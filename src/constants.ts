@@ -5,6 +5,7 @@
  * User-level overrides: clikdeploy config api-url <url> or env CLICKDEPLOY_API_URL.
  */
 export const DEFAULT_API_URL = 'https://clikdeploy.com';
+export const CLI_API_URL_OVERRIDE_ENV = 'CLICKDEPLOY_API_URL_OVERRIDE';
 
 export const CONFIG_KEYS = {
   API_URL: 'apiUrl',
