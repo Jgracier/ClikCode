@@ -9,7 +9,7 @@ interface ResolveOptions {
 }
 
 function normalize(value?: string | null): string {
-  return (value ?? '').trim();
+  return (value ?? '').trim().toLowerCase();
 }
 
 export function matchesServerIdentifier(
