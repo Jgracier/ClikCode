@@ -12,6 +12,23 @@ interface ResolveDeployServerOptions {
   preferFirstIfMultiple?: boolean;
 }
 
+export type DeployServerResolutionErrorCode =
+  | 'NO_SERVERS'
+  | 'SERVER_NOT_FOUND'
+  | 'MULTIPLE_SERVERS';
+
+export class DeployServerResolutionError extends Error {
+  constructor(
+    message: string,
+    public readonly code: DeployServerResolutionErrorCode,
+    public readonly servers: ServerLike[] = [],
+    public readonly requestedServer?: string
+  ) {
+    super(message);
+    this.name = 'DeployServerResolutionError';
+  }
+}
+
 export async function resolveDeployServer<T extends ServerLike>(
   api: { getServers(): Promise<T[]> },
   requestedServer?: string,
@@ -19,18 +36,25 @@ export async function resolveDeployServer<T extends ServerLike>(
 ): Promise<ResolvedDeployServer<T>> {
   const servers = (await api.getServers()) || [];
   if (servers.length === 0) {
-    throw new Error('No servers found. Add a server first: clikdeploy servers add <name> <ip>');
+    throw new DeployServerResolutionError(
+      'No servers found. Add a server first: clikdeploy servers add <name> <ip>',
+      'NO_SERVERS',
+      servers
+    );
   }
 
   const includeIpAddress = options.includeIpAddress ?? false;
-  const preferFirstIfMultiple = options.preferFirstIfMultiple ?? true;
+  const preferFirstIfMultiple = options.preferFirstIfMultiple ?? false;
 
   const requested = (requestedServer || '').trim();
   if (requested) {
     const server = resolveServerFromList(servers, requested, { includeIpAddress });
     if (!server) {
-      throw new Error(
-        `Server not found: ${requested}. Available: ${servers.map((s) => s.name || s.id).join(', ')}`
+      throw new DeployServerResolutionError(
+        `Server not found: "${requested}". Available: ${servers.map((s) => s.name || s.id).join(', ')}`,
+        'SERVER_NOT_FOUND',
+        servers,
+        requested
       );
     }
     return { server, servers, selectedBy: 'explicit' };
@@ -44,7 +68,11 @@ export async function resolveDeployServer<T extends ServerLike>(
     return { server: servers[0], servers, selectedBy: 'first' };
   }
 
-  throw new Error('Multiple servers found. Please specify --server <name-or-id>.');
+  throw new DeployServerResolutionError(
+    'Multiple servers connected. Specify --server <name-or-id>.',
+    'MULTIPLE_SERVERS',
+    servers
+  );
 }
 
 export function parseEnvVarPairs(envList?: string[]): Record<string, string> {
