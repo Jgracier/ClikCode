@@ -87,8 +87,11 @@ export function parseEnvVarPairs(envList?: string[]): Record<string, string> {
 
 export function deriveDockerAppName(imageName: string): string {
   const imageParts = imageName.split('/').pop()?.split(':')[0] || 'app';
-  const timestamp = Date.now().toString().slice(-4);
-  return `${imageParts}-${timestamp}`;
+  return imageParts
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'app';
 }
 
 export function deriveGithubAppName(url: string): string {
