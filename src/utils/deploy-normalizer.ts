@@ -1,5 +1,7 @@
 import type { ServerLike } from './server-resolver';
 import { resolveServerFromList } from './server-resolver';
+import type Conf from 'conf';
+import { CONFIG_KEYS } from '../constants';
 
 export interface ResolvedDeployServer<T extends ServerLike = ServerLike> {
   server: T;
@@ -10,6 +12,7 @@ export interface ResolvedDeployServer<T extends ServerLike = ServerLike> {
 interface ResolveDeployServerOptions {
   includeIpAddress?: boolean;
   preferFirstIfMultiple?: boolean;
+  config?: Conf;
 }
 
 export type DeployServerResolutionErrorCode =
@@ -45,6 +48,7 @@ export async function resolveDeployServer<T extends ServerLike>(
 
   const includeIpAddress = options.includeIpAddress ?? false;
   const preferFirstIfMultiple = options.preferFirstIfMultiple ?? false;
+  const config = options.config;
 
   const requested = (requestedServer || '').trim();
   if (requested) {
@@ -58,6 +62,15 @@ export async function resolveDeployServer<T extends ServerLike>(
       );
     }
     return { server, servers, selectedBy: 'explicit' };
+  }
+
+  // Prefer active server context when set.
+  const activeServerRef = String(config?.get(CONFIG_KEYS.ACTIVE_SERVER) || '').trim();
+  if (activeServerRef) {
+    const active = resolveServerFromList(servers, activeServerRef, { includeIpAddress });
+    if (active) {
+      return { server: active, servers, selectedBy: 'explicit' };
+    }
   }
 
   if (servers.length === 1) {
@@ -99,6 +112,19 @@ export function deriveGithubAppName(url: string): string {
   const match =
     trimmed.match(/(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)([^/]+)\/([^/#?]+)/i) ||
     trimmed.match(/^([^/]+)\/([^/#]+)$/);
-  if (match) return match[2];
+  if (match) {
+    const owner = String(match[1] || '').trim().toLowerCase();
+    const repo = String(match[2] || '').trim().toLowerCase();
+    const combined = `${owner}-${repo}`
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    if (combined) return combined;
+    const fallback = repo
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    return fallback || 'app';
+  }
   return 'app';
 }
