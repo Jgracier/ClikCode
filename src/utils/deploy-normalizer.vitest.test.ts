@@ -48,4 +48,25 @@ describe('deploy-normalizer', () => {
       DeployServerResolutionError
     );
   });
+
+  it('prefers the active server context when set', async () => {
+    const multiApi = {
+      getServers: async () => [
+        { id: '1', name: 'A' },
+        { id: '2', name: 'B' },
+      ],
+    };
+
+    // Active server ref resolves to a server -> selectedBy 'explicit'.
+    const activeConfig = { get: () => 'B' } as unknown as import('conf').default;
+    const active = await resolveDeployServer(multiApi, undefined, { config: activeConfig });
+    expect(active.server.id).toBe('2');
+    expect(active.selectedBy).toBe('explicit');
+
+    // Active server ref set but not matching any server -> falls through to error.
+    const staleConfig = { get: () => 'missing' } as unknown as import('conf').default;
+    await expect(resolveDeployServer(multiApi, undefined, { config: staleConfig })).rejects.toMatchObject(
+      { code: 'MULTIPLE_SERVERS' }
+    );
+  });
 });
