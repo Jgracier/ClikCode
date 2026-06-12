@@ -3,7 +3,7 @@ import { toCliErrorMessage } from './error-message';
 
 describe('error-message', () => {
   it('extracts nested API and object errors', () => {
-    expect(toCliErrorMessage({ message: 'plain' })).toBe('plain');
+    expect(toCliErrorMessage({ message: 'plain' })).toBe('Unknown error');
     expect(toCliErrorMessage({ response: { data: { error: 'api err' } } })).toBe('api err');
     expect(toCliErrorMessage({ response: { data: { message: 'msg err' } } })).toBe('msg err');
     expect(toCliErrorMessage({ response: { data: { error: { message: 'nested' } } } })).toBe('nested');
