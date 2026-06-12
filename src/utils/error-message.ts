@@ -1,16 +1,14 @@
-export function toCliErrorMessage(error: any): string {
+export function toCliErrorMessage(error: unknown): string {
+  const httpErr = error as { response?: { data?: { error?: unknown; message?: unknown } }; message?: string } | null;
   const raw =
-    error?.response?.data?.error ??
-    error?.response?.data?.message ??
-    error?.message ??
+    httpErr?.response?.data?.error ??
+    httpErr?.response?.data?.message ??
+    (error instanceof Error ? error.message : null) ??
     'Unknown error';
 
   if (typeof raw === 'string') return raw;
   if (raw && typeof raw === 'object') {
-    const nested =
-      (raw as any).message ||
-      (raw as any).error ||
-      (raw as any).code;
+    const nested = (raw as Record<string, unknown>).message || (raw as Record<string, unknown>).error || (raw as Record<string, unknown>).code;
     if (typeof nested === 'string' && nested.trim()) return nested;
     try {
       return JSON.stringify(raw);

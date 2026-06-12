@@ -10,7 +10,7 @@ export function emitJson(obj: unknown): void {
 
 function serverChoices(servers: ServerLike[]) {
   return servers.map((server) => {
-    const serverAny = server as any;
+    const serverWithStatus = server as ServerLike & { status?: string };
     const name = String(server.name || '').trim();
     const id = String(server.id || '').trim();
     return {
@@ -18,7 +18,7 @@ function serverChoices(servers: ServerLike[]) {
       name: name || id,
       option: `--server \"${name || id}\"`,
       ...(server.ipAddress ? { ipAddress: String(server.ipAddress) } : {}),
-      ...(serverAny?.status ? { status: String(serverAny.status) } : {}),
+      ...(serverWithStatus.status ? { status: String(serverWithStatus.status) } : {}),
     };
   });
 }
