@@ -1,4 +1,18 @@
 export function toCliErrorMessage(error: unknown): string {
+  // Platform unreachable (origin down / Cloudflare 5xx / connection reset) — almost
+  // always a transient deploy/restart window. Give a clear, actionable message instead
+  // of a raw axios/stack error.
+  const probe = error as { response?: { status?: number }; code?: string } | null;
+  const status = Number(probe?.response?.status || 0);
+  const code = String(probe?.code || "").toUpperCase();
+  if (
+    status === 502 || status === 503 || status === 504 ||
+    (status >= 520 && status <= 526) ||
+    code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT" ||
+    code === "ECONNABORTED" || code === "EPIPE" || code === "EAI_AGAIN"
+  ) {
+    return "ClikDeploy is temporarily unavailable (it may be deploying or restarting). Please retry in a few minutes.";
+  }
   const httpErr = error as { response?: { data?: { error?: unknown; message?: unknown } }; message?: string } | null;
   const raw =
     httpErr?.response?.data?.error ??
