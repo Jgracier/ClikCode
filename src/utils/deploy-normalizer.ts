@@ -40,7 +40,7 @@ export async function resolveDeployServer<T extends ServerLike>(
   const servers = (await api.getServers()) || [];
   if (servers.length === 0) {
     throw new DeployServerResolutionError(
-      'No servers found. Add a server first: clikdeploy servers add <name> <ip>',
+      'No servers found. Add a server first: clikdeploy server add <name> <ip>',
       'NO_SERVERS',
       servers
     );
