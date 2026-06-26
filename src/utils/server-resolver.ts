@@ -2,6 +2,10 @@ export interface ServerLike {
   id: string;
   name?: string | null;
   ipAddress?: string | null;
+  serverKind?: string | null;
+  placement?: string | null;
+  capabilities?: string[] | null;
+  restrictedCapabilities?: string[] | null;
 }
 
 interface ResolveOptions {
