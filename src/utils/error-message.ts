@@ -1,4 +1,43 @@
-export function toCliErrorMessage(error: unknown): string {
+/**
+ * Extract a correlation/trace id from an error, if the API returned one.
+ *
+ * Sources, in priority order:
+ *  1. `error.traceId` — attached by the ApiClient response interceptor.
+ *  2. RFC7807 problem+json body field `traceId` (or `trace_id`).
+ *  3. The `x-request-id` response header we echoed on the request.
+ */
+export function extractTraceId(error: unknown): string | undefined {
+  const e = error as
+    | {
+        traceId?: unknown;
+        response?: {
+          data?: { traceId?: unknown; trace_id?: unknown } | unknown;
+          headers?: Record<string, unknown>;
+        };
+      }
+    | null;
+
+  const direct = e?.traceId;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+
+  const data = e?.response?.data as { traceId?: unknown; trace_id?: unknown } | undefined;
+  const bodyTrace = data?.traceId ?? data?.trace_id;
+  if (typeof bodyTrace === 'string' && bodyTrace.trim()) return bodyTrace.trim();
+
+  const headers = e?.response?.headers;
+  if (headers) {
+    const headerTrace =
+      (headers['x-request-id'] as unknown) ??
+      (headers['X-Request-Id'] as unknown) ??
+      (headers['x-trace-id'] as unknown);
+    if (typeof headerTrace === 'string' && headerTrace.trim()) return headerTrace.trim();
+  }
+
+  return undefined;
+}
+
+/** Human-readable base message for an error (without the trace line). */
+export function toCliErrorMessageBase(error: unknown): string {
   // Platform unreachable (origin down / Cloudflare 5xx / connection reset) — almost
   // always a transient deploy/restart window. Give a clear, actionable message instead
   // of a raw axios/stack error.
@@ -31,4 +70,63 @@ export function toCliErrorMessage(error: unknown): string {
     }
   }
   return String(raw);
+}
+
+/**
+ * Friendly, user-facing error message. When the API handed back a correlation
+ * id, ends with a `trace <id>` line the user can quote in support.
+ */
+export function toCliErrorMessage(error: unknown): string {
+  const base = toCliErrorMessageBase(error);
+  const traceId = extractTraceId(error);
+  return traceId ? `${base}\ntrace ${traceId}` : base;
+}
+
+/**
+ * Debug escape-hatch details: HTTP status, response body and stack. Returned as
+ * an already-formatted multi-line string (empty when there's nothing extra).
+ */
+export function toCliErrorDebugDetails(error: unknown): string {
+  const e = error as
+    | { response?: { status?: number; statusText?: string; data?: unknown }; code?: string; stack?: string }
+    | null;
+  const lines: string[] = [];
+
+  const status = Number(e?.response?.status || 0);
+  if (status) {
+    const statusText = String(e?.response?.statusText || '').trim();
+    lines.push(`HTTP ${status}${statusText ? ` ${statusText}` : ''}`);
+  }
+  if (e?.code) lines.push(`code: ${e.code}`);
+
+  const body = e?.response?.data;
+  if (body !== undefined && body !== null && body !== '') {
+    let rendered: string;
+    try {
+      rendered = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+    } catch {
+      rendered = String(body);
+    }
+    lines.push(`response body:\n${rendered}`);
+  }
+
+  if (typeof e?.stack === 'string' && e.stack.trim()) {
+    lines.push(`stack:\n${e.stack}`);
+  }
+
+  return lines.join('\n');
+}
+
+/** Machine-readable error shape for `--json` mode. */
+export function toCliErrorJson(error: unknown): Record<string, unknown> {
+  const e = error as { response?: { status?: number; data?: unknown }; code?: string } | null;
+  const traceId = extractTraceId(error);
+  return {
+    status: 'error',
+    message: toCliErrorMessageBase(error),
+    ...(traceId ? { traceId } : {}),
+    ...(e?.response?.status ? { httpStatus: Number(e.response.status) } : {}),
+    ...(e?.code ? { code: e.code } : {}),
+    ...(e?.response?.data !== undefined ? { responseBody: e.response.data } : {}),
+  };
 }
