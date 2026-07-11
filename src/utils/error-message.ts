@@ -40,15 +40,26 @@ export function extractTraceId(error: unknown): string | undefined {
 export function toCliErrorMessageBase(error: unknown): string {
   // Platform unreachable (origin down / Cloudflare 5xx / connection reset) — almost
   // always a transient deploy/restart window. Give a clear, actionable message instead
-  // of a raw axios/stack error.
-  const probe = error as { response?: { status?: number }; code?: string } | null;
+  // of a raw axios/undici/stack error.
+  const probe = error as
+    | { response?: { status?: number }; code?: string; message?: string; cause?: { code?: string; message?: string } }
+    | null;
   const status = Number(probe?.response?.status || 0);
-  const code = String(probe?.code || "").toUpperCase();
+  // undici's fetch() throws `TypeError: fetch failed` with the real syscall code on
+  // `.cause.code` (not `.code`) — inspect both so connection failures don't leak raw.
+  const code = String(probe?.code || probe?.cause?.code || "").toUpperCase();
+  const message = String(probe?.message || "");
+  const isBareFetchFailure =
+    /^fetch failed$/i.test(message.trim()) ||
+    /\bfetch failed\b/i.test(message) ||
+    /UND_ERR/i.test(code);
   if (
     status === 502 || status === 503 || status === 504 ||
     (status >= 520 && status <= 526) ||
     code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT" ||
-    code === "ECONNABORTED" || code === "EPIPE" || code === "EAI_AGAIN"
+    code === "ECONNABORTED" || code === "EPIPE" || code === "EAI_AGAIN" ||
+    code === "ENOTFOUND" || code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_SOCKET" ||
+    isBareFetchFailure
   ) {
     return "ClikDeploy is temporarily unavailable (it may be deploying or restarting). Please retry in a few minutes.";
   }
@@ -80,6 +91,16 @@ export function toCliErrorMessage(error: unknown): string {
   const base = toCliErrorMessageBase(error);
   const traceId = extractTraceId(error);
   return traceId ? `${base}\ntrace ${traceId}` : base;
+}
+
+/**
+ * Shared replacement for the byte-identical local `apiError()` helpers that used
+ * to live in individual command files. Delegates to {@link toCliErrorMessage} so
+ * every command surfaces the friendly fetch-failed mapping and a `trace <id>` line
+ * instead of a raw `fetch failed` / `Request failed with status code 502`.
+ */
+export function apiErrorMessage(error: unknown): string {
+  return toCliErrorMessage(error);
 }
 
 /**
