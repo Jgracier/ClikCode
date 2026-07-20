@@ -93,36 +93,19 @@ export interface ResolvedCatalogError {
 }
 
 /**
- * Best-effort map a free-text deployment error string to a catalog entry.
- * Returns null when nothing matches (caller should fall back to the raw error).
- */
-export function inferCatalogCode(error?: string | null): string | null {
-  if (!error || typeof error !== 'string') return null;
-  const lower = error.toLowerCase();
-  if (/no space left|disk (space|usage|full)|enospc|insufficient disk|free up space/.test(lower)) return 'DISK_FULL';
-  if (/out of memory|oom|memory limit|killed.*memory/.test(lower)) return 'OOM_KILLED';
-  if (/health ?check|healthy|unhealthy/.test(lower)) return 'DEPLOY_HEALTHCHECK_FAILED';
-  if (/not inspectable|could not be inspected/.test(lower)) return 'IMAGE_NOT_INSPECTABLE';
-  if (/blob (unknown|missing)|short read|missing.*layer/.test(lower)) return 'REGISTRY_BLOB_MISSING';
-  if (/idle|stalled|no progress/.test(lower)) return 'BUILDER_IDLE_TIMEOUT';
-  if (/build (failed|error)|dockerfile|failed to build/.test(lower)) return 'BUILDER_BUILD_FAILED';
-  if (/timed out|timeout|max runtime/.test(lower)) return 'BUILDER_TIMEOUT';
-  if (/agent (unavailable|not reachable|offline|disconnected)/.test(lower)) return 'AGENT_UNAVAILABLE';
-  if (/worker.*(not connected|disconnected|unavailable)/.test(lower)) return 'WORKER_NOT_CONNECTED';
-  if (/docker (op|operation|daemon)/.test(lower)) return 'AGENT_DOCKER_OP_FAILED';
-  if (/rate limit/.test(lower)) return 'RATE_LIMITED';
-  return null;
-}
-
-/**
- * Resolve the best code + message + remediation for a failed deploy given an
- * explicit code (e.g. from an RFC7807 body) and/or a free-text error message.
+ * Resolve a catalog entry from the code the API attached.
+ *
+ * `inferCatalogCode` used to sit behind this as a fallback: twelve regexes guessing a code out of
+ * the error prose. It was deleted, not replaced. Every one of its patterns was a guess at a value
+ * the platform already knows and now always sends — and its guesses were routinely wrong in a way
+ * that mattered, because `/build (failed|error)/` matches almost any build output and would relabel
+ * a specific verdict as the generic BUILDER_BUILD_FAILED. Showing the user the real code, or no
+ * code and the raw error, is strictly more honest than showing a confident wrong one.
  */
 export function resolveCatalogError(
-  explicitCode?: string | null,
-  errorText?: string | null
+  explicitCode?: string | null
 ): ResolvedCatalogError | null {
-  const code = (explicitCode && ERROR_CATALOG[explicitCode] ? explicitCode : null) || inferCatalogCode(errorText);
+  const code = explicitCode && ERROR_CATALOG[explicitCode] ? explicitCode : null;
   if (!code) return null;
   const entry = ERROR_CATALOG[code] ?? ERROR_CATALOG.INTERNAL;
   return { code, message: entry.message, remediation: entry.remediation };
