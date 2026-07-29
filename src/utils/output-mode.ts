@@ -1,11 +1,12 @@
 import { emitJson } from './structured-output';
+import { globalFlag } from './global-flags';
 
 export function isHumanOutputRequested(): boolean {
-  return process.argv.includes('--human') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'human';
+  return globalFlag('human') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'human';
 }
 
 export function isJsonOutputRequested(): boolean {
-  return process.argv.includes('--json') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'json';
+  return globalFlag('json') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'json';
 }
 
 /**
