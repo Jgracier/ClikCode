@@ -103,6 +103,14 @@ export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
     severity: 'error',
     userFacing: true,
   },
+  MCP_TOOL_TIMEOUT: {
+    message: 'The tool did not finish within its time budget and was cancelled.',
+    remediation:
+      'Retry, or narrow the request (a smaller time window, fewer lines, a single target) so the tool has less work to do.',
+    httpStatus: 504,
+    severity: 'warning',
+    userFacing: true,
+  },
   VALIDATION_FAILED: {
     message: 'The request failed validation.',
     remediation: 'Correct the highlighted fields and resubmit.',
