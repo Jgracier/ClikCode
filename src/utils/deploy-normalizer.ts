@@ -1,7 +1,7 @@
-import type { ServerLike } from './server-resolver';
-import { resolveServerFromList } from './server-resolver';
+import type { ServerLike } from './server-resolver.js';
+import { resolveServerFromList } from './server-resolver.js';
 import type Conf from 'conf';
-import { CONFIG_KEYS } from '../constants';
+import { CONFIG_KEYS } from '../constants.js';
 
 export interface ResolvedDeployServer<T extends ServerLike = ServerLike> {
   server: T;

@@ -12,10 +12,10 @@
  * fails the suite if the generated file is stale.
  */
 
-export type { ErrorCatalogEntry, ErrorSeverity } from './error-catalog.generated';
-export { ERROR_CATALOG } from './error-catalog.generated';
+export type { ErrorCatalogEntry, ErrorSeverity } from './error-catalog.generated.js';
+export { ERROR_CATALOG } from './error-catalog.generated.js';
 
-import { ERROR_CATALOG } from './error-catalog.generated';
+import { ERROR_CATALOG } from './error-catalog.generated.js';
 
 export interface ResolvedCatalogError {
   code: string;

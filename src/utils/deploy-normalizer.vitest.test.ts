@@ -5,7 +5,7 @@ import {
   deriveGithubAppName,
   parseEnvVarPairs,
   resolveDeployServer,
-} from './deploy-normalizer';
+} from './deploy-normalizer.js';
 
 describe('deploy-normalizer', () => {
   it('parses env var pairs', () => {

@@ -12,20 +12,26 @@
  * sides of the admin-wall documented in tsconfig.json.
  */
 
+import { createRequire } from 'node:module';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import type Conf from 'conf';
-import { CLI_API_URL_OVERRIDE_ENV, CONFIG_KEYS, normalizeApiUrl } from '../constants';
-import { toCliErrorMessage, toCliErrorDebugDetails, toCliErrorJson } from '../utils/error-message';
-import { isDebugMode } from '../utils/debug-mode';
-import { isJsonDefaultMode } from '../utils/output-mode';
-import { bindGlobalFlags } from '../utils/global-flags';
-import { emitJson } from '../utils/structured-output';
-import { acquireLifecycleLock, type LifecycleLock } from '../utils/lifecycle-lock';
+import { CLI_API_URL_OVERRIDE_ENV, CONFIG_KEYS, normalizeApiUrl } from '../constants.js';
+import { toCliErrorMessage, toCliErrorDebugDetails, toCliErrorJson } from '../utils/error-message.js';
+import { isDebugMode } from '../utils/debug-mode.js';
+import { isJsonDefaultMode } from '../utils/output-mode.js';
+import { bindGlobalFlags } from '../utils/global-flags.js';
+import { emitJson } from '../utils/structured-output.js';
+import { acquireLifecycleLock, type LifecycleLock } from '../utils/lifecycle-lock.js';
 
 export const CLI_VERSION: string = (() => {
   try {
-    return String(require('../../package.json')?.version || '0.0.0');
+    // ESM build (package.json "type": "module"): there is no `require` at
+    // runtime. createRequire gives us the same relative-to-this-module lookup,
+    // and it resolves identically from src/cli/ and dist/cli/ since the
+    // package.json sits two levels up in both layouts.
+    const requireFromHere = createRequire(import.meta.url);
+    return String(requireFromHere('../../package.json')?.version || '0.0.0');
   } catch {
     return '0.0.0';
   }

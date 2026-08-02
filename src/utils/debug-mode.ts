@@ -1,4 +1,4 @@
-import { globalFlag } from './global-flags';
+import { globalFlag } from './global-flags.js';
 
 /**
  * Global `--debug` escape hatch. Opt-in only.
