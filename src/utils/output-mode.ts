@@ -1,5 +1,5 @@
-import { emitJson } from './structured-output';
-import { globalFlag } from './global-flags';
+import { emitJson } from './structured-output.js';
+import { globalFlag } from './global-flags.js';
 
 export function isHumanOutputRequested(): boolean {
   return globalFlag('human') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'human';

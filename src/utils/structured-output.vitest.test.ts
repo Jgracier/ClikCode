@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DeployServerResolutionError } from './deploy-normalizer';
-import { emitDeployServerResolutionError, emitJson } from './structured-output';
+import { DeployServerResolutionError } from './deploy-normalizer.js';
+import { emitDeployServerResolutionError, emitJson } from './structured-output.js';
 
 describe('structured-output', () => {
   afterEach(() => {

@@ -1,8 +1,8 @@
-import type { ServerLike } from './server-resolver';
+import type { ServerLike } from './server-resolver.js';
 import {
   DeployServerResolutionError,
   type DeployServerResolutionErrorCode,
-} from './deploy-normalizer';
+} from './deploy-normalizer.js';
 
 export function emitJson(obj: unknown): void {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toCliErrorMessage } from './error-message';
+import { toCliErrorMessage } from './error-message.js';
 
 describe('error-message', () => {
   it('extracts nested API and object errors', () => {

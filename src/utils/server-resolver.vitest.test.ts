@@ -4,7 +4,7 @@ import {
   matchesServerIdentifier,
   resolveServer,
   resolveServerFromList,
-} from './server-resolver';
+} from './server-resolver.js';
 
 describe('server-resolver', () => {
   const servers = [
