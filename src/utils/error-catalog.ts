@@ -15,6 +15,14 @@
 export type { ErrorCatalogEntry, ErrorSeverity } from './error-catalog.generated.js';
 export { ERROR_CATALOG } from './error-catalog.generated.js';
 
+/**
+ * The platform's ONE problem+json decoder, generated into the same file from
+ * packages/core/src/problem-json.ts. Re-exported here so the CLI has exactly one
+ * import site for "how do I read an error out of an API response".
+ */
+export type { ProblemJson } from './error-catalog.generated.js';
+export { parseProblemJson, problemJsonMessage } from './error-catalog.generated.js';
+
 import { ERROR_CATALOG } from './error-catalog.generated.js';
 
 export interface ResolvedCatalogError {
