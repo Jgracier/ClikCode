@@ -89,13 +89,13 @@ export async function resolveDeployServer<T extends ServerLike>(
 }
 
 export function parseEnvVarPairs(envList?: string[]): Record<string, string> {
-  const environmentVariables: Record<string, string> = {};
+  const envVars: Record<string, string> = {};
   for (const envStr of envList || []) {
     const [key, ...valueParts] = String(envStr).split('=');
     if (!key || valueParts.length === 0) continue;
-    environmentVariables[key] = valueParts.join('=');
+    envVars[key] = valueParts.join('=');
   }
-  return environmentVariables;
+  return envVars;
 }
 
 export function deriveDockerAppName(imageName: string): string {
