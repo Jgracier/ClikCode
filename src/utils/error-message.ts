@@ -1,9 +1,43 @@
+import {
+  ERROR_CATALOG,
+  parseProblemJson,
+  problemJsonMessage,
+  type ProblemJson,
+} from './error-catalog.js';
+
+/**
+ * Decode the platform's error contract off a thrown HTTP error.
+ *
+ * THE ONE DECODER, for the whole CLI. Everything the platform emits — RFC 7807
+ * (route-handlers, ~470 routes), the control-plane `{ success:false, error }`
+ * envelope (the gate routes) and the hand-rolled `{ error: "..." }` bodies —
+ * goes through `parseProblemJson`. Nothing in this file reaches into a response
+ * body for an error string on its own any more.
+ *
+ * That is the whole defect this replaces: `toCliErrorMessageBase` read
+ * `data.error ?? data.message`, and problem+json has NEITHER key. `detail` is
+ * the only near-match and `toProblemJson` omits it in production by design, so
+ * in production the decode always missed and axios's own sentence ("Request
+ * failed with status code 404") was printed instead of the catalogued title and
+ * remediation.
+ */
+function decodeProblem(error: unknown): ProblemJson | null {
+  const e = error as { response?: { data?: unknown; status?: number } } | null;
+  const response = e?.response;
+  if (!response) return null;
+  return parseProblemJson(response.data, {
+    status: Number(response.status) || undefined,
+    catalog: ERROR_CATALOG,
+  });
+}
+
 /**
  * Extract a correlation/trace id from an error, if the API returned one.
  *
  * Sources, in priority order:
  *  1. `error.traceId` — attached by the ApiClient response interceptor.
- *  2. RFC7807 problem+json body field `traceId` (or `trace_id`).
+ *  2. The decoded problem body's `traceId` — via the one decoder above, so this
+ *     stopped being a second, partial reading of the same body.
  *  3. The `x-request-id` response header we echoed on the request.
  */
 export function extractTraceId(error: unknown): string | undefined {
@@ -11,7 +45,6 @@ export function extractTraceId(error: unknown): string | undefined {
     | {
         traceId?: unknown;
         response?: {
-          data?: { traceId?: unknown; trace_id?: unknown } | unknown;
           headers?: Record<string, unknown>;
         };
       }
@@ -20,9 +53,8 @@ export function extractTraceId(error: unknown): string | undefined {
   const direct = e?.traceId;
   if (typeof direct === 'string' && direct.trim()) return direct.trim();
 
-  const data = e?.response?.data as { traceId?: unknown; trace_id?: unknown } | undefined;
-  const bodyTrace = data?.traceId ?? data?.trace_id;
-  if (typeof bodyTrace === 'string' && bodyTrace.trim()) return bodyTrace.trim();
+  const bodyTrace = decodeProblem(error)?.traceId;
+  if (bodyTrace) return bodyTrace;
 
   const headers = e?.response?.headers;
   if (headers) {
@@ -63,24 +95,18 @@ export function toCliErrorMessageBase(error: unknown): string {
   ) {
     return "ClikDeploy is temporarily unavailable (it may be deploying or restarting). Please retry in a few minutes.";
   }
-  const httpErr = error as { response?: { data?: { error?: unknown; message?: unknown } }; message?: string } | null;
-  const raw =
-    httpErr?.response?.data?.error ??
-    httpErr?.response?.data?.message ??
-    (error instanceof Error ? error.message : null) ??
-    'Unknown error';
+  // THE decode. `problemJsonMessage` renders the catalogued title and the
+  // catalogued remediation — the reason ERROR_CATALOG has a `remediation` column
+  // at all, and text no CLI user had ever seen before this.
+  const problem = decodeProblem(error);
+  if (problem) return problemJsonMessage(problem);
 
-  if (typeof raw === 'string') return raw;
-  if (raw && typeof raw === 'object') {
-    const nested = (raw as Record<string, unknown>).message || (raw as Record<string, unknown>).error || (raw as Record<string, unknown>).code;
-    if (typeof nested === 'string' && nested.trim()) return nested;
-    try {
-      return JSON.stringify(raw);
-    } catch {
-      return String(raw);
-    }
-  }
-  return String(raw);
+  // No error contract in the body (a non-JSON body, an empty 500, a local
+  // throw). The thrown error's own message is the honest answer; inventing a
+  // catalogued title for an error the platform never classified would be worse
+  // than axios's sentence, not better.
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return 'Unknown error';
 }
 
 /**
