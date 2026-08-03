@@ -119,6 +119,14 @@ export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
     severity: 'warning',
     userFacing: true,
   },
+  DEPLOY_POLICY_BLOCKED: {
+    message: 'Deployment blocked by policy.',
+    remediation:
+      'Satisfy the policy that refused the deploy (e.g. make the required GitHub checks pass on the deployed commit) and retry.',
+    httpStatus: 409,
+    severity: 'warning',
+    userFacing: true,
+  },
   APP_NOT_FOUND: {
     message: 'The requested app was not found.',
     remediation: 'Verify the app id/name and that it belongs to your account.',
