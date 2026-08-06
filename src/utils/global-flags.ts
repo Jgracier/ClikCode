@@ -32,11 +32,6 @@ export function bindGlobalFlags(opts: GlobalFlags): void {
   };
 }
 
-/** Test seam: forget the bound options. */
-export function resetGlobalFlags(): void {
-  bound = null;
-}
-
 /**
  * Read one global flag. Prefers commander's parse; falls back to argv only
  * while unbound, and never looks past a `--` terminator.
