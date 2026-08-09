@@ -1,0 +1,403 @@
+// ============================================
+// AI ROUTER SELECTION — the ranking logic behind every "auto/budget/frontier/explicit" choice.
+// ============================================
+// ONE ranking algorithm, used both by the persisted per-agent routing strategy
+// (AiRoutingStrategy in ai-routing.ts — what automatic production routing actually does) and by
+// the admin test-chat picker (previously a second, disconnected implementation that only lived in
+// apps/web and used a cruder cost-only ranking for automatic modes) — so testing an agent's
+// "Auto" mode and that agent's real automatic routing are provably the same computation, not two
+// systems that happened to agree by coincidence.
+//
+// Pure and dependency-free on purpose: no db/redis/env access, so it is safe for both the server
+// (ai-default-llm.ts) and — if a client ever needs it — a browser bundle.
+
+export type AiRoutingStrategy = 'auto' | 'budget' | 'frontier' | 'explicit';
+
+export interface AiRouterCandidate {
+  provider: string;
+  model: string;
+  accessClass: 'subscription' | 'free-tier' | 'metered' | 'unknown';
+  estimatedCostPerMTok: number | null;
+  /**
+   * Live exponential-moving-average response latency in ms (ai-model-latency.ts),
+   * or null/absent when never observed. This file stays pure/dependency-free
+   * (see the module comment), so it never reads Redis itself — the caller
+   * (ai-router-candidates.ts) fetches it and attaches it here, the same way it
+   * already does for accessClass/estimatedCostPerMTok.
+   */
+  avgLatencyMs?: number | null;
+  /**
+   * Real third-party agentic-capability score, 0-100 (ai-openrouter-
+   * benchmarks.ts's `agentic_index`), when this exact (provider, model) pair
+   * matched OpenRouter's public catalog — absent for the majority of pairs
+   * (measured live: only ~10 of 43 providers even share a namespace with
+   * OpenRouter, so most candidates never get this). Same caller-attaches
+   * posture as avgLatencyMs; this file never fetches it itself.
+   */
+  agenticIndex?: number | null;
+  /**
+   * Real observed success rate in [0, 1] from THIS platform's own routing
+   * history (ai-model-track-record.ts), only present once there is enough of
+   * it to trust (see that module's MIN_TRACK_RECORD_SAMPLES) — absent means
+   * "no track record yet", never "confirmed unreliable". Same caller-attaches
+   * posture as avgLatencyMs.
+   */
+  trackRecordSuccessRate?: number | null;
+}
+
+export interface AiRouterSelection {
+  provider: string;
+  model: string;
+  reason: string;
+}
+
+/**
+ * The scored breakdown behind ONE candidate's position in the ranking —
+ * the terms `rankRouterCandidates`'s comparator uses, made visible instead of
+ * being computed and discarded inside a sort callback. `compositeScore` is
+ * only meaningful for 'auto' mode (the only mode that blends terms into one
+ * number); the other modes rank lexicographically over these same terms in a
+ * fixed priority order (see `explainRanking`'s per-mode `order`).
+ */
+export interface AiRouterCandidateScore {
+  candidate: AiRouterCandidate;
+  accessRank: number;
+  cost: number;
+  intelligence: number;
+  latencyMs: number;
+  compositeScore: number | null;
+}
+
+const ACCESS_RANK: Record<AiRouterCandidate['accessClass'], number> = {
+  'free-tier': 0,
+  subscription: 1,
+  metered: 2,
+  unknown: 3,
+};
+
+function normalize(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * 50: the flat score for a candidate with NO real capability evidence at
+ * all — no OpenRouter agentic_index match (ai-openrouter-benchmarks.ts) and
+ * no track record yet (ai-model-track-record.ts). This file used to guess a
+ * tier from the model's NAME via a regex (gpt-5/claude-opus/… → 110, "flash"/
+ * "mini" → 60, anything else → 75) — a genuine guess dressed up as a score,
+ * and it was actively winning against REAL data: an unbenchmarked model
+ * defaulted to 110 while a real, measured flagship could score lower (Claude
+ * Opus 5's actual agentic_index is 59.2), so the fabricated number was
+ * outranking the true one. Removed entirely rather than kept as a fallback —
+ * "never use unverified data for model intelligence" means exactly that, not
+ * "prefer verified data when convenient".
+ *
+ * 50 sits in the middle of the plausible 0-100 agentic_index range on
+ * purpose, not derived from a live-data snapshot (a hardcoded median would
+ * just be a slower-moving version of the same guessing problem). It is
+ * ABOVE real low scores this platform has actually observed (nvidia's
+ * Nemotron-3-Nano measured 2, several others sit in the 20s-30s) and BELOW
+ * real high scores (Claude Opus 5 at 59.2, Claude Fable 5 at 56.6) — a
+ * measured LOW score is real negative evidence and must still rank below an
+ * unknown-quality model, same as a measured HIGH score must still rank
+ * above one. "Unknown" is genuinely neutral, never a synonym for "assume the
+ * best" or "assume the worst".
+ *
+ * Coverage is currently thin — measured live 2026-08-09: only 17 of 629 real
+ * routable (provider, model) pairs had a benchmark match at all. Most
+ * candidates get this neutral default today, which means "frontier" mode
+ * mostly stops differentiating on capability until real evidence (benchmark
+ * coverage growing, or this platform's own track record accumulating
+ * enough samples) exists to differentiate with — that is the honest state
+ * of what is actually known, not a regression to fix by guessing again.
+ */
+const NEUTRAL_CAPABILITY_SCORE = 50;
+
+/**
+ * Real third-party benchmark data (ai-openrouter-benchmarks.ts's
+ * `agentic_index`) when this candidate matched OpenRouter's catalog, else
+ * the flat NEUTRAL_CAPABILITY_SCORE — never a name-based guess. `agenticIndex`
+ * is used directly, not remapped through an invented conversion formula.
+ */
+function baseCapabilityScore(candidate: AiRouterCandidate): number {
+  if (typeof candidate.agenticIndex === 'number' && Number.isFinite(candidate.agenticIndex)) {
+    return candidate.agenticIndex;
+  }
+  return NEUTRAL_CAPABILITY_SCORE;
+}
+
+/**
+ * Capability (above), discounted by real observed reliability on THIS
+ * platform when there is enough of it to trust — a MULTIPLIER, not a
+ * replacement: capability answers "how smart is this model" (a real
+ * benchmark, or neutral when unknown), reliability answers "does it
+ * actually deliver that for us" (from our own routing history), and those
+ * are genuinely different questions. A model this platform has actually
+ * seen succeed only 40% of the time is not delivering its benchmark
+ * intelligence to real users regardless of how it scored on someone else's
+ * eval, so its effective score here is crushed accordingly. Absent track
+ * record (never routed to here yet, or too few recent samples — see
+ * ai-model-track-record.ts) leaves capability unadjusted: "no track record
+ * yet" must never be penalized the way "confirmed unreliable" is.
+ */
+function intelligenceWithReliability(candidate: AiRouterCandidate): number {
+  const capability = baseCapabilityScore(candidate);
+  if (
+    typeof candidate.trackRecordSuccessRate === 'number' &&
+    Number.isFinite(candidate.trackRecordSuccessRate)
+  ) {
+    return capability * candidate.trackRecordSuccessRate;
+  }
+  return capability;
+}
+
+/**
+ * Catches a model that is almost certainly NOT chat-capable, from its id
+ * alone — the router has nothing else to go on. `isTextRoutable`
+ * (ai-provider-registry's lookups.ts) already excludes whole PROVIDERS whose
+ * only modality is non-text (voyage, elevenlabs, fal, …), which is real data,
+ * not a guess. This exists for the gap that leaves open: a provider that DOES
+ * serve chat (Cloudflare, Groq, HuggingFace, Mistral, …) but ALSO lists
+ * TTS/embedding/image/ASR/moderation models in the SAME catalog, with no
+ * per-model modality field anywhere in the schema to check instead (verified:
+ * AiDiscoveredModel carries only id/pricing/enabled). Observed live via
+ * `clikdeploy admin ai chat --explain`: cloudflare/@cf/baai/bge-base-en-v1.5
+ * (an embedding model) and groq/whisper-large-v3-turbo (speech-to-text) both
+ * ranked as router candidates for a plain text chat request.
+ *
+ * Deliberately a DENYLIST, not an allowlist: an allowlist of "known chat
+ * model name shapes" would silently exclude every future chat model whose
+ * name doesn't match a pattern written today. A denylist only ever excludes
+ * what it explicitly recognizes as non-chat, so an unrecognized new model
+ * defaults to ELIGIBLE — the same "unknown is not confirmed bad" principle
+ * `NEUTRAL_CAPABILITY_SCORE` above already applies to capability tier.
+ *
+ * False negatives (a genuine chat model this misses and wrongly excludes)
+ * are the failure mode to watch for — a name containing "vision" or
+ * "instruct" must never trip these patterns just because it also contains a
+ * substring like "tts" or "embed" as part of an unrelated word.
+ */
+export function isLikelyChatModel(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  const patterns: RegExp[] = [
+    // Text-to-speech / audio generation.
+    /\btts\b|-tts-|-tts$|text-to-speech|\bspeech-\d|melotts|\baura(-\d)?\b|\bsonic\b/,
+    // Speech-to-text / transcription.
+    /whisper|paraformer|transcribe|nova-\d.*transcri|\basr\b/,
+    // Embeddings / reranking.
+    /\bembed(ding)?s?\b|-embed-|bge-|gte-|(^|-)e5-|nomic-embed|embeddinggemma|\brerank(er)?\b/,
+    // Image / video generation.
+    /flux|stable-diffusion|\bsdxl\b|dall-e|gpt-image|\bimagen\b|dreamshaper|-image$|-image-|image-lightning|inpainting|img2img|\bveo\b|\bsora\b|^ray-|-video$|-video-|video-01|minimax-video|speech-02/,
+    // Moderation / safety / guard classifiers — real models, never a chat
+    // answer's source.
+    /omni-moderation|llama-guard|nemoguard|-guard-|safeguard|content-safety|topic-control/,
+    // Misc non-chat utility models observed in mixed catalogs.
+    /\bocr\b|resnet|\bdetr\b|m2m100|\bnllb\b|indictrans/,
+  ];
+  return !patterns.some((re) => re.test(id));
+}
+
+/**
+ * Whether a model is eligible for text chat routing, preferring real
+ * evidence over a guess: a discovered model's `chatCapable` field (set at
+ * catalog-parse time from the vendor's OWN per-model modality field —
+ * OpenRouter/HuggingFace architecture.output_modalities, Cloudflare
+ * task.name — see probe-adapters.ts's deriveChatCapable) is authoritative
+ * when the vendor published one for this model. `isLikelyChatModel`'s name
+ * heuristic is only the fallback for the (common) case where the vendor's
+ * catalog carries no modality field at all.
+ */
+export function resolveChatCapable(model: {
+  id: string;
+  chatCapable?: boolean;
+}): boolean {
+  return model.chatCapable !== undefined
+    ? model.chatCapable
+    : isLikelyChatModel(model.id);
+}
+
+function costScore(cost: number | null): number {
+  if (typeof cost !== 'number' || Number.isNaN(cost) || !Number.isFinite(cost)) return 1_000_000;
+  return cost;
+}
+
+/**
+ * 3s: the neutral latency assumed for a candidate with no observed average
+ * yet (never routed to, or its 24h window lapsed). Deliberately mid-pack —
+ * a brand-new candidate should not outrank a PROVEN-fast one on the strength
+ * of having no data (that would make "never tried" a strategy), but it also
+ * must not be penalized as if it were confirmed slow, which would mean a
+ * newly configured model can never win a ranking until routed to once by
+ * some other means. Same "unknown is not confirmed bad" reasoning as
+ * NEUTRAL_CAPABILITY_SCORE above.
+ */
+const NEUTRAL_LATENCY_MS = 3_000;
+
+function latencyScore(avgLatencyMs: number | null | undefined): number {
+  if (typeof avgLatencyMs !== 'number' || Number.isNaN(avgLatencyMs) || !Number.isFinite(avgLatencyMs)) {
+    return NEUTRAL_LATENCY_MS;
+  }
+  return Math.max(0, avgLatencyMs);
+}
+
+/** The mode-level rationale shown to the admin — shared by selectRouterCandidate
+ *  and by callers that pick from rankRouterCandidates themselves (e.g. a
+ *  fallback loop) and need the same "why this mode chose this" text. */
+export function reasonFor(mode: AiRoutingStrategy, normalizedPreferred?: string): string {
+  if (mode === 'budget') {
+    return 'Budget mode selected the cheapest access tier, then the cheapest priced model in it.';
+  }
+  if (mode === 'frontier') {
+    return 'Frontier mode prioritized the strongest intelligence tier while keeping the cheapest option in that tier.';
+  }
+  if (mode === 'auto') {
+    return 'Auto mode balanced intelligence versus cost and preferred free or low-cost coverage.';
+  }
+  return normalizedPreferred
+    ? 'Exact model preference resolved to the most suitable available provider and model.'
+    : 'Explicit mode used the selected provider/model directly.';
+}
+
+/** Score every candidate on the four terms the comparator below reads, plus
+ *  the single composite number 'auto' mode blends them into (null for every
+ *  other mode, which ranks lexicographically over these terms instead of
+ *  blending them — see `compareScored`). This is a pure function of ONE
+ *  candidate; it does not know about `mode`'s tie-break ORDER, only about
+ *  what each term IS. */
+function scoreOne(candidate: AiRouterCandidate): Omit<AiRouterCandidateScore, 'candidate' | 'compositeScore'> {
+  return {
+    accessRank: ACCESS_RANK[candidate.accessClass],
+    cost: costScore(candidate.estimatedCostPerMTok),
+    intelligence: intelligenceWithReliability(candidate),
+    latencyMs: latencyScore(candidate.avgLatencyMs),
+  };
+}
+
+/** 'auto' mode's blended composite — the ONE place this formula is written.
+ *  Latency in whole seconds so its weight is comparable to the other terms:
+ *  a candidate answering 10s slower loses ~20 points, roughly one
+ *  intelligence tier's worth of movement — enough to matter, not enough for
+ *  a merely-average-latency frontier model to lose to a fast-but-weak one.
+ *
+ *  Cost only enters the blend for metered/unknown access — subscription and
+ *  free-tier candidates cost the caller nothing PER CALL (the whole point of
+ *  accessRank's -10/-0 spread already capturing that), so their own
+ *  estimatedCostPerMTok is either the underlying metered-equivalent rate
+ *  (irrelevant — not what gets billed) or absent entirely. `costScore`
+ *  returns a sentinel 1_000_000 for "no price on file", which is correct as
+ *  budget/frontier's TIEBREAK (sort by accessRank/intelligence first, so the
+ *  sentinel only ever separates two already-tied candidates) but is fatal
+ *  here: ×0.01 it is a flat -10,000, dwarfing every other term. Observed
+ *  live: subscription flagships with no per-token price (OAuth plans simply
+ *  don't have one — anthropic/claude-sonnet-4-5, openai/gpt-5.6) scored
+ *  around -9,878 despite tier-110 intelligence, guaranteeing they lose to
+ *  any priced free-tier candidate no matter the intelligence gap. */
+function autoComposite(s: AiRouterCandidateScore): number {
+  const costPenalty =
+    s.candidate.accessClass === 'metered' || s.candidate.accessClass === 'unknown' ? s.cost * 0.01 : 0;
+  return s.intelligence * 1.25 - s.accessRank * 10 - costPenalty - (s.latencyMs / 1000) * 2;
+}
+
+/** Best-first comparator over precomputed scores — the single source of
+ *  truth both `rankRouterCandidates` (existing callers, unchanged shape) and
+ *  `rankRouterCandidatesWithScores` (the new explain-everything caller) sort
+ *  with, so the two can never silently disagree on order. */
+function compareScored(mode: AiRoutingStrategy, a: AiRouterCandidateScore, b: AiRouterCandidateScore): number {
+  if (mode === 'budget') {
+    // Cheapest access tier first, then cheapest actual price — cost is
+    // budget mode's whole point, so it has to be the primary key, not a
+    // tiebreak. Intelligence, then live latency, decide ties at equal cost.
+    if (a.accessRank !== b.accessRank) return a.accessRank - b.accessRank;
+    if (a.cost !== b.cost) return a.cost - b.cost;
+    return (
+      b.intelligence - a.intelligence ||
+      a.latencyMs - b.latencyMs ||
+      a.candidate.model.localeCompare(b.candidate.model)
+    );
+  }
+
+  if (mode === 'frontier') {
+    if (a.intelligence !== b.intelligence) return b.intelligence - a.intelligence;
+    if (a.accessRank !== b.accessRank) return a.accessRank - b.accessRank;
+    return a.cost - b.cost || a.latencyMs - b.latencyMs || a.candidate.model.localeCompare(b.candidate.model);
+  }
+
+  if (mode === 'auto') {
+    const aScore = a.compositeScore ?? autoComposite(a);
+    const bScore = b.compositeScore ?? autoComposite(b);
+    if (aScore !== bScore) return bScore - aScore;
+    return a.cost - b.cost || a.latencyMs - b.latencyMs || a.candidate.model.localeCompare(b.candidate.model);
+  }
+
+  // 'explicit' as a FALLBACK-CHAIN ranking (not a single named model — that path never ranks at
+  // all) means "no smart preference beyond cost", the same deterministic floor 'budget' uses as
+  // its own tiebreak, so an admin-pinned model's own fallback list still lands somewhere sane.
+  // Live latency breaks cost ties before the final alphabetical floor.
+  return a.cost - b.cost || a.latencyMs - b.latencyMs || a.candidate.model.localeCompare(b.candidate.model);
+}
+
+function filterByPreference(
+  candidates: AiRouterCandidate[],
+  preferredModel: string | undefined,
+): AiRouterCandidate[] {
+  const normalizedPreferred = preferredModel?.trim().toLowerCase();
+  if (!normalizedPreferred) return candidates;
+  const filtered = candidates.filter((candidate) => normalize(candidate.model).includes(normalizedPreferred));
+  return filtered.length > 0 ? filtered : candidates;
+}
+
+/**
+ * Every eligible candidate, ranked best-first for `mode`, WITH the score
+ * breakdown that put it there — the "why" a canned per-mode sentence cannot
+ * express (which candidates were even considered, and by how much the winner
+ * actually won). `rankRouterCandidates` below is a thin projection of this
+ * for the many callers that only ever wanted the candidate list.
+ */
+export function rankRouterCandidatesWithScores(
+  candidates: AiRouterCandidate[],
+  mode: AiRoutingStrategy,
+  preferredModel?: string,
+): AiRouterCandidateScore[] {
+  if (candidates.length === 0) return [];
+  const pool = filterByPreference(candidates, preferredModel);
+  const scored: AiRouterCandidateScore[] = pool.map((candidate) => {
+    const base = scoreOne(candidate);
+    const withCandidate = { candidate, ...base, compositeScore: null };
+    return { ...withCandidate, compositeScore: mode === 'auto' ? autoComposite(withCandidate) : null };
+  });
+  return scored.sort((a, b) => compareScored(mode, a, b));
+}
+
+/**
+ * Every eligible candidate, ranked best-first for `mode`. Callers that need
+ * resilience (auto/budget/frontier) should walk this list and fall back to
+ * the next entry on failure, rather than trusting the top pick to always be
+ * reachable — a router mode's whole promise is "give me AN answer", not
+ * "give me this one specific model or nothing". Only `explicit` mode, where
+ * the caller named one exact model, should fail on that model's own error.
+ */
+export function rankRouterCandidates(
+  candidates: AiRouterCandidate[],
+  mode: AiRoutingStrategy,
+  preferredModel?: string,
+): AiRouterCandidate[] {
+  return rankRouterCandidatesWithScores(candidates, mode, preferredModel).map((s) => s.candidate);
+}
+
+/** Top-ranked candidate only — explicit mode, tests, and any caller that
+ *  doesn't need fallback. Prefer `rankRouterCandidates` for auto/budget/frontier
+ *  call sites so a failed top pick doesn't dead-end the whole request. */
+export function selectRouterCandidate(
+  candidates: AiRouterCandidate[],
+  mode: AiRoutingStrategy,
+  preferredModel?: string,
+): AiRouterSelection | null {
+  const ranked = rankRouterCandidates(candidates, mode, preferredModel);
+  const selected = ranked[0];
+  if (!selected) return null;
+  return {
+    provider: selected.provider,
+    model: selected.model,
+    reason: reasonFor(mode, preferredModel?.trim().toLowerCase()),
+  };
+}

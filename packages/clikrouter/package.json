@@ -1,0 +1,53 @@
+{
+  "name": "@clikdeploy/clikrouter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provider-agnostic AI request normalization and router-selection logic: one dialect layer across ~40 providers (registry, request building, response extraction) plus the candidate-ranking algorithm. No storage, no credentials, no platform-specific business logic — those stay in the app that wires this up (see @clikdeploy/platform-domains's connectors for ClikDeploy's own Redis/Postgres-backed wiring: live latency/cost EWMAs, cooldowns, credential resolution, billing attribution).",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:vitest": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^5.0.40",
+    "@ai-sdk/anthropic": "^4.0.27",
+    "@ai-sdk/assemblyai": "^3.0.18",
+    "@ai-sdk/azure": "^4.0.28",
+    "@ai-sdk/baseten": "^2.0.20",
+    "@ai-sdk/cerebras": "^3.0.20",
+    "@ai-sdk/cohere": "^4.0.18",
+    "@ai-sdk/deepgram": "^3.0.18",
+    "@ai-sdk/deepinfra": "^3.0.20",
+    "@ai-sdk/deepseek": "^3.0.19",
+    "@ai-sdk/elevenlabs": "^3.0.19",
+    "@ai-sdk/fal": "^3.0.19",
+    "@ai-sdk/fireworks": "^3.0.22",
+    "@ai-sdk/gladia": "^3.0.18",
+    "@ai-sdk/google": "^4.0.31",
+    "@ai-sdk/google-vertex": "^5.0.38",
+    "@ai-sdk/groq": "^4.0.19",
+    "@ai-sdk/hume": "^3.0.18",
+    "@ai-sdk/lmnt": "^3.0.18",
+    "@ai-sdk/luma": "^3.0.19",
+    "@ai-sdk/mistral": "^4.0.20",
+    "@ai-sdk/openai": "^4.0.27",
+    "@ai-sdk/openai-compatible": "^3.0.20",
+    "@ai-sdk/perplexity": "^4.0.20",
+    "@ai-sdk/replicate": "^3.0.19",
+    "@ai-sdk/revai": "^3.0.18",
+    "@ai-sdk/togetherai": "^3.0.21",
+    "@ai-sdk/voyage": "^2.0.18",
+    "@ai-sdk/xai": "^4.0.25",
+    "ai": "^7.0.48"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.2",
+    "typescript": "6.0.3",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
