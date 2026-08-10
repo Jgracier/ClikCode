@@ -198,8 +198,18 @@ export function isLikelyChatModel(modelId: string): boolean {
   const patterns: RegExp[] = [
     // Text-to-speech / audio generation.
     /\btts\b|-tts-|-tts$|text-to-speech|\bspeech-\d|melotts|\baura(-\d)?\b|\bsonic\b/,
-    // Speech-to-text / transcription.
-    /whisper|paraformer|transcribe|nova-\d.*transcri|\basr\b/,
+    // Speech-to-text / transcription / audio-in chat.
+    //
+    // `voxtral` is Mistral's AUDIO family and is the reason this line was widened.
+    // MEASURED 2026-08-10: with cliknet enabled, EVERY remediation run for the whole
+    // 20-app fleet routed to mistral/voxtral-small-latest and voxtral-small-2507 —
+    // an audio model handed tool definitions to propose code fixes. Mistral's catalog
+    // publishes no per-model modality field, so `chatCapable` was undefined and this
+    // heuristic was the only thing standing between an audio model and the agent lane;
+    // it recognized no `voxtral` shape, so the model was treated as chat-eligible.
+    // Confirmed against the live router state: no `ai:model-chat-capable:voxtral-*`
+    // key exists, i.e. no vendor ever published a verdict for it.
+    /whisper|paraformer|transcribe|nova-\d.*transcri|\basr\b|voxtral|\bqwen\d*-audio\b|-audio$|-audio-|audio-preview|\bseamless(m4t)?\b|\bwav2vec\b|\bmms-\d/,
     // Embeddings / reranking.
     /\bembed(ding)?s?\b|-embed-|bge-|gte-|(^|-)e5-|nomic-embed|embeddinggemma|\brerank(er)?\b/,
     // Image / video generation.
