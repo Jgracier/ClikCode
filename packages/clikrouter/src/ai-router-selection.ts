@@ -254,6 +254,29 @@ export function isLikelyChatModel(modelId: string): boolean {
 }
 
 /**
+ * An ABSOLUTE veto, checked BEFORE any vendor `chatCapable` field — unlike
+ * every other exclusion in this file, a real modality fact from the vendor
+ * is deliberately NOT allowed to override this one.
+ *
+ * Fill-In-the-Middle (code-completion: prompt+suffix, not chat turns) is a
+ * REQUEST-SHAPE incompatibility, not a modality question `chatCapable` was
+ * designed to answer. MEASURED LIVE 2026-08-10: Mistral's catalog publishes
+ * `capabilities.completion_chat: true` for mistral-code-fim-latest — almost
+ * certainly meaning "reachable via our /v1/chat/completions endpoint" (true
+ * for nearly every model Mistral hosts, FIM included), not "accepts
+ * open-ended conversation". Routed to for a real user's AI_ASSISTANT_CHAT
+ * turn, it produced exactly the unusable non-answer ("I don't have that
+ * capability") a model built for prompt/suffix completion would, since this
+ * platform only ever sends normal chat-turn requests, never FIM-shaped
+ * (prompt/suffix) ones. A vendor field answering a different question than
+ * the one being asked is not real evidence for THIS question, so it does
+ * not get the usual "vendor beats heuristic" precedence here.
+ */
+export function isFillInMiddleModel(modelId: string): boolean {
+  return /\bfim\b|-fim-|-fim$/i.test(modelId);
+}
+
+/**
  * Whether a model is eligible for text chat routing, preferring real
  * evidence over a guess: a discovered model's `chatCapable` field (set at
  * catalog-parse time from the vendor's OWN per-model modality field —
@@ -261,12 +284,14 @@ export function isLikelyChatModel(modelId: string): boolean {
  * task.name — see probe-adapters.ts's deriveChatCapable) is authoritative
  * when the vendor published one for this model. `isLikelyChatModel`'s name
  * heuristic is only the fallback for the (common) case where the vendor's
- * catalog carries no modality field at all.
+ * catalog carries no modality field at all. isFillInMiddleModel is checked
+ * FIRST and overrides both — see its own doc comment for why.
  */
 export function resolveChatCapable(model: {
   id: string;
   chatCapable?: boolean;
 }): boolean {
+  if (isFillInMiddleModel(model.id)) return false;
   return model.chatCapable !== undefined
     ? model.chatCapable
     : isLikelyChatModel(model.id);
