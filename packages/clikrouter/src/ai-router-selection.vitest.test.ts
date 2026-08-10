@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   selectRouterCandidate,
   isLikelyChatModel,
+  isFillInMiddleModel,
   resolveChatCapable,
   rankRouterCandidatesWithScores,
   type AiRouterCandidate,
@@ -223,6 +224,27 @@ describe('resolveChatCapable', () => {
     expect(resolveChatCapable({ id: 'grok-imagine-video' })).toBe(false);
     expect(resolveChatCapable({ id: 'anthropic/claude-opus-5' })).toBe(true);
   });
+
+  it('vetoes a fill-in-the-middle model EVEN when the vendor explicitly claims chatCapable:true', () => {
+    // MEASURED LIVE 2026-08-10: Mistral publishes chatCapable:true for
+    // mistral-code-fim-latest — the one case where the vendor field does
+    // NOT win, because it's answering "is this reachable via our
+    // chat/completions endpoint", not "does this accept a chat-turns
+    // request" (FIM models take prompt/suffix, not chat turns).
+    expect(resolveChatCapable({ id: 'mistral-code-fim-latest', chatCapable: true })).toBe(false);
+  });
+});
+
+describe('isFillInMiddleModel', () => {
+  const fim = ['mistral-code-fim-latest', 'codestral-fim-2508', 'some-model-fim', 'fim-completion-v2'];
+  for (const id of fim) {
+    it(`flags ${id}`, () => expect(isFillInMiddleModel(id)).toBe(true));
+  }
+
+  const notFim = ['claude-opus-5', 'gpt-5.6-sol', 'confirmation-model', 'infimum-7b'];
+  for (const id of notFim) {
+    it(`does not false-positive on ${id}`, () => expect(isFillInMiddleModel(id)).toBe(false));
+  }
 });
 
 describe('agenticIndex + trackRecordSuccessRate — capability is REAL EVIDENCE ONLY, never a name guess', () => {
