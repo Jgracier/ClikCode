@@ -215,6 +215,46 @@ describe('buildAiChatRequest', () => {
     expect(req.alwaysSse).toBe(true);
   });
 
+  // The chokepoint guard. Anthropic's HTTP API DOES answer a Claude
+  // subscription token, so without this a lane that forgot to route to the
+  // harness would spend the subscription on an unsupported surface and look
+  // fine until the rate-limited bucket started returning 429s.
+  it('refuses to build an HTTP request for a harness-transport subscription', () => {
+    expect(() =>
+      buildAiChatRequest({
+        provider: 'anthropic',
+        model: 'claude-sonnet-5',
+        apiKey: 'oauth-token',
+        credentialSource: 'oauth',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    ).toThrow(/cannot be dispatched over HTTP.*harness/s);
+  });
+
+  it('refuses to build one for a provider with no subscription transport', () => {
+    expect(() =>
+      buildAiChatRequest({
+        provider: 'xai',
+        model: 'grok-4-1-fast',
+        apiKey: 'oauth-token',
+        credentialSource: 'oauth',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    ).toThrow(/no working subscription dispatch/);
+  });
+
+  it('still builds normally for an anthropic API key', () => {
+    const req = buildAiChatRequest({
+      provider: 'anthropic',
+      model: 'claude-sonnet-5',
+      apiKey: 'sk-ant-x',
+      credentialSource: 'platform-secret',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(req.dialect).toBe('anthropic-messages');
+    expect(req.headers['x-api-key']).toBe('sk-ant-x');
+  });
+
   it('leaves an openai API key on the public API', () => {
     const req = buildAiChatRequest({
       provider: 'openai',

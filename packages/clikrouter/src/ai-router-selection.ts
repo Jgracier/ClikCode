@@ -16,7 +16,19 @@ export type AiRoutingStrategy = 'auto' | 'budget' | 'frontier' | 'explicit';
 export interface AiRouterCandidate {
   provider: string;
   model: string;
-  accessClass: 'subscription' | 'free-tier' | 'metered' | 'unknown';
+  /**
+   * 'subscription' — an OAuth credential dispatched DIRECTLY over HTTP
+   * (subscriptionTransport: 'direct' — Codex, Code Assist). 'subscription-
+   * harness' — an OAuth credential spent through the vendor's own CLI
+   * (subscriptionTransport: 'harness' — Anthropic → Claude Code). Both are
+   * "you already have access, this is not metered spend" for ranking/cost
+   * purposes (see ACCESS_RANK below), but kept as distinct literals so a
+   * consumer can tell "plain HTTP call" apart from "runs a real subprocess"
+   * by accessClass alone — the harness tier carries a materially bigger
+   * trust surface that a user-facing dispatch mode must be able to exclude
+   * without also excluding the direct one.
+   */
+  accessClass: 'subscription' | 'subscription-harness' | 'free-tier' | 'metered' | 'unknown';
   estimatedCostPerMTok: number | null;
   /**
    * Live exponential-moving-average response latency in ms (ai-model-latency.ts),
@@ -71,6 +83,10 @@ export interface AiRouterCandidateScore {
 const ACCESS_RANK: Record<AiRouterCandidate['accessClass'], number> = {
   'free-tier': 0,
   subscription: 1,
+  // Same rank as 'subscription' — both are non-metered included capacity;
+  // the transport distinction matters for ELIGIBILITY (ai-router-candidates.ts),
+  // not for how a harness-dispatched candidate should rank once it IS eligible.
+  'subscription-harness': 1,
   metered: 2,
   unknown: 3,
 };

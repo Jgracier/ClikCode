@@ -5,8 +5,10 @@
 // task triage, health probes) hits OAuth and API-key credentials the same way.
 // Server-only (no client imports).
 
+import { randomUUID } from "node:crypto";
 import {
   getAiProvider,
+  subscriptionDispatchesDirect,
   type AiProviderId,
   type AiProviderSpec,
 } from "./ai-provider-registry";
@@ -240,6 +242,12 @@ function buildOauthSurfaceRequest(
       body: {
         model: input.model,
         ...(input.projectId ? { project: input.projectId } : {}),
+        // Per-turn identifier the Gemini CLI's own converter.js generates
+        // (verified: @google/gemini-cli-core@0.54.4's toGenerateContentRequest
+        // wraps every call with one) — a fresh id each turn since it labels
+        // THIS prompt, not a stable per-account/per-session value like
+        // accountId/projectId above.
+        user_prompt_id: randomUUID(),
         request: {
           contents: turns.map((t) => ({
             // Code Assist speaks Vertex roles: the assistant is 'model'.
@@ -336,6 +344,30 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   // traffic for the same provider is untouched and still takes the path below.
   if (input.credentialSource === "oauth" && spec?.oauthChat) {
     return buildOauthSurfaceRequest(input, spec, auth);
+  }
+
+  // A harness-transport subscription has NO HTTP request to build — the vendor's
+  // CLI is its transport. Reaching here with one means a calling lane forgot to
+  // route it (see subscriptionUsesHarness's callers), and the cost of continuing
+  // is silent: Anthropic's API does answer a Claude subscription token, so this
+  // would quietly spend it on an unsupported surface that additionally needs
+  // client-spoofing headers to avoid a rate-limited bucket, and nothing would
+  // look broken until the 429s started.
+  //
+  // Throwing makes that a loud failure at the one chokepoint every HTTP dispatch
+  // passes through, instead of a safety property five separate call sites each
+  // have to remember. Same reasoning for a provider with no subscription
+  // transport at all (xAI): a request built for it is measured to 403, so
+  // building it is never the right outcome.
+  if (input.credentialSource === "oauth" && !subscriptionDispatchesDirect(spec)) {
+    const transport = spec?.subscriptionTransport ?? "none";
+    throw new Error(
+      `${input.provider}: a subscription credential cannot be dispatched over HTTP ` +
+        `(subscriptionTransport: ${transport}). ` +
+        (transport === "harness"
+          ? "Route it through the vendor's CLI (runHarnessChat) instead."
+          : "This provider has no working subscription dispatch; use an API key."),
+    );
   }
 
   // openai-chat is the DEFAULT dialect, full stop: a row opts out by declaring `chatDialect`.
