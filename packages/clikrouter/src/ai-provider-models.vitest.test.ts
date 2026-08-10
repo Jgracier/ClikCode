@@ -15,6 +15,7 @@ import {
   firstPartyProviderIds,
   isPermanentAiCallFailure,
   isAccountScopedAiCallFailure,
+  streamAiChatTurn,
 } from './ai-provider-models';
 import {
   AI_PROVIDERS as AI_PROVIDERS_CONST,
@@ -23,6 +24,8 @@ import {
   providerCategory,
   providerModalities,
   isTextRoutable,
+  getAiProvider,
+  subscriptionDispatchesDirect,
   type AiProviderSpec,
 } from './ai-provider-registry';
 
@@ -269,6 +272,108 @@ describe('streamAiChatTurn recovers the REAL error instead of the SDK generic wr
     ).rejects.toBe(real404);
     vi.doUnmock('ai');
     vi.resetModules();
+  });
+});
+
+describe('streamAiChatTurn — direct-transport OAuth subscription dispatch', () => {
+  // openai's registry row declares subscriptionTransport: 'direct' with an
+  // oauthChat surface (codex-responses, always SSE, aggregated back into the
+  // Responses shape) — this is the whole reason a caller can pass
+  // credentialSource: 'oauth' at all without shelling out to a CLI.
+  it('bypasses the AI SDK entirely and dispatches through the codex-responses surface', async () => {
+    const sse =
+      'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"hello from codex"}]}]}}\n\n';
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'x-request-id': 'abc' }),
+      text: async () => sse,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const result = await streamAiChatTurn({
+        provider: 'openai',
+        model: 'gpt-5.6-luna',
+        apiKey: 'oauth-token',
+        credentialSource: 'oauth',
+        accountId: 'acct-123',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(result.text).toBe('hello from codex');
+      expect(result.toolCalls).toEqual([]);
+      expect(result.headers).toEqual({ 'x-request-id': 'abc' });
+      // Proof the AI SDK's own factory/streamText path was never touched: the
+      // only network call is the one this test's fetch mock made.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('chatgpt.com');
+      expect((init.headers as Record<string, string>)['chatgpt-account-id']).toBe('acct-123');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('calls onDelta exactly once with the full text (no incremental channel on this transport)', async () => {
+    const sse =
+      'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"one shot"}]}]}}\n\n';
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: async () => sse,
+    })));
+    try {
+      const deltas: string[] = [];
+      await streamAiChatTurn({
+        provider: 'openai',
+        model: 'gpt-5.6-luna',
+        apiKey: 'oauth-token',
+        credentialSource: 'oauth',
+        messages: [{ role: 'user', content: 'hi' }],
+        onDelta: (d) => deltas.push(d),
+      });
+      expect(deltas).toEqual(['one shot']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('throws a real APICallError with the response statusCode on a non-ok response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      headers: new Headers(),
+      text: async () => '{"error":"invalid token"}',
+    })));
+    try {
+      const err = await streamAiChatTurn({
+        provider: 'openai',
+        model: 'gpt-5.6-luna',
+        apiKey: 'oauth-token',
+        credentialSource: 'oauth',
+        messages: [{ role: 'user', content: 'hi' }],
+      }).catch((e) => e);
+      expect(APICallError.isInstance(err)).toBe(true);
+      expect((err as APICallError).statusCode).toBe(401);
+      // The whole reason this constructs a real APICallError instead of a
+      // plain Error: isPermanentAiCallFailure must classify a dead
+      // subscription credential exactly like a dead API key.
+      expect(isPermanentAiCallFailure(err)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // anthropic's subscriptionTransport is 'harness', not 'direct' — the branch
+  // predicate itself (subscriptionDispatchesDirect) is what keeps a
+  // credentialSource: 'oauth' call for it OUT of dispatchOauthSurfaceChatTurn,
+  // covered directly rather than through a full streamAiChatTurn call: the AI
+  // SDK's own factory also uses global fetch, so stubbing it here couldn't
+  // distinguish "the direct branch was skipped" from "the SDK path made its
+  // own real network call" without mocking the entire SDK, which the
+  // preceding describe block already does for a different assertion.
+  it('the branch predicate is false for a harness-transport provider (anthropic)', () => {
+    expect(subscriptionDispatchesDirect(getAiProvider('anthropic'))).toBe(false);
   });
 });
 

@@ -64,9 +64,19 @@ import { createReplicate } from "@ai-sdk/replicate";
 import {
   getAiProvider,
   providerModalities,
+  subscriptionDispatchesDirect,
   type AiModality,
   type AiProviderSpec,
 } from "./ai-provider-registry";
+import {
+  buildAiChatRequest,
+  readAiChatResponseBody,
+  extractChatText,
+  extractToolCalls,
+  extractStopReason,
+  extractProviderCostMicroUsd,
+  type AiToolSpec,
+} from "./ai-provider-http";
 
 interface FactoryOptions {
   apiKey?: string;
@@ -204,13 +214,44 @@ export interface AiChatTurnInput {
   provider: string;
   model: string;
   apiKey?: string;
+  /**
+   * Absent/'platform-secret'/'env' (any API key) dispatches through the AI
+   * SDK exactly as before. 'oauth' on a provider whose registry row declares
+   * `subscriptionTransport: 'direct'` (Codex, Code Assist) is dispatched
+   * through the SAME hand-rolled request/response pipeline
+   * ai-provider-http.ts already built and tested for those non-standard
+   * surfaces, since neither speaks the standard chat-completions/messages
+   * API an AI-SDK provider factory expects. This branch is router-level and
+   * credential-driven — every caller (ClikAgent, ClikNet, ClikEvents, admin
+   * test tools) gets it automatically with no agent-specific code anywhere.
+   * 'oauth' on a `harness`-transport or unspendable provider is never valid
+   * input here — see resolveEffectiveCredential's own doc comment for where
+   * that's already refused before a credential ever reaches this function.
+   */
+  credentialSource?: "oauth" | "platform-secret" | "env";
+  /** Required by the Codex direct-transport surface alongside the bearer
+   *  token; ignored otherwise. See ChatTurnInput.accountId in
+   *  ai-provider-http.ts for the full reasoning. */
+  accountId?: string;
+  /** Required by the Code Assist direct-transport surface; ignored
+   *  otherwise. See ChatTurnInput.projectId in ai-provider-http.ts. */
+  projectId?: string;
   system?: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   tools?: AiChatTool[];
   temperature?: number;
   maxOutputTokens?: number;
   abortSignal?: AbortSignal;
-  /** Called with each text delta as it arrives. Absent = buffer, no streaming. */
+  /**
+   * Called with each text delta as it arrives. Absent = buffer, no streaming.
+   * A direct-transport OAuth dispatch (see `credentialSource` above) has no
+   * incremental delta channel of its own — Codex answers as one aggregated
+   * SSE stream that is collected into a single final text before this
+   * function ever sees it — so `onDelta`, if given, fires exactly ONCE with
+   * the complete text rather than token-by-token. A real degradation for a
+   * live-typing UI, but a correct one: the alternative is silently never
+   * calling it at all, which would look like the model produced no output.
+   */
   onDelta?: (text: string) => void;
   /**
    * Passed straight to the SDK's `providerOptions.openai.reasoningEffort` (the only vendor with
@@ -338,6 +379,98 @@ export function isAccountScopedAiCallFailure(error: unknown): boolean {
 }
 
 /**
+ * Build an APICallError with a real statusCode from a failed direct-transport
+ * HTTP response, so isPermanentAiCallFailure/isAccountScopedAiCallFailure
+ * (both of which only recognize APICallError instances) classify a dead Codex
+ * or Code Assist credential exactly the same way they already classify a dead
+ * AI-SDK one — one failure-shape contract for every caller of this function,
+ * regardless of which transport actually served (or refused) the request.
+ */
+function oauthSurfaceApiCallError(
+  url: string,
+  requestBody: Record<string, unknown>,
+  status: number,
+  responseHeaders: Record<string, string>,
+  responseBody: string,
+): APICallError {
+  return new APICallError({
+    message: `${status} response from subscription surface`,
+    url,
+    requestBodyValues: requestBody,
+    statusCode: status,
+    responseHeaders,
+    responseBody,
+    // Same retryability convention the AI SDK itself applies: a server error
+    // or rate limit can clear up on its own; anything else (400/401/403/404)
+    // is a configuration problem no amount of waiting fixes.
+    isRetryable: status >= 500 || status === 429,
+  });
+}
+
+/**
+ * Run one chat turn against a DIRECT-transport OAuth subscription (Codex,
+ * Code Assist) — the non-standard surfaces ai-provider-http.ts already has a
+ * complete, hand-rolled request/response pipeline for, since neither speaks
+ * the standard API shape an AI-SDK provider factory expects. Returns the
+ * exact same AiChatTurnResult shape the AI-SDK path returns, so callers never
+ * know which transport actually served a given turn.
+ */
+async function dispatchOauthSurfaceChatTurn(
+  input: AiChatTurnInput,
+): Promise<AiChatTurnResult> {
+  const tools: AiToolSpec[] = (input.tools ?? []).map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+  }));
+  const built = buildAiChatRequest({
+    provider: input.provider,
+    model: input.model,
+    apiKey: input.apiKey ?? "",
+    credentialSource: "oauth",
+    ...(input.system ? { system: input.system } : {}),
+    messages: input.messages,
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.maxOutputTokens !== undefined ? { maxTokens: input.maxOutputTokens } : {}),
+    ...(tools.length > 0 ? { tools } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+  });
+
+  const response = await fetch(built.url, {
+    method: "POST",
+    headers: built.headers,
+    body: JSON.stringify(built.body),
+    ...(input.abortSignal ? { signal: input.abortSignal } : {}),
+  });
+  const headers = Object.fromEntries(response.headers.entries());
+  if (!response.ok) {
+    const responseBody = await response.text().catch(() => "");
+    throw oauthSurfaceApiCallError(built.url, built.body, response.status, headers, responseBody);
+  }
+  const data = await readAiChatResponseBody(built, response);
+
+  const text = extractChatText(built.dialect, data);
+  // No incremental delta channel on this transport (see AiChatTurnInput's own
+  // doc comment) — one call with the complete text, not a per-token stream.
+  if (text) input.onDelta?.(text);
+
+  return {
+    text,
+    toolCalls: extractToolCalls(built.dialect, data),
+    // No verified usage field for either dialect's response shape yet (see
+    // this module's own "never guess" convention) — absent, not invented.
+    usage: {},
+    headers,
+    stopReason: extractStopReason(built.dialect, data),
+    ...((() => {
+      const costMicroUsd = extractProviderCostMicroUsd(input.provider, built.dialect, data);
+      return costMicroUsd !== undefined ? { costMicroUsd } : {};
+    })()),
+  };
+}
+
+/**
  * Run one chat turn: streams text deltas through `onDelta` and returns the
  * turn's prose, its native tool calls, and the observed usage.
  *
@@ -348,6 +481,17 @@ export function isAccountScopedAiCallFailure(error: unknown): boolean {
 export async function streamAiChatTurn(
   input: AiChatTurnInput,
 ): Promise<AiChatTurnResult> {
+  // Credential-driven, not caller-driven: ANY caller (ClikAgent, ClikNet,
+  // ClikEvents, admin test tools) that happens to resolve a direct-transport
+  // OAuth credential gets routed correctly with no agent-specific branching
+  // of its own. A harness-transport subscription never reaches here with
+  // credentialSource 'oauth' in the first place — resolveEffectiveCredential
+  // refuses to hand one out except in 'harness' mode, whose callers dispatch
+  // it through their own separate runHarnessChat, never through this function.
+  if (input.credentialSource === "oauth" && subscriptionDispatchesDirect(getAiProvider(input.provider))) {
+    return dispatchOauthSurfaceChatTurn(input);
+  }
+
   const model = resolveLanguageModel({
     provider: input.provider,
     model: input.model,
