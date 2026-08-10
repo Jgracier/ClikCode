@@ -55,6 +55,15 @@ export interface AiRouterCandidate {
    * posture as avgLatencyMs.
    */
   trackRecordSuccessRate?: number | null;
+  /**
+   * Trailing-14-day count of real observed "I don't have that capability"
+   * hallucinations FROM THIS EXACT MODEL, despite a real tool being attached
+   * to the call (ai-model-capability.ts's recordObservedCapabilityRefusal /
+   * readCapabilityRefusalCounts — cross-provider, keyed by
+   * normalizeModelKey). Absent or 0 means no observed refusals, never
+   * "confirmed reliable". Same caller-attaches posture as avgLatencyMs.
+   */
+  capabilityRefusalCount?: number | null;
 }
 
 export interface AiRouterSelection {
@@ -157,12 +166,33 @@ function baseCapabilityScore(candidate: AiRouterCandidate): number {
  * yet" must never be penalized the way "confirmed unreliable" is.
  */
 function intelligenceWithReliability(candidate: AiRouterCandidate): number {
-  const capability = baseCapabilityScore(candidate);
+  let capability = baseCapabilityScore(candidate);
   if (
     typeof candidate.trackRecordSuccessRate === 'number' &&
     Number.isFinite(candidate.trackRecordSuccessRate)
   ) {
-    return capability * candidate.trackRecordSuccessRate;
+    capability *= candidate.trackRecordSuccessRate;
+  }
+  // A SECOND, independent multiplier — deliberately not folded into the
+  // track-record one above: trackRecordSuccessRate answers "did the HTTP
+  // call succeed", while this answers "did the model actually USE an
+  // available tool instead of hallucinating a refusal" — a real model this
+  // platform has caught doing that repeatedly gets discounted here even on
+  // a call that "succeeded" by every other measure. A NUDGE, not a ban —
+  // 15% off per observed refusal, floored at a 60% total cut, so a model
+  // with real advantages elsewhere (free/subscription access, low latency)
+  // can still win; it just has to actually earn it against a clean-record
+  // alternative instead of coasting on being cheapest. See
+  // ai-model-capability.ts's own header for why this is a decaying,
+  // cross-provider, "nudge not ban" signal rather than the binary
+  // vendor/tested/observed tool-calling-SUPPORT tiers above it.
+  if (
+    typeof candidate.capabilityRefusalCount === 'number' &&
+    Number.isFinite(candidate.capabilityRefusalCount) &&
+    candidate.capabilityRefusalCount > 0
+  ) {
+    const refusalFactor = Math.max(0.4, 1 - candidate.capabilityRefusalCount * 0.15);
+    capability *= refusalFactor;
   }
   return capability;
 }

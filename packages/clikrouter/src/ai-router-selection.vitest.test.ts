@@ -285,3 +285,52 @@ describe('agenticIndex + trackRecordSuccessRate — capability is REAL EVIDENCE 
     expect(ranked[0]!.intelligence).toBe(45); // 50 * 0.9
   });
 });
+
+describe('capabilityRefusalCount — a NUDGE against real observed "I can\'t do that" hallucinations, never a ban', () => {
+  it('a single observed refusal costs 15% of capability, not more', () => {
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'once-refused', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80, capabilityRefusalCount: 1 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
+    expect(ranked[0]!.intelligence).toBeCloseTo(68, 5); // 80 * 0.85
+  });
+
+  it('the penalty is FLOORED at a 60% total cut, however many refusals accumulate', () => {
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'many-refusals', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80, capabilityRefusalCount: 20 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
+    expect(ranked[0]!.intelligence).toBeCloseTo(32, 5); // 80 * 0.4 floor, never lower
+  });
+
+  it('zero or absent refusal count leaves capability unpenalized — absence is not evidence', () => {
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'clean-explicit-zero', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80, capabilityRefusalCount: 0 },
+      { provider: 'clean-absent', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
+    for (const s of ranked) expect(s.intelligence).toBe(80);
+  });
+
+  it('composes with trackRecordSuccessRate as a second, independent multiplier', () => {
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'both-signals', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80, trackRecordSuccessRate: 0.5, capabilityRefusalCount: 1 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
+    expect(ranked[0]!.intelligence).toBeCloseTo(80 * 0.5 * 0.85, 5);
+  });
+
+  it('a real, repeated refusal nudges a cheaper model below a clean-record alternative it used to beat', () => {
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'weak-but-untested', model: 'small', accessClass: 'free-tier', estimatedCostPerMTok: 0.04, capabilityRefusalCount: 3 },
+      { provider: 'clean-record', model: 'other', accessClass: 'free-tier', estimatedCostPerMTok: 0.1 },
+    ];
+    // Both start from the same NEUTRAL_CAPABILITY_SCORE (50, no agenticIndex)
+    // — without the penalty they'd tie on intelligence and auto mode would
+    // prefer the cheaper one. 3 refusals cut the first to 50*0.55=27.5,
+    // enough for auto's blend to prefer the clean-record alternative despite
+    // its higher price.
+    const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
+    expect(ranked[0]!.candidate.provider).toBe('clean-record');
+  });
+});
