@@ -105,6 +105,37 @@ export function textRoutableProviders(): string[] {
   return AI_PROVIDERS.filter(isTextRoutable).map((p) => p.id);
 }
 
+// ── Subscription (OAuth) transport ───────────────────────────────────────────
+// Three helpers rather than one boolean, because there are genuinely THREE
+// states (direct / harness / no subscription dispatch at all) and every lane
+// that collapses them to two gets one of the cases wrong. Reading
+// `subscriptionTransport` directly at a call site is the thing these exist to
+// prevent — see ai-router-candidates.ts, which used to test a boolean and so
+// treated "spend this through the CLI" as "cannot be spent".
+
+/** This provider's subscription token is sent over HTTP (see `oauthChat`). */
+export function subscriptionDispatchesDirect(
+  spec: AiProviderSpec | undefined,
+): boolean {
+  return spec?.subscriptionTransport === "direct";
+}
+
+/** This provider's subscription is spent through the vendor's own CLI — the
+ *  PRIMARY path for that tier, not a fallback from a failed HTTP attempt. */
+export function subscriptionUsesHarness(
+  spec: AiProviderSpec | undefined,
+): boolean {
+  return spec?.subscriptionTransport === "harness";
+}
+
+/** True when a subscription credential for this provider can be spent at all,
+ *  by either transport. False means connectable but unusable (xAI today). */
+export function subscriptionIsSpendable(
+  spec: AiProviderSpec | undefined,
+): boolean {
+  return Boolean(spec?.subscriptionTransport);
+}
+
 /** Rows grouped for the admin console, in header order, skipping empty sections. */
 export function providersByCategory(): Array<{
   category: AiProviderCategory;

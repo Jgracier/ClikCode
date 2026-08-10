@@ -148,29 +148,202 @@ export interface ChatTurnInput {
    * is treating a symptom. Pass tools here and read them back via extractToolCalls.
    */
   tools?: AiToolSpec[];
+  /**
+   * Second identifier some OAuth surfaces require ALONGSIDE the bearer token.
+   * Resolved once at credential-resolution time (resolve-credential.ts reads it
+   * from the token's own JWT claims per `oauthAccountIdClaim`) rather than
+   * re-parsed here, so every dispatch site agrees by construction.
+   *
+   * Codex rejects the call without it (`chatgpt-account-id`).
+   */
+  accountId?: string;
+  /**
+   * Google Code Assist's `project` — `cloudaicompanionProject` from
+   * :loadCodeAssist. REQUIRED on that dialect: the endpoint 500s on every
+   * request when it is missing, which is a failure mode worth naming because it
+   * looks like an outage rather than a malformed request.
+   */
+  projectId?: string;
 }
 
 export interface BuiltChatRequest {
   url: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
-  dialect: "openai-chat" | "anthropic-messages" | "openai-responses";
+  dialect:
+    | "openai-chat"
+    | "anthropic-messages"
+    | "openai-responses"
+    | "codex-responses"
+    | "code-assist";
+  /**
+   * This surface answers with an SSE stream even when the caller wants one JSON
+   * object, so a non-streaming caller MUST aggregate the event stream rather
+   * than `await res.json()`. Declared on the built request because only the
+   * builder knows the dialect; see aggregateSseResponse().
+   */
+  alwaysSse?: boolean;
+}
+
+/**
+ * Split the caller's turn into the (system, non-system) halves every
+ * non-chat/completions dialect needs — all three of them hoist system out of
+ * the message list rather than carrying it as a role.
+ */
+function splitSystemAndTurns(input: ChatTurnInput): {
+  instructions: string;
+  turns: Array<{ role: "user" | "assistant"; content: string }>;
+} {
+  const instructions = [
+    input.system,
+    ...input.messages.filter((m) => m.role === "system").map((m) => m.content),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const turns = input.messages
+    .filter((m) => m.role !== "system")
+    .map((m) => ({
+      role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+      content: m.content,
+    }));
+  if (turns.length === 0) turns.push({ role: "user", content: "Begin." });
+  return { instructions, turns };
+}
+
+/**
+ * Build a request against a vendor's SUBSCRIPTION surface (registry `oauthChat`).
+ *
+ * This is the whole reason an OAuth credential no longer needs the vendor's CLI
+ * for these providers: the CLI's only privileged act was knowing this host, these
+ * headers and this body shape.
+ */
+function buildOauthSurfaceRequest(
+  input: ChatTurnInput,
+  spec: NonNullable<ReturnType<typeof getAiProvider>>,
+  auth: Record<string, string>,
+): BuiltChatRequest {
+  const surface = spec.oauthChat!;
+  const base = resolveProviderUrl(spec, surface.baseUrl).replace(/\/$/, "");
+  const { instructions, turns } = splitSystemAndTurns(input);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...auth,
+    ...(surface.headers ?? {}),
+  };
+
+  if (surface.dialect === "code-assist") {
+    // The method is a ':'-suffix on the version root, not a path segment.
+    // `project` is mandatory — see the registry row and ChatTurnInput.projectId.
+    return {
+      url: `${base}:generateContent`,
+      headers,
+      body: {
+        model: input.model,
+        ...(input.projectId ? { project: input.projectId } : {}),
+        request: {
+          contents: turns.map((t) => ({
+            // Code Assist speaks Vertex roles: the assistant is 'model'.
+            role: t.role === "assistant" ? "model" : "user",
+            parts: [{ text: t.content }],
+          })),
+          ...(instructions
+            ? { systemInstruction: { role: "user", parts: [{ text: instructions }] } }
+            : {}),
+          ...(input.tools?.length
+            ? {
+                tools: [
+                  {
+                    functionDeclarations: input.tools.map((t) => ({
+                      name: t.name,
+                      description: t.description,
+                      parameters: t.parameters,
+                    })),
+                  },
+                ],
+              }
+            : {}),
+          generationConfig: {
+            ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+            maxOutputTokens: input.maxTokens ?? 700,
+          },
+        },
+      },
+      dialect: "code-assist",
+    };
+  }
+
+  // codex-responses. Three body fields are NOT optional here, each for its own
+  // reason (all three verified against the Codex CLI's own wire format):
+  //   store:false   — the backend rejects a stored request outright, so every
+  //                   turn must carry the full history (it is stateless).
+  //   stream:true   — this surface only streams; see `alwaysSse` below.
+  //   instructions  — a system prompt is required, not merely accepted.
+  // Content parts must be typed `input_text`; the plain `text` type is rejected.
+  return {
+    url: `${base}${surface.path ?? "/responses"}`,
+    headers: {
+      ...headers,
+      ...(input.accountId ? { "chatgpt-account-id": input.accountId } : {}),
+      // Always SSE, even when the caller wants a single JSON object.
+      accept: "text/event-stream",
+    },
+    body: {
+      model: input.model,
+      instructions: instructions || "You are a helpful assistant.",
+      input: turns.map((t) => ({
+        role: t.role,
+        content: [
+          {
+            type: t.role === "assistant" ? "output_text" : "input_text",
+            text: t.content,
+          },
+        ],
+      })),
+      store: false,
+      stream: true,
+      // Required for stateless operation with store:false — without it the
+      // model's own reasoning cannot be carried across turns.
+      include: ["reasoning.encrypted_content"],
+      max_output_tokens: input.maxTokens ?? 700,
+      ...(input.tools?.length
+        ? {
+            tools: input.tools.map((t) => ({
+              type: "function",
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            })),
+          }
+        : {}),
+    },
+    dialect: "codex-responses",
+    alwaysSse: true,
+  };
 }
 
 /** Build a chat request for the provider's dialect (OpenAI chat or Anthropic Messages). */
 export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   const spec = getAiProvider(input.provider);
+  const cred: ResolvedAiCred = {
+    apiKey: input.apiKey,
+    credentialSource: input.credentialSource,
+  };
+  const auth = buildAiAuthHeaders(input.provider, cred);
+
+  // A subscription token may belong on an entirely different surface than the
+  // provider's public API — see `oauthChat` in the registry. Checked BEFORE the
+  // normal dialect so the override cannot be silently outranked; API-key
+  // traffic for the same provider is untouched and still takes the path below.
+  if (input.credentialSource === "oauth" && spec?.oauthChat) {
+    return buildOauthSurfaceRequest(input, spec, auth);
+  }
+
   // openai-chat is the DEFAULT dialect, full stop: a row opts out by declaring `chatDialect`.
   // This used to be a ternary on `openAiCompatible || chatBaseUrl` whose two branches were both
   // "openai-chat" — a conditional that could not branch, reading as if those fields selected the
   // dialect when they never did. Keeping the default here (rather than per-row) is what lets the
   // ~30 openai-compatible rows in the registry carry no dialect field at all.
   const dialect = spec?.chatDialect ?? "openai-chat";
-  const cred: ResolvedAiCred = {
-    apiKey: input.apiKey,
-    credentialSource: input.credentialSource,
-  };
-  const auth = buildAiAuthHeaders(input.provider, cred);
 
   if (dialect === "anthropic-messages") {
     const base = resolveProviderUrl(
@@ -322,6 +495,100 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   };
 }
 
+/**
+ * Collapse a Responses-API SSE stream into the single JSON object the
+ * non-streaming callers expect.
+ *
+ * Needed because the Codex subscription surface answers `text/event-stream`
+ * unconditionally — `await res.json()` on it yields a parse error, not a body,
+ * which reads as a broken provider rather than a streaming one. Returning the
+ * stream's own terminal `response` object (rather than a hand-rolled shape) is
+ * what lets `codex-responses` reuse every `openai-responses` extractor below
+ * without a second parser to keep in sync.
+ *
+ * Takes the decoded stream TEXT, not a Response, so it is directly testable and
+ * has no opinion about how the caller read the body.
+ */
+export function aggregateResponsesSse(sseText: string): Record<string, unknown> {
+  const deltas: string[] = [];
+  let completed: Record<string, unknown> | undefined;
+  let failed: Record<string, unknown> | undefined;
+
+  for (const line of sseText.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(payload) as Record<string, unknown>;
+    } catch {
+      // A partial frame at the tail of a truncated stream is not fatal — the
+      // deltas collected so far are still a real (if short) answer.
+      continue;
+    }
+    const type = typeof event.type === "string" ? event.type : "";
+    if (type === "response.completed" || type === "response.incomplete") {
+      completed = event.response as Record<string, unknown> | undefined;
+    } else if (type === "response.failed" || type === "error") {
+      failed = (event.response as Record<string, unknown> | undefined) ?? event;
+    } else if (type === "response.output_text.delta" && typeof event.delta === "string") {
+      deltas.push(event.delta);
+    }
+  }
+
+  if (completed) return completed;
+  // A failed stream must surface as an error body, never as empty prose that
+  // the caller would report as a successful blank completion.
+  if (failed) return failed;
+  // Terminal event missing (truncated stream): synthesize the same Responses
+  // shape from the deltas so the extractors still find the text.
+  return {
+    output: [
+      {
+        type: "message",
+        content: [{ type: "output_text", text: deltas.join("") }],
+      },
+    ],
+  };
+}
+
+/**
+ * Read a built request's response body into the JSON object the extractors take,
+ * honouring `alwaysSse`. One place decides how to read a body, so a caller can
+ * never pick the wrong reader for a dialect.
+ */
+export async function readAiChatResponseBody(
+  built: BuiltChatRequest,
+  response: { text: () => Promise<string> },
+): Promise<unknown> {
+  const raw = await response.text();
+  if (built.alwaysSse) return aggregateResponsesSse(raw);
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Dialects that answer in the Responses-API shape. `codex-responses` is the same
+ * wire format on a different host, and aggregateResponsesSse() hands back that
+ * exact object — so every extractor treats them as one rather than duplicating
+ * the walk over `output[]`.
+ */
+function isResponsesShaped(dialect: BuiltChatRequest["dialect"]): boolean {
+  return dialect === "openai-responses" || dialect === "codex-responses";
+}
+
+/** Unwrap Code Assist's envelope: the real Gemini payload sits under `response`. */
+function codeAssistPayload(d: Record<string, unknown>): Record<string, unknown> {
+  const inner = d.response;
+  return inner && typeof inner === "object"
+    ? (inner as Record<string, unknown>)
+    : d;
+}
+
 /** Parse chat response text from either OpenAI or Anthropic JSON body. */
 export function extractChatText(
   dialect: BuiltChatRequest["dialect"],
@@ -340,7 +607,18 @@ export function extractChatText(
     }
     return "";
   }
-  if (dialect === "openai-responses") {
+  if (dialect === "code-assist") {
+    // Vertex/Gemini shape, one envelope deep.
+    const candidates = codeAssistPayload(d).candidates as
+      | Array<{ content?: { parts?: Array<{ text?: string }> } }>
+      | undefined;
+    if (!Array.isArray(candidates)) return "";
+    return (candidates[0]?.content?.parts ?? [])
+      .filter((p) => typeof p?.text === "string")
+      .map((p) => p.text as string)
+      .join("");
+  }
+  if (isResponsesShaped(dialect)) {
     // Responses returns an `output` ARRAY; assistant prose lives in `message` items as
     // `output_text` parts, interleaved with reasoning and function_call items we ignore here.
     const output = d.output as
@@ -376,11 +654,17 @@ export function extractStopReason(
   if (dialect === "anthropic-messages") {
     return typeof d.stop_reason === "string" ? d.stop_reason : undefined;
   }
-  if (dialect === "openai-responses") {
+  if (isResponsesShaped(dialect)) {
     // Responses bundles per-item statuses rather than one top-level finish reason; extracting a
     // single value here would mean guessing which item's status represents the turn. Deliberately
     // lossy per-turn rather than guessed.
     return undefined;
+  }
+  if (dialect === "code-assist") {
+    const candidates = codeAssistPayload(d).candidates as
+      | Array<{ finishReason?: string }>
+      | undefined;
+    return candidates?.[0]?.finishReason;
   }
   const choices = d.choices as Array<{ finish_reason?: string }> | undefined;
   return choices?.[0]?.finish_reason;
@@ -453,7 +737,32 @@ export function extractToolCalls(
         args: c.input && typeof c.input === "object" ? (c.input as Record<string, unknown>) : {},
       }));
   }
-  if (dialect === "openai-responses") {
+  if (dialect === "code-assist") {
+    // Gemini returns calls as `functionCall` PARTS, and `args` is already an
+    // object — no JSON string to parse, unlike both OpenAI shapes.
+    const candidates = codeAssistPayload(d).candidates as
+      | Array<{
+          content?: {
+            parts?: Array<{ functionCall?: { name?: string; args?: unknown } }>;
+          };
+        }>
+      | undefined;
+    if (!Array.isArray(candidates)) return [];
+    return (candidates[0]?.content?.parts ?? []).flatMap((p) => {
+      const call = p?.functionCall;
+      if (!call || typeof call.name !== "string") return [];
+      return [
+        {
+          name: call.name,
+          args:
+            call.args && typeof call.args === "object"
+              ? (call.args as Record<string, unknown>)
+              : {},
+        },
+      ];
+    });
+  }
+  if (isResponsesShaped(dialect)) {
     // Each call is a top-level `function_call` item; `arguments` is a JSON STRING as in chat.
     const output = d.output as
       | Array<{ type?: string; name?: string; arguments?: string }>

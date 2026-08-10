@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildAiAuthHeaders, buildAiChatRequest, extractChatText } from './ai-provider-http';
+import {
+  aggregateResponsesSse,
+  buildAiAuthHeaders,
+  buildAiChatRequest,
+  extractChatText,
+  extractToolCalls,
+  readAiChatResponseBody,
+} from './ai-provider-http';
 
 afterEach(() => {
   delete process.env.CUSTOM_OPENAI_BASE_URL;
@@ -118,18 +125,107 @@ describe('buildAiChatRequest', () => {
     ]);
   });
 
-  it('builds google openai-compat chat url', () => {
+  // credentialSource is 'api-key' on purpose: generativelanguage is the API-KEY
+  // surface. This case used to pass 'oauth' here while asserting this url, which
+  // is the combination that 403s in production — an OAuth token has no access to
+  // that host at all. The OAuth arm is asserted separately below.
+  it('builds google openai-compat chat url for an API key', () => {
     const req = buildAiChatRequest({
       provider: 'google',
       model: 'gemini-2.5-flash',
-      apiKey: 'ya29.x',
-      credentialSource: 'oauth',
+      apiKey: 'AIza-test',
+      credentialSource: 'env',
       messages: [{ role: 'user', content: 'hi' }],
     });
     expect(req.dialect).toBe('openai-chat');
     expect(req.url).toContain('generativelanguage.googleapis.com');
     expect(req.url).toContain('/chat/completions');
+    expect(req.headers.Authorization).toBe('Bearer AIza-test');
+  });
+
+  it('routes a google OAuth credential to Code Assist, not the API-key host', () => {
+    const req = buildAiChatRequest({
+      provider: 'google',
+      model: 'gemini-2.5-flash',
+      apiKey: 'ya29.x',
+      credentialSource: 'oauth',
+      projectId: 'my-companion-project',
+      system: 'You are helpful',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(req.dialect).toBe('code-assist');
+    expect(req.url).toBe(
+      'https://cloudcode-pa.googleapis.com/v1internal:generateContent',
+    );
     expect(req.headers.Authorization).toBe('Bearer ya29.x');
+    expect(req.headers['X-Goog-Api-Client']).toContain('gemini-cli/');
+    // `project` is mandatory — the endpoint 500s on every call without it.
+    expect(req.body.project).toBe('my-companion-project');
+    expect(req.body.model).toBe('gemini-2.5-flash');
+    const inner = req.body.request as Record<string, unknown>;
+    expect(inner.contents).toEqual([{ role: 'user', parts: [{ text: 'hi' }] }]);
+    expect(inner.systemInstruction).toEqual({
+      role: 'user',
+      parts: [{ text: 'You are helpful' }],
+    });
+  });
+
+  it('maps an assistant turn to the Vertex `model` role on code-assist', () => {
+    const req = buildAiChatRequest({
+      provider: 'google',
+      model: 'gemini-2.5-flash',
+      apiKey: 'ya29.x',
+      credentialSource: 'oauth',
+      projectId: 'p',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+      ],
+    });
+    const inner = req.body.request as { contents: Array<{ role: string }> };
+    expect(inner.contents.map((c) => c.role)).toEqual(['user', 'model']);
+  });
+
+  it('routes an openai OAuth credential to the Codex backend, not api.openai.com', () => {
+    const req = buildAiChatRequest({
+      provider: 'openai',
+      model: 'gpt-5.1-codex',
+      apiKey: 'oauth-token',
+      credentialSource: 'oauth',
+      accountId: 'acct_123',
+      system: 'Be terse',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(req.dialect).toBe('codex-responses');
+    expect(req.url).toBe('https://chatgpt.com/backend-api/codex/responses');
+    expect(req.headers.Authorization).toBe('Bearer oauth-token');
+    expect(req.headers['chatgpt-account-id']).toBe('acct_123');
+    expect(req.headers['OpenAI-Beta']).toBe('responses=experimental');
+    expect(req.headers.originator).toBe('codex_cli_rs');
+    expect(req.headers.accept).toBe('text/event-stream');
+    // All three are required by that backend, not stylistic choices.
+    expect(req.body.store).toBe(false);
+    expect(req.body.stream).toBe(true);
+    expect(req.body.instructions).toBe('Be terse');
+    expect(req.body.include).toEqual(['reasoning.encrypted_content']);
+    // `input_text`, never the plain `text` type, which this backend rejects.
+    expect(req.body.input).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+    ]);
+    expect(req.alwaysSse).toBe(true);
+  });
+
+  it('leaves an openai API key on the public API', () => {
+    const req = buildAiChatRequest({
+      provider: 'openai',
+      model: 'gpt-5.1',
+      apiKey: 'sk-test',
+      credentialSource: 'env',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(req.dialect).toBe('openai-chat');
+    expect(req.url).toContain('api.openai.com');
+    expect(req.alwaysSse).toBeUndefined();
   });
 
   it('builds a configurable OpenAI-compatible endpoint request', () => {
@@ -190,5 +286,87 @@ describe('extractChatText', () => {
         ],
       }),
     ).toBe('Hello world.');
+  });
+});
+
+describe('aggregateResponsesSse', () => {
+  it('returns the terminal response object from a completed stream', () => {
+    const sse = [
+      'data: {"type":"response.created","response":{"id":"r1"}}',
+      'data: {"type":"response.output_text.delta","delta":"Hel"}',
+      'data: {"type":"response.output_text.delta","delta":"lo"}',
+      'data: {"type":"response.completed","response":{"id":"r1","output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}]}}',
+      'data: [DONE]',
+    ].join('\n');
+    // The extractors then read it exactly as an openai-responses body.
+    expect(extractChatText('codex-responses', aggregateResponsesSse(sse))).toBe(
+      'Hello',
+    );
+  });
+
+  it('falls back to accumulated deltas when the stream is truncated', () => {
+    const sse = [
+      'data: {"type":"response.output_text.delta","delta":"par"}',
+      'data: {"type":"response.output_text.delta","delta":"tial"}',
+      'data: {"type":"response.output_te',
+    ].join('\n');
+    expect(extractChatText('codex-responses', aggregateResponsesSse(sse))).toBe(
+      'partial',
+    );
+  });
+
+  it('surfaces a failed stream as the error body, not as empty prose', () => {
+    const sse =
+      'data: {"type":"response.failed","response":{"error":{"message":"nope"}}}';
+    const out = aggregateResponsesSse(sse) as { error?: { message?: string } };
+    expect(out.error?.message).toBe('nope');
+    // Critically NOT a blank successful turn.
+    expect(extractChatText('codex-responses', out)).toBe('');
+  });
+
+  it('reads an SSE body only when the dialect says the surface streams', async () => {
+    const streamed = await readAiChatResponseBody(
+      { url: '', headers: {}, body: {}, dialect: 'codex-responses', alwaysSse: true },
+      {
+        text: async () =>
+          'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}}',
+      },
+    );
+    expect(extractChatText('codex-responses', streamed)).toBe('ok');
+
+    const plain = await readAiChatResponseBody(
+      { url: '', headers: {}, body: {}, dialect: 'openai-chat' },
+      { text: async () => '{"choices":[{"message":{"content":"hi"}}]}' },
+    );
+    expect(extractChatText('openai-chat', plain)).toBe('hi');
+  });
+});
+
+describe('code-assist extraction', () => {
+  const body = {
+    response: {
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: {
+            parts: [
+              { text: 'Hello ' },
+              { text: 'world' },
+              { functionCall: { name: 'lookup', args: { id: 7 } } },
+            ],
+          },
+        },
+      ],
+    },
+  };
+
+  it('unwraps the Code Assist envelope to read text', () => {
+    expect(extractChatText('code-assist', body)).toBe('Hello world');
+  });
+
+  it('reads functionCall parts, whose args are already objects', () => {
+    expect(extractToolCalls('code-assist', body)).toEqual([
+      { name: 'lookup', args: { id: 7 } },
+    ]);
   });
 });
