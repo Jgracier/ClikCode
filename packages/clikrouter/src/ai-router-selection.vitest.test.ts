@@ -176,6 +176,17 @@ describe('isLikelyChatModel', () => {
     // it only matched "video-01"/"minimax-video", not xai's own naming.
     'grok-imagine-video',
     'grok-imagine-video-1.5',
+    // MEASURED 2026-08-10: the exact ids cliknet's remediation agent routed EVERY run to,
+    // for the whole 20-app fleet, while trying to propose code fixes. Mistral's `voxtral`
+    // is its audio family. The list above already contained `voxtral-mini-tts-2603`, but
+    // that was excluded by the `-tts-` pattern — the plain audio ids carry no `tts` marker
+    // and sailed through, so the family itself was never actually recognized.
+    'mistral/voxtral-small-latest',
+    'voxtral-small-2507',
+    'voxtral-mini-latest',
+    // Other audio families with no `tts`/`whisper` marker in the name.
+    'qwen2-audio-7b-instruct',
+    'gpt-4o-audio-preview',
   ];
   for (const id of nonChat) {
     it(`excludes ${id}`, () => expect(isLikelyChatModel(id)).toBe(false));
@@ -189,6 +200,11 @@ describe('isLikelyChatModel', () => {
     'Qwen/Qwen3-VL-30B-A3B-Instruct', // "VL" (vision-language), not video/image generation
     '@cf/nvidia/nemotron-3-120b-a12b',
     'amazon.nova-pro-v1', // "nova" also names Deepgram's ASR product; this is Amazon's chat model
+    // Guards the widened audio patterns against false negatives: none of these are audio
+    // models, and each contains a substring the new patterns could over-match on.
+    'mistral-large-2407',
+    'claude-sonnet-5',
+    'gpt-5-codex',
   ];
   for (const id of chat) {
     it(`keeps ${id}`, () => expect(isLikelyChatModel(id)).toBe(true));
