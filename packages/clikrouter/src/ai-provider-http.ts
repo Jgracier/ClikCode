@@ -312,7 +312,15 @@ function buildOauthSurfaceRequest(
       // Required for stateless operation with store:false — without it the
       // model's own reasoning cannot be carried across turns.
       include: ["reasoning.encrypted_content"],
-      max_output_tokens: input.maxTokens ?? 700,
+      // NOT `max_output_tokens` — that name is the PUBLIC Responses API's
+      // param (see the api-key-only branch above, where it's correct). This
+      // internal ChatGPT-backend surface rejects it outright: confirmed live
+      // 2026-08-10, `400 Unsupported parameter: max_output_tokens`, on the
+      // very first real dispatch this surface ever received. No verified
+      // replacement name exists yet (this endpoint is undocumented — see the
+      // PR's own reviewer note), so omitted rather than guessed; a caller
+      // that needs a real cap here should re-test against a live token
+      // before adding one back.
       ...(input.tools?.length
         ? {
             tools: input.tools.map((t) => ({
