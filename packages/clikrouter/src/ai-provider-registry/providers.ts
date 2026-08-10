@@ -78,7 +78,24 @@ export const AI_PROVIDERS = [
       url: "https://api.anthropic.com/v1/models",
     },
     oauth: true,
-    oauthBareCompletion: true,
+    // The two tiers are cleanly separated here, and this is the one row where
+    // that separation is a POLICY choice rather than a technical limit:
+    //
+    //   API key      → plain HTTP to chatBaseUrl (x-api-key), unchanged.
+    //   subscription → Claude Code, always. Not attempted over HTTP first and
+    //                  not rescued by the harness afterwards — the CLI IS the
+    //                  transport for a Claude subscription.
+    //
+    // A Claude subscription token does technically work against
+    // api.anthropic.com/v1/messages (Bearer + anthropic-version +
+    // `anthropic-beta: oauth-2025-04-20`, which ai-provider-http.ts can still
+    // build), so this row COULD say 'direct' the way openai and google now do.
+    // It says 'harness' because Claude Code is the vendor's own supported
+    // surface for a subscription, and because the raw-HTTP route additionally
+    // requires spoofing `x-app: cli` and `user-agent: claude-cli/<version>` to
+    // stay out of an aggressively rate-limited bucket — imitating the client
+    // rather than being it.
+    subscriptionTransport: "harness",
     docsPricingCatalog: "anthropic",
   },
   {
@@ -152,6 +169,39 @@ export const AI_PROVIDERS = [
     openAiCompatible: true,
     usesMaxCompletionTokens: true,
     responsesPath: "/responses",
+    // A ChatGPT subscription token cannot call api.openai.com at all (measured
+    // here: 401 `Missing scopes: model.request`, and ADDING that scope to the
+    // OAuth request breaks the login outright). It CAN call the Codex backend
+    // directly over plain HTTPS — that is the same surface `probe.bySource`
+    // above already reaches for the model catalog, so this is the catalog
+    // fact's dispatch twin rather than a new trust surface.
+    //
+    // VERIFIED against the Codex CLI's own wire format as reimplemented by
+    // opencode-openai-codex-auth (lib/constants.ts + lib/request/*): base
+    // https://chatgpt.com/backend-api, path /codex/responses, and the four
+    // headers below. `OpenAI-Beta: responses=experimental` and
+    // `originator: codex_cli_rs` are both required; the account id rides in
+    // `chatgpt-account-id` and comes from THIS ROW's own `oauthAccountIdClaim`
+    // (that plugin reads the identical claim path, which is the independent
+    // confirmation the claim declared above is the right one).
+    //
+    // `version`/`User-Agent` reuse OPENAI_CODEX_CLIENT_VERSION, the same pin
+    // the probe uses — one declared string for both surfaces.
+    oauthChat: {
+      baseUrl: "https://chatgpt.com/backend-api",
+      path: "/codex/responses",
+      dialect: "codex-responses",
+      headers: {
+        "OpenAI-Beta": "responses=experimental",
+        originator: "codex_cli_rs",
+        version: OPENAI_CODEX_CLIENT_VERSION,
+        "User-Agent": `codex-tui/${OPENAI_CODEX_CLIENT_VERSION}`,
+      },
+    },
+    // 'direct' because `oauthChat` above gives this token a real HTTP surface.
+    // NOT a claim that api.openai.com accepts it — that will never be true —
+    // but that the subscription is spendable without running a CLI subprocess.
+    subscriptionTransport: "direct",
   },
   {
     id: "google",
@@ -206,6 +256,34 @@ export const AI_PROVIDERS = [
       },
     },
     oauth: true,
+    // The Code Assist arm is not just a health probe — it SERVES CONTENT. An
+    // OAuth token 403s on generativelanguage (that host wants an API key), but
+    // cloudcode-pa answers :generateContent for the same token, which is
+    // exactly what the Gemini CLI does internally. Since the CLI adds nothing
+    // but this HTTP call, dispatching it here removes the harness from the
+    // path entirely — and sidesteps the reason the gemini harness has no
+    // adapter at all (untrusted-folder MCP suppression, see
+    // ai-harness-registry.ts's google row), which never applies to plain HTTP.
+    //
+    // Body shape VERIFIED by reading the shipped
+    // @google/gemini-cli-core@0.54.4 `dist/src/code_assist/converter.js`:
+    // toGenerateContentRequest() wraps as
+    //   { model, project, user_prompt_id, request: {...}, enabled_credit_types }
+    // and the inner request carries contents/systemInstruction/tools/
+    // generationConfig/session_id. `project` is NOT optional — omitting it
+    // 500s every call — and comes from :loadCodeAssist's
+    // `cloudaicompanionProject`, which ai-adapters/google.ts already reads.
+    //
+    // The two headers are the same pinned client id the probe above sends.
+    oauthChat: {
+      baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+      dialect: "code-assist",
+      headers: {
+        "X-Goog-Api-Client": `google-cloud-sdk gemini-cli/${GEMINI_CLI_CLIENT_VERSION}`,
+        "User-Agent": `GeminiCLI/${GEMINI_CLI_CLIENT_VERSION}`,
+      },
+    },
+    subscriptionTransport: "direct",
   },
   {
     id: "nvidia",

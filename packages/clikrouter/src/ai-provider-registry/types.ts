@@ -175,8 +175,31 @@ export interface AiProviderSpec {
   /** True when the platform supports an OAuth connection for this provider —
    *  a token-backed CONNECTION with refresh/disconnect (PlatformAiConnection). */
   oauth?: boolean;
-  /** OAuth tokens can be sent directly to the provider's bare completion API. */
-  oauthBareCompletion?: boolean;
+  /**
+   * How a SUBSCRIPTION (OAuth) credential for this provider is spent. The two
+   * credential tiers are independent transports, and this declares the
+   * subscription one POSITIVELY:
+   *
+   *   'direct'  — send the token over HTTP to the surface named in `oauthChat`
+   *               (OpenAI → the Codex backend, Google → Code Assist). These are
+   *               real vendor endpoints, not a wrapper around a CLI.
+   *   'harness' — the vendor's own CLI is the supported way to spend this
+   *               subscription, and is therefore the PRIMARY and only path for
+   *               it (Anthropic → Claude Code). Not a fallback: no HTTP attempt
+   *               is made first, and nothing "falls back" to it.
+   *   undefined — this provider has no working subscription dispatch at all, so
+   *               an OAuth credential for it can be connected but not spent
+   *               (xAI: measured 403, and no vendor CLI exists either).
+   *
+   * An API KEY is unaffected by this field in every case — it always dispatches
+   * over plain HTTP to `chatBaseUrl`.
+   *
+   * Replaced the older boolean `oauthBareCompletion`, which could only say
+   * "direct or not" and so made 'harness' and 'unusable' indistinguishable —
+   * the ambiguity that let a harness-tier provider be silently skipped by a lane
+   * that meant to skip only the unusable ones.
+   */
+  subscriptionTransport?: "direct" | "harness";
   /** Vendor documentation pricing table merged into discovered models. */
   docsPricingCatalog?:
     | "cloudflare"
@@ -260,6 +283,30 @@ export interface AiProviderSpec {
    *   anthropic-messages — POST https://api.anthropic.com/v1/messages (Claude)
    */
   chatDialect?: "openai-chat" | "anthropic-messages";
+  /**
+   * Dispatch overrides that apply ONLY when the credential is an OAuth
+   * subscription token — the SECOND DIMENSION for chat, exactly as
+   * `probe.bySource` is for health.
+   *
+   * Declared because two vendors route subscription traffic to a COMPLETELY
+   * different surface than their public API, and the token is rejected on the
+   * public one by design (measured here: OpenAI 401 `Missing scopes:
+   * model.request`; Google 403 on generativelanguage). The vendor's own CLI is
+   * not doing anything privileged — it is calling a different HTTPS endpoint
+   * with a different body shape. So this is a ROW DATUM (host + dialect +
+   * pinned client headers), not a reason to shell out to that CLI.
+   *
+   * `path` is appended to `baseUrl` when the dialect needs one (Codex's
+   * `/responses`); the Code Assist dialect builds `:generateContent` itself
+   * because the method rides in the URL as a `:`-suffix, not a path segment.
+   */
+  oauthChat?: {
+    baseUrl: string;
+    dialect: "codex-responses" | "code-assist";
+    path?: string;
+    /** Pinned client identification the vendor's own CLI sends verbatim. */
+    headers?: Readonly<Record<string, string>>;
+  };
   /** Override /chat/completions when the compatible provider uses a named route. */
   chatPath?: string;
   /**
