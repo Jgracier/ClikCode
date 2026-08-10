@@ -222,9 +222,27 @@ export interface AiChatTurnInput {
   reasoningEffort?: import("./ai-provider-registry").AiReasoningEffort;
 }
 
+export interface AiChatTurnWarning {
+  type: string;
+  feature?: string;
+  details?: string;
+}
+
 export interface AiChatTurnResult {
   /** The model's prose for this turn (may be empty on a pure tool-calling turn). */
   text: string;
+  /**
+   * The AI SDK's own structured warnings for this call — e.g.
+   * `{ type: "unsupported", feature: "tools" }`, confirmed live in the
+   * installed @ai-sdk/openai-compatible adapter's own source: some
+   * dispatch paths SILENTLY DROP an unsupported parameter and warn rather
+   * than throwing. A caller that only checks for a thrown error (as this
+   * whole codebase's tool-calling-capability detection originally did)
+   * would wrongly conclude "the call succeeded, so tools are supported"
+   * when they were actually stripped before the request ever went out. See
+   * ai-model-capability.ts's hasUnsupportedToolsWarning.
+   */
+  warnings?: AiChatTurnWarning[];
   /**
    * Native tool calls the model made. `args` is already a decoded object with
    * the schema's own types — numbers arrive as numbers, so nothing downstream
@@ -403,15 +421,16 @@ export async function streamAiChatTurn(
     throw capturedStreamError ?? error;
   }
 
-  let calls, usage, response, finishReason, providerMetadata;
+  let calls, usage, response, finishReason, providerMetadata, warnings;
   try {
-    [calls, usage, response, finishReason, providerMetadata] =
+    [calls, usage, response, finishReason, providerMetadata, warnings] =
       await Promise.all([
         result.toolCalls,
         result.totalUsage,
         result.response,
         result.finishReason,
         result.providerMetadata,
+        result.warnings,
       ]);
   } catch (error) {
     // Re-throw the ORIGINAL provider error (with its real statusCode) when
@@ -443,5 +462,14 @@ export async function streamAiChatTurn(
     ...(response.headers ? { headers: response.headers } : {}),
     stopReason: finishReason,
     ...(costMicroUsd !== undefined ? { costMicroUsd } : {}),
+    ...(warnings && warnings.length > 0
+      ? {
+          warnings: warnings.map((w) => ({
+            type: w.type,
+            ...("feature" in w && typeof w.feature === "string" ? { feature: w.feature } : {}),
+            ...("details" in w && typeof w.details === "string" ? { details: w.details } : {}),
+          })),
+        }
+      : {}),
   };
 }
