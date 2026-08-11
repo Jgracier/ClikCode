@@ -245,10 +245,19 @@ export interface AiChatTurnInput {
    * every AI-SDK-dispatched provider (OpenAI, Anthropic, Google, xAI,
    * Mistral, Groq, and the generic OpenAI-compatible adapter used for
    * DeepInfra/Novita/HuggingFace/OpenRouter). A model that genuinely cannot
-   * comply throws a classifiable APICallError instead of silently declining
-   * — see model-call.ts and ai-model-health-probe.ts for why this replaces
-   * regex-detecting a refusal after the fact. Only meaningful alongside
-   * `tools`; ignored when `tools` is absent.
+   * comply throws a classifiable APICallError instead of silently declining.
+   * Only meaningful alongside `tools`; ignored when `tools` is absent.
+   *
+   * ONLY set this on a turn where EVERY legitimate response requires a tool
+   * call — see ai-model-health-probe.ts, whose entire prompt IS "call this
+   * tool now". model-call.ts's live ClikAgent chat path deliberately never
+   * sets this: its tools are the account's whole capability surface,
+   * attached whether or not THIS message needs one, so forcing a call there
+   * would turn an ordinary no-tool-needed question into a hallucinated tool
+   * invocation — a worse failure than the prose-refusal this was built to
+   * replace. That live path still detects refusal via
+   * looksLikeCapabilityRefusal (ai-model-capability.ts) for exactly this
+   * reason.
    */
   toolChoice?: "required";
   temperature?: number;
