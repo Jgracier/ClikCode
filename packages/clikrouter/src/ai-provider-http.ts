@@ -151,6 +151,13 @@ export interface ChatTurnInput {
    */
   tools?: AiToolSpec[];
   /**
+   * Forces the model to actually invoke one of `tools` rather than legally
+   * answering in prose — see AiChatTurnInput.toolChoice in
+   * ai-provider-models.ts for the full reasoning. Only meaningful alongside
+   * `tools`; ignored when `tools` is absent.
+   */
+  toolChoice?: "required";
+  /**
    * Second identifier some OAuth surfaces require ALONGSIDE the bearer token.
    * Resolved once at credential-resolution time (resolve-credential.ts reads it
    * from the token's own JWT claims per `oauthAccountIdClaim`) rather than
@@ -270,6 +277,9 @@ function buildOauthSurfaceRequest(
                 ],
               }
             : {}),
+          ...(input.tools?.length && input.toolChoice === "required"
+            ? { toolConfig: { functionCallingConfig: { mode: "ANY" } } }
+            : {}),
           generationConfig: {
             ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
             maxOutputTokens: input.maxTokens ?? 700,
@@ -331,6 +341,7 @@ function buildOauthSurfaceRequest(
             })),
           }
         : {}),
+      ...(input.tools?.length && input.toolChoice === "required" ? { tool_choice: "required" } : {}),
     },
     dialect: "codex-responses",
     alwaysSse: true,
