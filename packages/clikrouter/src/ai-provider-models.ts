@@ -239,6 +239,18 @@ export interface AiChatTurnInput {
   system?: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   tools?: AiChatTool[];
+  /**
+   * Forces the model to actually invoke one of `tools` rather than legally
+   * answering in prose instead — the AI SDK translates this uniformly across
+   * every AI-SDK-dispatched provider (OpenAI, Anthropic, Google, xAI,
+   * Mistral, Groq, and the generic OpenAI-compatible adapter used for
+   * DeepInfra/Novita/HuggingFace/OpenRouter). A model that genuinely cannot
+   * comply throws a classifiable APICallError instead of silently declining
+   * — see model-call.ts and ai-model-health-probe.ts for why this replaces
+   * regex-detecting a refusal after the fact. Only meaningful alongside
+   * `tools`; ignored when `tools` is absent.
+   */
+  toolChoice?: "required";
   temperature?: number;
   maxOutputTokens?: number;
   abortSignal?: AbortSignal;
@@ -433,6 +445,7 @@ async function dispatchOauthSurfaceChatTurn(
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.maxOutputTokens !== undefined ? { maxTokens: input.maxOutputTokens } : {}),
     ...(tools.length > 0 ? { tools } : {}),
+    ...(tools.length > 0 && input.toolChoice ? { toolChoice: input.toolChoice } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
     ...(input.projectId ? { projectId: input.projectId } : {}),
   });
@@ -529,6 +542,7 @@ export async function streamAiChatTurn(
     ...(input.system ? { system: input.system } : {}),
     messages: input.messages,
     ...(Object.keys(toolSet).length > 0 ? { tools: toolSet } : {}),
+    ...(Object.keys(toolSet).length > 0 && input.toolChoice ? { toolChoice: input.toolChoice } : {}),
     ...(input.temperature !== undefined
       ? { temperature: input.temperature }
       : {}),
