@@ -336,6 +336,18 @@ export const AI_PROVIDERS = [
     // both, so this never silently escalates to billing.
     apiKeyAccessClass: "free-tier",
     contextWindow: 128_000,
+    // Voxtral Small is NOT a 128K model despite inheriting the row default —
+    // live-verified 2026-08-10 from a real dispatch failure: "Prompt 79419 >
+    // 32768 maximum context length" against voxtral-small-latest. This is the
+    // exact gap that let a large ClikAgent prompt route to it and exhaust a
+    // fallback attempt on a guaranteed-oversized request. Not extended to
+    // other Mistral models without the same live confirmation — see
+    // ai-credential-health/probe-adapters.ts's deriveContextWindow for the
+    // per-model catalog signal (`max_context_length`) that now supersedes
+    // this static floor going forward wherever it's populated.
+    modelWindows: {
+      "voxtral-small": { contextWindow: 32_768 },
+    },
     keyUrl: "https://console.mistral.ai/api-keys",
     defaultModel: "mistral-large-latest",
     label: "Mistral",
