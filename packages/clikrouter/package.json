@@ -43,8 +43,8 @@
     "ai": "^7.0.48"
   },
   "devDependencies": {
-    "@types/node": "26.1.2",
-    "typescript": "6.0.3",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {
