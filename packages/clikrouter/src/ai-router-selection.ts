@@ -560,7 +560,7 @@ export function selectRouterCandidate(
 }
 
 /**
- * Fraction of 'auto'-mode resolutions that deliberately pick an
+ * Floor on the fraction of 'auto'-mode resolutions that deliberately pick an
  * under-sampled candidate instead of the top-ranked one. WHY THIS EXISTS:
  * every real-evidence signal in this file (trackRecordSuccessRate,
  * sustainRate, capabilityRefusalCount) only ever influences ranking once a
@@ -573,8 +573,67 @@ export function selectRouterCandidate(
  * be perfectly fine. 5% is deliberately small: this trades a small, bounded
  * share of "best guess right now" for the platform's own ability to keep
  * learning, not a general randomization of routing.
+ *
+ * This is a FLOOR, not the whole story, because 5% was tuned against "a few
+ * dozen" candidates. A flat rate spreads that same 5% budget across however
+ * many under-explored candidates happen to be in the ranked list — with a
+ * few dozen, each cold-start candidate gets picked every few requests; with
+ * hundreds (this registry already lists 43 providers, and each can host many
+ * models), the same 5% divided across a much bigger pool means any one
+ * candidate's odds of getting an exploratory pick shrink toward
+ * irrelevance — the exact starvation this mechanism exists to prevent, just
+ * moved one level up. See `explorationRateFor` for how the effective rate
+ * scales past this floor as the under-explored pool grows.
  */
-export const EXPLORATION_RATE = 0.05;
+export const EXPLORATION_RATE_FLOOR = 0.05;
+
+/**
+ * Ceiling on the effective exploration rate, regardless of how large the
+ * under-explored pool gets. This is still live routing traffic for real user
+ * requests — exploration must stay a small minority of it even at registry-
+ * wide scale, or "learning about cold-start candidates" starts meaningfully
+ * degrading normal-case answer quality, which defeats the purpose (a router
+ * nobody trusts doesn't get to keep learning either). 3x the floor: enough
+ * that a candidate in a huge pool gets meaningfully more frequent chances
+ * than the diluted flat-5% baseline would give it, nowhere near "exploration
+ * is now a routine fraction of traffic".
+ */
+export const EXPLORATION_RATE_CEILING = 0.15;
+
+/**
+ * Size of the under-explored pool that 5% (EXPLORATION_RATE_FLOOR) was
+ * actually tuned against — "a few dozen" candidates, per the motivating case
+ * above. Below this, the pool is the size the floor already accounts for, so
+ * the rate stays flat at the floor: no reason to explore MORE aggressively
+ * just because the pool is, say, 10 instead of 40 — small pools were never
+ * the problem. Only past this reference point does dilution become real
+ * enough to counteract.
+ */
+const UNDER_EXPLORED_REFERENCE_COUNT = 40;
+
+/**
+ * Effective exploration rate for a call with `underExploredCount`
+ * under-explored candidates in its ranked list. Flat at the floor up to
+ * `UNDER_EXPLORED_REFERENCE_COUNT`, then grows with the SQUARE ROOT of how
+ * far past that reference the pool is — sublinear on purpose, so a huge
+ * registry-wide pool (hundreds of models) pulls the rate up toward the
+ * ceiling without a linear scale-up blowing past it almost immediately (a
+ * linear "rate per candidate" term would need to be so small to respect the
+ * ceiling at 300+ candidates that it would barely move at the 40-100
+ * candidate range where the dilution first starts to bite). Clamped to
+ * [EXPLORATION_RATE_FLOOR, EXPLORATION_RATE_CEILING] so neither bound is
+ * ever crossed regardless of how the pool size moves.
+ *
+ * // example: 10 under-explored candidates  -> 5%    (below reference, floor)
+ * // example: 40 under-explored candidates  -> 5%    (at reference, floor)
+ * // example: 160 under-explored candidates -> ~10%  (4x reference -> sqrt(4)=2x floor)
+ * // example: 360 under-explored candidates -> 15%   (9x reference -> sqrt(9)=3x floor, hits the ceiling)
+ */
+export function explorationRateFor(underExploredCount: number): number {
+  if (underExploredCount <= UNDER_EXPLORED_REFERENCE_COUNT) return EXPLORATION_RATE_FLOOR;
+  const scaled = EXPLORATION_RATE_FLOOR * Math.sqrt(underExploredCount / UNDER_EXPLORED_REFERENCE_COUNT);
+  return Math.min(EXPLORATION_RATE_CEILING, scaled);
+}
 
 /**
  * A candidate this platform has real uncertainty about — no observed
@@ -624,9 +683,17 @@ export function applyExploration<T extends AiRouterCandidate>(
   random: () => number = Math.random,
 ): { candidates: readonly T[]; explored: boolean } {
   if (mode !== 'auto' || ranked.length <= 1) return { candidates: ranked, explored: false };
-  if (random() >= EXPLORATION_RATE) return { candidates: ranked, explored: false };
-  const pick = ranked.find((c) => isUnderExplored(c));
-  if (!pick || pick === ranked[0]) return { candidates: ranked, explored: false };
+  const underExplored = ranked.filter((c) => isUnderExplored(c));
+  if (underExplored.length === 0) return { candidates: ranked, explored: false };
+  // Rate scales with THIS call's own under-explored pool, not the registry's
+  // theoretical maximum — a request whose candidates happen to already be
+  // well-sampled shouldn't get a scaled-up rate just because the platform
+  // integrates many providers elsewhere. See explorationRateFor's doc for
+  // the floor/ceiling reasoning.
+  const rate = explorationRateFor(underExplored.length);
+  if (random() >= rate) return { candidates: ranked, explored: false };
+  const pick = underExplored[0];
+  if (pick === ranked[0]) return { candidates: ranked, explored: false };
   const reordered = [pick, ...ranked.filter((c) => c !== pick)];
   return { candidates: reordered, explored: true };
 }
