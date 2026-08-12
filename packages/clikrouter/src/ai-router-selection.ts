@@ -64,6 +64,22 @@ export interface AiRouterCandidate {
    * "confirmed reliable". Same caller-attaches posture as avgLatencyMs.
    */
   capabilityRefusalCount?: number | null;
+  /**
+   * Real observed rate in [0, 1] of this (provider, model) pair FINISHING an
+   * agent-loop turn with a real answer, vs. giving up mid-task
+   * (ai-model-task-completion.ts's getModelSustainRates — see MIN_SUSTAIN_SAMPLES
+   * for the trust floor). A DIFFERENT question than trackRecordSuccessRate:
+   * that answers "did the dispatch call error", this answers "did the model
+   * actually complete the multi-step task it was given" — the two are
+   * independent (MEASURED: a model can dispatch cleanly on every individual
+   * tool call and still never produce a final answer). Absent means "not
+   * enough agent-loop samples yet", never "confirmed can't finish long
+   * tasks" — same caller-attaches posture as avgLatencyMs.
+   */
+  sustainRate?: number | null;
+  /** Sample size backing sustainRate, for callers that want their own trust
+   *  threshold instead of relying on the read layer's MIN_SUSTAIN_SAMPLES gate. */
+  sustainSampleSize?: number | null;
 }
 
 export interface AiRouterSelection {
@@ -194,8 +210,35 @@ function intelligenceWithReliability(candidate: AiRouterCandidate): number {
     const refusalFactor = Math.max(0.4, 1 - candidate.capabilityRefusalCount * 0.15);
     capability *= refusalFactor;
   }
+  // A THIRD, independent multiplier, same "real evidence, no threshold
+  // means unadjusted" shape as the two above. Diagnosed root cause of a real
+  // production bug: NEUTRAL_CAPABILITY_SCORE collapses ~97% of candidates to
+  // the same flat 50 (no OpenRouter benchmark match), so a tied score fell
+  // through to "whichever model answers fastest" — a small, cheap model
+  // that reliably gives up mid-task still won on latency alone, because
+  // nothing measured whether it could actually FINISH a multi-step loop.
+  // sustainRate is that missing measurement, sourced from this platform's
+  // own agent-loop outcomes (ai-model-task-completion.ts), not a guess.
+  // sustainSampleSize is read here (not just trusted from the read layer's
+  // MIN_SUSTAIN_SAMPLES gate) so this file stays honest about its own
+  // trust threshold rather than silently inheriting whatever the caller
+  // happened to fetch with.
+  if (
+    typeof candidate.sustainRate === 'number' &&
+    Number.isFinite(candidate.sustainRate) &&
+    typeof candidate.sustainSampleSize === 'number' &&
+    candidate.sustainSampleSize >= MIN_SUSTAIN_SAMPLES_TRUSTED
+  ) {
+    capability *= candidate.sustainRate;
+  }
   return capability;
 }
+
+/** Mirrors ai-model-task-completion.ts's own MIN_SUSTAIN_SAMPLES — duplicated
+ *  here (this file is deliberately dependency-free, see the module header)
+ *  rather than imported, so a caller that fetched with a looser threshold
+ *  can never leak an under-trusted rate into scoring. */
+const MIN_SUSTAIN_SAMPLES_TRUSTED = 5;
 
 /**
  * Catches a model that is almost certainly NOT chat-capable, from its id
@@ -277,6 +320,38 @@ export function isFillInMiddleModel(modelId: string): boolean {
 }
 
 /**
+ * A SECOND absolute veto, same precedence and same reasoning shape as
+ * isFillInMiddleModel above — checked BEFORE any vendor `chatCapable` field,
+ * never overridden by one.
+ *
+ * MEASURED LIVE 2026-08-11, cross-referenced against the full production
+ * catalog: safety/moderation classifiers — Llama Guard (meta/llama-guard-*,
+ * meta-llama/Llama-Guard-*), Llama Prompt Guard, NVIDIA's Nemoguard/
+ * content-safety family, openai/gpt-oss-safeguard-20b — carry `chatCapable:
+ * true` from SOME catalogs (HuggingFace and OpenRouter both publish
+ * `architecture.output_modalities: ["text"]` for these, because the model
+ * genuinely does emit text: a classification verdict, not a conversational
+ * reply) while OTHER catalogs for the identical id publish no chatCapable
+ * field at all. Either way the vendor field is answering "does this model
+ * produce text output", not "does it hold a conversation" — the exact same
+ * category error isFillInMiddleModel's own doc comment describes for
+ * mistral-code-fim-latest. Routing a real chat turn to a safety classifier
+ * would return a moderation verdict ("safe"/"unsafe" or similar), not an
+ * answer to the user's question — a materially worse failure than the
+ * FIM case, since nothing about the response would look like an error to
+ * the caller.
+ *
+ * Deliberately name/id-pattern-based rather than trying to read a
+ * capabilities.moderation-style field: no catalog in this platform's probe
+ * coverage publishes one, so a name veto is the only real signal available,
+ * same justification NEUTRAL_CAPABILITY_SCORE gives for why a heuristic is
+ * sometimes the honest fallback rather than a fabricated field read.
+ */
+export function isSafetyClassifierModel(modelId: string): boolean {
+  return /guard|nemoguard|safeguard|content-safety|topic-control|moderation/i.test(modelId);
+}
+
+/**
  * Whether a model is eligible for text chat routing, preferring real
  * evidence over a guess: a discovered model's `chatCapable` field (set at
  * catalog-parse time from the vendor's OWN per-model modality field —
@@ -284,14 +359,15 @@ export function isFillInMiddleModel(modelId: string): boolean {
  * task.name — see probe-adapters.ts's deriveChatCapable) is authoritative
  * when the vendor published one for this model. `isLikelyChatModel`'s name
  * heuristic is only the fallback for the (common) case where the vendor's
- * catalog carries no modality field at all. isFillInMiddleModel is checked
- * FIRST and overrides both — see its own doc comment for why.
+ * catalog carries no modality field at all. isFillInMiddleModel and
+ * isSafetyClassifierModel are checked FIRST and override both — see their
+ * own doc comments for why.
  */
 export function resolveChatCapable(model: {
   id: string;
   chatCapable?: boolean;
 }): boolean {
-  if (isFillInMiddleModel(model.id)) return false;
+  if (isFillInMiddleModel(model.id) || isSafetyClassifierModel(model.id)) return false;
   return model.chatCapable !== undefined
     ? model.chatCapable
     : isLikelyChatModel(model.id);
