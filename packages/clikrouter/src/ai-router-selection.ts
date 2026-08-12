@@ -558,3 +558,75 @@ export function selectRouterCandidate(
     reason: reasonFor(mode, preferredModel?.trim().toLowerCase()),
   };
 }
+
+/**
+ * Fraction of 'auto'-mode resolutions that deliberately pick an
+ * under-sampled candidate instead of the top-ranked one. WHY THIS EXISTS:
+ * every real-evidence signal in this file (trackRecordSuccessRate,
+ * sustainRate, capabilityRefusalCount) only ever influences ranking once a
+ * candidate has enough samples to trust — correct, per each signal's own
+ * "absence is not evidence" contract, but it creates a cold-start trap on
+ * its own: a candidate that starts out ranked low (say, on latency or cost
+ * alone) gets picked rarely, and because it's picked rarely it never
+ * accumulates the samples that could otherwise raise or confirm its
+ * ranking. Rich-get-richer, purely from lack of chances — the model might
+ * be perfectly fine. 5% is deliberately small: this trades a small, bounded
+ * share of "best guess right now" for the platform's own ability to keep
+ * learning, not a general randomization of routing.
+ */
+export const EXPLORATION_RATE = 0.05;
+
+/**
+ * A candidate this platform has real uncertainty about — no observed
+ * dispatch track record AND no trusted sustain-rate sample (see
+ * MIN_SUSTAIN_SAMPLES_TRUSTED). Both, not either: a candidate proven on one
+ * axis but new on the other has SOME real evidence already and is not a
+ * blank slate the way a candidate with neither is.
+ */
+function isUnderExplored(candidate: AiRouterCandidate): boolean {
+  const noTrackRecord =
+    candidate.trackRecordSuccessRate === undefined || candidate.trackRecordSuccessRate === null;
+  const noSustainData =
+    candidate.sustainSampleSize === undefined ||
+    candidate.sustainSampleSize === null ||
+    candidate.sustainSampleSize < MIN_SUSTAIN_SAMPLES_TRUSTED;
+  return noTrackRecord && noSustainData;
+}
+
+/**
+ * Given an already best-first ranked list, occasionally substitute the top
+ * pick with the best-ranked UNDER-EXPLORED candidate instead of the actual
+ * top pick — real exploration, not noise: among candidates this platform
+ * has genuine uncertainty about, still take the one the REST of scoring
+ * (cost, latency, access tier) likes best, so "let's learn about this one"
+ * is never also "let's pick something obviously worse for no reason".
+ *
+ * ONLY applies to 'auto' mode. 'budget' and 'frontier' are an explicit user
+ * intent — cheapest, full stop; strongest, full stop — and overriding
+ * either with an exploratory pick would violate the thing the caller
+ * actually asked for. 'auto' already means "balance intelligence and cost,
+ * use judgment"; exploration is a natural extension of that judgment, not a
+ * departure from it.
+ *
+ * Returns the ORIGINAL list, untouched, when: mode isn't 'auto', the roll
+ * misses, there is no under-explored candidate at all, or the best
+ * under-explored candidate already IS the top pick (nothing to substitute).
+ * When it does substitute, everyone else keeps their real relative order —
+ * this is a promotion, not a re-sort, so a fallback chain behind the
+ * exploratory pick is still the genuine ranking, not a shuffled one.
+ *
+ * `random` is injectable (default Math.random) so a caller can test this
+ * deterministically instead of actually being nondeterministic in a test run.
+ */
+export function applyExploration<T extends AiRouterCandidate>(
+  ranked: readonly T[],
+  mode: AiRoutingStrategy,
+  random: () => number = Math.random,
+): { candidates: readonly T[]; explored: boolean } {
+  if (mode !== 'auto' || ranked.length <= 1) return { candidates: ranked, explored: false };
+  if (random() >= EXPLORATION_RATE) return { candidates: ranked, explored: false };
+  const pick = ranked.find((c) => isUnderExplored(c));
+  if (!pick || pick === ranked[0]) return { candidates: ranked, explored: false };
+  const reordered = [pick, ...ranked.filter((c) => c !== pick)];
+  return { candidates: reordered, explored: true };
+}
