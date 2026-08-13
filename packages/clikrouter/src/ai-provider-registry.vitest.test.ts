@@ -66,6 +66,19 @@ describe("AI provider registry", () => {
       expect(ids.has(id), id).toBe(true);
     }
   });
+
+  it("keeps Cohere off the native-tools path while /compatibility/v1 rejects tools", () => {
+    // TEMPORARY VETO (2026-08-13): every dispatch WITH tools attached to
+    // Cohere's /compatibility/v1 endpoint fails with a bare "Not Found"
+    // (measured live 2026-08-09 across multiple models), while bare
+    // completions work. `noNativeTools: true` keeps the tools payload off
+    // that endpoint (tool calls go through the JSON-envelope protocol
+    // instead). This pin exists so removing the flag is a deliberate act
+    // that comes WITH live verification the endpoint accepts tools — see the
+    // cohere row's own comment in providers.ts.
+    const cohere = providers.find((p) => p.id === "cohere");
+    expect(cohere?.noNativeTools).toBe(true);
+  });
 });
 
 // ── Per-model token windows ────────────────────────────────────────────────

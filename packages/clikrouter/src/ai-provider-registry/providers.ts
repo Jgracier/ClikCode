@@ -289,6 +289,13 @@ export const AI_PROVIDERS = [
     id: "nvidia",
     contextWindow: 128_000,
     keyUrl: "https://ngc.nvidia.com/setup/api-key",
+    // KNOWN STALE: this id 404'd on every routed attempt observed live
+    // 2026-08-09 (see ai-provider-models.ts's capturedStreamError comment) —
+    // NVIDIA deprecated it. Left in place because no registry/catalog data
+    // here names a successor: the live catalogUrl feed is the real model
+    // source (the candidate builder routes across every discovered model,
+    // this default only pins ordering), and inventing a replacement id
+    // without vendor evidence is the same guess that broke this one.
     defaultModel: "nvidia/llama-3.1-nemotron-70b-instruct",
     label: "NVIDIA",
     envKey: "NVIDIA_API_KEY",
@@ -524,15 +531,22 @@ export const AI_PROVIDERS = [
     // chat traffic live in production 2026-08-09: a bare completion works
     // fine, but every attempt WITH tools attached (the real agent path — 48
     // tools) failed with a bare "Not Found" across multiple Cohere models
-    // (command-a-03-2025, command-r7b-12-2024). Cohere's registry row has no
-    // `noNativeTools` flag, so the real dispatch path sends the full OpenAI-
-    // style `tools`/`tool_choice` payload to Cohere's `/compatibility/v1`
-    // endpoint — root cause not yet confirmed (unsupported parameter shape
-    // on that specific endpoint is the leading hypothesis), so re-declaring
-    // this needs verifying that fix (or `noNativeTools: true`, which would
-    // route tool calls through the JSON-envelope protocol instead) actually
-    // resolves it BEFORE Cohere re-enters the eligible pool, not guessing
-    // again live against production traffic.
+    // (command-a-03-2025, command-r7b-12-2024) — root cause not yet
+    // confirmed (unsupported parameter shape on that specific endpoint is
+    // the leading hypothesis). Until that is fixed and live-verified,
+    // `noNativeTools: true` below (added 2026-08-13) is a TEMPORARY veto on
+    // sending native tools to Cohere at all: dispatch stops attaching the
+    // OpenAI-style `tools`/`tool_choice` payload and uses the JSON-envelope
+    // protocol instead (the bare completions that DO work), the same
+    // mechanism huggingface/ollama rows already use for endpoints that
+    // cannot take tools natively. Chosen over inventing a new provider-level
+    // "tools currently broken" field because the candidate builder's
+    // tool-calling filter is per-MODEL learned evidence
+    // (ai-model-capability.ts), not registry data — this flag is the one
+    // existing registry-level switch that keeps tool traffic off the broken
+    // endpoint without a second arbitration mechanism. Remove the flag once
+    // /compatibility/v1 tools dispatch is verified working.
+    noNativeTools: true,
     contextWindow: 128_000,
     keyUrl: "https://dashboard.cohere.com/api-keys",
     defaultModel: "command-a-03-2025",

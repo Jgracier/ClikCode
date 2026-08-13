@@ -33,7 +33,6 @@ import { APICallError, jsonSchema, streamText, tool } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createVertex } from "@ai-sdk/google-vertex";
 import { createAzure } from "@ai-sdk/azure";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { createXai } from "@ai-sdk/xai";
@@ -97,7 +96,6 @@ const FIRST_PARTY_FACTORIES: Readonly<Record<string, ProviderFactory>> = {
   openai: (o) => createOpenAI(o),
   anthropic: (o) => createAnthropic(o),
   google: (o) => createGoogleGenerativeAI(o),
-  "google-vertex": (o) => createVertex(o),
   "microsoft-foundry": (o) => createAzure(o),
   "aws-bedrock": (o) => createAmazonBedrock({ ...o, apiKey: o.apiKey ?? "" }),
   xai: (o) => createXai(o),
