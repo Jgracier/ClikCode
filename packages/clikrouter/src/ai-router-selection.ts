@@ -121,7 +121,7 @@ export interface AiRouterSelection {
  * only meaningful for auto-family modes ('auto' / 'auto-budget' /
  * 'auto-frontier' — the only modes that blend terms into one number); the
  * other modes rank lexicographically over these same terms in a fixed
- * priority order (see `explainRanking`'s per-mode `order`).
+ * priority order (see `compareScored`'s per-mode branches).
  */
 export interface AiRouterCandidateScore {
   candidate: AiRouterCandidate;
