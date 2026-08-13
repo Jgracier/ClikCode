@@ -706,10 +706,33 @@ export function extractStopReason(
     return typeof d.stop_reason === "string" ? d.stop_reason : undefined;
   }
   if (isResponsesShaped(dialect)) {
-    // Responses bundles per-item statuses rather than one top-level finish reason; extracting a
-    // single value here would mean guessing which item's status represents the turn. Deliberately
-    // lossy per-turn rather than guessed.
-    return undefined;
+    // The terminal `response` object DOES carry a turn-level outcome: `status`
+    // ('completed' | 'incomplete' | 'failed' | ...) plus `incomplete_details.reason`
+    // when truncated. Mapped exactly the way @ai-sdk/openai's own
+    // mapOpenAIResponseFinishReason does (verified against the installed
+    // package's dist source): reason 'max_output_tokens' → 'length',
+    // 'content_filter' → 'content-filter', no reason on a completed turn →
+    // 'tool-calls' when the output contains a function_call, else 'stop'.
+    // A body with no `status` at all (e.g. the synthesized fallback
+    // aggregateResponsesSse builds from a truncated stream) yields undefined —
+    // absent, not invented.
+    if (typeof d.status !== "string") return undefined;
+    const reason = (d.incomplete_details as { reason?: unknown } | undefined)
+      ?.reason;
+    if (typeof reason === "string") {
+      if (reason === "max_output_tokens") return "length";
+      if (reason === "content_filter") return "content-filter";
+      return reason;
+    }
+    if (d.status === "completed") {
+      const output = d.output as Array<{ type?: string }> | undefined;
+      const hasFunctionCall =
+        Array.isArray(output) && output.some((item) => item?.type === "function_call");
+      return hasFunctionCall ? "tool-calls" : "stop";
+    }
+    // 'failed', 'cancelled', 'in_progress', … — the raw status is the truest
+    // single word available for the turn.
+    return d.status;
   }
   if (dialect === "code-assist") {
     const candidates = codeAssistPayload(d).candidates as
@@ -719,6 +742,87 @@ export function extractStopReason(
   }
   const choices = d.choices as Array<{ finish_reason?: string }> | undefined;
   return choices?.[0]?.finish_reason;
+}
+
+/** Token counts parsed from a response body — the same shape AiChatTurnResult.usage carries. */
+export interface AiTokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+}
+
+/** A count only when the body actually carries a finite non-negative number — absent otherwise. */
+function usageCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+/**
+ * Parse token usage from the response bodies the HAND-ROLLED dialects produce.
+ * This is what makes an OAuth direct-transport turn (Codex, Code Assist)
+ * billable-visible at all: both surfaces report usage on their terminal
+ * payload, and until this existed every subscription call recorded zero tokens.
+ *
+ * - Responses-shaped (`openai-responses` and `codex-responses`, the latter via
+ *   aggregateResponsesSse handing back the `response.completed` event's own
+ *   `response` object): `usage.input_tokens` / `usage.output_tokens` /
+ *   `usage.input_tokens_details.cached_tokens`. `output_tokens` already
+ *   INCLUDES `output_tokens_details.reasoning_tokens` (OpenAI's documented
+ *   accounting, and how @ai-sdk/openai's own converter treats it), so reasoning
+ *   is not re-added — and AiChatTurnResult.usage has no reasoning slot anyway.
+ * - `code-assist`: `usageMetadata` one envelope deep —
+ *   `promptTokenCount` → input (cache included, per @ai-sdk/google's
+ *   convertGoogleUsage, verified in the installed package's dist source),
+ *   `candidatesTokenCount + thoughtsTokenCount` → output (thoughts are billed
+ *   as output and the AI SDK sums them the same way),
+ *   `cachedContentTokenCount` → cachedInput.
+ *
+ * Every field is mapped only when the body carries it — absent, not invented.
+ * Other dialects return {} here: their real dispatch runs through the AI SDK
+ * (which reports usage itself), and the remaining hand-rolled chat callers
+ * already parse usage via parseAiProviderTokenUsage in platform-domains.
+ */
+export function extractUsage(
+  dialect: BuiltChatRequest["dialect"],
+  data: unknown,
+): AiTokenUsage {
+  const d = data as Record<string, unknown>;
+  if (isResponsesShaped(dialect)) {
+    const usage = d.usage as Record<string, unknown> | undefined;
+    if (!usage || typeof usage !== "object") return {};
+    const details = usage.input_tokens_details as
+      | Record<string, unknown>
+      | undefined;
+    const inputTokens = usageCount(usage.input_tokens);
+    const outputTokens = usageCount(usage.output_tokens);
+    const cachedInputTokens = usageCount(details?.cached_tokens);
+    return {
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+      ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    };
+  }
+  if (dialect === "code-assist") {
+    const meta = codeAssistPayload(d).usageMetadata as
+      | Record<string, unknown>
+      | undefined;
+    if (!meta || typeof meta !== "object") return {};
+    const inputTokens = usageCount(meta.promptTokenCount);
+    const candidateTokens = usageCount(meta.candidatesTokenCount);
+    const thoughtTokens = usageCount(meta.thoughtsTokenCount);
+    const outputTokens =
+      candidateTokens !== undefined || thoughtTokens !== undefined
+        ? (candidateTokens ?? 0) + (thoughtTokens ?? 0)
+        : undefined;
+    const cachedInputTokens = usageCount(meta.cachedContentTokenCount);
+    return {
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+      ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    };
+  }
+  return {};
 }
 
 /**

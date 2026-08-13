@@ -74,6 +74,7 @@ import {
   extractChatText,
   extractToolCalls,
   extractStopReason,
+  extractUsage,
   extractProviderCostMicroUsd,
   type AiToolSpec,
 } from "./ai-provider-http";
@@ -480,9 +481,13 @@ async function dispatchOauthSurfaceChatTurn(
   return {
     text,
     toolCalls: extractToolCalls(built.dialect, data),
-    // No verified usage field for either dialect's response shape yet (see
-    // this module's own "never guess" convention) — absent, not invented.
-    usage: {},
+    // Both direct-transport surfaces report usage on their terminal payload —
+    // Codex on the `response.completed` event's `response.usage`, Code Assist
+    // as `usageMetadata` inside its envelope. Parsed into the exact shape the
+    // AI-SDK path produces, so recordAiCallTelemetry / attributeAiInvocation /
+    // budget.observe work unchanged; fields the body doesn't carry stay
+    // absent, not invented (see extractUsage's own doc comment).
+    usage: extractUsage(built.dialect, data),
     headers,
     stopReason: extractStopReason(built.dialect, data),
     ...((() => {
