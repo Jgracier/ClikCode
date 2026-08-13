@@ -105,9 +105,13 @@ describe('resolveLanguageModel', () => {
     expect(unreachable).toEqual([]);
   });
 
-  it('covers 17 first-party language-model providers and no speech/transcription ones', () => {
+  it('covers 16 first-party language-model providers and no speech/transcription ones', () => {
+    // Was 17: the "google-vertex" factory was removed 2026-08-13 as
+    // unreachable — no registry row has ever carried that id, so the factory
+    // could never be selected (resolveLanguageModel keys factories by
+    // registry row id).
     const ids = firstPartyProviderIds();
-    expect(ids).toHaveLength(17);
+    expect(ids).toHaveLength(16);
     // Adding a speech or transcription provider here would surface it in the admin console's model
     // picker as a selectable remediation model and then fail at request time.
     for (const nonLm of ['elevenlabs', 'deepgram', 'assemblyai', 'voyage', 'lmnt', 'hume', 'revai']) {
