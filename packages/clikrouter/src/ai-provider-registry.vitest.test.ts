@@ -31,7 +31,12 @@ describe("AI provider registry", () => {
       // Text-routable rows need a chat endpoint (or a configurable base URL).
       // Audio/visual/embedding rows do not — they speak non-chat dialects and
       // are reached through first-party AI SDK packages instead.
-      if (isTextRoutable(provider)) {
+      // …unless the row's transport is the vendor's own CLI, in which case there is no HTTP base to
+      // declare and demanding one would force a fabricated URL into the registry — the precise
+      // defect this suite exists to prevent. Keyed on the declared transport, not on a provider id.
+      // github-copilot is the first row in this state (see its registry comment: GitHub retired the
+      // only inference endpoint a Copilot credential could ever have reached).
+      if (isTextRoutable(provider) && !subscriptionUsesHarness(provider)) {
         expect(
           Boolean(provider.chatBaseUrl || provider.baseUrlEnvKey),
           `${provider.id} is text-routable but has no chat base`,
