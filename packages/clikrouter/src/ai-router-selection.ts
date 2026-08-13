@@ -119,6 +119,26 @@ export interface AiRouterCandidate {
   /** Sample size backing sustainRate, for callers that want their own trust
    *  threshold instead of relying on the read layer's MIN_SUSTAIN_SAMPLES gate. */
   sustainSampleSize?: number | null;
+  /**
+   * MEASURED third-party endpoint latency for this exact (provider, model)
+   * pair, in ms (TTFT-shaped — Vercel AI Gateway's latency_last_1h p50 via
+   * platform-domains' ai-endpoint-health-feed.ts). A PRIOR, never an
+   * override: `latencyScore` consults it ONLY when avgLatencyMs is absent —
+   * i.e. exactly where the neutral 3s constant would otherwise stand in.
+   * Our own EWMA, once it has even one sample, is never displaced by this.
+   * Same caller-attaches posture as avgLatencyMs.
+   */
+  externalLatencyMs?: number | null;
+  /**
+   * MEASURED third-party uptime_last_1d for this exact pair, percent 0-100
+   * (pessimistic minimum across the feed's sources — same module). Only ever
+   * used to DEPRIORITIZE: `intelligenceWithReliability` applies a penalty
+   * when this is below LOW_EXTERNAL_UPTIME_THRESHOLD AND this platform has
+   * NO track record of its own for the pair — real first-party evidence
+   * (trackRecordSuccessRate present) always supersedes the external prior
+   * entirely. Same caller-attaches posture as avgLatencyMs.
+   */
+  externalUptime?: number | null;
 }
 
 export interface AiRouterSelection {
@@ -262,6 +282,26 @@ function intelligenceWithReliability(candidate: AiRouterCandidate): number {
     const refusalFactor = Math.max(0.4, 1 - candidate.capabilityRefusalCount * 0.15);
     capability *= refusalFactor;
   }
+  // EXTERNAL-UPTIME PRIOR — applies ONLY in the total absence of first-party
+  // track record for this pair (the exact opposite precedence of the three
+  // multipliers around it, which all ARE first-party evidence): a pair we
+  // have real dispatch history for is scored on that history alone, however
+  // it disagrees with a third-party feed. Where we know nothing, a MEASURED
+  // uptime_last_1d below LOW_EXTERNAL_UPTIME_THRESHOLD (endpoint flapping at
+  // its own aggregator, observed live: nebius@llama-3.3 at 44% while healthy
+  // siblings sat at 96-100%) is real negative evidence that pair would waste
+  // a first attempt — a proportional discount, floored so this stays a
+  // deprioritization, never a ban (same "nudge not ban" posture as the
+  // refusal discount above). Uptime AT/ABOVE the threshold changes nothing:
+  // normal healthy variance (97% vs 99.9%) is not a capability signal.
+  if (
+    (candidate.trackRecordSuccessRate === undefined || candidate.trackRecordSuccessRate === null) &&
+    typeof candidate.externalUptime === 'number' &&
+    Number.isFinite(candidate.externalUptime) &&
+    candidate.externalUptime < LOW_EXTERNAL_UPTIME_THRESHOLD
+  ) {
+    capability *= Math.max(0.5, Math.max(0, candidate.externalUptime) / 100);
+  }
   // A THIRD, independent multiplier, same "real evidence, no threshold
   // means unadjusted" shape as the two above. Diagnosed root cause of a real
   // production bug: NEUTRAL_CAPABILITY_SCORE collapses ~97% of candidates to
@@ -291,6 +331,18 @@ function intelligenceWithReliability(candidate: AiRouterCandidate): number {
  *  rather than imported, so a caller that fetched with a looser threshold
  *  can never leak an under-trusted rate into scoring. */
 const MIN_SUSTAIN_SAMPLES_TRUSTED = 5;
+
+/**
+ * 90%: below this, an externally MEASURED uptime_last_1d marks an endpoint as
+ * genuinely degraded rather than normally variable. Deliberately
+ * conservative: healthy endpoints observed live on the feed sit at 96-100%
+ * even during routine operation (transient sub-100 readings are normal), and
+ * a prior must only ever move a ranking on a clear signal — 90% for a full
+ * day means roughly 2.4 cumulative hours of failures, which no healthy
+ * endpoint shows. Used ONLY when this platform has no track record of its
+ * own for the pair — see AiRouterCandidate['externalUptime'].
+ */
+export const LOW_EXTERNAL_UPTIME_THRESHOLD = 90;
 
 /**
  * Catches a model that is almost certainly NOT chat-capable, from its id
@@ -442,11 +494,30 @@ function costScore(cost: number | null): number {
  */
 const NEUTRAL_LATENCY_MS = 3_000;
 
-function latencyScore(avgLatencyMs: number | null | undefined): number {
-  if (typeof avgLatencyMs !== 'number' || Number.isNaN(avgLatencyMs) || !Number.isFinite(avgLatencyMs)) {
-    return NEUTRAL_LATENCY_MS;
+function latencyScore(
+  avgLatencyMs: number | null | undefined,
+  externalLatencyMs?: number | null,
+): number {
+  if (typeof avgLatencyMs === 'number' && !Number.isNaN(avgLatencyMs) && Number.isFinite(avgLatencyMs)) {
+    // Our own EWMA always wins once it has any samples — the external prior
+    // below never displaces a first-party measurement.
+    return Math.max(0, avgLatencyMs);
   }
-  return Math.max(0, avgLatencyMs);
+  // No first-party samples: a MEASURED external latency (ai-endpoint-health-
+  // feed.ts — see AiRouterCandidate['externalLatencyMs']) stands in for the
+  // neutral constant, and ONLY for the neutral constant. This is exactly the
+  // "unknown is not confirmed bad" blank NEUTRAL_LATENCY_MS covers — a real
+  // third-party measurement of this exact pair is strictly better evidence
+  // than a flat guess, while still instantly superseded by our own EWMA the
+  // first time we actually route to the pair.
+  if (
+    typeof externalLatencyMs === 'number' &&
+    !Number.isNaN(externalLatencyMs) &&
+    Number.isFinite(externalLatencyMs)
+  ) {
+    return Math.max(0, externalLatencyMs);
+  }
+  return NEUTRAL_LATENCY_MS;
 }
 
 /** The mode-level rationale shown to the admin — shared by selectRouterCandidate
@@ -484,7 +555,7 @@ function scoreOne(candidate: AiRouterCandidate): Omit<AiRouterCandidateScore, 'c
     accessRank: ACCESS_RANK[candidate.accessClass],
     cost: costScore(candidate.estimatedCostPerMTok),
     intelligence: intelligenceWithReliability(candidate),
-    latencyMs: latencyScore(candidate.avgLatencyMs),
+    latencyMs: latencyScore(candidate.avgLatencyMs, candidate.externalLatencyMs),
   };
 }
 
