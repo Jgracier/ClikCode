@@ -1155,6 +1155,197 @@ export const AI_PROVIDERS = [
     ],
     modalities: ["image", "video"],
   },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // SUBSCRIPTION LANES (added 2026-08-13). One contiguous block on purpose: a
+  // parallel branch is appending plain api-key rows to this same file, and a
+  // block that neither reorders nor reformats anything above it merges without
+  // a conflict.
+  //
+  // The rule these rows were chosen by: if a subscription-derived credential
+  // (OAuth token OR vendor-issued key) can be spent on a DIRECT HTTP call, it
+  // is spent that way — no subprocess, real streaming, parseable usage. A
+  // harness row is written ONLY where no HTTP surface exists that the
+  // credential can reach. Every row below names, in one sentence, WHICH of
+  // those two facts put it where it is, so a future reader never has to guess
+  // whether "harness" meant "no HTTP exists" or "we did not check".
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: "chutes",
+    label: "Chutes",
+    // Row floor = the SMALLEST real window in the live catalog
+    // (Qwen/Qwen3-32B-TEE, 40 960), read from llm.chutes.ai/v1/models on
+    // 2026-08-13 — not a guess, and deliberately not the largest.
+    contextWindow: 40_960,
+    maxOutput: 40_960,
+    modelWindows: {
+      // The defaultModel's own published pair from that same listing.
+      "deepseek-ai/DeepSeek-V3.2-TEE": {
+        contextWindow: 131_072,
+        maxOutput: 65_536,
+      },
+    },
+    keyUrl: "https://chutes.ai/app/api",
+    defaultModel: "deepseek-ai/DeepSeek-V3.2-TEE",
+    envKey: "CHUTES_API_KEY",
+    chatBaseUrl: "https://llm.chutes.ai/v1",
+    chatDialect: "openai-chat",
+    authHeader: "bearer",
+    openAiCompatible: true,
+    // The catalog is PUBLIC — `GET https://llm.chutes.ai/v1/models` answered
+    // 200 with the full model list and no Authorization header at all
+    // (measured 2026-08-13). An `openai-models` probe against it would
+    // therefore report a garbage credential HEALTHY, which is worse than no
+    // probe. Same resolution the ollama row reached for the same reason:
+    // health stays explicitly unsupported, and the public listing is used only
+    // as `catalogUrl`.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://llm.chutes.ai/v1/models",
+    },
+    oauth: true,
+    // DIRECT, and no `oauthChat` override — deliberately, on evidence.
+    //
+    // Chutes publishes a real OIDC discovery document at
+    // https://idp.chutes.ai/.well-known/openid-configuration (fetched
+    // 2026-08-13). It advertises issuer https://api.chutes.ai,
+    // authorization_code + refresh_token, S256 PKCE, a
+    // `token_endpoint_auth_methods_supported` that INCLUDES `none` (so a
+    // public client is expressible), and — the reason this row exists — a
+    // `chutes:invoke` scope, documented by the vendor as "Make AI API calls".
+    //
+    // The subscription surface is the SAME OpenAI-compatible host the API key
+    // already uses, so there is no second endpoint to declare: `oauthChat`
+    // exists for vendors whose subscription traffic goes somewhere else
+    // entirely (OpenAI → the Codex backend, Google → Code Assist), and Chutes
+    // is not one of them. MEASURED support for that assumption:
+    // `POST https://llm.chutes.ai/v1/chat/completions` with a bogus
+    // `Authorization: Bearer` answered `401 {"detail":"Invalid token."}` —
+    // i.e. this endpoint authenticates a BEARER TOKEN, which is exactly the
+    // shape an OIDC access token arrives in, rather than a key-only header.
+    //
+    // NOT OBSERVED, and stated plainly because the whole point of this comment
+    // is that the gap be visible: a real Chutes OAuth access token actually
+    // being ACCEPTED by llm.chutes.ai. No token could be minted here (see the
+    // platform-ai.json caveat — registration needs an existing Chutes key), and
+    // the vendor's own docs never state which host the issued token spends on.
+    // If it turns out the token is rejected there, the fix is a `oauthChat`
+    // pointing at whatever host does accept it — not a harness, because Chutes
+    // publishes no CLI harness at all.
+    subscriptionTransport: "direct",
+  },
+  {
+    id: "opencode-go",
+    label: "OpenCode Go",
+    // MEASURED, not documented: OpenCode publishes no context/output table for
+    // the Go plan, so this row carries a conservative floor rather than an
+    // invented per-model table.
+    contextWindow: 128_000,
+    maxOutput: 32_000,
+    keyUrl: "https://opencode.ai/auth",
+    // From the live Go catalog (25 ids, read 2026-08-13). Chosen because it is
+    // the id OpenCode's own Go docs lead with.
+    defaultModel: "minimax-m3",
+    // Distinct from any key the free/pay-as-you-go Zen row uses: Go is a
+    // separate $10/mo plan on a separate base URL, and one env var cannot hold
+    // two different subscriptions' keys.
+    envKey: "OPENCODE_GO_API_KEY",
+    chatBaseUrl: "https://opencode.ai/zen/go/v1",
+    chatDialect: "openai-chat",
+    authHeader: "bearer",
+    openAiCompatible: true,
+    // Public catalog again (200, no auth), so the same reasoning as the chutes
+    // row above applies: an authenticated-looking probe here would be a
+    // false green.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://opencode.ai/zen/go/v1/models",
+    },
+    // DIRECT, and the strongest evidence of any row in this block — this one
+    // needed no inference at all. `POST https://opencode.ai/zen/go/v1/chat/
+    // completions` was exercised three ways on 2026-08-13:
+    //   no Authorization header       → 401 {"error":{"type":"AuthError",
+    //                                        "message":"Missing API key."}}
+    //   Authorization: Bearer bogus   → 401 {"error":{"type":"AuthError",
+    //                                        "message":"Invalid API key."}}
+    //   unknown model id              → 401 ModelError "Model x is not supported"
+    // So the endpoint is live, OpenAI-shaped, and reads a BEARER token — the
+    // subscription is spendable over plain HTTPS and there is no reason to run
+    // a CLI. `opencode run` exists and is fully documented, but a harness row
+    // for it would be a subprocess wrapped around this same request.
+    //
+    // NOT `oauth`: OpenCode has no third-party authorization server. Both Zen
+    // and Go end at "copy your API key" from the console at opencode.ai/auth,
+    // and `opencode auth login` takes no `--key`/stdin flag, so nothing about
+    // the credential is delegable. See this provider's verdict entry.
+    //
+    // DELIBERATELY SEPARATE from any `opencode-zen` row: Zen is the
+    // pay-as-you-go gateway at /zen/v1 (model prefix `opencode/`), Go is the
+    // subscription at /zen/go/v1 (prefix `opencode-go/`). Different hosts,
+    // different catalogs, different billing — one row could not honestly
+    // describe both.
+    staticModels: [
+      "minimax-m3",
+      "minimax-m2.7",
+      "minimax-m2.5",
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "glm-5.2",
+      "glm-5.1",
+      "glm-5",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "qwen3.8-max",
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen3.6-plus",
+      "qwen3.5-plus",
+      "mimo-v2-pro",
+      "mimo-v2-omni",
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
+      "hy3",
+      "hy3-preview",
+      "gpt-5.6-luna",
+      "grok-4.5",
+    ],
+  },
+  {
+    id: "github-copilot",
+    label: "GitHub Copilot",
+    keyUrl: "https://github.com/settings/copilot",
+    // NO chatBaseUrl and NO envKey, and both absences are the finding.
+    //
+    // RE-CHECKED specifically for an HTTP path before writing this row, because
+    // direct is strongly preferred. There is none that a Copilot credential may
+    // documentedly reach:
+    //   * GitHub Models — the one first-party OpenAI-shaped inference surface
+    //     GitHub ever shipped — WAS RETIRED on 2026-07-30, and its own retirement
+    //     notice states it is "unrelated to GitHub Copilot services".
+    //   * docs.github.com/en/rest/copilot covers seat/user management, usage
+    //     metrics and cloud-agent management. None of those runs a model turn.
+    //   * The community `api.githubcopilot.com` token exchange is deliberately
+    //     NOT adopted: undocumented, and using it means impersonating GitHub's
+    //     own editor client — the exact pattern the moonshot/fal verdicts in
+    //     ai-provider-oauth-verdicts.ts refuse.
+    // So the documented programmatic surfaces are the SDK library and the CLI,
+    // and the CLI is the one this platform can drive. Harness by absence of an
+    // HTTP endpoint, not by preference.
+    probe: { kind: "unsupported" },
+    oauth: true,
+    subscriptionTransport: "harness",
+    // From GitHub's own programmatic-usage examples, which show
+    // `--model claude-haiku-4.5` and `--model gpt-5.3-codex` verbatim. Listed
+    // rather than discovered because Copilot CLI publishes its model strings
+    // only through `copilot help`, and there is no catalog endpoint to read.
+    // No `defaultModel`: with none set the harness adapter omits `--model`
+    // entirely and the CLI uses the account's own default, which is more
+    // correct than pinning one of two examples.
+    staticModels: ["claude-haiku-4.5", "gpt-5.3-codex"],
+  },
+
 ] as const satisfies readonly AiProviderSpec[];
 
 /** Union of every known provider id ('xai' | 'anthropic' | …). */
