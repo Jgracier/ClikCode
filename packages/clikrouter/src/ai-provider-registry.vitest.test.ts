@@ -21,6 +21,10 @@ describe("AI provider registry", () => {
 
   it("gives every provider a model-discovery source", () => {
     for (const provider of providers) {
+      // self-hosted's "models" are live ModelDeployment rows enumerated
+      // per-candidate (ai-self-hosted-candidates.ts in platform-domains) —
+      // there is no static catalog or probeable endpoint to declare here.
+      if (provider.id === "self-hosted") continue;
       // Text-routable rows need a chat endpoint (or a configurable base URL).
       // Audio/visual/embedding rows do not — they speak non-chat dialects and
       // are reached through first-party AI SDK packages instead.
