@@ -133,7 +133,15 @@ export function firstPartyProviderIds(): string[] {
 function resolveBaseUrl(
   spec: AiProviderSpec,
   env: Record<string, string | undefined>,
+  override?: string,
 ): string | undefined {
+  // A per-call override is the MOST deployment-specific fact there is — it
+  // wins over both the env override and the row default. This is how a
+  // candidate that IS a live endpoint (a self-hosted model deployment, whose
+  // base URL is a row in the deployments table, not an env var) gets
+  // dispatched through the same code path as every catalog provider.
+  const fromCall = String(override || "").trim();
+  if (fromCall) return fromCall;
   const fromEnv = spec.baseUrlEnvKey
     ? String(env[spec.baseUrlEnvKey] || "").trim()
     : "";
@@ -144,6 +152,10 @@ export interface ResolveModelInput {
   provider: string;
   model: string;
   apiKey?: string;
+  /** Per-call endpoint override (see resolveBaseUrl). Used for candidates
+   *  whose endpoint is resolved per-deployment at routing time rather than
+   *  from env/catalog — the self-hosted model-deployment bridge. */
+  baseUrl?: string;
   env?: Record<string, string | undefined>;
 }
 
@@ -166,7 +178,7 @@ export function resolveLanguageModel(input: ResolveModelInput): LanguageModel {
   if (!modelId) throw new Error(`no model id for provider ${input.provider}`);
 
   const env = input.env ?? process.env;
-  const baseURL = resolveBaseUrl(spec, env);
+  const baseURL = resolveBaseUrl(spec, env, input.baseUrl);
   const opts: FactoryOptions = {
     apiKey: input.apiKey,
     ...(baseURL ? { baseURL } : {}),
@@ -214,6 +226,10 @@ export interface AiChatTurnInput {
   provider: string;
   model: string;
   apiKey?: string;
+  /** Per-call endpoint override, threaded to resolveLanguageModel — see
+   *  ResolveModelInput.baseUrl. Ignored on the OAuth direct-transport path
+   *  (those surfaces own their URLs). */
+  baseUrl?: string;
   /**
    * Absent/'platform-secret'/'env' (any API key) dispatches through the AI
    * SDK exactly as before. 'oauth' on a provider whose registry row declares
@@ -518,6 +534,7 @@ export async function streamAiChatTurn(
     provider: input.provider,
     model: input.model,
     apiKey: input.apiKey,
+    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
   });
 
   const toolSet = Object.fromEntries(

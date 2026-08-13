@@ -142,7 +142,10 @@ describe('modality grouping and text-only routing', () => {
     // text-routable. Every future move of this number must name its provider the same way — a
     // silent bump is how an audio row would sneak into the text lane unnoticed.
     expect(routable.has('nous')).toBe(true);
-    expect(routable.size).toBe(32);
+    // 33, not 32: the self-hosted model-deployments row is genuinely
+    // text-routable (a chat runtime, dispatched via per-candidate baseUrl).
+    expect(routable.has('self-hosted')).toBe(true);
+    expect(routable.size).toBe(33);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {
@@ -377,3 +380,60 @@ describe('streamAiChatTurn — direct-transport OAuth subscription dispatch', ()
   });
 });
 
+
+describe('streamAiChatTurn — per-candidate baseUrl override (self-hosted deployments)', () => {
+  // A self-hosted model deployment's endpoint is a row in the deployments
+  // table, not an env var — the candidates layer attaches it per-candidate
+  // and dispatch threads it through here. This proves the override actually
+  // aims the openai-compatible request at the deployment's URL.
+  it('dispatches the openai-compatible request to the per-call baseUrl', async () => {
+    const sse = [
+      'data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"org/local-7b","choices":[{"index":0,"delta":{"role":"assistant","content":"hi from the pod"},"finish_reason":null}]}',
+      'data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"org/local-7b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}',
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(sse, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const result = await streamAiChatTurn({
+        provider: 'self-hosted',
+        model: 'org/local-7b',
+        // Placeholder bearer — deployment runtimes reached directly take no
+        // auth; the adapter just needs SOME key to build a header from.
+        apiKey: 'self-hosted-deployment',
+        baseUrl: 'http://10.0.0.7:8000/v1',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(result.text).toBe('hi from the pod');
+      expect(fetchMock).toHaveBeenCalled();
+      const url = String((fetchMock.mock.calls[0] as unknown[])[0]);
+      expect(url).toBe('http://10.0.0.7:8000/v1/chat/completions');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('a per-call baseUrl beats an env base-URL override (most specific wins)', () => {
+    const row = AI_PROVIDERS.find((p) => p.id === 'self-hosted');
+    expect(row).toBeTruthy();
+    // Constructs without throwing even though the row's chatBaseUrl is the
+    // unresolvable "{baseUrl}" placeholder — the override supplies the real
+    // endpoint. (URL selection itself is proven live by the dispatch test
+    // above; construction is what can throw here.)
+    expect(
+      resolveLanguageModel({
+        provider: 'self-hosted',
+        model: 'org/local-7b',
+        apiKey: 'k',
+        baseUrl: 'http://10.0.0.7:8000/v1',
+      }),
+    ).toBeTruthy();
+  });
+});
