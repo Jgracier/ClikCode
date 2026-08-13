@@ -27,6 +27,7 @@ import {
   isTextRoutable,
   getAiProvider,
   subscriptionDispatchesDirect,
+  subscriptionUsesHarness,
   type AiProviderSpec,
 } from './ai-provider-registry';
 
@@ -99,6 +100,13 @@ describe('resolveLanguageModel', () => {
     const unreachable = AI_PROVIDERS.filter((p) => {
       if (!isTextRoutable(p)) return false;
       if (hasFirstPartyProvider(p.id)) return false;
+      // A HARNESS-transport row is addressable through the vendor's own CLI, which is a transport
+      // this test cannot express as a URL. github-copilot is the first such row: its subscription is
+      // spendable and it has no inference endpoint at all (GitHub Models, the only one it ever had,
+      // was retired 2026-07-30), so "no chatBaseUrl" is the CORRECT state for it rather than the
+      // defect this guard hunts. Excluded on the registry datum, never on the id — a second
+      // harness-only vendor is covered by the same line. Everything else still has to carry a URL.
+      if (subscriptionUsesHarness(p)) return false;
       // A compatible row needs somewhere to send the request; `baseUrlEnvKey` rows are supplied at
       // deploy time, so they count as reachable.
       return !p.chatBaseUrl && !p.baseUrlEnvKey;
@@ -150,10 +158,12 @@ describe('modality grouping and text-only routing', () => {
     // 33, not 32: the self-hosted model-deployments row is genuinely
     // text-routable (a chat runtime, dispatched via per-candidate baseUrl).
     expect(routable.has('self-hosted')).toBe(true);
-    // 50, not 33: seventeen OpenAI-compatible chat endpoints were added 2026-08-13, every one of
+    // 52, not 33: nineteen rows were added 2026-08-13 across two parallel batches, every one of
     // them text and only text. Named individually rather than bumped, per the rule above — this
     // list IS the justification for the number, and it is also the guard that would catch an
-    // audio/visual row being added to that block by mistake.
+    // audio/visual row being added to those blocks by mistake.
+    //
+    // Seventeen plain OpenAI-compatible chat endpoints:
     for (const id of [
       'byteplus',
       'scaleway',
@@ -175,7 +185,16 @@ describe('modality grouping and text-only routing', () => {
     ]) {
       expect(routable.has(id), id).toBe(true);
     }
-    expect(routable.size).toBe(50);
+    // …plus two subscription lanes. `chutes` is deliberately absent from this second list: it
+    // appears once above, because the api-key row and the OIDC subscription collapsed onto ONE
+    // row carrying both `envKey` and `oauth`/`subscriptionTransport`.
+    //   opencode-go    — OpenCode Go plan, OpenAI-compatible at opencode.ai/zen/go/v1
+    //   github-copilot — harness-transport: routable through the Copilot CLI, with NO chatBaseUrl,
+    //                    which is exactly why the "addressable" guard above had to learn about
+    //                    harness rows.
+    expect(routable.has('opencode-go')).toBe(true);
+    expect(routable.has('github-copilot')).toBe(true);
+    expect(routable.size).toBe(52);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {
