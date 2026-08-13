@@ -150,7 +150,32 @@ describe('modality grouping and text-only routing', () => {
     // 33, not 32: the self-hosted model-deployments row is genuinely
     // text-routable (a chat runtime, dispatched via per-candidate baseUrl).
     expect(routable.has('self-hosted')).toBe(true);
-    expect(routable.size).toBe(33);
+    // 50, not 33: seventeen OpenAI-compatible chat endpoints were added 2026-08-13, every one of
+    // them text and only text. Named individually rather than bumped, per the rule above — this
+    // list IS the justification for the number, and it is also the guard that would catch an
+    // audio/visual row being added to that block by mistake.
+    for (const id of [
+      'byteplus',
+      'scaleway',
+      'ovhcloud',
+      'publicai',
+      'opencode-zen',
+      'tencent',
+      'modelscope',
+      'upstage',
+      'chutes',
+      'venice',
+      'featherless',
+      'redpill',
+      'ionet',
+      'akashml',
+      'prime-intellect',
+      'vercel-gateway',
+      'reka',
+    ]) {
+      expect(routable.has(id), id).toBe(true);
+    }
+    expect(routable.size).toBe(50);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {

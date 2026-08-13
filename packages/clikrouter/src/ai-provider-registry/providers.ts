@@ -455,11 +455,23 @@ export const AI_PROVIDERS = [
   },
   {
     id: "cerebras",
-    // Real, hard-gated free tier: 1,000,000 tokens/day, resets daily, no
-    // credit card (inference-docs.cerebras.ai/support/pricing, verified
-    // 2026-08-08). Past the limit the request 429s — no paid escalation
-    // without adding a card, so safe to declare unconditionally free.
-    apiKeyAccessClass: "free-tier",
+    // apiKeyAccessClass DELIBERATELY NOT DECLARED — this row said 'free-tier'
+    // and the claim has EXPIRED (corrected 2026-08-13).
+    //
+    // What was true on 2026-08-08 and is no longer: "1,000,000 tokens/day,
+    // resets daily, no credit card". Cerebras has since eliminated that tier.
+    // What replaces it is a $5 credit grant that requires a VERIFIED PAYMENT
+    // METHOD and expires 30 days after issue, and Cerebras's own docs now state
+    // there is no permanent no-cost tier available.
+    //
+    // That is a credit grant, not a free tier, and the difference is exactly
+    // what apiKeyAccessClass encodes: a rate-limited tier 429s and costs nothing
+    // ever; a credit grant runs out and then BILLS THE CARD ON FILE, silently,
+    // on a provider the router was ranking as free. Leaving the old value would
+    // have kept Cerebras out-ranking metered providers on the strength of a tier
+    // that no longer exists. Undeclared falls through to "unknown", which fails
+    // closed (excluded whenever allowMetered is off) — the same conservative
+    // landing spot the cloudflare row uses, and the honest one here.
     contextWindow: 64_000,
     keyUrl: "https://cloud.cerebras.ai/platform",
     defaultModel: "llama-3.3-70b",
@@ -529,7 +541,23 @@ export const AI_PROVIDERS = [
   },
   {
     id: "cohere",
-    // apiKeyAccessClass DELIBERATELY NOT declared, pending a fix — see below.
+    // apiKeyAccessClass DELIBERATELY NOT declared — CONFIRMED STILL CORRECT
+    // 2026-08-13, and there are now TWO independent reasons, either of which
+    // alone is sufficient. Re-checked because the value is absent, and an absent
+    // field looks like an oversight to anyone tidying this table.
+    //
+    // REASON 1 (contractual, and the more permanent of the two). Cohere's free
+    // Trial keys are barred from production and commercial use by the terms they
+    // are issued under — they exist to evaluate the API, not to serve traffic.
+    // Every credential this platform routes to IS production traffic: the
+    // remediation lane, the assistant and the triage lane all serve real users
+    // on real deployments. So declaring Cohere free-tier would not merely
+    // mis-rank it, it would preferentially route production work onto a
+    // credential that is not licensed to carry it. A vendor's free tier is only
+    // usable here if it is free AND permitted for the use we put it to; Cohere
+    // is the row that separates those two questions.
+    //
+    // REASON 2 (operational, and possibly temporary) — see below.
     //
     // Cohere DOES issue a real, hard-gated free Trial key tier (free, no
     // card, rate-limited, explicitly barred from production/billed use —
@@ -603,6 +631,20 @@ export const AI_PROVIDERS = [
     // 2026-08-08) — rate-limit-gated, not credit-gated, so there is no paid
     // plan it silently escalates to. (Separately: a one-time $5/3-month
     // credit also exists on top of this, unrelated to the free tier itself.)
+    //
+    // THE SIZE OF THE TIER, recorded 2026-08-13 because ranking cannot see it:
+    // the free developer tier is 20 REQUESTS PER DAY. The 600 RPM figure above
+    // is the burst rate, not the daily allowance, and the two read very
+    // differently at a routing decision. `apiKeyAccessClass` has exactly two
+    // states — 'free-tier' or metered — with no way to say "free but
+    // negligible", so this stays free-tier: it IS free and it IS hard-gated
+    // (429, no card, no silent escalation), which is what the flag asserts.
+    // What it cannot say is that the twenty-first request of the day fails, so
+    // treating SambaNova as a dependable free lane will disappoint. Expressing
+    // that honestly needs a quota dimension on the class, not a lie in this
+    // field — and the failure mode of leaving it as-is is a 429 (recoverable,
+    // and already handled by the cooldown path), whereas demoting it to metered
+    // would wrongly bill-gate a genuinely free provider.
     apiKeyAccessClass: "free-tier",
     contextWindow: 64_000,
     keyUrl: "https://cloud.sambanova.ai/apis",
@@ -872,6 +914,403 @@ export const AI_PROVIDERS = [
     probe: { kind: "unsupported", catalogUrl: "https://ollama.com/api/tags" },
     openAiCompatible: true,
   },
+
+  // ── OPENAI-COMPATIBLE ENDPOINTS ADDED 2026-08-13 ───────────────────────────────────────────────
+  // EVERY ROW BELOW WAS LIVE-PROBED BEFORE IT WAS WRITTEN, and each row records
+  // what was measured rather than what the vendor's marketing page claims. The
+  // two facts that decide the shape of a row are both measurable without an
+  // account, and both were measured for every entry:
+  //
+  //   1. Does `<base>/models` answer at all, and what does it return?
+  //   2. Does it answer 401/403 to a BOGUS bearer token?
+  //
+  // Only (2) makes an endpoint usable as a credential probe. A models route that
+  // answers 200 to a bogus (or absent) token proves the HOST is alive and proves
+  // NOTHING about the key, so wiring it to `openai-models` would report a dead or
+  // never-set credential as healthy — the exact defect already documented on the
+  // nvidia/nous/sambanova/novita rows above. Those endpoints are wired as
+  // `catalogUrl` under `kind: "unsupported"` instead, which is honest: model
+  // discovery works, credential health is unknown.
+  //
+  // `contextWindow` is a CONSERVATIVE FLOOR on every row here, deliberately not a
+  // vendor-published figure. These are marketplaces whose offered set changes
+  // without notice, so the per-model truth is the catalog's own `context_length`
+  // (which deriveContextWindow in probe-adapters.ts already reads at discovery
+  // time) — see the `contextWindow` doc comment's "WHY MOST ROWS STILL CARRY ONLY
+  // A FLOOR" note. Where the live catalog was read, the observed range is
+  // recorded in the row's comment so the floor can be checked against it.
+  //
+  // NOT ADDED, and why — recorded here so the next person does not re-research it:
+  //   * writer (api.writer.com) — SKIPPED. The vendor documents `/v1/chat`, not
+  //     `/v1/chat/completions`, and the live probe cannot tell which route really
+  //     exists: with a bogus bearer, `/v1/models`, `/v1/chat`,
+  //     `/v1/chat/completions`, `/v1/chat/completions/bogus` and `/v1/completions`
+  //     ALL answer an identical 401 `fail.auth` envelope, while
+  //     `/v1/definitely-not-a-real-path` answers 404. So the gateway 404s unknown
+  //     PREFIXES but 401s anything under a known one — which means the 401 on
+  //     `/v1/chat/completions` is not evidence that the OpenAI-dialect route is
+  //     served. Wiring either path would be a guess about the dialect. Revisit
+  //     with a real Writer key, which resolves it in one call.
+  //   * zai-anthropic (api.z.ai/api/anthropic) — SKIPPED, for two independent
+  //     reasons. (a) It would have to share ZAI_API_KEY with the `zai` row, and
+  //     the registry does not allow that: ai-provider-registry.vitest.test.ts
+  //     asserts envKey uniqueness, and getAiProviderByEnvKey() is a `find` that
+  //     would resolve the shared name to whichever row came first. (b) There is
+  //     no honest probe for it anyway — `/api/anthropic/v1/models` answers
+  //     HTTP 200 with an auth-error BODY (`{"code":401,"msg":"token expired or
+  //     incorrect"}`) for a bogus key under both `x-api-key` and `Bearer`, so no
+  //     status-code-based probe can tell a live key from a dead one.
+  {
+    id: "byteplus",
+    contextWindow: 32_000,
+    keyUrl: "https://console.byteplus.com/ark",
+    label: "BytePlus ModelArk",
+    envKey: "BYTEPLUS_API_KEY",
+    chatBaseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+    // REAL credential probe — MEASURED: bogus bearer → 401
+    // `{"error":{"code":"AuthenticationError",…,"type":"Unauthorized"}}`.
+    probe: {
+      kind: "openai-models",
+      url: "https://ark.ap-southeast.bytepluses.com/api/v3/models",
+    },
+    openAiCompatible: true,
+    // apiKeyAccessClass DELIBERATELY NOT free-tier. BytePlus grants 500K free
+    // tokens PER MODEL, non-expiring — that is a CREDIT GRANT, not a
+    // rate-limited tier: once it is spent the same key keeps working and bills.
+    // Declaring it free-tier would make it out-rank metered providers forever on
+    // the strength of a one-time balance nobody here can observe. This is the
+    // same distinction the cerebras row below now records the hard way.
+  },
+  {
+    id: "scaleway",
+    contextWindow: 32_000,
+    keyUrl: "https://console.scaleway.com/iam/api-keys",
+    label: "Scaleway Generative APIs",
+    envKey: "SCALEWAY_API_KEY",
+    // EU (Paris) inference. Keys are Scaleway IAM API keys, hence the IAM console.
+    chatBaseUrl: "https://api.scaleway.ai/v1",
+    // MEASURED: no token → 401; bogus bearer → 403 `{"status":403,
+    // "error":"FORBIDDEN","message":"insufficient permissions to access the
+    // resource"}`. Both are auth failures to executeProbe (401 and 403 are both
+    // default auth-failed statuses), with ONE caveat worth writing down: that
+    // 403 body contains the words "insufficient permissions", which trips
+    // executeProbe's `entitlementFailure` guard, so a bad Scaleway key reports as
+    // provider trouble rather than `auth_failed`. It never reports HEALTHY, which
+    // is the property that matters — noted so the next reader does not mistake it
+    // for a broken probe.
+    probe: { kind: "openai-models", url: "https://api.scaleway.ai/v1/models" },
+    openAiCompatible: true,
+  },
+  {
+    id: "ovhcloud",
+    contextWindow: 32_000,
+    keyUrl: "https://endpoints.ai.cloud.ovh.net/",
+    label: "OVHcloud AI Endpoints",
+    envKey: "OVH_AI_ENDPOINTS_API_KEY",
+    chatBaseUrl: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+    // ANONYMOUS ACCESS IS REAL HERE, which is why credentialOptional is set.
+    // MEASURED: /v1/models answers 200 with NO token, and a keyless POST to
+    // /v1/chat/completions is not rejected as unauthenticated — it answers 429
+    // `{"message":"API rate limit exceeded"}`, i.e. the request was ACCEPTED and
+    // then throttled against OVH's documented 2 req/min-per-IP anonymous bucket
+    // (shared with everyone else on the egress IP, so 429 is the normal keyless
+    // outcome from a datacenter address). A key raises the limit; it is not
+    // required to be admitted.
+    //
+    // The catalog is public and rich: {data:[{id, pricing:{prompt,completion},
+    // context_length, max_completion_tokens}]} — context_length observed 8,192 →
+    // 262,144 across the 20 listed models, and deriveContextWindow reads it, so
+    // the 32K row floor only applies to the 3 entries that omit it.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models",
+    },
+    openAiCompatible: true,
+    credentialOptional: true,
+  },
+  {
+    id: "publicai",
+    // Real, hard-gated free tier: Public AI is a nonprofit serving
+    // publicly-funded open models at no charge, rate-limited (20 RPM) rather
+    // than credit-limited — there is no paid plan for it to silently escalate
+    // into, which is the property that makes free-tier safe to declare.
+    apiKeyAccessClass: "free-tier",
+    contextWindow: 32_000,
+    keyUrl: "https://platform.publicai.co/",
+    label: "Public AI",
+    envKey: "PUBLICAI_API_KEY",
+    chatBaseUrl: "https://api.publicai.co/v1",
+    // REAL credential probe — MEASURED: bogus bearer → 401, RFC 7807 body
+    // (`{"type":"https://httpproblems.com/http-status/401","title":
+    // "Unauthorized",…}`). The catalog is NOT public here.
+    probe: { kind: "openai-models", url: "https://api.publicai.co/v1/models" },
+    openAiCompatible: true,
+  },
+  {
+    id: "opencode-zen",
+    contextWindow: 32_000,
+    keyUrl: "https://opencode.ai/auth",
+    label: "OpenCode Zen",
+    envKey: "OPENCODE_ZEN_API_KEY",
+    chatBaseUrl: "https://opencode.ai/zen/v1",
+    // KEYLESS WORKS FOR THE ZERO-COST SUBSET, measured not assumed: a POST to
+    // /zen/v1/chat/completions with NO Authorization header and model
+    // `nemotron-3.5-lightning-free` returned 200 and a real completion, while the
+    // same call for a paid id (`grok-code`) returned 401. Hence credentialOptional.
+    //
+    // The catalog is public (61 models, id-only shape) and cannot authenticate —
+    // catalogUrl only.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://opencode.ai/zen/v1/models",
+    },
+    openAiCompatible: true,
+    credentialOptional: true,
+    // apiKeyAccessClass DELIBERATELY NOT free-tier, even though free models
+    // exist. The free set is PER MODEL (the `-free` suffixed ids), and this row
+    // also serves claude-opus-5 / gpt-5.6 / gemini-3.x at full metered cost. A
+    // provider-level free-tier declaration would price the whole catalog at zero
+    // and let a routing lane with allowMetered=false spend real money on a
+    // frontier model. Per-model zero pricing has no registry expression (see the
+    // zai note in ai-zai-pricing.ts, which reaches the same conclusion), and
+    // inventing one for a single provider is not a fix.
+  },
+  {
+    id: "tencent",
+    contextWindow: 32_000,
+    // URL taken verbatim from the vendor's own 401 body, which links it.
+    keyUrl: "https://console.cloud.tencent.com/tokenhub/apikey",
+    label: "Tencent TokenHub",
+    envKey: "TENCENT_TOKENHUB_API_KEY",
+    // International endpoint (the mainland host is a different origin).
+    chatBaseUrl: "https://tokenhub-intl.tencentcloudmaas.com/v1",
+    // REAL credential probe — MEASURED: bogus bearer → 401 `{"error":
+    // {"type":"gateway_error","code":"401002","message":"The API Key does not
+    // exist or signature verification failed…"}}`.
+    probe: {
+      kind: "openai-models",
+      url: "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "modelscope",
+    // Real, hard-gated free tier: ModelScope's inference API grants 2,000
+    // requests/day to a bound account, rate-limited rather than credit-limited.
+    apiKeyAccessClass: "free-tier",
+    contextWindow: 32_000,
+    keyUrl: "https://modelscope.cn/my/myaccesstoken",
+    label: "ModelScope",
+    envKey: "MODELSCOPE_API_KEY",
+    chatBaseUrl: "https://api-inference.modelscope.cn/v1",
+    // /v1/models is live-verified UNAUTHENTICATED (200 with no token, 43 models,
+    // id-only shape with no pricing and no context field) — cannot serve as a
+    // credential probe, so it is catalog-only and the row floor is what applies.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://api-inference.modelscope.cn/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "upstage",
+    contextWindow: 32_000,
+    // URL taken verbatim from the vendor's own 401 body, which links it.
+    keyUrl: "https://console.upstage.ai/api-keys",
+    label: "Upstage Solar",
+    envKey: "UPSTAGE_API_KEY",
+    chatBaseUrl: "https://api.upstage.ai/v1",
+    // REAL credential probe — MEASURED: bogus bearer → 401
+    // `{"error":{…,"code":"invalid_api_key"}}`.
+    probe: { kind: "openai-models", url: "https://api.upstage.ai/v1/models" },
+    openAiCompatible: true,
+  },
+  {
+    id: "chutes",
+    contextWindow: 32_000,
+    keyUrl: "https://chutes.ai/app/settings/api-keys",
+    label: "Chutes",
+    envKey: "CHUTES_API_KEY",
+    chatBaseUrl: "https://llm.chutes.ai/v1",
+    // /v1/models is live-verified UNAUTHENTICATED (200 with no token) — cannot
+    // serve as a credential probe, but it is a GOOD catalog: {data:[{id,
+    // pricing:{prompt,completion}, context_length, max_output_length,…}]}, which
+    // is the generic pricing.prompt/completion shape parseModelsListBody already
+    // reads with no extractor. context_length observed 40,960 → 1,048,576 across
+    // the 13 listed models, so the 32K row floor is a true floor here.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://llm.chutes.ai/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "venice",
+    contextWindow: 32_000,
+    keyUrl: "https://venice.ai/settings/api",
+    label: "Venice AI",
+    envKey: "VENICE_API_KEY",
+    // The doubled `/api` is correct, not a typo: Venice's OpenAI-compatible
+    // surface is served at /api/v1 (live-verified).
+    chatBaseUrl: "https://api.venice.ai/api/v1",
+    // /api/v1/models is live-verified UNAUTHENTICATED (200 with no token, 110
+    // models) — catalog only. It carries `context_length` (observed 32,000 →
+    // 2,000,000), which deriveContextWindow reads per model; its prices live
+    // under a vendor-specific `model_spec.pricing` object that
+    // parseModelsListBody does not read, so pricing stays empty rather than wrong.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://api.venice.ai/api/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "featherless",
+    contextWindow: 32_000,
+    keyUrl: "https://featherless.ai/account/api-keys",
+    label: "Featherless",
+    envKey: "FEATHERLESS_API_KEY",
+    chatBaseUrl: "https://api.featherless.ai/v1",
+    // /v1/models is live-verified UNAUTHENTICATED (200 with no token) — catalog
+    // only. It is by far the largest catalog wired here: 21,702 community models,
+    // each with `context_length` and a generic `pricing:{prompt,completion}`.
+    //
+    // THE 32K FLOOR IS NOT A HARD FLOOR ON THIS ROW, uniquely — observed
+    // context_length spans 2,048 → 262,144. It does not need to be: 21,693 of the
+    // 21,702 entries carry the field, so deriveContextWindow supplies per-model
+    // truth for all but nine, and pinning the row to the catalog's 2,048 minimum
+    // would shrink every prompt to fit the smallest RWKV model in the index.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://api.featherless.ai/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "redpill",
+    contextWindow: 32_000,
+    keyUrl: "https://redpill.ai/dashboard",
+    label: "RedPill",
+    envKey: "REDPILL_API_KEY",
+    chatBaseUrl: "https://api.redpill.ai/v1",
+    // /v1/models is live-verified UNAUTHENTICATED (200 with no token, 66 models)
+    // — catalog only. OpenRouter-shaped: `pricing:{prompt,completion,
+    // input_cache_read}` as USD-per-single-token strings plus `context_length`
+    // (observed 8,191 → 2,000,000), both read by the generic parser.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://api.redpill.ai/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "ionet",
+    contextWindow: 32_000,
+    keyUrl: "https://ai.io.net/ai/api-keys",
+    label: "io.net Intelligence",
+    // NOT `IONET_API_KEY` — that name is already taken, by io.net's COMPUTE
+    // integration (packages/compute/src/providers/ionet-provider.ts, which reads
+    // it for api.io.net/v1 GPU jobs and has a compute-gpu manifest row). These
+    // are two different io.net products with two different API hosts and two
+    // different key consoles (cloud.io.net for compute, ai.io.net for
+    // Intelligence), so collapsing them onto one env var would assert that one
+    // pasted secret authenticates both — an assumption nothing here can verify.
+    // This is the Hugging Face situation (two credentials that look like one),
+    // not the fal/Baseten one (one credential that grew two names): when the
+    // vendor really does issue a single key for both surfaces, the fix is to
+    // DELETE this row's key and read the shared one, not to keep both.
+    envKey: "IONET_INTELLIGENCE_API_KEY",
+    chatBaseUrl: "https://api.intelligence.io.solutions/api/v1",
+    // /api/v1/models is live-verified UNAUTHENTICATED (200 with no token, 31
+    // models) — catalog only. NOTE the row floor genuinely carries weight here:
+    // io.net names its window field `context_window` and its prices
+    // `input_token_price`/`output_token_price`, none of which deriveContextWindow
+    // or parseModelsListBody read, so nothing is discovered per-model. The
+    // observed range is 32,768 → 1,048,576, so 32K is a true floor for every
+    // model currently listed.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://api.intelligence.io.solutions/api/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "akashml",
+    contextWindow: 32_000,
+    keyUrl: "https://akashml.com/",
+    label: "AkashML",
+    envKey: "AKASHML_API_KEY",
+    chatBaseUrl: "https://api.akashml.com/v1",
+    // REAL credential probe — MEASURED: bogus bearer → 401 `{"error":
+    // "Unauthorized","message":"Invalid token format. API keys should start with
+    // 'akml-'…"}`. The catalog is NOT public here.
+    probe: { kind: "openai-models", url: "https://api.akashml.com/v1/models" },
+    openAiCompatible: true,
+  },
+  {
+    id: "prime-intellect",
+    contextWindow: 32_000,
+    keyUrl: "https://app.primeintellect.ai/dashboard/tokens",
+    label: "Prime Intellect",
+    envKey: "PRIME_INTELLECT_API_KEY",
+    chatBaseUrl: "https://api.pinference.ai/api/v1",
+    // /api/v1/models is live-verified UNAUTHENTICATED (200 with no token, 116
+    // models) — catalog only. Its prices are per-MILLION-token under vendor names
+    // (`pricing.input_usd_per_mtok`/`output_usd_per_mtok`), which the generic
+    // per-single-token pricing.prompt/completion path does NOT read, so pricing
+    // stays empty rather than wrong by a factor of a million. Adding an extractor
+    // for it belongs in PROVIDER_PRICING_EXTRACTORS, not in this row.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://api.pinference.ai/api/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "vercel-gateway",
+    contextWindow: 32_000,
+    keyUrl: "https://vercel.com/dashboard/ai-gateway/api-keys",
+    label: "Vercel AI Gateway",
+    envKey: "VERCEL_AI_GATEWAY_API_KEY",
+    chatBaseUrl: "https://ai-gateway.vercel.sh/v1",
+    // /v1/models is live-verified UNAUTHENTICATED (200 with no token, 328 models)
+    // — cannot serve as a credential probe, but it is the richest catalog of the
+    // set: name, description, `pricing`, `context_window`, `max_tokens`,
+    // `modalities`, `supported_parameters` and reasoning options per model. As
+    // with io.net, the window field is `context_window`, which deriveContextWindow
+    // does not read (it reads `context_length`), so the row floor is what applies
+    // per model today; observed `context_window` spans 480 → 2,000,000 across the
+    // 238 entries that declare one, so 32K is a floor for the chat models and
+    // deliberately over-states the handful of tiny embedding rows — which are not
+    // text-routable candidates anyway.
+    probe: {
+      kind: "unsupported",
+      catalogUrl: "https://ai-gateway.vercel.sh/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
+    id: "reka",
+    contextWindow: 32_000,
+    keyUrl: "https://app.reka.ai/",
+    label: "Reka",
+    envKey: "REKA_API_KEY",
+    chatBaseUrl: "https://api.reka.ai/v1",
+    // REAL credential probe — MEASURED: bogus bearer → 401 `{"detail":"Could not
+    // authorize access"}`. (With NO header at all the same route answers 400 and
+    // an empty body, which is why the bogus-token measurement is the one that
+    // decides this: 400-on-absent is not an auth verdict, 401-on-bogus is.)
+    //
+    // The OpenAI dialect is CONFIRMED by route existence, not assumed: POST
+    // /v1/chat/completions with a bogus bearer answers 401, while
+    // /v1/nonexistent-path answers 404 — so this gateway does route-match before
+    // authenticating, and the chat-completions route is really there. That same
+    // test is what disqualified Writer (see the SKIPPED note at the top of this
+    // block), where every path under a known prefix answers 401 alike.
+    probe: { kind: "openai-models", url: "https://api.reka.ai/v1/models" },
+    openAiCompatible: true,
+  },
+
   {
     id: "custom-openai",
     noNativeTools: true,
