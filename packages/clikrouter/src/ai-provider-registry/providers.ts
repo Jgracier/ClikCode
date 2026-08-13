@@ -34,6 +34,15 @@ export const AI_PROVIDERS = [
     probe: { kind: "openai-models", url: "https://api.x.ai/v1/models" },
     openAiCompatible: true,
     oauth: true,
+    // xAI publishes its own non-interactive CLI (`@xai-official/grok`, maintainer
+    // xai-security <security@x.ai>), and that CLI is the ONLY working way to spend
+    // a Grok subscription. Deliberately NOT 'direct': the measured fact that put
+    // this row at "unspendable" for so long has not changed — api.x.ai still
+    // answers an xAI OAuth bearer with 403, and there is no `oauthChat` surface
+    // here because no such surface is known to exist. What changed is that a
+    // harness transport now does. See the xai row in ai-harness-registry.ts for
+    // the adapter and exactly what was and was not observed.
+    subscriptionTransport: "harness",
   },
   {
     id: "anthropic",

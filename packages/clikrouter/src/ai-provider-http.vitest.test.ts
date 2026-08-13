@@ -233,11 +233,29 @@ describe('buildAiChatRequest', () => {
     ).toThrow(/cannot be dispatched over HTTP.*harness/s);
   });
 
-  it('refuses to build one for a provider with no subscription transport', () => {
+  // xAI used to be THIS test's subject — it was the registry's example of a provider that could be
+  // connected but never spent. It is a harness row now (xAI publishes @xai-official/grok), so it
+  // belongs with anthropic above. The measured fact underneath is unchanged and is exactly why it is
+  // 'harness' and not 'direct': api.x.ai answers an xAI OAuth bearer with 403, so this chokepoint
+  // must still refuse to build the request — only the reason it gives has changed.
+  it('refuses to build an HTTP request for an xAI subscription, pointing at the CLI', () => {
     expect(() =>
       buildAiChatRequest({
         provider: 'xai',
         model: 'grok-4-1-fast',
+        apiKey: 'oauth-token',
+        credentialSource: 'oauth',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    ).toThrow(/cannot be dispatched over HTTP.*harness/s);
+  });
+
+  it('refuses to build one for a provider with no subscription transport', () => {
+    expect(() =>
+      buildAiChatRequest({
+        // huggingface has an OAuth connection but neither a subscription endpoint nor a vendor CLI.
+        provider: 'huggingface',
+        model: 'meta-llama/Llama-3.1-8B-Instruct',
         apiKey: 'oauth-token',
         credentialSource: 'oauth',
         messages: [{ role: 'user', content: 'hi' }],

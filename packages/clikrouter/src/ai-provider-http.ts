@@ -375,9 +375,14 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   //
   // Throwing makes that a loud failure at the one chokepoint every HTTP dispatch
   // passes through, instead of a safety property five separate call sites each
-  // have to remember. Same reasoning for a provider with no subscription
-  // transport at all (xAI): a request built for it is measured to 403, so
-  // building it is never the right outcome.
+  // have to remember. The same throw covers a provider with no subscription
+  // transport at all, for the same reason: there is no surface to build for.
+  //
+  // xAI is now a harness row, not a transport-less one, and it is the sharpest
+  // case for throwing rather than trying: api.x.ai is MEASURED to answer an xAI
+  // OAuth bearer with 403, so an HTTP attempt here cannot succeed — it can only
+  // burn the request and mask the fact that the CLI is where that credential is
+  // spent.
   if (input.credentialSource === "oauth" && !subscriptionDispatchesDirect(spec)) {
     const transport = spec?.subscriptionTransport ?? "none";
     throw new Error(

@@ -185,11 +185,18 @@ export interface AiProviderSpec {
    *               real vendor endpoints, not a wrapper around a CLI.
    *   'harness' — the vendor's own CLI is the supported way to spend this
    *               subscription, and is therefore the PRIMARY and only path for
-   *               it (Anthropic → Claude Code). Not a fallback: no HTTP attempt
-   *               is made first, and nothing "falls back" to it.
+   *               it (Anthropic → Claude Code, xAI → Grok Build). Not a
+   *               fallback: no HTTP attempt is made first, and nothing "falls
+   *               back" to it. xAI is the clearest illustration of why this is a
+   *               separate state rather than "direct or nothing": api.x.ai is
+   *               measured to answer its own OAuth bearer with 403, so there is
+   *               genuinely no HTTP surface — and the subscription is still
+   *               fully spendable, through `@xai-official/grok`.
    *   undefined — this provider has no working subscription dispatch at all, so
    *               an OAuth credential for it can be connected but not spent
-   *               (xAI: measured 403, and no vendor CLI exists either).
+   *               (today: huggingface, microsoft-foundry — rows with an OAuth
+   *               connection and neither a known subscription endpoint nor a
+   *               vendor CLI).
    *
    * An API KEY is unaffected by this field in every case — it always dispatches
    * over plain HTTP to `chatBaseUrl`.
