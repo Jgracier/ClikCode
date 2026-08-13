@@ -409,3 +409,77 @@ describe('capabilityRefusalCount — a NUDGE against real observed "I can\'t do 
     expect(ranked[0]!.candidate.provider).toBe('clean-record');
   });
 });
+
+describe('external endpoint-health priors — seed the blanks, never displace first-party evidence', () => {
+  it('uses externalLatencyMs in place of the neutral 3s ONLY when our own EWMA is absent', () => {
+    // Identical candidates except: one has a measured external TTFT, the
+    // other has nothing. With no first-party latency anywhere, the external
+    // prior (200ms vs neutral 3000ms) must decide the auto-mode ranking.
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'a', model: 'model-with-prior', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, externalLatencyMs: 200 },
+      { provider: 'b', model: 'model-without', accessClass: 'free-tier', estimatedCostPerMTok: 0.1 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
+    expect(ranked[0]!.candidate.model).toBe('model-with-prior');
+    expect(ranked[0]!.latencyMs).toBe(200);
+    // The blank candidate still scores the neutral constant, not zero.
+    expect(ranked[1]!.latencyMs).toBe(3000);
+  });
+
+  it('our own EWMA always wins over the external prior once it has samples', () => {
+    // The pair with a REAL observed 2500ms EWMA also carries a rosy 100ms
+    // external number — the prior must be ignored entirely, so the genuinely
+    // faster first-party-measured sibling ranks first.
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'a', model: 'own-slow-ext-fast', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, avgLatencyMs: 2500, externalLatencyMs: 100 },
+      { provider: 'b', model: 'own-fast', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, avgLatencyMs: 800 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
+    expect(ranked[0]!.candidate.model).toBe('own-fast');
+    expect(ranked[1]!.latencyMs).toBe(2500); // EWMA, not the 100ms prior
+  });
+
+  it('low external uptime deprioritizes a pair we have NO track record for', () => {
+    // 44% measured uptime_last_1d (a real value observed live on the feed)
+    // vs an identical sibling with no uptime data: the flapping endpoint
+    // must rank below it in auto mode.
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'flapping', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, externalUptime: 44 },
+      { provider: 'unknown-health', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
+    expect(ranked[0]!.candidate.provider).toBe('unknown-health');
+    expect(ranked[0]!.intelligence).toBeGreaterThan(ranked[1]!.intelligence);
+  });
+
+  it('uptime at/above the 90% threshold changes nothing — healthy variance is not a signal', () => {
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'a', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, externalUptime: 97 },
+      { provider: 'b', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
+    expect(ranked[0]!.intelligence).toBe(ranked[1]!.intelligence);
+  });
+
+  it('first-party track record supersedes the external uptime prior entirely', () => {
+    // Same 44% external uptime, but WE have real dispatch history for the
+    // pair (perfect success rate) — the prior must not touch the score, so
+    // the two candidates tie on intelligence.
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'proven', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, trackRecordSuccessRate: 1, externalUptime: 44 },
+      { provider: 'also-proven', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, trackRecordSuccessRate: 1 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
+    expect(ranked[0]!.intelligence).toBe(ranked[1]!.intelligence);
+  });
+
+  it('the uptime discount is floored — a deprioritization, never a ban', () => {
+    // 0% uptime must still leave half the capability score standing (the
+    // 0.5 floor), not zero the candidate out of existence.
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'dead-at-aggregator', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, agenticIndex: 60, externalUptime: 0 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
+    expect(ranked[0]!.intelligence).toBe(30); // 60 × 0.5 floor
+  });
+});
