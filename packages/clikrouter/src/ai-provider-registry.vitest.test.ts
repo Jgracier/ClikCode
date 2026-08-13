@@ -4,6 +4,9 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   isTextRoutable,
   modelTokenLimits,
+  subscriptionDispatchesDirect,
+  subscriptionIsSpendable,
+  subscriptionUsesHarness,
   type AiProviderSpec,
 } from "./ai-provider-registry";
 
@@ -150,6 +153,31 @@ describe("modelTokenLimits", () => {
       contextWindow: 200_000,
       maxOutput: 32_000,
     });
+  });
+
+  // xAI's subscription tier moved from "connectable but unspendable" to "spendable through the
+  // vendor's CLI" when xAI published one (@xai-official/grok). Both halves are pinned, because the
+  // half that did NOT change is the one most likely to be eroded by a later edit: api.x.ai is
+  // measured to answer an xAI OAuth bearer with 403, so there is still no HTTP dispatch surface.
+  it("spends an xAI subscription through the harness, and never over HTTP", () => {
+    const xai = providers.find((p) => p.id === "xai");
+    expect(xai).toBeTruthy();
+    expect(xai!.subscriptionTransport).toBe("harness");
+    expect(subscriptionIsSpendable(xai)).toBe(true);
+    expect(subscriptionUsesHarness(xai)).toBe(true);
+    // The load-bearing negative: no `oauthChat` surface, and no direct dispatch.
+    expect(subscriptionDispatchesDirect(xai)).toBe(false);
+    expect(xai!.oauthChat).toBeUndefined();
+  });
+
+  // The harness tier must be provider-agnostic: xAI is admitted on exactly the terms Anthropic is,
+  // with no xai-shaped special case anywhere in the gate.
+  it("treats xai and anthropic identically at the harness gate", () => {
+    const xai = providers.find((p) => p.id === "xai");
+    const anthropic = providers.find((p) => p.id === "anthropic");
+    for (const fn of [subscriptionIsSpendable, subscriptionUsesHarness, subscriptionDispatchesDirect]) {
+      expect(fn(xai), fn.name).toBe(fn(anthropic));
+    }
   });
 
   it("never returns a maxOutput larger than its own contextWindow", () => {
