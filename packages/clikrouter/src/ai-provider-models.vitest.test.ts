@@ -27,6 +27,7 @@ import {
   isTextRoutable,
   getAiProvider,
   subscriptionDispatchesDirect,
+  subscriptionUsesHarness,
   type AiProviderSpec,
 } from './ai-provider-registry';
 
@@ -99,6 +100,13 @@ describe('resolveLanguageModel', () => {
     const unreachable = AI_PROVIDERS.filter((p) => {
       if (!isTextRoutable(p)) return false;
       if (hasFirstPartyProvider(p.id)) return false;
+      // A HARNESS-transport row is addressable through the vendor's own CLI, which is a transport
+      // this test cannot express as a URL. github-copilot is the first such row: its subscription is
+      // spendable and it has no inference endpoint at all (GitHub Models, the only one it ever had,
+      // was retired 2026-07-30), so "no chatBaseUrl" is the CORRECT state for it rather than the
+      // defect this guard hunts. Excluded on the registry datum, never on the id — a second
+      // harness-only vendor is covered by the same line. Everything else still has to carry a URL.
+      if (subscriptionUsesHarness(p)) return false;
       // A compatible row needs somewhere to send the request; `baseUrlEnvKey` rows are supplied at
       // deploy time, so they count as reachable.
       return !p.chatBaseUrl && !p.baseUrlEnvKey;
@@ -150,7 +158,17 @@ describe('modality grouping and text-only routing', () => {
     // 33, not 32: the self-hosted model-deployments row is genuinely
     // text-routable (a chat runtime, dispatched via per-candidate baseUrl).
     expect(routable.has('self-hosted')).toBe(true);
-    expect(routable.size).toBe(33);
+    // 36, not 33 — three subscription lanes added 2026-08-13, each named here as this comment
+    // block's convention requires, so the bump can never be silent:
+    //   chutes        — OIDC subscription + OpenAI-compatible chat at llm.chutes.ai/v1
+    //   opencode-go   — OpenCode Go plan, OpenAI-compatible at opencode.ai/zen/go/v1
+    //   github-copilot— harness-transport: routable through the Copilot CLI, with NO chatBaseUrl,
+    //                   which is exactly why the "addressable" guard above had to learn about
+    //                   harness rows.
+    expect(routable.has('chutes')).toBe(true);
+    expect(routable.has('opencode-go')).toBe(true);
+    expect(routable.has('github-copilot')).toBe(true);
+    expect(routable.size).toBe(36);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {
