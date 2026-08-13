@@ -15,6 +15,7 @@ import {
   firstPartyProviderIds,
   isPermanentAiCallFailure,
   isAccountScopedAiCallFailure,
+  resolveRateLimitRetryAfterMs,
   streamAiChatTurn,
 } from './ai-provider-models';
 import {
@@ -195,6 +196,13 @@ describe('isPermanentAiCallFailure', () => {
     expect(isPermanentAiCallFailure(apiCallError(404, true))).toBe(true);
   });
 
+  it('treats 402 (Payment Required) as permanent — MEASURED: two providers hit this in the same routing window, 2026-08-13', () => {
+    // Before this, 402 fell through to the generic 5-minute MODEL_COOLDOWN_MS,
+    // the same as a random transient blip — a depleted credit balance does
+    // not refill itself in 5 minutes.
+    expect(isPermanentAiCallFailure(apiCallError(402, true))).toBe(true);
+  });
+
   it('treats a non-retryable status of any other code as permanent too', () => {
     expect(isPermanentAiCallFailure(apiCallError(400, false))).toBe(true);
   });
@@ -232,6 +240,45 @@ describe('isAccountScopedAiCallFailure — the gate on provider-wide escalation'
     expect(isAccountScopedAiCallFailure(apiCallError(500))).toBe(false);
     expect(isAccountScopedAiCallFailure(new Error('network blip'))).toBe(false);
     expect(isAccountScopedAiCallFailure(undefined)).toBe(false);
+  });
+});
+
+function rateLimitedError(headers?: Record<string, string>): APICallError {
+  return new APICallError({
+    message: 'status 429',
+    url: 'https://example.test/v1/chat/completions',
+    requestBodyValues: {},
+    statusCode: 429,
+    isRetryable: true,
+    responseHeaders: headers,
+  });
+}
+
+describe('resolveRateLimitRetryAfterMs — MEASURED (groq, 2026-08-13): a per-minute token budget clears well under the generic 5-minute default', () => {
+  it('reads a Retry-After header given as integer seconds', () => {
+    expect(resolveRateLimitRetryAfterMs(rateLimitedError({ 'retry-after': '30' }))).toBe(30_000);
+  });
+
+  it('reads a Retry-After header given as an HTTP-date', () => {
+    const future = new Date(Date.now() + 45_000).toUTCString();
+    const ms = resolveRateLimitRetryAfterMs(rateLimitedError({ 'retry-after': future }));
+    expect(ms).toBeGreaterThan(40_000);
+    expect(ms).toBeLessThanOrEqual(45_000);
+  });
+
+  it('clamps to the [1s, 30min] bound rather than trusting an extreme header verbatim', () => {
+    expect(resolveRateLimitRetryAfterMs(rateLimitedError({ 'retry-after': '0' }))).toBe(1_000);
+    expect(resolveRateLimitRetryAfterMs(rateLimitedError({ 'retry-after': '999999' }))).toBe(30 * 60 * 1000);
+  });
+
+  it('returns undefined — never a shorter-than-safe guess — when there is no usable header', () => {
+    expect(resolveRateLimitRetryAfterMs(rateLimitedError())).toBeUndefined();
+    expect(resolveRateLimitRetryAfterMs(rateLimitedError({ 'retry-after': 'not-a-value' }))).toBeUndefined();
+  });
+
+  it('only applies to 429 — a permanent-shaped 401/402/403/404 never reads this header', () => {
+    expect(resolveRateLimitRetryAfterMs(apiCallError(402))).toBeUndefined();
+    expect(resolveRateLimitRetryAfterMs(new Error('boom'))).toBeUndefined();
   });
 });
 
