@@ -4,7 +4,9 @@ import {
   buildAiAuthHeaders,
   buildAiChatRequest,
   extractChatText,
+  extractStopReason,
   extractToolCalls,
+  extractUsage,
   readAiChatResponseBody,
 } from './ai-provider-http';
 
@@ -408,5 +410,46 @@ describe('code-assist extraction', () => {
     expect(extractToolCalls('code-assist', body)).toEqual([
       { name: 'lookup', args: { id: 7 } },
     ]);
+  });
+
+  it('parses usageMetadata one envelope deep, summing thoughts into output', () => {
+    // Realistic Code Assist terminal payload: usageMetadata sits beside
+    // candidates inside the `response` envelope. thoughtsTokenCount is billed
+    // as output, and @ai-sdk/google's convertGoogleUsage sums it the same way.
+    const withUsage = {
+      response: {
+        ...body.response,
+        usageMetadata: {
+          promptTokenCount: 910,
+          candidatesTokenCount: 84,
+          thoughtsTokenCount: 40,
+          cachedContentTokenCount: 512,
+          totalTokenCount: 1034,
+        },
+      },
+    };
+    expect(extractUsage('code-assist', withUsage)).toEqual({
+      inputTokens: 910,
+      outputTokens: 124,
+      cachedInputTokens: 512,
+    });
+    expect(extractStopReason('code-assist', withUsage)).toBe('STOP');
+  });
+
+  it('maps output from candidates alone when no thoughts are reported', () => {
+    const noThoughts = {
+      response: {
+        usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 7 },
+      },
+    };
+    expect(extractUsage('code-assist', noThoughts)).toEqual({
+      inputTokens: 12,
+      outputTokens: 7,
+    });
+  });
+
+  it('leaves usage absent when the envelope carries no usageMetadata', () => {
+    expect(extractUsage('code-assist', body)).toEqual({});
+    expect(extractUsage('code-assist', {})).toEqual({});
   });
 });

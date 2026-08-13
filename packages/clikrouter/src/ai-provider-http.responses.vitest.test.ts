@@ -1,7 +1,14 @@
 // The Responses surface is what OpenAI requires for function tools on reasoning models
 // (chat/completions rejects tools+reasoning). Locks request shape and both extractors.
 import { describe, it, expect } from 'vitest';
-import { buildAiChatRequest, extractChatText, extractToolCalls } from './ai-provider-http';
+import {
+  aggregateResponsesSse,
+  buildAiChatRequest,
+  extractChatText,
+  extractStopReason,
+  extractToolCalls,
+  extractUsage,
+} from './ai-provider-http';
 
 const TOOLS = [{ name: 'set_app_env', description: 'set env', parameters: { type: 'object', properties: {} } }];
 // Typed as the builder's own input shape rather than `as never`: `never` is not spreadable, so the
@@ -66,5 +73,97 @@ describe('openai responses dialect', () => {
   it('returns empty rather than throwing on an unexpected body', () => {
     expect(extractToolCalls('openai-responses', {})).toEqual([]);
     expect(extractChatText('openai-responses', {})).toBe('');
+  });
+});
+
+// Usage + stop reason from the Responses terminal object — the whole reason a
+// Codex subscription turn is billable-visible at all. The `response.completed`
+// event's `response` carries `usage`, and aggregateResponsesSse hands that
+// exact object back, so these lock both the field mapping and the end-to-end
+// SSE path.
+describe('responses usage + stop reason', () => {
+  // Realistic terminal event body, field names per the Responses API:
+  // input_tokens includes cached; output_tokens includes reasoning.
+  const completed = {
+    id: 'resp_1',
+    status: 'completed',
+    output: [
+      { type: 'reasoning', summary: [] },
+      { type: 'message', content: [{ type: 'output_text', text: 'PORT is 8080.' }] },
+    ],
+    usage: {
+      input_tokens: 1452,
+      input_tokens_details: { cached_tokens: 1280 },
+      output_tokens: 312,
+      output_tokens_details: { reasoning_tokens: 256 },
+      total_tokens: 1764,
+    },
+  };
+
+  it('maps usage into the AI-SDK shape (input/output/cachedInput)', () => {
+    expect(extractUsage('openai-responses', completed)).toEqual({
+      inputTokens: 1452,
+      outputTokens: 312,
+      cachedInputTokens: 1280,
+    });
+  });
+
+  it('parses usage from the terminal response.completed SSE event end-to-end', () => {
+    const sse = [
+      'data: {"type":"response.created","response":{"id":"resp_1"}}',
+      'data: {"type":"response.output_text.delta","delta":"PORT is 8080."}',
+      `data: ${JSON.stringify({ type: 'response.completed', response: completed })}`,
+      'data: [DONE]',
+    ].join('\n');
+    const body = aggregateResponsesSse(sse);
+    expect(extractUsage('codex-responses', body)).toEqual({
+      inputTokens: 1452,
+      outputTokens: 312,
+      cachedInputTokens: 1280,
+    });
+    expect(extractStopReason('codex-responses', body)).toBe('stop');
+  });
+
+  it('leaves usage absent (not zeroed) when the body carries none', () => {
+    expect(extractUsage('codex-responses', {})).toEqual({});
+    // Truncated stream: aggregateResponsesSse synthesizes a body from deltas
+    // with no usage and no status — nothing may be invented from it.
+    const truncated = aggregateResponsesSse(
+      'data: {"type":"response.output_text.delta","delta":"par"}',
+    );
+    expect(extractUsage('codex-responses', truncated)).toEqual({});
+    expect(extractStopReason('codex-responses', truncated)).toBeUndefined();
+  });
+
+  it('omits individual fields the body does not carry', () => {
+    expect(
+      extractUsage('codex-responses', { usage: { input_tokens: 10, output_tokens: 3 } }),
+    ).toEqual({ inputTokens: 10, outputTokens: 3 });
+    expect(extractUsage('codex-responses', { usage: { input_tokens: 'NaNsense' } })).toEqual({});
+  });
+
+  it('maps stop reasons the way the AI SDK does', () => {
+    expect(
+      extractStopReason('codex-responses', {
+        status: 'incomplete',
+        incomplete_details: { reason: 'max_output_tokens' },
+      }),
+    ).toBe('length');
+    expect(
+      extractStopReason('codex-responses', {
+        status: 'incomplete',
+        incomplete_details: { reason: 'content_filter' },
+      }),
+    ).toBe('content-filter');
+    expect(
+      extractStopReason('codex-responses', {
+        status: 'completed',
+        output: [{ type: 'function_call', name: 'set_app_env', arguments: '{}' }],
+      }),
+    ).toBe('tool-calls');
+    // A terminal status with no finer detail surfaces as itself.
+    expect(extractStopReason('codex-responses', { status: 'failed' })).toBe('failed');
+    // No status at all → absent, not invented.
+    expect(extractStopReason('codex-responses', {})).toBeUndefined();
   });
 });
