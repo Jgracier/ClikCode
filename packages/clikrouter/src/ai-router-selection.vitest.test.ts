@@ -288,6 +288,43 @@ describe('agenticIndex + trackRecordSuccessRate — capability is REAL EVIDENCE 
     expect(ranked[0]!.intelligence).toBe(59.2);
   });
 
+  it('arenaScore fills intelligence when agenticIndex is absent — the SECOND real source, not a name guess', () => {
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'google', model: 'gemini-2.5-pro', accessClass: 'subscription', estimatedCostPerMTok: null, arenaScore: 96.5 },
+      { provider: 'unbenchmarked', model: 'whatever', accessClass: 'subscription', estimatedCostPerMTok: null },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
+    expect(ranked[0]!.candidate.provider).toBe('google');
+    expect(ranked[0]!.intelligence).toBe(96.5);
+    expect(ranked[1]!.intelligence).toBe(50);
+  });
+
+  it('a measured LOW arenaScore still ranks BELOW the neutral default — same contract as agenticIndex', () => {
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'weak', model: 'bottom-of-the-board', accessClass: 'free-tier', estimatedCostPerMTok: 0, arenaScore: 4.2 },
+      { provider: 'unbenchmarked', model: 'whatever', accessClass: 'free-tier', estimatedCostPerMTok: 0 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
+    expect(ranked[0]!.candidate.provider).toBe('unbenchmarked');
+    expect(ranked[1]!.intelligence).toBe(4.2);
+  });
+
+  it('agenticIndex takes PRECEDENCE over arenaScore when both are present — measured agentic beats crowd preference', () => {
+    // A model can be crowd-favorite (high arena Elo) yet measure poorly on
+    // real agentic tasks — the router dispatches agent loops, so the agentic
+    // measurement must win, even when it is the LOWER number.
+    const candidates: AiRouterCandidate[] = [
+      { provider: 'both', model: 'm', accessClass: 'subscription', estimatedCostPerMTok: null, agenticIndex: 41, arenaScore: 93 },
+      { provider: 'arena-only', model: 'm', accessClass: 'subscription', estimatedCostPerMTok: null, arenaScore: 60 },
+    ];
+    const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
+    const both = ranked.find((s) => s.candidate.provider === 'both')!;
+    const arenaOnly = ranked.find((s) => s.candidate.provider === 'arena-only')!;
+    expect(both.intelligence).toBe(41);
+    expect(arenaOnly.intelligence).toBe(60);
+    expect(ranked[0]!.candidate.provider).toBe('arena-only');
+  });
+
   it('trackRecordSuccessRate MULTIPLIES capability rather than replacing it, and never applies when absent', () => {
     const candidates: AiRouterCandidate[] = [
       { provider: 'unreliable', model: 'm', accessClass: 'subscription', estimatedCostPerMTok: null, agenticIndex: 80, trackRecordSuccessRate: 0.4 },

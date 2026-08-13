@@ -74,6 +74,19 @@ export interface AiRouterCandidate {
    */
   agenticIndex?: number | null;
   /**
+   * LMArena text-arena human-preference rating, percentile-scaled to 0-100
+   * across the current leaderboard snapshot (platform-domains'
+   * ai-quality-feed.ts) — a SECOND real intelligence source with much wider
+   * coverage than agenticIndex, matched onto our model ids by conservative
+   * name normalization (unambiguous matches only, never a guess). A
+   * DIFFERENT measurement than agenticIndex (crowd preference on chat
+   * answers vs. a measured agentic benchmark), so it is its own field:
+   * `baseCapabilityScore` prefers agenticIndex where present and only fills
+   * with this where agenticIndex is absent. Same caller-attaches posture as
+   * avgLatencyMs; this file never fetches it itself.
+   */
+  arenaScore?: number | null;
+  /**
    * Real observed success rate in [0, 1] from THIS platform's own routing
    * history (ai-model-track-record.ts), only present once there is enough of
    * it to trust (see that module's MIN_TRACK_RECORD_SAMPLES) — absent means
@@ -182,14 +195,26 @@ function normalize(value: string): string {
 const NEUTRAL_CAPABILITY_SCORE = 50;
 
 /**
- * Real third-party benchmark data (ai-openrouter-benchmarks.ts's
- * `agentic_index`) when this candidate matched OpenRouter's catalog, else
- * the flat NEUTRAL_CAPABILITY_SCORE — never a name-based guess. `agenticIndex`
- * is used directly, not remapped through an invented conversion formula.
+ * Real third-party capability data, in strict precedence order — never a
+ * name-based guess:
+ *   1. `agenticIndex` (ai-openrouter-benchmarks.ts's `agentic_index`) — a
+ *      MEASURED agentic benchmark, the closest thing to what this router
+ *      actually dispatches (tool-calling agent loops), used directly, not
+ *      remapped through an invented conversion formula.
+ *   2. `arenaScore` (platform-domains' ai-quality-feed.ts) — LMArena
+ *      human-preference Elo, percentile-scaled to the same 0-100 range so
+ *      the snapshot's median model lands at exactly NEUTRAL_CAPABILITY_SCORE
+ *      (see that module's SCALING CHOICE header). Wider coverage, weaker
+ *      task-fit (crowd chat preference ≠ agentic ability), so it only FILLS
+ *      where the measured agentic number is absent — it never overrides it.
+ *   3. NEUTRAL_CAPABILITY_SCORE when neither exists.
  */
 function baseCapabilityScore(candidate: AiRouterCandidate): number {
   if (typeof candidate.agenticIndex === 'number' && Number.isFinite(candidate.agenticIndex)) {
     return candidate.agenticIndex;
+  }
+  if (typeof candidate.arenaScore === 'number' && Number.isFinite(candidate.arenaScore)) {
+    return candidate.arenaScore;
   }
   return NEUTRAL_CAPABILITY_SCORE;
 }
