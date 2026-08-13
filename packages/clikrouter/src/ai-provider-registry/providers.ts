@@ -875,6 +875,37 @@ export const AI_PROVIDERS = [
     openAiCompatible: true,
     credentialOptional: true,
   },
+  {
+    // Platform model deployments (packages/clikmodels + the models domain):
+    // a user's own vLLM/llama.cpp/Ollama runtime served on their server or a
+    // platform GPU pod, exposed as an OpenAI-compatible endpoint. This row
+    // exists so those deployments have a REGISTRY-KNOWN provider id — router
+    // candidates and AiInvocation attribution both join this catalog instead
+    // of the pseudo-ids ('gpu-pod') that used to join nothing.
+    //
+    // DELIBERATELY NEVER RESOLVED FROM ENV: there is no single endpoint or
+    // key — each candidate is one live ModelDeployment, and its base URL is
+    // attached per-candidate at the candidates layer
+    // (platform-domains ai-self-hosted-candidates.ts) and dispatched via
+    // streamAiChatTurn's per-call `baseUrl` override. The envKey below is a
+    // naming placeholder that keeps this row invisible to the normal
+    // credential walk (never set ⇒ hasApiKeyCredential is false ⇒ the
+    // AI_PROVIDERS candidate walk never emits it on its own).
+    id: "self-hosted",
+    // None of the serving runtimes clikmodels' runtime-matcher provisions
+    // (vLLM/llama.cpp/Ollama as deployed — bare chat-completions, no
+    // tool-template guarantees) is configured for native tool calling, so
+    // these dispatch through the JSON-envelope protocol like ollama/custom.
+    noNativeTools: true,
+    contextWindow: 32_000,
+    label: "Self-hosted models",
+    envKey: "SELF_HOSTED_MODELS_API_KEY",
+    chatBaseUrl: "{baseUrl}",
+    probe: { kind: "unsupported" },
+    openAiCompatible: true,
+    credentialOptional: true,
+    apiKeyAccessClass: "free-tier",
+  },
 
   // ── AUDIO AND VISUAL PROVIDERS ─────────────────────────────────────────────────────────────────
   // Added so the console can offer them; NOTHING routes to them. Every agent lane selects on
