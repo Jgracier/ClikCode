@@ -11,7 +11,33 @@
 // Pure and dependency-free on purpose: no db/redis/env access, so it is safe for both the server
 // (ai-default-llm.ts) and — if a client ever needs it — a browser bundle.
 
-export type AiRoutingStrategy = 'auto' | 'budget' | 'frontier' | 'explicit';
+/**
+ * 'auto' / 'auto-budget' / 'auto-frontier' are the "auto family" — all three
+ * blend intelligence, access tier, cost, and latency into ONE composite score
+ * via `autoComposite` (see AUTO_COMPOSITE_WEIGHTS below for how the three
+ * differ), and all three explore under-sampled candidates via
+ * `applyExploration`. 'auto' is the balanced point among them and keeps its
+ * EXACT pre-existing meaning/weights — nothing about its behavior changed
+ * when the other two were added, so anything that already persisted the
+ * literal string 'auto' keeps working unchanged.
+ *
+ * 'budget' / 'frontier' are a DELIBERATELY DIFFERENT, blunter pair: a rigid
+ * lexicographic sort (cost-then-tiebreak, or intelligence-then-tiebreak — see
+ * `compareScored`) with zero exploration, for a caller that wants an exact,
+ * repeatable answer ("cheapest, period" / "strongest, period") rather than a
+ * judgment call. They are not a lesser version of auto-budget/auto-frontier;
+ * they answer a different question on purpose and are left untouched by the
+ * auto-family additions.
+ */
+export type AiRoutingStrategy = 'auto' | 'auto-budget' | 'auto-frontier' | 'budget' | 'frontier' | 'explicit';
+
+/** True for any of the three composite-blending, exploring modes — the
+ *  grouping `compareScored`, `rankRouterCandidatesWithScores`, and
+ *  `applyExploration` all key off of to decide "does this mode use the
+ *  blended composite / explore" as opposed to a rigid lexicographic sort. */
+function isAutoFamily(mode: AiRoutingStrategy): mode is 'auto' | 'auto-budget' | 'auto-frontier' {
+  return mode === 'auto' || mode === 'auto-budget' || mode === 'auto-frontier';
+}
 
 export interface AiRouterCandidate {
   provider: string;
@@ -92,9 +118,10 @@ export interface AiRouterSelection {
  * The scored breakdown behind ONE candidate's position in the ranking —
  * the terms `rankRouterCandidates`'s comparator uses, made visible instead of
  * being computed and discarded inside a sort callback. `compositeScore` is
- * only meaningful for 'auto' mode (the only mode that blends terms into one
- * number); the other modes rank lexicographically over these same terms in a
- * fixed priority order (see `explainRanking`'s per-mode `order`).
+ * only meaningful for auto-family modes ('auto' / 'auto-budget' /
+ * 'auto-frontier' — the only modes that blend terms into one number); the
+ * other modes rank lexicographically over these same terms in a fixed
+ * priority order (see `explainRanking`'s per-mode `order`).
  */
 export interface AiRouterCandidateScore {
   candidate: AiRouterCandidate;
@@ -410,6 +437,12 @@ export function reasonFor(mode: AiRoutingStrategy, normalizedPreferred?: string)
   if (mode === 'auto') {
     return 'Auto mode balanced intelligence versus cost and preferred free or low-cost coverage.';
   }
+  if (mode === 'auto-budget') {
+    return 'Auto-budget mode blended the same evidence as auto, tilted toward cheap and included access, while still letting capability decide between similarly-priced options.';
+  }
+  if (mode === 'auto-frontier') {
+    return 'Auto-frontier mode blended the same evidence as auto, tilted toward the strongest capability, while still letting a nearly-as-capable free or low-cost option win over a needlessly expensive one.';
+  }
   return normalizedPreferred
     ? 'Exact model preference resolved to the most suitable available provider and model.'
     : 'Explicit mode used the selected provider/model directly.';
@@ -430,29 +463,99 @@ function scoreOne(candidate: AiRouterCandidate): Omit<AiRouterCandidateScore, 'c
   };
 }
 
-/** 'auto' mode's blended composite — the ONE place this formula is written.
+/**
+ * The four coefficients `autoComposite` blends with — one named preset per
+ * auto-family strategy. All three keep the exact same FORMULA SHAPE (a
+ * linear blend of intelligence, accessRank, costPenalty, and latency — see
+ * `autoComposite` below); only the weights move. That constraint matters:
+ * a structurally different formula per preset would make "auto-budget" and
+ * "auto-frontier" a genuinely different algorithm from 'auto' rather than
+ * the same judgment tilted toward a different point on the cost↔capability
+ * dial, which is the whole product ask.
+ *
+ * `balanced` is 'auto' — copied verbatim from the coefficients this file has
+ * always used (intelligence×1.25, accessRank×10, costPenalty rate 0.01,
+ * latency×2). NOT allowed to move: anything already relying on 'auto''s
+ * exact ranking behavior must see zero change.
+ *
+ * `budgetLeaning` ('auto-budget') roughly HALVES the intelligence weight
+ * (1.25 → 0.6) and roughly DOUBLES both the accessRank weight (10 → 16, a
+ * ~60% bump) and the cost-penalty rate (0.01 → 0.02) relative to balanced —
+ * cost and included-access-tier now dominate the blend the way they do for
+ * literal 'budget' mode's primary sort key, but intelligence is still worth
+ * real points, not reduced to a mere tiebreak: two similarly-cheap
+ * candidates with a real capability gap (say, a 20-point agentic_index
+ * difference) still separate by ~12 composite points at 0.6 weight — smaller
+ * than balanced's ~25, but nowhere near zero, which is exactly what keeps
+ * this a genuine blend instead of literal 'budget' mode's rigid cost-primary
+ * sort (where intelligence only ever breaks an EXACT cost tie). Latency
+ * weight is left unchanged: a budget-conscious caller still doesn't want a
+ * dramatically slower model just because it's marginally cheaper, and
+ * latency was never the axis this preset is meant to move.
+ *
+ * `frontierLeaning` ('auto-frontier') roughly DOUBLES the intelligence
+ * weight (1.25 → 2.5) and roughly HALVES both the accessRank weight (10 → 6)
+ * and the cost-penalty rate (0.01 → 0.005) relative to balanced —
+ * capability now dominates the blend the way it does for literal 'frontier'
+ * mode's primary sort key, but cost/access still meaningfully move the
+ * score: at 0.005 per estimated-cost-per-MTok-dollar-cent-equivalent unit, a
+ * free-tier or cheap candidate within a few intelligence points of a
+ * needlessly expensive metered one can still come out ahead once the
+ * expensive one's cost penalty and access-rank cost stack up — literal
+ * 'frontier' mode would never let that happen, since cost there only ever
+ * breaks an EXACT intelligence tie. Latency weight is left unchanged for the
+ * same reason as budgetLeaning: it was never the axis either preset is
+ * meant to move, and a big latency swing should keep mattering the same
+ * amount no matter which end of the cost↔capability dial the caller leans
+ * toward.
+ */
+const AUTO_COMPOSITE_WEIGHTS: Record<
+  'auto' | 'auto-budget' | 'auto-frontier',
+  { intelligence: number; accessRank: number; costPenaltyRate: number; latency: number }
+> = {
+  auto: { intelligence: 1.25, accessRank: 10, costPenaltyRate: 0.01, latency: 2 },
+  'auto-budget': { intelligence: 0.6, accessRank: 16, costPenaltyRate: 0.02, latency: 2 },
+  'auto-frontier': { intelligence: 2.5, accessRank: 6, costPenaltyRate: 0.005, latency: 2 },
+};
+
+/** The auto-family's blended composite — the ONE place this formula is
+ *  written, parameterized by which of the three named weight presets
+ *  (AUTO_COMPOSITE_WEIGHTS above) to blend with. Defaults to 'auto' (the
+ *  balanced preset, i.e. this function's original pre-auto-family behavior)
+ *  so existing call sites that never pass a mode keep working unchanged.
+ *
  *  Latency in whole seconds so its weight is comparable to the other terms:
- *  a candidate answering 10s slower loses ~20 points, roughly one
- *  intelligence tier's worth of movement — enough to matter, not enough for
- *  a merely-average-latency frontier model to lose to a fast-but-weak one.
+ *  at the shared latency×2 weight, a candidate answering 10s slower loses
+ *  ~20 points, roughly one intelligence tier's worth of movement — enough to
+ *  matter, not enough for a merely-average-latency frontier model to lose to
+ *  a fast-but-weak one.
  *
  *  Cost only enters the blend for metered/unknown access — subscription and
  *  free-tier candidates cost the caller nothing PER CALL (the whole point of
- *  accessRank's -10/-0 spread already capturing that), so their own
+ *  accessRank's negative spread already capturing that), so their own
  *  estimatedCostPerMTok is either the underlying metered-equivalent rate
  *  (irrelevant — not what gets billed) or absent entirely. `costScore`
  *  returns a sentinel 1_000_000 for "no price on file", which is correct as
  *  budget/frontier's TIEBREAK (sort by accessRank/intelligence first, so the
  *  sentinel only ever separates two already-tied candidates) but is fatal
- *  here: ×0.01 it is a flat -10,000, dwarfing every other term. Observed
- *  live: subscription flagships with no per-token price (OAuth plans simply
- *  don't have one — anthropic/claude-sonnet-4-5, openai/gpt-5.6) scored
- *  around -9,878 despite tier-110 intelligence, guaranteeing they lose to
- *  any priced free-tier candidate no matter the intelligence gap. */
-function autoComposite(s: AiRouterCandidateScore): number {
+ *  here: at balanced's 0.01 rate it is a flat -10,000, dwarfing every other
+ *  term (and worse at budgetLeaning's steeper 0.02). Observed live:
+ *  subscription flagships with no per-token price (OAuth plans simply don't
+ *  have one — anthropic/claude-sonnet-4-5, openai/gpt-5.6) scored around
+ *  -9,878 despite tier-110 intelligence, guaranteeing they lose to any
+ *  priced free-tier candidate no matter the intelligence gap. */
+function autoComposite(s: AiRouterCandidateScore, mode: 'auto' | 'auto-budget' | 'auto-frontier' = 'auto'): number {
+  const weights = AUTO_COMPOSITE_WEIGHTS[mode];
   const costPenalty =
-    s.candidate.accessClass === 'metered' || s.candidate.accessClass === 'unknown' ? s.cost * 0.01 : 0;
-  return s.intelligence * 1.25 - s.accessRank * 10 - costPenalty - (s.latencyMs / 1000) * 2;
+    s.candidate.accessClass === 'metered' || s.candidate.accessClass === 'unknown'
+      ? s.cost * weights.costPenaltyRate
+      : 0;
+  return (
+    s.intelligence * weights.intelligence -
+    s.accessRank * weights.accessRank -
+    costPenalty -
+    (s.latencyMs / 1000) * weights.latency
+  );
 }
 
 /** Best-first comparator over precomputed scores — the single source of
@@ -479,9 +582,15 @@ function compareScored(mode: AiRoutingStrategy, a: AiRouterCandidateScore, b: Ai
     return a.cost - b.cost || a.latencyMs - b.latencyMs || a.candidate.model.localeCompare(b.candidate.model);
   }
 
-  if (mode === 'auto') {
-    const aScore = a.compositeScore ?? autoComposite(a);
-    const bScore = b.compositeScore ?? autoComposite(b);
+  if (isAutoFamily(mode)) {
+    // 'auto' / 'auto-budget' / 'auto-frontier' all take this SAME blended-
+    // composite path — only the weight preset `autoComposite` blends with
+    // differs (see AUTO_COMPOSITE_WEIGHTS). This is the one place that
+    // distinction is made: everything else about how the composite is used
+    // to rank (best-first, cost/latency/name tiebreak on an exact tie) is
+    // shared across all three.
+    const aScore = a.compositeScore ?? autoComposite(a, mode);
+    const bScore = b.compositeScore ?? autoComposite(b, mode);
     if (aScore !== bScore) return bScore - aScore;
     return a.cost - b.cost || a.latencyMs - b.latencyMs || a.candidate.model.localeCompare(b.candidate.model);
   }
@@ -520,7 +629,7 @@ export function rankRouterCandidatesWithScores(
   const scored: AiRouterCandidateScore[] = pool.map((candidate) => {
     const base = scoreOne(candidate);
     const withCandidate = { candidate, ...base, compositeScore: null };
-    return { ...withCandidate, compositeScore: mode === 'auto' ? autoComposite(withCandidate) : null };
+    return { ...withCandidate, compositeScore: isAutoFamily(mode) ? autoComposite(withCandidate, mode) : null };
   });
   return scored.sort((a, b) => compareScored(mode, a, b));
 }
@@ -660,16 +769,21 @@ function isUnderExplored(candidate: AiRouterCandidate): boolean {
  * (cost, latency, access tier) likes best, so "let's learn about this one"
  * is never also "let's pick something obviously worse for no reason".
  *
- * ONLY applies to 'auto' mode. 'budget' and 'frontier' are an explicit user
- * intent — cheapest, full stop; strongest, full stop — and overriding
- * either with an exploratory pick would violate the thing the caller
- * actually asked for. 'auto' already means "balance intelligence and cost,
- * use judgment"; exploration is a natural extension of that judgment, not a
- * departure from it.
+ * Applies to any AUTO-FAMILY mode — 'auto', 'auto-budget', and
+ * 'auto-frontier' alike. 'budget' and 'frontier' (the literal, blunt modes)
+ * are an explicit user intent — cheapest, full stop; strongest, full stop —
+ * and overriding either with an exploratory pick would violate the thing the
+ * caller actually asked for: a repeatable, deterministic answer with zero
+ * randomness involved. Every auto-family mode, by contrast, already means
+ * "blend intelligence, cost, access, and latency into one judgment call",
+ * just tilted toward a different point on the cost↔capability dial (see
+ * AUTO_COMPOSITE_WEIGHTS) — exploration is a natural extension of that
+ * judgment for all three, not a departure from it, so none of them are
+ * exempted the way the literal modes are.
  *
- * Returns the ORIGINAL list, untouched, when: mode isn't 'auto', the roll
- * misses, there is no under-explored candidate at all, or the best
- * under-explored candidate already IS the top pick (nothing to substitute).
+ * Returns the ORIGINAL list, untouched, when: mode isn't an auto-family
+ * mode, the roll misses, there is no under-explored candidate at all, or the
+ * best under-explored candidate already IS the top pick (nothing to substitute).
  * When it does substitute, everyone else keeps their real relative order —
  * this is a promotion, not a re-sort, so a fallback chain behind the
  * exploratory pick is still the genuine ranking, not a shuffled one.
@@ -682,7 +796,7 @@ export function applyExploration<T extends AiRouterCandidate>(
   mode: AiRoutingStrategy,
   random: () => number = Math.random,
 ): { candidates: readonly T[]; explored: boolean } {
-  if (mode !== 'auto' || ranked.length <= 1) return { candidates: ranked, explored: false };
+  if (!isAutoFamily(mode) || ranked.length <= 1) return { candidates: ranked, explored: false };
   const underExplored = ranked.filter((c) => isUnderExplored(c));
   if (underExplored.length === 0) return { candidates: ranked, explored: false };
   // Rate scales with THIS call's own under-explored pool, not the registry's
