@@ -372,25 +372,81 @@ export function extractPerplexityCostMicroUsd(
 /**
  * Whether a failed `streamAiChatTurn` call is a PERMANENT configuration
  * problem (a deprecated/renamed model id, an invalid credential, an
- * unauthorized scope — 401/403/404, or the SDK's own `isRetryable: false`
- * verdict) versus a TRANSIENT one (rate-limited, momentarily unavailable,
- * a plain network hiccup). Callers use this to decide how long a routing
- * cooldown should last: retrying a 404 five minutes later is pure waste —
- * nothing about elapsed time makes a renamed model id valid again — while a
- * 429 or 503 genuinely can clear up on its own shortly. An AbortError (our
- * own ROUTED_MODEL_TIMEOUT_MS firing) is neither — a slow response under
- * load is not evidence the model itself is broken, so callers should
- * exclude aborts from calling this at all.
+ * unauthorized scope, an exhausted/lapsed billing account — 401/402/403/404,
+ * or the SDK's own `isRetryable: false` verdict) versus a TRANSIENT one
+ * (rate-limited, momentarily unavailable, a plain network hiccup). Callers
+ * use this to decide how long a routing cooldown should last: retrying a 404
+ * five minutes later is pure waste — nothing about elapsed time makes a
+ * renamed model id valid again — while a 429 or 503 genuinely can clear up
+ * on its own shortly. An AbortError (our own ROUTED_MODEL_TIMEOUT_MS firing)
+ * is neither — a slow response under load is not evidence the model itself
+ * is broken, so callers should exclude aborts from calling this at all.
+ *
+ * 402 (Payment Required) was MEASURED here as a live incident, not a
+ * hypothetical: two DIFFERENT providers (mistral, huggingface) both
+ * returned it within the same ~300ms routing window, and — before this —
+ * both got the plain 5-minute reactive cooldown (MODEL_COOLDOWN_MS), the
+ * same as a random transient blip. A depleted credit balance or a lapsed
+ * subscription does not refill itself in 5 minutes; treating it as
+ * transient meant the router would burn a routed attempt on the same known-
+ * broken credential again on every chat turn for the rest of that window
+ * and the next, and the one after that. It belongs with 401/403/404: none
+ * of the four resolve on a timer, all four need something OUTSIDE the
+ * request (an admin action, a renamed model fixed, credits topped up) —
+ * which is exactly what the proactive health probe's event-driven
+ * `clearModelCooldown` already exists to detect early, the moment any of
+ * them actually starts working again, well before the 24h backstop.
  */
 export function isPermanentAiCallFailure(error: unknown): boolean {
   if (!APICallError.isInstance(error)) return false;
   if (
     error.statusCode === 401 ||
+    error.statusCode === 402 ||
     error.statusCode === 403 ||
     error.statusCode === 404
   )
     return true;
   return error.isRetryable === false;
+}
+
+/**
+ * When a 429 (rate-limited) failure's response carries a `retry-after`
+ * header, read the real wait time instead of guessing — MEASURED (groq,
+ * 2026-08-13): "Limit 12000, Requested 17857" on a per-MINUTE token budget,
+ * a window that clears in well under the router's generic 5-minute
+ * MODEL_COOLDOWN_MS default, so the flat cooldown was making the router
+ * wait roughly 4 minutes longer than the provider itself required. Returns
+ * undefined when the error isn't a 429, carries no usable header, or the
+ * header value is unparseable — callers fall back to the generic default in
+ * every one of those cases, never a shorter-than-safe guess.
+ *
+ * Accepts both header shapes the HTTP spec allows: an integer count of
+ * seconds ("Retry-After: 30") and an HTTP-date ("Retry-After: Wed, 21 Oct
+ * 2026 07:28:00 GMT"). Clamped to [1s, 30min] — a provider sending 0 (retry
+ * instantly, which would defeat the whole point of a cooldown) or an
+ * absurdly large value (a misconfigured header holding a model out of
+ * rotation for a whole day on one 429) is bounded rather than trusted
+ * verbatim; the cooldown's OWN backstop mechanisms (the proactive probe,
+ * the flat ceiling) are what real long-term exclusion should come from.
+ */
+export function resolveRateLimitRetryAfterMs(error: unknown): number | undefined {
+  if (!APICallError.isInstance(error)) return undefined;
+  if (error.statusCode !== 429) return undefined;
+  const headers = error.responseHeaders as Record<string, string> | undefined;
+  const raw = headers?.['retry-after'] ?? headers?.['Retry-After'];
+  if (!raw) return undefined;
+  const MIN_MS = 1_000;
+  const MAX_MS = 30 * 60 * 1000;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(MAX_MS, Math.max(MIN_MS, Math.round(seconds * 1000)));
+  }
+  const asDate = Date.parse(raw);
+  if (Number.isFinite(asDate)) {
+    const deltaMs = asDate - Date.now();
+    if (deltaMs > 0) return Math.min(MAX_MS, Math.max(MIN_MS, deltaMs));
+  }
+  return undefined;
 }
 
 /**
