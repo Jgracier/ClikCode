@@ -13,7 +13,26 @@ import {
   type AiProviderSpec,
 } from "./ai-provider-registry";
 
-/** Substitute a provider's '{accountId}'-style URL placeholder (spec.urlParamEnvKey)
+/**
+ * The literal a row writes where ONE operator-supplied path/host segment goes
+ * (spec.urlParamEnvKey supplies it: Cloudflare's account id, Bedrock's region).
+ *
+ * Named after the FIELD, not after one row's use of it. It read `{accountId}`
+ * while cloudflare was the only row with a urlParamEnvKey, which made the next
+ * row's value — an AWS region — look like it was in the wrong slot.
+ */
+const URL_PARAM_PLACEHOLDER = "{urlParam}";
+
+/** Substitute `{urlParam}` in a URL template with one already-resolved value.
+ *  PURE — no env access — so callers that hold the value directly (the AWS
+ *  region discovery in ai-cloud-pricing-catalogs.ts, which probes every
+ *  candidate region against the SAME template chat and the health probe use)
+ *  cannot drift from the row that declares the template. */
+export function substituteUrlParam(url: string, value: string): string {
+  return url.replace(URL_PARAM_PLACEHOLDER, value);
+}
+
+/** Substitute a provider's '{urlParam}' URL placeholder (spec.urlParamEnvKey)
  *  with its env value. No-op for providers without one. Returns the raw
  *  (unsubstituted) URL when the env var isn't set — the request fails
  *  upstream and the health probe correctly reports it unconfigured. Server-only
@@ -28,7 +47,7 @@ export function resolveProviderUrl(
   }
   if (!spec?.urlParamEnvKey) return url;
   const value = process.env[spec.urlParamEnvKey];
-  return value ? url.replace("{accountId}", value) : url;
+  return value ? substituteUrlParam(url, value) : url;
 }
 
 export type AiCredSource = "oauth" | "platform-secret" | "env";
