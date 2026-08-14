@@ -32,15 +32,12 @@ import type {
 import { APICallError, jsonSchema, streamText, tool } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAzure } from "@ai-sdk/azure";
-import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { createXai } from "@ai-sdk/xai";
 import { createMistral } from "@ai-sdk/mistral";
 import { createGroq } from "@ai-sdk/groq";
 import { createCohere } from "@ai-sdk/cohere";
 import { createDeepSeek } from "@ai-sdk/deepseek";
-import { createDeepInfra } from "@ai-sdk/deepinfra";
 import { createTogetherAI } from "@ai-sdk/togetherai";
 import { createFireworks } from "@ai-sdk/fireworks";
 import { createCerebras } from "@ai-sdk/cerebras";
@@ -95,15 +92,44 @@ type ProviderFactory = (
 const FIRST_PARTY_FACTORIES: Readonly<Record<string, ProviderFactory>> = {
   openai: (o) => createOpenAI(o),
   anthropic: (o) => createAnthropic(o),
-  google: (o) => createGoogleGenerativeAI(o),
+  // ── THREE ROWS DELIBERATELY ABSENT (2026-08-13) ────────────────────────────
+  // Each declared `openAiCompatible: true` — i.e. "my chatBaseUrl serves the
+  // OpenAI dialect" — while ALSO being mapped here to a first-party package
+  // that builds a DIFFERENT route off that same base. One stored base URL
+  // cannot satisfy both readers, so the /models connection test went green off
+  // the OpenAI-compatible base while every chat call 404'd on the native one.
+  // Absent from this table, each falls through to createOpenAICompatible and
+  // the row's own base — one contract, one base URL. All three were MEASURED
+  // live from the control plane (POST, no credential; 404 = no such route,
+  // 401/400 = the route exists and answered):
+  //
+  //   aws-bedrock  @ai-sdk/amazon-bedrock@5.0.40 builds {base}/model/{id}/
+  //     converse|invoke. {host}/models 404 · {host}/v1/models 401 (OpenAI-shaped
+  //     body) · {host}/v1/chat/completions 405-on-GET. See the row in
+  //     providers.ts for the full transcript and the /v1 requirement.
+  //
+  //   google  @ai-sdk/google builds {base}/models/{id}:streamGenerateContent,
+  //     the NATIVE Gemini dialect, against the row's OpenAI-compat shim base.
+  //     .../v1beta/openai/models/gemini-2.5-flash:streamGenerateContent 404 ·
+  //     .../v1beta/openai/chat/completions 400 "model is not specified".
+  //     The OAuth/Code Assist lane is unaffected — it never reaches this table
+  //     (see oauthChat / dispatchOauthSurfaceChatTurn).
+  //
+  //   deepinfra  @ai-sdk/deepinfra's `baseURL` means the API ROOT and it
+  //     appends /openai/chat/completions itself, while the row's chatBaseUrl
+  //     already ends in /openai — so the two composed to a doubled segment.
+  //     .../v1/openai/openai/chat/completions 404 {"detail":"Not Found"} ·
+  //     .../v1/openai/chat/completions 401 "missing API key".
+  //
+  // The invariant is enforced, not just commented: see the
+  // "openAiCompatible rows: probe and chat derive from the SAME base URL"
+  // suite in ai-provider-models.vitest.test.ts.
   "microsoft-foundry": (o) => createAzure(o),
-  "aws-bedrock": (o) => createAmazonBedrock({ ...o, apiKey: o.apiKey ?? "" }),
   xai: (o) => createXai(o),
   mistral: (o) => createMistral(o),
   groq: (o) => createGroq(o),
   cohere: (o) => createCohere(o),
   deepseek: (o) => createDeepSeek(o),
-  deepinfra: (o) => createDeepInfra(o),
   together: (o) => createTogetherAI(o),
   fireworks: (o) => createFireworks(o),
   cerebras: (o) => createCerebras(o),
