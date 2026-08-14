@@ -335,14 +335,46 @@ export interface AiProviderSpec {
    *  clicks. Absent when the provider has no key console (OAuth-only). */
   keyUrl?: string;
   /** Env var holding a second identifier some providers bake into the URL
-   *  itself rather than an auth header (e.g. Cloudflare's account id). When
-   *  set, chatBaseUrl and probe.url contain the literal placeholder
-   *  '{accountId}', substituted server-side by resolveProviderUrl() in
-   *  ai-provider-http.ts — never resolved here (pure data, no env access). */
+   *  itself rather than an auth header (Cloudflare's account id, AWS Bedrock's
+   *  region). When set, chatBaseUrl and probe.url contain the literal
+   *  placeholder '{urlParam}', substituted server-side by resolveProviderUrl()
+   *  in ai-provider-http.ts — never resolved here (pure data, no env access). */
   urlParamEnvKey?: string;
+  /**
+   * The admin AI tab COLLECTS urlParamEnvKey itself, with this prompt.
+   *
+   * Absent means the value is supplied somewhere else — cloudflare's account id
+   * arrives with the OAuth connect and is edited under Platform secrets, which
+   * is why `urlParamEnvKey` rendered nothing in the AI tab until this existed.
+   *
+   * Declared as DATA because the alternative for aws-bedrock was the field it
+   * replaces: a free-text `baseUrlEnvKey` where the operator typed a whole URL,
+   * omitted the `/v1` suffix, and got a bare 404 that never evaluated the key.
+   * A row that templates its own base cannot be typed wrong that way.
+   */
+  urlParamPrompt?: {
+    /** Field label, e.g. "AWS region". */
+    label: string;
+    /** One line under the label — what the value is and where to find it. */
+    help: string;
+    /** Example value, shown in the free-text fallback. */
+    placeholder: string;
+    /**
+     * SHAPE the value must match (RegExp source), enforced client-side and
+     * again at POST /api/admin/integrations.
+     *
+     * Deliberately a shape and not an allowlist: an enumerated region list
+     * goes stale the day the vendor adds a region, and a stale allowlist
+     * REJECTS a value that works — the worst direction to be wrong in. The
+     * live option list below is what narrows this to what actually answers.
+     */
+    pattern: string;
+    /** Live-derived options for a picker. Absent = free text only. */
+    optionsSource?: "aws-bedrock-regions";
+  };
   /** For a configurable OpenAI-compatible endpoint, read the entire API base
    *  URL from this PlatformSecret/env key. This is intentionally distinct
-   *  from urlParamEnvKey, which substitutes one account identifier. */
+   *  from urlParamEnvKey, which substitutes one URL segment. */
   baseUrlEnvKey?: string;
   /** Local/private OpenAI-compatible endpoints may not require a bearer key. */
   credentialOptional?: boolean;

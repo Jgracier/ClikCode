@@ -799,15 +799,80 @@ export const AI_PROVIDERS = [
     openAiCompatible: true,
   },
   {
+    // OpenAI-COMPATIBLE, end to end. AWS's Bedrock API-key endpoint speaks the
+    // OpenAI dialect and lives under /v1 — MEASURED against a live tenant
+    // endpoint (2026-08-13):
+    //   GET  {host}/models            -> 404, empty body
+    //   GET  {host}/v1/models         -> 401 {"error":{"code":"invalid_api_key",
+    //                                    "message":"Missing 'authorization' or
+    //                                    'x-api-key' header",...}}  ← OpenAI-shaped
+    //   POST {host}/v1/chat/completions -> 405 on GET (the route exists)
+    //   GET  {host}/chat/completions  -> 404
+    //
+    // ONLY THE REGION VARIES, so only the region is asked for. This row used to
+    // carry `baseUrlEnvKey: AWS_BEDROCK_BASE_URL` and a free-text URL field in
+    // the AI tab, and the very first operator to use it typed the host WITHOUT
+    // the /v1 suffix: bare 404, key never evaluated. A field that can be typed
+    // wrong in exactly one way, where the platform already knows the right
+    // answer, is a field that should not exist — so the row templates the whole
+    // base including /v1 and `urlParamEnvKey` supplies the one segment that is
+    // genuinely the operator's to choose.
+    //
+    // THE HOSTNAME PATTERN IS MEASURED, NOT ASSUMED (2026-08-13, from the
+    // control plane, unauthenticated GET /v1/models): 18 of the 35 regions AWS
+    // lists for Bedrock answer 401 with an OpenAI-shaped body — ap-northeast-1,
+    // ap-south-1, ap-southeast-1/2/3/4, eu-central-1/2, eu-north-1, eu-south-1,
+    // eu-west-1/2, sa-east-1, us-east-1/2, us-gov-east-1, us-gov-west-1,
+    // us-west-2. The other 17 (af-south-1, ca-central-1, us-west-1, …) are
+    // NXDOMAIN: the mantle endpoint does not exist there, even though Bedrock
+    // foundation models are priced there. That gap is why the picker's options
+    // are filtered by probing this template and not taken from AWS's pricing
+    // region index alone (see getAwsBedrockRegions in
+    // ai-cloud-pricing-catalogs.ts) — "Bedrock is offered here" and "the
+    // OpenAI-compatible endpoint answers here" are different claims, and only
+    // the second one predicts a working chat call.
+    //
+    // This row deliberately has NO first-party factory. It used to map to
+    // createAmazonBedrock, which builds Bedrock-NATIVE paths off the same base
+    // ({base}/model/{id}/converse, /invoke), so the probe below and every chat
+    // call wanted DIFFERENT base URLs and no single stored value could satisfy
+    // both: the connection test went green while chat 404'd on every request.
+    // Dropping the factory also drops SigV4 — this row is API-key only now.
+    // Nothing routed Bedrock through AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+    // deliberately (those are the Fargate/Lambda/backup credentials); the old
+    // factory could only reach SigV4 by ACCIDENT, when no Bedrock API key was
+    // set, by silently signing with those unrelated compute credentials.
     id: "aws-bedrock",
     cloudPricingLookup: "aws-bedrock",
     contextWindow: 200_000,
     keyUrl: "https://console.aws.amazon.com/bedrock/home#/api-keys",
     label: "Amazon Bedrock",
     envKey: "AWS_BEDROCK_API_KEY",
-    baseUrlEnvKey: "AWS_BEDROCK_BASE_URL",
-    chatBaseUrl: "{baseUrl}",
-    probe: { kind: "openai-models", url: "{baseUrl}/models" },
+    urlParamEnvKey: "AWS_BEDROCK_REGION",
+    // A DEDICATED key, deliberately not the existing AWS_REGION PlatformSecret.
+    // AWS_REGION is where this platform's own Fargate/Lambda/S3 workloads run —
+    // chosen for compute latency and cost, and rewritten whenever an operator
+    // moves that compute. Bedrock's region decides which MODELS exist and what
+    // tokens cost, and the mantle endpoint answers in only 18 regions (above)
+    // while Lambda runs in all of them. Sharing one value would mean moving the
+    // compute region silently repointed every LLM call, or worse, pointed it at
+    // a region with no endpoint at all.
+    chatBaseUrl: "https://bedrock-mantle.{urlParam}.api.aws/v1",
+    probe: {
+      kind: "openai-models",
+      url: "https://bedrock-mantle.{urlParam}.api.aws/v1/models",
+    },
+    urlParamPrompt: {
+      label: "AWS region",
+      help: "Where your Bedrock API key was issued. The endpoint is built for you — there is no URL to type.",
+      placeholder: "us-east-1",
+      // Region-id GRAMMAR, not a region list: geo, one or more words, digit
+      // (us-east-1, ap-southeast-4, us-gov-west-1). An enumerated list would
+      // reject a region AWS added yesterday; the live options below are what
+      // narrow this to the ones whose endpoint actually answers.
+      pattern: "^[a-z]{2}(-[a-z]+)+-\\d+$",
+      optionsSource: "aws-bedrock-regions",
+    },
     openAiCompatible: true,
   },
   {
@@ -881,14 +946,14 @@ export const AI_PROVIDERS = [
     // resolveProviderUrl in ai-provider-http.ts).
     urlParamEnvKey: "CLOUDFLARE_ACCOUNT_ID",
     chatBaseUrl:
-      "https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1",
+      "https://api.cloudflare.com/client/v4/accounts/{urlParam}/ai/v1",
     // Account-scoped model search is authenticated and returns the models
     // available to this Workers AI account. It carries no pricing — vendor
     // pricing is merged in separately from an UNOFFICIAL docs-site feed (see
     // fetchCloudflarePricingFeed in ai-credential-health.ts).
     probe: {
       kind: "cloudflare-models",
-      url: "https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/models/search",
+      url: "https://api.cloudflare.com/client/v4/accounts/{urlParam}/ai/models/search",
     },
     // Same CLOUDFLARE_OAUTH_TOKEN as Platform secrets (DNS + Workers AI). Connect
     // lives ONLY on Platform secrets → Cloudflare so one consent cannot be
