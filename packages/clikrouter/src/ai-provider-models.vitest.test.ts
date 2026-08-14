@@ -30,6 +30,7 @@ import {
   subscriptionUsesHarness,
   type AiProviderSpec,
 } from './ai-provider-registry';
+import { resolveProviderUrl } from './ai-provider-http';
 
 // AI_PROVIDERS is declared `as const satisfies readonly AiProviderSpec[]` so
 // each entry keeps its own precise literal shape (needed elsewhere for
@@ -595,9 +596,99 @@ describe('openAiCompatible rows: probe and chat derive from the SAME base URL', 
       return [];
     });
     expect(mismatched).toEqual([]);
-    // …and this is not vacuous: aws-bedrock, microsoft-foundry and
-    // custom-openai are the three configurable-endpoint rows.
+    // …and this is not vacuous: microsoft-foundry, custom-openai and
+    // self-hosted are the rows whose whole base is supplied at runtime.
     expect(compatible.filter((p) => p.chatBaseUrl === '{baseUrl}').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('CATALOG: a row that TEMPLATES its base off one operator value probes that same base', () => {
+    // The second way a base URL is operator-influenced, and the one aws-bedrock
+    // moved to: the row owns the whole URL and substitutes ONE segment
+    // (`{urlParam}` ← urlParamEnvKey). That removes the typo surface, but it
+    // reintroduces the original defect — two hardcoded URLs in one row — the
+    // moment the probe URL is written independently of chatBaseUrl. Same
+    // invariant, stated for the shape that can now express it.
+    const templated = compatible.filter(
+      (p) => p.chatBaseUrl?.includes('{urlParam}') && p.probe.kind === 'openai-models'
+    );
+    expect(templated.map((p) => p.id)).toContain('aws-bedrock');
+    expect(
+      templated.flatMap((p) =>
+        p.probe.url?.startsWith(`${p.chatBaseUrl}/`)
+          ? []
+          : [`${p.id}: probe ${p.probe.url} is not under its own chat base ${p.chatBaseUrl}`]
+      )
+    ).toEqual([]);
+  });
+
+  it('a templated row declares how its URL segment is supplied AND collected', () => {
+    // Three facts that only work together: the placeholder, the env key that
+    // fills it, and the prompt that lets an admin SET that key. bedrock's
+    // predecessor had the first two on a free-text base URL and the third
+    // rendered a whole URL field — which is how an operator came to store a
+    // base with no /v1 and get a bare 404 that never checked the key.
+    for (const p of AI_PROVIDERS.filter((row) => row.chatBaseUrl?.includes('{urlParam}'))) {
+      expect(p.urlParamEnvKey, `${p.id} templates {urlParam} with no env key`).toBeTruthy();
+      // A row whose value is collected elsewhere (cloudflare: Platform
+      // secrets, alongside the OAuth token it arrives with) declares that by
+      // having no prompt — but then it must say where, or nobody can set it.
+      if (!p.urlParamPrompt) {
+        expect(p.credentialManagedElsewhere, `${p.id} has no prompt and no elsewhere`).toBeTruthy();
+      }
+    }
+  });
+
+  it('aws-bedrock builds a complete /v1 base from a region alone', () => {
+    // The requirement in one line: region in, working URL out — INCLUDING the
+    // version prefix the operator used to have to remember.
+    const bedrock = AI_PROVIDERS.find((p) => p.id === 'aws-bedrock')!;
+    process.env.AWS_BEDROCK_REGION = 'ap-southeast-2';
+    try {
+      expect(resolveProviderUrl(bedrock, bedrock.chatBaseUrl!)).toBe(
+        'https://bedrock-mantle.ap-southeast-2.api.aws/v1'
+      );
+      expect(resolveProviderUrl(bedrock, bedrock.probe.url!)).toBe(
+        'https://bedrock-mantle.ap-southeast-2.api.aws/v1/models'
+      );
+    } finally {
+      delete process.env.AWS_BEDROCK_REGION;
+    }
+  });
+
+  it('aws-bedrock no longer reads a stored base URL — the region is the only input', () => {
+    // The migration in apps/web platform-secrets.ts converts a stored
+    // AWS_BEDROCK_BASE_URL into a region before the first hydrate. This pins
+    // the reason that migration is REQUIRED rather than optional: with the
+    // field gone from the row, a stored base URL has nothing to substitute
+    // into and would be silently ignored.
+    const bedrock = AI_PROVIDERS.find((p) => p.id === 'aws-bedrock')!;
+    expect(bedrock.baseUrlEnvKey).toBeUndefined();
+    process.env.AWS_BEDROCK_BASE_URL = 'https://bedrock-mantle.us-east-1.api.aws/v1';
+    try {
+      expect(resolveProviderUrl(bedrock, bedrock.chatBaseUrl!)).toContain('{urlParam}');
+    } finally {
+      delete process.env.AWS_BEDROCK_BASE_URL;
+    }
+  });
+
+  it('rejects a malformed region and accepts every real AWS region shape', () => {
+    const prompt = AI_PROVIDERS.find((p) => p.id === 'aws-bedrock')!.urlParamPrompt!;
+    const shape = new RegExp(prompt.pattern);
+    // Every geo pattern AWS actually ships, including the 4-segment GovCloud
+    // ids — a shape check that rejected those would reject a working region.
+    for (const region of ['us-east-1', 'ap-southeast-4', 'eu-central-2', 'us-gov-west-1', 'il-central-1'])
+      expect(shape.test(region), region).toBe(true);
+    // The values a URL field used to accept, and the empty/garbage cases.
+    for (const bad of [
+      'https://bedrock-mantle.us-east-1.api.aws',
+      'us-east-1/v1',
+      'US-EAST-1',
+      'useast1',
+      'us-east-',
+      '',
+      '../../etc',
+    ])
+      expect(shape.test(bad), bad).toBe(false);
   });
 
   // The ONE row that still builds a non-OpenAI route off its own
