@@ -799,6 +799,34 @@ export const AI_PROVIDERS = [
     openAiCompatible: true,
   },
   {
+    // OpenAI-COMPATIBLE, end to end. AWS's Bedrock API-key endpoint speaks the
+    // OpenAI dialect and lives under /v1 — MEASURED against a live tenant
+    // endpoint (2026-08-13):
+    //   GET  {host}/models            -> 404, empty body
+    //   GET  {host}/v1/models         -> 401 {"error":{"code":"invalid_api_key",
+    //                                    "message":"Missing 'authorization' or
+    //                                    'x-api-key' header",...}}  ← OpenAI-shaped
+    //   POST {host}/v1/chat/completions -> 405 on GET (the route exists)
+    //   GET  {host}/chat/completions  -> 404
+    //
+    // So AWS_BEDROCK_BASE_URL MUST INCLUDE THE /v1 PREFIX, e.g.
+    // https://bedrock-mantle.us-east-1.api.aws/v1 — the admin AI tab says so on
+    // the endpoint field, and a base URL missing it now fails the connection
+    // test with that sentence rather than a bare 404 (see readOpenAiModelsProbe
+    // in probe-adapters.ts). The URL is NOT rewritten for the operator: the
+    // whole reason this row was broken is that two layers disagreed about what
+    // the stored base URL meant, and silently editing it would re-create that.
+    //
+    // This row deliberately has NO first-party factory. It used to map to
+    // createAmazonBedrock, which builds Bedrock-NATIVE paths off the same base
+    // ({base}/model/{id}/converse, /invoke), so the probe below and every chat
+    // call wanted DIFFERENT base URLs and no single stored value could satisfy
+    // both: the connection test went green while chat 404'd on every request.
+    // Dropping the factory also drops SigV4 — this row is API-key only now.
+    // Nothing routed Bedrock through AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+    // deliberately (those are the Fargate/Lambda/backup credentials); the old
+    // factory could only reach SigV4 by ACCIDENT, when no Bedrock API key was
+    // set, by silently signing with those unrelated compute credentials.
     id: "aws-bedrock",
     cloudPricingLookup: "aws-bedrock",
     contextWindow: 200_000,

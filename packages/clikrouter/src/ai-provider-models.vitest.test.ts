@@ -114,13 +114,17 @@ describe('resolveLanguageModel', () => {
     expect(unreachable).toEqual([]);
   });
 
-  it('covers 16 first-party language-model providers and no speech/transcription ones', () => {
+  it('covers 13 first-party language-model providers and no speech/transcription ones', () => {
     // Was 17: the "google-vertex" factory was removed 2026-08-13 as
     // unreachable — no registry row has ever carried that id, so the factory
     // could never be selected (resolveLanguageModel keys factories by
     // registry row id).
+    // Was 16: "aws-bedrock", "google" and "deepinfra" were removed 2026-08-13
+    // — each declared openAiCompatible while its first-party package built a
+    // different route off the same base, measured 404 live. See the
+    // openAiCompatible-contract describe block at the bottom of this file.
     const ids = firstPartyProviderIds();
-    expect(ids).toHaveLength(16);
+    expect(ids).toHaveLength(13);
     // Adding a speech or transcription provider here would surface it in the admin console's model
     // picker as a selectable remediation model and then fail at request time.
     for (const nonLm of ['elevenlabs', 'deepgram', 'assemblyai', 'voyage', 'lmnt', 'hume', 'revai']) {
@@ -530,5 +534,210 @@ describe('streamAiChatTurn — per-candidate baseUrl override (self-hosted deplo
         baseUrl: 'http://10.0.0.7:8000/v1',
       }),
     ).toBeTruthy();
+  });
+});
+
+// ── ONE CONTRACT, ONE BASE URL ──────────────────────────────────────────────
+//
+// THE DEFECT THIS SUITE EXISTS TO PREVENT (measured live, aws-bedrock,
+// 2026-08-13): a row declared `openAiCompatible: true` with
+// `probe: {baseUrl}/models`, AND was also mapped to a first-party factory —
+// @ai-sdk/amazon-bedrock — that builds Bedrock-NATIVE paths off the same base
+// ({base}/model/{id}/converse). The two layers wanted DIFFERENT base URLs, so
+// no single stored value could satisfy both: the admin connection test went
+// green off /models while every chat call 404'd. A green connection test that
+// does not predict working chat is worse than no test at all.
+//
+// The invariant, in two halves:
+//   CATALOG — where one stored base URL feeds both readers, both must read it.
+//   WIRE    — whatever builds the model (first-party factory or the
+//             OpenAI-compatible adapter) must send chat to an OpenAI-dialect
+//             route under that SAME base.
+// Neither half catches this alone: the catalog half passed throughout the
+// bedrock outage (both fields did say "{baseUrl}"), and the wire half is the
+// one that actually asks the factory where it sends the request.
+describe('openAiCompatible rows: probe and chat derive from the SAME base URL', () => {
+  const compatible = AI_PROVIDERS.filter((p) => p.openAiCompatible && isTextRoutable(p));
+
+  it('covers a meaningful share of the registry (a filter typo must not silently empty this)', () => {
+    expect(compatible.length).toBeGreaterThan(20);
+  });
+
+  it('CATALOG: an operator-supplied base is read the SAME way by the probe and by chat', () => {
+    // The rows where ONE stored value has to serve both readers — the exact
+    // condition bedrock got wrong. `{baseUrl}` is the registry's placeholder
+    // for "whatever the operator typed into baseUrlEnvKey", so a row that
+    // carries it in one field and a hardcoded host in the other is declaring
+    // two different endpoints for one credential.
+    //
+    // Rows with a FIXED chatBaseUrl are deliberately not held to a
+    // shared-prefix rule: several probe a genuinely different service host on
+    // purpose (baseten's control plane at api.baseten.co vs its inference
+    // plane, huggingface's whoami-v2, cloudflare's account API). There is no
+    // shared stored value there to disagree about — the WIRE test below is
+    // what covers those.
+    const mismatched = compatible.flatMap((p) => {
+      const usesOperatorBase =
+        p.chatBaseUrl === '{baseUrl}' || Boolean(p.probe.url?.includes('{baseUrl}'));
+      if (!usesOperatorBase) return [];
+      // Where the value comes from is not this test's business: three rows fill
+      // it from baseUrlEnvKey, and self-hosted fills it per-candidate from a
+      // model-deployment row. Both readers agreeing is.
+      if (p.chatBaseUrl !== '{baseUrl}') {
+        return [`${p.id}: probe reads the operator's base but chat is pinned to ${p.chatBaseUrl}`];
+      }
+      // No probe URL at all = nothing to disagree with. self-hosted is the
+      // case: its "models" are live ModelDeployment rows, not an endpoint.
+      if (!p.probe.url) return [];
+      if (!p.probe.url.startsWith('{baseUrl}')) {
+        return [`${p.id}: chat reads the operator's base but the probe is pinned to ${p.probe.url}`];
+      }
+      return [];
+    });
+    expect(mismatched).toEqual([]);
+    // …and this is not vacuous: aws-bedrock, microsoft-foundry and
+    // custom-openai are the three configurable-endpoint rows.
+    expect(compatible.filter((p) => p.chatBaseUrl === '{baseUrl}').length).toBeGreaterThanOrEqual(3);
+  });
+
+  // The ONE row that still builds a non-OpenAI route off its own
+  // OpenAI-compatible base. @ai-sdk/cohere posts to `{base}/chat` (its native
+  // v2 route) while the row's base is Cohere's /compatibility/v1 surface.
+  // NOT fixed here because it is not PROVEN broken the way the other three
+  // were: POST .../compatibility/v1/chat and .../compatibility/v1/chat/
+  // completions BOTH answered 401 "no api key supplied" unauthenticated, so
+  // the measurement cannot tell a live route from an auth check that runs
+  // before routing. It is suspicious rather than settled — the row's own
+  // `noNativeTools` veto records "every dispatch WITH tools fails with a bare
+  // Not Found while bare completions work", which is exactly what a
+  // wrong-route-with-a-tolerant-body would look like. Confirming it needs a
+  // live Cohere key; until then this pins the divergence instead of hiding it.
+  const KNOWN_NON_OPENAI_ROUTE: readonly string[] = ['cohere'];
+
+  it('WIRE: every openAiCompatible row sends chat to an OpenAI-family route under its own base', async () => {
+    // One sentinel base for every row, supplied as the per-call override, so
+    // this asks the one question that matters: given a base, where does the
+    // request ACTUALLY go? `/chat/completions` and `/responses` are the two
+    // OpenAI-dialect surfaces (AI SDK 5 first-party providers default to
+    // Responses); anything else means the row's `openAiCompatible: true` and
+    // the thing building its requests disagree — the bedrock defect.
+    //
+    // Deliberately NOT compared against the row's `chatPath`: that field is
+    // consumed by the hand-rolled builder in ai-provider-http.ts, a different
+    // reader. Perplexity is the proof it would be the wrong yardstick — its
+    // chatPath is /v1/sonar while the SDK uses /chat/completions, and BOTH are
+    // live routes (measured: 401 on each, 404 on /v1/chat/completions).
+    const OPENAI_ROUTES = ['/chat/completions', '/responses'];
+    const BASE = 'https://sentinel.example.test/v1';
+    const wrong: string[] = [];
+    const diverged: string[] = [];
+    for (const p of compatible) {
+      // Harness-transport rows dispatch through a vendor CLI, not an HTTP base.
+      if (subscriptionUsesHarness(p)) continue;
+      const seen: string[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: unknown) => {
+          seen.push(String(url));
+          return new Response('data: [DONE]\n\n', {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          });
+        }),
+      );
+      try {
+        await streamAiChatTurn({
+          provider: p.id,
+          model: p.defaultModel ?? 'probe-model',
+          apiKey: 'k',
+          baseUrl: BASE,
+          messages: [{ role: 'user', content: 'hi' }],
+        }).catch(() => undefined);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      if (seen.length === 0) {
+        wrong.push(`${p.id}: built a model that made no request at all`);
+        continue;
+      }
+      const url = seen[0];
+      const path = url.startsWith(`${BASE}/`) ? url.slice(BASE.length) : undefined;
+      if (path === undefined) {
+        wrong.push(`${p.id}: chat left the configured base entirely — went to ${url}`);
+      } else if (!OPENAI_ROUTES.some((route) => path.split('?')[0] === route)) {
+        diverged.push(p.id);
+      }
+    }
+    expect(wrong).toEqual([]);
+    // A NEW name here is this defect reappearing: the row promises the OpenAI
+    // dialect and something is building a different route off the same base.
+    // Removing a name is a fix and is equally required to update this list.
+    expect(diverged.sort()).toEqual([...KNOWN_NON_OPENAI_ROUTE].sort());
+  });
+
+  it('no openAiCompatible row is ALSO claimed by a first-party factory that builds a different URL shape', () => {
+    // The structural restatement of the wire test: it names the rows that
+    // legitimately pair OpenAI compatibility with a first-party package.
+    // Anything NEW appearing here is the bedrock defect reappearing under a
+    // different provider name, and must be justified against the wire test
+    // above before this list is edited.
+    //
+    //   microsoft-foundry — createAzure. Safe ONLY because the base is
+    //     operator-supplied and non-'.openai.azure.com': @ai-sdk/azure v4.0.28
+    //     branches on the HOSTNAME (isAzureOpenAIBaseURL), sending
+    //     {base}{path} for a Foundry host but {base}/v1{path}?api-version=…
+    //     for an *.openai.azure.com one. The factory is KEPT because the row
+    //     declares `authHeader: 'api-key'` and createOpenAICompatible can only
+    //     send Bearer — dropping it would break auth outright. The hazard is
+    //     real but narrower than bedrock's, and it is pinned directly below
+    //     rather than assumed away.
+    const claimed = AI_PROVIDERS
+      .filter((p) => p.openAiCompatible && hasFirstPartyProvider(p.id))
+      .map((p) => p.id)
+      .sort();
+    expect(claimed).toContain('microsoft-foundry');
+    // aws-bedrock is the row this suite was written for: OpenAI-compatible,
+    // and deliberately NOT first-party.
+    expect(hasFirstPartyProvider('aws-bedrock')).toBe(false);
+    expect(getAiProvider('aws-bedrock')?.openAiCompatible).toBe(true);
+  });
+
+  it('microsoft-foundry: createAzure rewrites the base for an *.openai.azure.com host — the ONE remaining hazard, pinned not hidden', async () => {
+    // Not a bug being tolerated silently: an operator who pastes an Azure
+    // OpenAI resource URL gets chat aimed at {base}/v1/chat/completions while
+    // the probe still reads {base}/models. This test states the exact
+    // condition so that a future fix (or a vendor SDK change) is a deliberate
+    // edit here, with evidence, rather than a surprise in production.
+    const BASE = 'https://example-resource.openai.azure.com/openai';
+    const seen: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        seen.push(String(url));
+        return new Response('data: [DONE]\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      }),
+    );
+    try {
+      await streamAiChatTurn({
+        provider: 'microsoft-foundry',
+        model: 'gpt-4o',
+        apiKey: 'k',
+        baseUrl: BASE,
+        messages: [{ role: 'user', content: 'hi' }],
+      }).catch(() => undefined);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    // {base}/v1/… — the SDK inserted a /v1 the operator did not type, and
+    // appended ?api-version…
+    expect(seen[0]).toContain(`${BASE}/v1/`);
+    expect(seen[0]).toContain('api-version=');
+    // …while the row's probe reads {base}/models. Same stored value, two
+    // different bases — the bedrock shape, surviving only because it is
+    // confined to one hostname suffix.
+    expect(getAiProvider('microsoft-foundry')?.probe.url).toBe('{baseUrl}/models');
   });
 });

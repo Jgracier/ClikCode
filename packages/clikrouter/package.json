@@ -29,7 +29,6 @@
     "test:vitest": "vitest run"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "^5.0.40",
     "@ai-sdk/anthropic": "^4.0.27",
     "@ai-sdk/assemblyai": "^3.0.18",
     "@ai-sdk/azure": "^4.0.28",
@@ -37,13 +36,11 @@
     "@ai-sdk/cerebras": "^3.0.20",
     "@ai-sdk/cohere": "^4.0.18",
     "@ai-sdk/deepgram": "^3.0.18",
-    "@ai-sdk/deepinfra": "^3.0.20",
     "@ai-sdk/deepseek": "^3.0.19",
     "@ai-sdk/elevenlabs": "^3.0.19",
     "@ai-sdk/fal": "^3.0.19",
     "@ai-sdk/fireworks": "^3.0.22",
     "@ai-sdk/gladia": "^3.0.18",
-    "@ai-sdk/google": "^4.0.31",
     "@ai-sdk/google-vertex": "^5.0.38",
     "@ai-sdk/groq": "^4.0.19",
     "@ai-sdk/hume": "^3.0.18",
