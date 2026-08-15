@@ -15,6 +15,7 @@ import {
   firstPartyProviderIds,
   isPermanentAiCallFailure,
   isAccountScopedAiCallFailure,
+  isBillingAiCallFailure,
   resolveRateLimitRetryAfterMs,
   streamAiChatTurn,
 } from './ai-provider-models';
@@ -289,6 +290,35 @@ describe('isAccountScopedAiCallFailure — the gate on provider-wide escalation'
     expect(isAccountScopedAiCallFailure(apiCallError(500))).toBe(false);
     expect(isAccountScopedAiCallFailure(new Error('network blip'))).toBe(false);
     expect(isAccountScopedAiCallFailure(undefined)).toBe(false);
+  });
+});
+
+describe('isBillingAiCallFailure — single-observation provider exclusion', () => {
+  it('is true ONLY for 402', () => {
+    expect(isBillingAiCallFailure(apiCallError(402))).toBe(true);
+    // 401/403 stay account-scoped but NOT billing: they can plausibly be one
+    // malformed key or one un-entitled model, so they still have to clear the
+    // two-distinct-model threshold before the whole provider is cut off. A
+    // 402 needs no corroboration — the account cannot pay, full stop.
+    expect(isBillingAiCallFailure(apiCallError(401))).toBe(false);
+    expect(isBillingAiCallFailure(apiCallError(403))).toBe(false);
+    expect(isBillingAiCallFailure(apiCallError(404))).toBe(false);
+    expect(isBillingAiCallFailure(apiCallError(429))).toBe(false);
+  });
+
+  it('is false for non-APICallError failures', () => {
+    expect(isBillingAiCallFailure(new Error('Payment Required'))).toBe(false);
+    expect(isBillingAiCallFailure(undefined)).toBe(false);
+  });
+
+  it('agrees with the other classifiers on a real 402', () => {
+    // A 402 is simultaneously permanent (do not retry on a 5-min timer),
+    // account-scoped (it is about the credential), and billing (escalate the
+    // provider now). All three must hold or the escalation path is unreachable.
+    const err = apiCallError(402);
+    expect(isPermanentAiCallFailure(err)).toBe(true);
+    expect(isAccountScopedAiCallFailure(err)).toBe(true);
+    expect(isBillingAiCallFailure(err)).toBe(true);
   });
 });
 
