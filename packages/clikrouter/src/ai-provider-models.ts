@@ -497,6 +497,30 @@ export function isAccountScopedAiCallFailure(error: unknown): boolean {
 }
 
 /**
+ * Specifically a BILLING failure: the credential is valid and the model id
+ * is real, the account simply cannot pay right now (402 Payment Required —
+ * exhausted credits, a lapsed subscription, a free tier used up).
+ *
+ * Split out from isAccountScopedAiCallFailure because 402 is the one member
+ * of that set that says something about the WHOLE PROVIDER with certainty
+ * from a SINGLE observation: a 401/403 can plausibly be one malformed key or
+ * one model the account lacks entitlement for, but "payment required" is a
+ * property of the account, and every other model behind that same account
+ * will answer identically. Escalating it needs no corroborating second
+ * failure — which matters because the two-distinct-model threshold
+ * (CONSECUTIVE_PROVIDER_FAILURE_THRESHOLD) is unreachable once cooldowns
+ * have already reduced a provider to its last uncooled model, exactly the
+ * state a billing outage produces. MEASURED LIVE 2026-08-15: mistral
+ * returned 402 ("Check your subscription") on every routed attempt for
+ * hours while five of its other models sat in cooldown, so no second model
+ * could ever fail to trigger the escalation, and the router re-picked the
+ * dead model on every single turn.
+ */
+export function isBillingAiCallFailure(error: unknown): boolean {
+  return APICallError.isInstance(error) && error.statusCode === 402;
+}
+
+/**
  * Build an APICallError with a real statusCode from a failed direct-transport
  * HTTP response, so isPermanentAiCallFailure/isAccountScopedAiCallFailure
  * (both of which only recognize APICallError instances) classify a dead Codex
