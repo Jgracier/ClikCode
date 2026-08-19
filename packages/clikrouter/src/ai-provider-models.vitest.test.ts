@@ -200,7 +200,10 @@ describe('modality grouping and text-only routing', () => {
     //                    harness rows.
     expect(routable.has('opencode-go')).toBe(true);
     expect(routable.has('github-copilot')).toBe(true);
-    expect(routable.size).toBe(52);
+    // 53, not 52: Hetzner Inference (added 2026-08-18) — a plain OpenAI-compatible
+    // text(+vision) chat endpoint at inference.hetzner.com/api/v1, text-routable.
+    expect(routable.has('hetzner')).toBe(true);
+    expect(routable.size).toBe(53);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {

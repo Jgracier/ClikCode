@@ -1067,6 +1067,30 @@ export const AI_PROVIDERS = [
     openAiCompatible: true,
   },
   {
+    id: "hetzner",
+    // Hetzner Inference (experiments.hetzner.com) — OpenAI-compatible, served
+    // from Hetzner's own DE/FI datacenters. Launched July 2026 as a free,
+    // no-SLA "Experiments" product; the only model at time of writing is
+    // Qwen/Qwen3.6-35B-A3B-FP8 (MoE, 35B/3B active, 262,144-token context,
+    // text + image). Per-key limits: 3M in / 60k out tokens per 60s and
+    // 500M in / 5M out per 24h, answered with 429 when exceeded.
+    contextWindow: 262_144,
+    // NOT the Hetzner Cloud API token (HETZNER_API_KEY, the compute-tab
+    // credential). Inference tokens are minted separately at
+    // experiments.hetzner.com/inference ("Create API Token"); a Cloud token is
+    // rejected here, and an inference token cannot manage servers. Two
+    // credentials → two env keys — the io.net split, not the Baseten alias.
+    keyUrl: "https://experiments.hetzner.com/inference",
+    label: "Hetzner Inference",
+    envKey: "HETZNER_INFERENCE_API_KEY",
+    chatBaseUrl: "https://inference.hetzner.com/api/v1",
+    // MEASURED 2026-08-18: /api/v1/models answers 401 `{"error":"unauthorized"}`
+    // both with no token and with a bogus bearer, so a bad key reports
+    // `auth_failed` cleanly and never HEALTHY.
+    probe: { kind: "openai-models", url: "https://inference.hetzner.com/api/v1/models" },
+    openAiCompatible: true,
+  },
+  {
     id: "ovhcloud",
     contextWindow: 32_000,
     keyUrl: "https://endpoints.ai.cloud.ovh.net/",
