@@ -260,6 +260,66 @@ export interface AiProviderSpec {
    */
   usageAccountingOptions?: Readonly<Record<string, unknown>>;
   /**
+   * How this provider's PROMPT CACHING is activated.
+   *
+   *   'explicit'  — the caller must mark a cache breakpoint on the request, and
+   *                 the vendor caches NOTHING otherwise (Anthropic). Cache
+   *                 writes are charged at a premium, so this only pays off when
+   *                 the marked prefix is reused inside the TTL.
+   *   'automatic' — the vendor caches on its own, with no request parameter to
+   *                 set (OpenAI, DeepSeek). The caller cannot switch it on or
+   *                 off; what the caller CONTROLS is whether it hits, by keeping
+   *                 the prompt's leading bytes stable.
+   *   undefined   — no prompt caching, or none this platform can reach.
+   *
+   * The distinction is load-bearing rather than descriptive: it decides whether
+   * there is anything to send, and it decides whether an agent-level toggle
+   * means anything. Turning caching "off" for an automatic provider is not a
+   * thing that can be done, and a control implying otherwise would be a lie.
+   */
+  promptCaching?: "explicit" | "automatic";
+  /**
+   * This provider runs a BATCH API: work is submitted asynchronously against a
+   * completion window and charged at a discount, instead of being answered on
+   * the request.
+   *
+   * A genuinely different DISPATCH MODEL, not a cheaper flag on the same call —
+   * which is why it is declared here rather than inferred from a price. A
+   * caller opts into waiting; nothing can silently route a synchronous request
+   * onto it, because a batch submission returns a job id rather than an answer.
+   *
+   * Every path below was probed live (2026-08-20, no credential — 401 proves
+   * the route exists and authenticates). `discount` is what the vendor's own
+   * published batch table charges relative to standard; it is documentation for
+   * an operator, never the number anything bills on. Real batch rates come from
+   * `AiDiscoveredModel.batchInMTok/batchOutMTok`, per model, because a vendor
+   * does not offer every model on its batch tier.
+   *
+   * NOT WIRED TO DISPATCH, and that is a finding rather than an omission. Of
+   * the four router-governed tasks, three (ClikAgent chat, ClikNet remediation,
+   * ClikEvents research) are multi-turn TOOL LOOPS, where each request depends
+   * on the previous tool result — a shape a batch API cannot express at all,
+   * since it accepts one request and returns one response with no turn between
+   * them. The fourth, the task-triage full-promotion sweep, is single-shot per
+   * pattern and so would fit, but it is a progress-tracked job an operator
+   * watches and can pause or cancel mid-run; trading a few minutes for a
+   * 24-hour opaque window is a bad trade for half the token price.
+   *
+   * So the endpoints and per-model batch rates are captured HERE, where they
+   * cost nothing and are ready the day a latency-tolerant bulk workload exists.
+   * What is deliberately absent is an `allowBatch` agent toggle: there is no
+   * workload it could route today, and a switch that changes nothing is worse
+   * than no switch.
+   */
+  batch?: {
+    /** Submission path, absolute. */
+    url: string;
+    /** Longest the vendor guarantees for completion, for the operator's sake. */
+    completionWindow: string;
+    /** Published discount vs the standard tier, e.g. '50%'. Descriptive only. */
+    discount: string;
+  };
+  /**
    * A button-driven flow that MINTS this provider's API key.
    *
    * Distinct from `oauth`: the result is a plain key written to `envKey`, with
