@@ -1901,6 +1901,47 @@ export const AI_PROVIDERS = [
     // correct than pinning one of two examples.
     staticModels: ["claude-haiku-4.5", "gpt-5.3-codex"],
   },
+  {
+    id: "command-code",
+    label: "Command Code",
+    keyUrl: "https://commandcode.ai/studio",
+    // Harness by absence of an HTTP endpoint, the github-copilot shape above — not by preference.
+    // PROBED here (command-code 1.28.4, installed from npm): the package ships a terminal agent and
+    // nothing else. There is no published inference base URL, no OpenAI-compatible route, and no
+    // API-key env var anywhere in the shipped bundle (grepped: the only CMD_* vars are debug/test
+    // and tool-gating flags). The vendor's programmatic surface IS the CLI.
+    //
+    // envKey is a REAL credential, not a placeholder: `cmdc login` offers "Authorize in browser, or
+    // paste API key here", and the key is minted at commandcode.ai/studio. One secret does both
+    // jobs — the operator pastes it into the CLI's login inside the container, and records it here
+    // so the platform knows this provider is available to route to. Nothing injects it into the
+    // CLI: the runner deliberately does not seed credentials (see its own header), so the CLI's own
+    // login is still what authenticates it, and a missing login surfaces as the runner's
+    // `not-authenticated`, which is diagnosable rather than silent.
+    envKey: "COMMAND_CODE_API_KEY",
+    // No probe endpoint exists to authenticate against — see above.
+    probe: { kind: "unsupported" },
+    subscriptionTransport: "harness",
+    // NOT `oauth: true`. Command Code's sign-in is a LOOPBACK browser callback
+    // (http://localhost:5959/callback?state=…, captured live under a pty), not a device code and
+    // not a flow a third party can drive: there is no client registration, no authorization server
+    // we hold a client for, and a loopback redirect only works on the machine running the CLI. See
+    // this provider's entry in ai-provider-oauth-verdicts.ts.
+    //
+    // Read from `cmdc --list-models` (56 models, run unauthenticated 2026-08-20) — a sample across
+    // the vendors it fronts, not the whole list, for the same reason github-copilot lists two: the
+    // catalog is a CLI printout with no endpoint behind it, so a full transcription would rot.
+    // No `defaultModel`: the CLI marks `deepseek/deepseek-v4-flash` as its own default, and letting
+    // it choose is more correct than pinning one here.
+    staticModels: [
+      "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4-pro",
+      "moonshotai/kimi-k3",
+      "zai-org/glm-5.3",
+      "minimaxai/minimax-m3",
+      "qwen/qwen3.8-max",
+    ],
+  },
 
 ] as const satisfies readonly AiProviderSpec[];
 
