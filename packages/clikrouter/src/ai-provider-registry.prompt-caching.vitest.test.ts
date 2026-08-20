@@ -26,12 +26,29 @@ describe('promptCaching', () => {
     expect(getAiProvider('deepseek')?.promptCaching).toBe('automatic');
   });
 
+  it('marks Mistral and SambaNova automatic, on observed production evidence', () => {
+    // These two were left unmarked until production traffic settled it:
+    // 22.2M and 491K cache-READ input tokens respectively, with zero cache
+    // writes on either. Reads without writes can only be vendor-side
+    // automatic caching, since nothing in this platform ever asked.
+    //
+    // Mistral is also the provider serving most of this platform's calls, so
+    // leaving it unmarked was not a small omission — it described the busiest
+    // path as having no caching we could reach.
+    expect(getAiProvider('mistral')?.promptCaching).toBe('automatic');
+    expect(getAiProvider('sambanova')?.promptCaching).toBe('automatic');
+  });
+
   it('leaves the mechanism ABSENT for providers whose docs state none', () => {
     // Absent is a fact, same as everywhere else in this catalog: it means
     // nobody has read that vendor's caching documentation, which is a
     // different claim from having read it and found no caching. Guessing
     // 'automatic' would assert a discount on the operator's behalf; guessing
     // 'explicit' would send a parameter the vendor rejects.
+    // Asserted as a population rather than by naming one provider: this test
+    // used to name Mistral as its example, and production traffic then proved
+    // Mistral caches after all. Pinning a specific id here would just invite
+    // the same mistake the next time evidence arrives.
     const unstated = (AI_PROVIDERS as readonly AiProviderSpec[]).filter(
       (s) => s.promptCaching === undefined,
     );
