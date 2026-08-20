@@ -221,6 +221,18 @@ export function resolveLanguageModel(input: ResolveModelInput): LanguageModel {
       `provider ${spec.id} has no first-party AI SDK package and no chatBaseUrl/${spec.baseUrlEnvKey ?? "baseUrlEnvKey"} to reach`,
     );
   }
+
+  // RESPONSES-ONLY rows take OpenAI's Responses surface against THEIR base URL, not the compatible
+  // adapter. `createOpenAICompatible` builds `{baseURL}/chat/completions`, which is precisely the
+  // route these gateways do not serve — Ramp Router documents it as a 404 — so the compatible
+  // adapter would leave the SDK lane permanently broken while the hand-rolled HTTP lane
+  // (buildAiChatRequest) worked, which is the same split-brain the three absent first-party rows
+  // above were removed to fix. Keyed on the DIALECT, never on a provider id, so a second
+  // Responses-only vendor needs no code here.
+  if (spec.chatDialect === "openai-responses") {
+    return createOpenAI(opts).responses(modelId);
+  }
+
   return createOpenAICompatible({
     name: spec.id,
     apiKey: input.apiKey,

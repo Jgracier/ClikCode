@@ -368,6 +368,72 @@ function buildOauthSurfaceRequest(
 }
 
 /** Build a chat request for the provider's dialect (OpenAI chat or Anthropic Messages). */
+/**
+ * Build one request in the OpenAI **Responses** schema.
+ *
+ * Shared by the two lanes that need that shape — the tools-only detour off
+ * `/chat/completions` (`responsesPath`) and rows that speak Responses and nothing else
+ * (`chatDialect: "openai-responses"`) — so the body shape has exactly one definition.
+ *
+ * The field names are the trap this centralizes: Responses takes `input` rather than `messages`,
+ * hoists the system prompt to `instructions`, caps output with `max_output_tokens` (a third
+ * spelling after `max_tokens` and `max_completion_tokens`), and takes tools FLAT instead of nested
+ * under a `function` key.
+ */
+function buildResponsesRequest(
+  input: ChatTurnInput,
+  base: string,
+  path: string,
+  auth: Record<string, string>,
+): BuiltChatRequest {
+  const inputItems = input.messages
+    .filter((m) => m.role !== "system")
+    .map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    }));
+  // Responses rejects an empty `input`, and a turn can legitimately arrive system-only.
+  if (inputItems.length === 0) inputItems.push({ role: "user", content: "Begin." });
+  const instructions = [
+    input.system,
+    ...input.messages.filter((m) => m.role === "system").map((m) => m.content),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    url: `${base}${path}`,
+    headers: { "Content-Type": "application/json", ...auth },
+    body: {
+      model: input.model,
+      ...(instructions ? { instructions } : {}),
+      input: inputItems,
+      // Responses names the output cap differently again from both chat variants.
+      max_output_tokens: input.maxTokens ?? 700,
+      // Same rule as the other dialects: only sent when the caller asked for one, because
+      // reasoning models reject a non-default temperature outright.
+      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+      // Tools are FLAT here (name/description/parameters at the top level), not nested under a
+      // `function` key the way chat/completions requires.
+      ...(input.tools?.length
+        ? {
+            tools: input.tools.map((t) => ({
+              type: "function",
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            })),
+          }
+        : {}),
+      ...(input.stream ? { stream: true } : {}),
+    },
+    dialect: "openai-responses",
+    // A streamed Responses call answers SSE, and `JSON.parse` on that yields {} — a body that
+    // reads as an empty completion rather than a parse failure. Pairing the flag with the reader
+    // here is what keeps a streamed turn from silently returning nothing.
+    ...(input.stream ? { alwaysSse: true } : {}),
+  };
+}
+
 export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   const spec = getAiProvider(input.provider);
   const cred: ResolvedAiCred = {
@@ -488,45 +554,24 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
     spec?.chatBaseUrl || "https://api.openai.com/v1",
   ).replace(/\/$/, "");
 
+  // RESPONSES-ONLY providers: every call takes this surface, tools or not, because there is no
+  // `/chat/completions` behind this base URL to fall back to — addressing one 404s. Checked before
+  // the tools detour below so the dialect cannot be outranked by a row that also sets
+  // `responsesPath`; both end at the same builder, and the dialect is the broader claim.
+  if (dialect === "openai-responses") {
+    return buildResponsesRequest(input, base, spec?.responsesPath ?? "/responses", auth);
+  }
+
   // TOOLS + Responses surface: `/chat/completions` cannot combine function tools with reasoning on
   // newer models (see `responsesPath`). Same credential and auth headers — only the endpoint and the
   // request/response shape differ.
+  //
+  // Two DIFFERENT reasons reach the same builder, which is why it is shared rather than inlined:
+  // this one moves only tool-carrying calls off a working `/chat/completions`, while a
+  // `chatDialect: "openai-responses"` row has no chat-completions route at all. A second copy of
+  // the Responses body shape is how the two would drift.
   if (input.tools?.length && spec?.responsesPath) {
-    const inputItems = [
-      ...input.messages
-        .filter((m) => m.role !== "system")
-        .map((m) => ({
-          role: m.role === "assistant" ? "assistant" : "user",
-          content: m.content,
-        })),
-    ];
-    if (inputItems.length === 0) inputItems.push({ role: "user", content: "Begin." });
-    const instructions = [
-      input.system,
-      ...input.messages.filter((m) => m.role === "system").map((m) => m.content),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-    return {
-      url: `${base}${spec.responsesPath}`,
-      headers: { "Content-Type": "application/json", ...auth },
-      body: {
-        model: input.model,
-        ...(instructions ? { instructions } : {}),
-        input: inputItems,
-        // Responses names the output cap differently again from both chat variants.
-        max_output_tokens: input.maxTokens ?? 700,
-        // Tools are FLAT here (name/description/parameters at the top level), not nested under a
-        // `function` key the way chat/completions requires.
-        tools: input.tools.map((t) => ({
-          type: "function",
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        })),
-      },
-      dialect: "openai-responses",
-    };
+    return buildResponsesRequest(input, base, spec.responsesPath, auth);
   }
   const messages = [
     ...(input.system

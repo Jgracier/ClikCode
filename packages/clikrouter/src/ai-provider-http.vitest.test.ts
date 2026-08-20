@@ -101,6 +101,96 @@ describe('buildAiAuthHeaders', () => {
   });
 });
 
+// A Responses-ONLY provider (Ramp Router) is the case these cover: it publishes no
+// /chat/completions at all, so "did we build the right URL" is not a style question — the
+// chat-completions route is a documented 404 there.
+describe('buildAiChatRequest — openai-responses dialect', () => {
+  const base = {
+    provider: 'router',
+    model: 'some-account-scoped-id',
+    apiKey: 'rtr_test_key',
+    credentialSource: 'env' as const,
+  };
+
+  it('routes a PLAIN turn (no tools) to /responses, never /chat/completions', () => {
+    const req = buildAiChatRequest({
+      ...base,
+      system: 'You are helpful',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 100,
+    });
+    expect(req.dialect).toBe('openai-responses');
+    expect(req.url).toBe('https://api.router.com/v1/responses');
+    expect(req.url).not.toContain('/chat/completions');
+    // Responses field names, all three of which differ from chat/completions.
+    expect(req.body.instructions).toBe('You are helpful');
+    expect(req.body.input).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(req.body.max_output_tokens).toBe(100);
+    expect(req.body.messages).toBeUndefined();
+    expect(req.body.max_tokens).toBeUndefined();
+  });
+
+  it('sends a Bearer token, not the anthropic x-api-key header', () => {
+    const req = buildAiChatRequest({ ...base, messages: [{ role: 'user', content: 'hi' }] });
+    expect(req.headers.Authorization).toBe('Bearer rtr_test_key');
+    expect(req.headers['x-api-key']).toBeUndefined();
+  });
+
+  it('carries tools FLAT, not nested under a function key', () => {
+    const req = buildAiChatRequest({
+      ...base,
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [{ name: 'deploy', description: 'ship it', parameters: { type: 'object' } }],
+    });
+    expect(req.url).toBe('https://api.router.com/v1/responses');
+    expect(req.body.tools).toEqual([
+      { type: 'function', name: 'deploy', description: 'ship it', parameters: { type: 'object' } },
+    ]);
+  });
+
+  it('never sends an empty input array — a system-only turn still gets a user item', () => {
+    const req = buildAiChatRequest({
+      ...base,
+      system: 'Only a system prompt',
+      messages: [],
+    });
+    expect(req.body.input).toEqual([{ role: 'user', content: 'Begin.' }]);
+  });
+
+  it('omits temperature unless the caller asked for one', () => {
+    const withOut = buildAiChatRequest({ ...base, messages: [{ role: 'user', content: 'hi' }] });
+    expect(withOut.body.temperature).toBeUndefined();
+    const withIt = buildAiChatRequest({
+      ...base,
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0.2,
+    });
+    expect(withIt.body.temperature).toBe(0.2);
+  });
+
+  it('pairs stream:true with alwaysSse so the body reader aggregates SSE', async () => {
+    const req = buildAiChatRequest({
+      ...base,
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    });
+    expect(req.body.stream).toBe(true);
+    // Without alwaysSse, JSON.parse over an SSE body yields {} — an empty completion that reads
+    // as a working call returning nothing, which is the failure this pairing exists to prevent.
+    expect(req.alwaysSse).toBe(true);
+    const sse = [
+      'event: response.completed',
+      `data: ${JSON.stringify({
+        type: 'response.completed',
+        response: { output: [{ type: 'message', content: [{ type: 'output_text', text: 'pong' }] }] },
+      })}`,
+      '',
+    ].join('\n');
+    const body = await readAiChatResponseBody(req, { text: async () => sse });
+    expect(extractChatText(req.dialect, body)).toBe('pong');
+  });
+});
+
 describe('buildAiChatRequest', () => {
   it('builds anthropic messages dialect', () => {
     const req = buildAiChatRequest({
