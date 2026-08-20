@@ -298,14 +298,13 @@ export const AI_PROVIDERS = [
     id: "nvidia",
     contextWindow: 128_000,
     keyUrl: "https://ngc.nvidia.com/setup/api-key",
-    // KNOWN STALE: this id 404'd on every routed attempt observed live
-    // 2026-08-09 (see ai-provider-models.ts's capturedStreamError comment) —
-    // NVIDIA deprecated it. Left in place because no registry/catalog data
-    // here names a successor: the live catalogUrl feed is the real model
-    // source (the candidate builder routes across every discovered model,
-    // this default only pins ordering), and inventing a replacement id
-    // without vendor evidence is the same guess that broke this one.
-    defaultModel: "nvidia/llama-3.1-nemotron-70b-instruct",
+    // No `defaultModel`: the previous pin (nvidia/llama-3.1-nemotron-70b-instruct)
+    // 404'd on every routed attempt observed live 2026-08-09 (see
+    // ai-provider-models.ts's capturedStreamError comment) — NVIDIA deprecated
+    // it. The field is optional, so rather than inventing a replacement id
+    // without vendor evidence (the same guess that broke this one), we omit it
+    // and let the live catalogUrl feed decide: the candidate builder routes
+    // across every discovered model, a default only pins ordering.
     label: "NVIDIA",
     envKey: "NVIDIA_API_KEY",
     chatBaseUrl: "https://integrate.api.nvidia.com/v1",
