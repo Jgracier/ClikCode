@@ -69,6 +69,19 @@ export interface AiRouterCandidate {
    */
   cachedInputCostPerMTok?: number | null;
   /**
+   * OBSERVED share of eligible input tokens this pair actually served from
+   * cache, 0-1, with the prompt tokens it was measured over.
+   *
+   * Takes precedence over the caller's declared prefix size in the cost term
+   * below, because the declared figure is a property of the PROMPT and this is
+   * a property of the PAIR — and the two disagree wildly in practice. Measured
+   * on production 2026-08-20: byte-identical ClikNet prompts hit 55.6% on
+   * Mistral and 5.1% on SambaNova. Pricing both off the same declared prefix
+   * flatters one of them by an order of magnitude.
+   */
+  observedCacheHitRate?: number;
+  observedCacheEligibleTokens?: number;
+  /**
    * Live exponential-moving-average response latency in ms (ai-model-latency.ts),
    * or null/absent when never observed. This file stays pure/dependency-free
    * (see the module comment), so it never reads Redis itself — the caller
@@ -604,6 +617,65 @@ function costScore(cost: number | null): number {
 }
 
 
+
+/**
+ * What share of this candidate's input will be served from cache.
+ *
+ * MEASURED FIRST, declared second. An observed hit rate is what this exact
+ * (provider, model) pair actually did with real traffic; the caller's declared
+ * prefix size is a property of the prompt, which two providers can answer
+ * completely differently. Where both exist the measurement wins — it already
+ * accounts for everything the estimate cannot see: cache TTL, minimum prefix
+ * length, replica affinity, and whether the vendor caches at all.
+ *
+ * Returns null when neither is usable, which leaves the candidate priced
+ * uncached — the honest answer to "we cannot say this is cheaper".
+ */
+function cachedFractionFor(
+  candidate: AiRouterCandidate,
+  cacheContext?: { cacheablePrefixTokens?: number; estimatedPromptTokens?: number },
+): number | null {
+  const observed = candidate.observedCacheHitRate;
+  const eligible = candidate.observedCacheEligibleTokens ?? 0;
+  if (
+    typeof observed === 'number' &&
+    Number.isFinite(observed) &&
+    observed >= 0 &&
+    eligible >= MIN_CACHE_OBSERVATION_TOKENS
+  ) {
+    return Math.min(1, observed);
+  }
+
+  const prefix = cacheContext?.cacheablePrefixTokens;
+  const prompt = cacheContext?.estimatedPromptTokens;
+  if (
+    typeof prefix !== 'number' ||
+    !Number.isFinite(prefix) ||
+    prefix <= 0 ||
+    typeof prompt !== 'number' ||
+    !Number.isFinite(prompt) ||
+    prompt <= 0
+  ) {
+    return null;
+  }
+  // Clamped: a caller whose prefix estimate exceeds its prompt estimate has
+  // given us two numbers that cannot both be right, and the safe reading is
+  // "the whole prompt is prefix" rather than a fraction above 1 that would
+  // discount tokens that do not exist.
+  return Math.min(1, prefix / prompt);
+}
+
+/**
+ * Eligible prompt tokens a pair must have accumulated before its measured hit
+ * rate outranks the caller's estimate.
+ *
+ * Tokens rather than call count, because that is what the rate is a ratio of:
+ * fifty tiny calls say much less about a prefix than one large one. Set low —
+ * roughly a handful of real prompts — since even a coarse measurement of this
+ * pair beats a precise estimate about a different one.
+ */
+const MIN_CACHE_OBSERVATION_TOKENS = 50_000;
+
 /**
  * Per-MTok cost with the cacheable slice of the prompt priced at this
  * candidate's CACHE-READ rate rather than its base input rate.
@@ -626,28 +698,17 @@ export function effectiveCostPerMTok(
 
   const cachedRate = candidate.cachedInputCostPerMTok;
   const inputRate = candidate.inputCostPerMTok;
-  const prefix = cacheContext?.cacheablePrefixTokens;
-  const prompt = cacheContext?.estimatedPromptTokens;
   if (
     typeof cachedRate !== 'number' ||
     !Number.isFinite(cachedRate) ||
     typeof inputRate !== 'number' ||
-    !Number.isFinite(inputRate) ||
-    typeof prefix !== 'number' ||
-    !Number.isFinite(prefix) ||
-    prefix <= 0 ||
-    typeof prompt !== 'number' ||
-    !Number.isFinite(prompt) ||
-    prompt <= 0
+    !Number.isFinite(inputRate)
   ) {
     return base;
   }
 
-  // Clamped: a caller whose prefix estimate exceeds its prompt estimate has
-  // given us two numbers that cannot both be right, and the safe reading is
-  // "the whole prompt is prefix" rather than a fraction above 1 that would
-  // discount tokens that do not exist.
-  const cachedFraction = Math.min(1, prefix / prompt);
+  const cachedFraction = cachedFractionFor(candidate, cacheContext);
+  if (cachedFraction === null) return base;
   const effectiveInput = cachedRate * cachedFraction + inputRate * (1 - cachedFraction);
   // Rebuild rather than scale: `base` is input + output, so swapping the input
   // term out keeps the output term at full price where it belongs.

@@ -100,3 +100,67 @@ describe('effectiveCostPerMTok', () => {
     expect(some).toBeLessThan(50);
   });
 });
+
+describe('measured hit rate beats the declared prefix', () => {
+  // The production case this precedence exists for. ClikNet sends
+  // byte-identical prompts to both, declaring the same 1,500-token prefix, and
+  // gets 55.6% from Mistral and 5.1% from SambaNova (measured 2026-08-20).
+  // Pricing both off the declared prefix credits them the SAME discount, which
+  // over-states SambaNova by roughly a factor of ten.
+  const DECLARED = { cacheablePrefixTokens: 1_500, estimatedPromptTokens: 3_000 };
+
+  it('uses the observation instead of the declared fraction', () => {
+    // Declared says half the prompt is cacheable; the measurement says 10%.
+    const cost = effectiveCostPerMTok(
+      candidate({ observedCacheHitRate: 0.1, observedCacheEligibleTokens: 9_735_750 }),
+      DECLARED,
+    );
+    // input = 1*0.1 + 10*0.9 = 9.1, plus 40 output.
+    expect(cost).toBeCloseTo(49.1, 6);
+    // What the declared fraction alone would have produced.
+    expect(cost).not.toBeCloseTo(45.5, 6);
+  });
+
+  it('separates two providers the declared fraction would price identically', () => {
+    const mistral = effectiveCostPerMTok(
+      candidate({ observedCacheHitRate: 0.556, observedCacheEligibleTokens: 41_295_123 }),
+      DECLARED,
+    )!;
+    const sambanova = effectiveCostPerMTok(
+      candidate({ observedCacheHitRate: 0.051, observedCacheEligibleTokens: 9_735_750 }),
+      DECLARED,
+    )!;
+    // The one that actually caches must price cheaper. Before this, both
+    // returned 45.5 and the router had no way to tell them apart.
+    expect(mistral).toBeLessThan(sambanova);
+    expect(sambanova - mistral).toBeGreaterThan(4);
+  });
+
+  it('ignores an observation too thin to mean anything', () => {
+    // A pair with a handful of tokens behind its rate falls back to the
+    // declared estimate rather than letting noise drive pricing.
+    const cost = effectiveCostPerMTok(
+      candidate({ observedCacheHitRate: 0.99, observedCacheEligibleTokens: 500 }),
+      DECLARED,
+    );
+    expect(cost).toBeCloseTo(45.5, 6); // the declared-fraction answer
+  });
+
+  it('honours a measured ZERO — that is evidence, not absence', () => {
+    // A provider observed at 0% over real volume genuinely does not cache for
+    // us. It must be priced at full input, NOT given the declared discount.
+    const cost = effectiveCostPerMTok(
+      candidate({ observedCacheHitRate: 0, observedCacheEligibleTokens: 5_000_000 }),
+      DECLARED,
+    );
+    expect(cost).toBe(50);
+  });
+
+  it('still prices uncached when there is neither an observation nor a prefix', () => {
+    const cost = effectiveCostPerMTok(
+      candidate({ observedCacheHitRate: 0.9, observedCacheEligibleTokens: 100 }),
+      {},
+    );
+    expect(cost).toBe(50);
+  });
+});
