@@ -175,6 +175,38 @@ export interface AiRouterCandidate {
    * along. Absent means "no evidence of pressure", never "under pressure".
    */
   rateLimitHeadroom?: number | null;
+  /**
+   * Observed generation rate in output tokens per second
+   * (ai-model-throughput.ts), or null/absent when this pair has never produced
+   * a long enough turn to measure.
+   *
+   * A SECOND speed signal, and deliberately not folded into `avgLatencyMs`.
+   * Wall clock answers "how long until this turn is done", which is what a
+   * short planner step is judged on; this answers "how fast does it produce",
+   * which is what decides the wait on a long generation. Conflating them
+   * punishes the better model — a turn that took 8s to write 4,000 tokens
+   * looks slower than one that took 3s to write 200.
+   *
+   * Consumed ONLY when the caller says the request is generation-heavy (see
+   * `preferThroughput`), because for everything else the existing latency
+   * signal is the right one and adding this would be noise.
+   */
+  throughputTokensPerSecond?: number | null;
+  /**
+   * This candidate's VENDOR is currently declaring a major or critical
+   * incident on its own public status page (vendor-status-feed.ts).
+   *
+   * The only LEADING availability signal here — every other one waits for our
+   * own traffic to fail first. It exists to avoid the first burned attempt of
+   * an outage, not to override what our traffic has since proven, so it is a
+   * discount rather than an exclusion: a status page can be scoped to a
+   * console outage that never touches inference, and vendors are often slower
+   * to close an incident than to open one.
+   *
+   * Absent/false means no declared incident OR no known status page — both
+   * genuinely "no evidence of a problem", never a claim of health.
+   */
+  vendorIncident?: boolean | null;
 }
 
 export interface AiRouterSelection {
@@ -289,7 +321,10 @@ function baseCapabilityScore(candidate: AiRouterCandidate): number {
  * ai-model-track-record.ts) leaves capability unadjusted: "no track record
  * yet" must never be penalized the way "confirmed unreliable" is.
  */
-function intelligenceWithReliability(candidate: AiRouterCandidate): number {
+function intelligenceWithReliability(
+  candidate: AiRouterCandidate,
+  preferThroughput = false,
+): number {
   let capability = baseCapabilityScore(candidate);
   if (
     typeof candidate.trackRecordSuccessRate === 'number' &&
@@ -368,6 +403,20 @@ function intelligenceWithReliability(candidate: AiRouterCandidate): number {
   // which is as first-party as evidence gets. Unknown headroom returns exactly
   // 1 and changes nothing.
   capability *= rateLimitHeadroomFactor(candidate.rateLimitHeadroom);
+  // Generation rate, on the requests where it means anything. Gated by the
+  // caller rather than always-on, because a fast generator is not a better
+  // choice for a turn that emits forty tokens.
+  if (preferThroughput) {
+    capability *= throughputFactor(candidate.throughputTokensPerSecond);
+  }
+  // A vendor-declared outage, applied last and unconditionally. Unlike the
+  // external-uptime prior above, this is not superseded by first-party track
+  // record: that prior describes how a pair behaves in GENERAL, while this
+  // describes what the vendor says is happening RIGHT NOW, and a good history
+  // is no reason to route into an incident the vendor has already announced.
+  if (candidate.vendorIncident === true) {
+    capability *= VENDOR_INCIDENT_FACTOR;
+  }
   return capability;
 }
 
@@ -595,11 +644,34 @@ export function reasonFor(mode: AiRoutingStrategy, normalizedPreferred?: string)
  *  blending them — see `compareScored`). This is a pure function of ONE
  *  candidate; it does not know about `mode`'s tie-break ORDER, only about
  *  what each term IS. */
-function scoreOne(candidate: AiRouterCandidate): Omit<AiRouterCandidateScore, 'candidate' | 'compositeScore'> {
+/**
+ * Ranking inputs that describe THIS REQUEST rather than the candidates.
+ *
+ * Kept as one object so a third request-shaped input does not mean a fourth
+ * positional argument on three exported functions.
+ */
+export interface AiRouterRankContext {
+  /** Rough prompt size in tokens; drives context-window eligibility. */
+  estimatedPromptTokens?: number;
+  /**
+   * This request is generation-heavy — a long answer rather than a short
+   * decision — so observed tokens/second is a meaningful ranking input.
+   *
+   * Opt-in because it is only true sometimes. For a planner step deciding
+   * which tool to call, wall clock is what matters and throughput is noise;
+   * for a final answer or a patch, the reverse.
+   */
+  preferThroughput?: boolean;
+}
+
+function scoreOne(
+  candidate: AiRouterCandidate,
+  preferThroughput = false,
+): Omit<AiRouterCandidateScore, 'candidate' | 'compositeScore'> {
   return {
     accessRank: ACCESS_RANK[candidate.accessClass],
     cost: costScore(candidate.estimatedCostPerMTok),
-    intelligence: intelligenceWithReliability(candidate),
+    intelligence: intelligenceWithReliability(candidate, preferThroughput),
     latencyMs: latencyScore(candidate.avgLatencyMs, candidate.externalLatencyMs),
   };
 }
@@ -713,6 +785,48 @@ function rateLimitHeadroomFactor(headroom: number | null | undefined): number {
   const clamped = Math.max(0, headroom);
   const ratio = clamped / RATE_LIMIT_PRESSURE_THRESHOLD;
   return MIN_RATE_LIMIT_FACTOR + (1 - MIN_RATE_LIMIT_FACTOR) * ratio;
+}
+
+/**
+ * Reference generation rate, tokens/second, that scores neutral.
+ *
+ * Not a measured median — a hardcoded snapshot of one would be the same
+ * slow-moving guess this file removed from capability scoring. It is a round
+ * number in the middle of the range mainstream hosted models actually produce,
+ * so a candidate at the reference neither gains nor loses, a genuinely fast one
+ * gains a little, and a genuinely slow one loses a little.
+ */
+const REFERENCE_TOKENS_PER_SECOND = 50;
+
+/** Bounds on the throughput adjustment. Deliberately narrow: throughput is a
+ *  real signal but a secondary one, and a model that generates twice as fast
+ *  is not twice as good a choice. */
+const MIN_THROUGHPUT_FACTOR = 0.8;
+const MAX_THROUGHPUT_FACTOR = 1.25;
+
+/**
+ * Multiplier applied while a vendor declares a major incident.
+ *
+ * Steep enough that any comparable alternative wins, shallow enough that a
+ * candidate with no alternative is still reachable — the same "nudge not ban"
+ * posture as every other discount in this file, and for a sharper reason here:
+ * the signal is the vendor's own summary of its whole platform, which can be
+ * red for something that does not touch the endpoint we are about to call.
+ */
+const VENDOR_INCIDENT_FACTOR = 0.35;
+
+/**
+ * Capability multiplier for observed generation rate, applied ONLY to
+ * generation-heavy requests.
+ *
+ * 1.0 (no effect) when unmeasured, which is the overwhelmingly common case and
+ * must stay neutral — "never generated enough to measure" is not "slow".
+ */
+function throughputFactor(tokensPerSecond: number | null | undefined): number {
+  if (typeof tokensPerSecond !== 'number' || !Number.isFinite(tokensPerSecond)) return 1;
+  if (tokensPerSecond <= 0) return 1;
+  const ratio = tokensPerSecond / REFERENCE_TOKENS_PER_SECOND;
+  return Math.max(MIN_THROUGHPUT_FACTOR, Math.min(MAX_THROUGHPUT_FACTOR, ratio));
 }
 
 function autoComposite(s: AiRouterCandidateScore, mode: 'auto' | 'auto-budget' | 'auto-frontier' = 'auto'): number {
@@ -845,8 +959,10 @@ export function rankRouterCandidatesWithScores(
   mode: AiRoutingStrategy,
   preferredModel?: string,
   estimatedPromptTokens?: number,
+  context?: AiRouterRankContext,
 ): AiRouterCandidateScore[] {
   if (candidates.length === 0) return [];
+  const preferThroughput = context?.preferThroughput ?? false;
   // Eligibility BEFORE preference, and both before scoring: "can this model
   // hold the request" is a harder constraint than "did the caller ask for this
   // family", and neither is a matter of degree that belongs in a score.
@@ -855,7 +971,7 @@ export function rankRouterCandidatesWithScores(
     preferredModel,
   );
   const scored: AiRouterCandidateScore[] = pool.map((candidate) => {
-    const base = scoreOne(candidate);
+    const base = scoreOne(candidate, preferThroughput);
     const withCandidate = { candidate, ...base, compositeScore: null };
     return { ...withCandidate, compositeScore: isAutoFamily(mode) ? autoComposite(withCandidate, mode) : null };
   });
@@ -875,12 +991,14 @@ export function rankRouterCandidates(
   mode: AiRoutingStrategy,
   preferredModel?: string,
   estimatedPromptTokens?: number,
+  context?: AiRouterRankContext,
 ): AiRouterCandidate[] {
   return rankRouterCandidatesWithScores(
     candidates,
     mode,
     preferredModel,
     estimatedPromptTokens,
+    context,
   ).map((s) => s.candidate);
 }
 
