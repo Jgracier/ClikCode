@@ -1374,6 +1374,39 @@ export const AI_PROVIDERS = [
     openAiCompatible: true,
   },
   {
+    id: "router",
+    // Ramp Router (router.com) — a ROUTING GATEWAY, not an inference host: it holds the provider
+    // credentials and forwards each call to the cheapest approved model clearing a quality bar,
+    // across OpenAI, Anthropic, Google Vertex, Fireworks and xAI. Launched 2026-08-19.
+    //
+    // NOT openAiCompatible, and that is the whole point of this row: Router documents
+    // `POST /v1/chat/completions` as UNSUPPORTED — "pointing a Chat Completions client at this
+    // base URL will 404". It serves exactly two routes, `GET /v1/models` and `POST /v1/responses`,
+    // so it takes `chatDialect: "openai-responses"` and every call — tools or not — is built in the
+    // Responses schema. Declaring openAiCompatible here would send both dispatch lanes at a route
+    // that does not exist.
+    //
+    // 1.05M is the top of the published range (models span 131K → 1,048,576); the row value is the
+    // usual floor for entries whose catalog omits a window.
+    contextWindow: 1_048_576,
+    keyUrl: "https://app.router.com/keys",
+    label: "Ramp Router",
+    envKey: "ROUTER_API_KEY",
+    chatBaseUrl: "https://api.router.com/v1",
+    chatDialect: "openai-responses",
+    // MEASURED 2026-08-20: /v1/models answers 401 `{"error":{"message":"Invalid API key.",
+    // "type":"authentication_error","code":"invalid_api_key"}}` — the OpenAI error envelope — both
+    // unauthenticated and to a bogus bearer, so a bad key reports auth_failed and never HEALTHY.
+    // CAVEAT worth knowing before debugging a 401 here: Router checks auth BEFORE routing, so every
+    // path on this host 401s, including nonexistent ones (measured). A 401 is therefore evidence
+    // about the KEY only, never about whether a route exists.
+    probe: { kind: "openai-models", url: "https://api.router.com/v1/models" },
+    // Model ids are ACCOUNT-SCOPED — "each key sees its own set of models" — and Router's docs are
+    // explicit that a provider's public model name must never be reused as one. So there is no
+    // honest `defaultModel` to pin: the discovered `/v1/models` catalogue for the pasted key is the
+    // only valid source, which is the same position the other aggregator rows take.
+  },
+  {
     id: "reka",
     contextWindow: 32_000,
     keyUrl: "https://app.reka.ai/",

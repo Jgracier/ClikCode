@@ -321,8 +321,16 @@ export interface AiProviderSpec {
    * How the assistant / platform callers should shape chat requests:
    *   openai-chat        — POST {chatBaseUrl}/chat/completions (default when openAiCompatible)
    *   anthropic-messages — POST https://api.anthropic.com/v1/messages (Claude)
+   *   openai-responses   — POST {chatBaseUrl}{responsesPath ?? '/responses'} for EVERY call
+   *
+   * `openai-responses` is for providers that serve the Responses schema and NOTHING else, so
+   * there is no `/chat/completions` to fall back to. That is a different claim from
+   * `responsesPath`, which keeps `/chat/completions` as the normal path and moves only
+   * tool-carrying calls; a row declaring this dialect never builds a chat-completions body.
+   * Distinct from `openAiCompatible`, which specifically means the chat-completions dialect —
+   * a Responses-only row must NOT set it, or callers would address a route that 404s.
    */
-  chatDialect?: "openai-chat" | "anthropic-messages";
+  chatDialect?: "openai-chat" | "anthropic-messages" | "openai-responses";
   /**
    * Dispatch overrides that apply ONLY when the credential is an OAuth
    * subscription token — the SECOND DIMENSION for chat, exactly as
