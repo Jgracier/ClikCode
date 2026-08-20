@@ -514,6 +514,18 @@ export const AI_PROVIDERS = [
       label: "Connect",
       startEndpoint: "/api/admin/platform-connect/openrouter/start",
     },
+    // EXACT COST, not an estimate. OpenRouter bills a per-request amount that
+    // depends on which upstream provider it actually routed to, so a catalog
+    // rate for the model id is a genuinely poor proxy for what was charged —
+    // the same model can settle at different prices on consecutive calls. It
+    // reports the real figure as `usage.cost` (USD), but ONLY when the request
+    // opts in via `usage: { include: true }`, which is what the accounting
+    // options below add to the body. The OpenAI-compatible adapter spreads
+    // providerOptions.openrouter into the request and hands the untouched
+    // usage object back as `usage.raw`, so both halves work without a
+    // provider-specific branch anywhere in the dispatch path.
+    usageAccountingOptions: { usage: { include: true } },
+    usageCostUsdPath: ["cost"],
     openAiCompatible: true,
   },
   {

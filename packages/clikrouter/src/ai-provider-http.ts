@@ -772,7 +772,16 @@ export function extractStopReason(
 export interface AiTokenUsage {
   inputTokens?: number;
   outputTokens?: number;
+  /** Input tokens billed at the FULL rate. Derived here, since both surfaces
+   *  report a total that already includes the cached count. */
+  uncachedInputTokens?: number;
   cachedInputTokens?: number;
+  /** Cache-WRITE input tokens. Neither OAuth surface reports one (see
+   *  extractUsage), so this stays absent — the field exists to keep this
+   *  shape assignable to AiChatTurnResult.usage. */
+  cacheWriteInputTokens?: number;
+  /** Reasoning tokens, already INCLUDED in `outputTokens`. */
+  reasoningTokens?: number;
 }
 
 /** A count only when the body actually carries a finite non-negative number — absent otherwise. */
@@ -794,7 +803,12 @@ function usageCount(value: unknown): number | undefined {
  *   `usage.input_tokens_details.cached_tokens`. `output_tokens` already
  *   INCLUDES `output_tokens_details.reasoning_tokens` (OpenAI's documented
  *   accounting, and how @ai-sdk/openai's own converter treats it), so reasoning
- *   is not re-added — and AiChatTurnResult.usage has no reasoning slot anyway.
+ *   is not re-added to the total — it is now ALSO reported on its own, because
+ *   a turn that spends its whole budget on hidden reasoning and returns nothing
+ *   is invisible in the combined number.
+ *   `uncachedInputTokens` is derived as `input_tokens - cached_tokens`: this
+ *   surface bills auto-cached reads at a discount and has no cache-WRITE
+ *   charge at all, so there is no third counter to subtract.
  * - `code-assist`: `usageMetadata` one envelope deep —
  *   `promptTokenCount` → input (cache included, per @ai-sdk/google's
  *   convertGoogleUsage, verified in the installed package's dist source),
@@ -818,13 +832,23 @@ export function extractUsage(
     const details = usage.input_tokens_details as
       | Record<string, unknown>
       | undefined;
+    const outDetails = usage.output_tokens_details as
+      | Record<string, unknown>
+      | undefined;
     const inputTokens = usageCount(usage.input_tokens);
     const outputTokens = usageCount(usage.output_tokens);
     const cachedInputTokens = usageCount(details?.cached_tokens);
+    const reasoningTokens = usageCount(outDetails?.reasoning_tokens);
+    const uncachedInputTokens =
+      inputTokens !== undefined && cachedInputTokens !== undefined
+        ? Math.max(0, inputTokens - cachedInputTokens)
+        : inputTokens;
     return {
       ...(inputTokens !== undefined ? { inputTokens } : {}),
       ...(outputTokens !== undefined ? { outputTokens } : {}),
+      ...(uncachedInputTokens !== undefined ? { uncachedInputTokens } : {}),
       ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+      ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     };
   }
   if (dialect === "code-assist") {
@@ -840,10 +864,19 @@ export function extractUsage(
         ? (candidateTokens ?? 0) + (thoughtTokens ?? 0)
         : undefined;
     const cachedInputTokens = usageCount(meta.cachedContentTokenCount);
+    const uncachedInputTokens =
+      inputTokens !== undefined && cachedInputTokens !== undefined
+        ? Math.max(0, inputTokens - cachedInputTokens)
+        : inputTokens;
     return {
       ...(inputTokens !== undefined ? { inputTokens } : {}),
       ...(outputTokens !== undefined ? { outputTokens } : {}),
+      ...(uncachedInputTokens !== undefined ? { uncachedInputTokens } : {}),
       ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+      // `thoughtsTokenCount` is Google's reasoning counter and is already
+      // summed into `outputTokens` above — reported separately for the same
+      // reason the Responses surface does.
+      ...(thoughtTokens !== undefined ? { reasoningTokens: thoughtTokens } : {}),
     };
   }
   return {};

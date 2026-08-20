@@ -139,6 +139,42 @@ export interface AiRouterCandidate {
    * entirely. Same caller-attaches posture as avgLatencyMs.
    */
   externalUptime?: number | null;
+  /**
+   * The model's REAL total context window in tokens, when it is known — the
+   * vendor's own per-model catalog figure (AiProviderModel.contextWindowTokens)
+   * where discovery captured one, otherwise the provider's registry floor.
+   *
+   * A SELECTION signal, not a scoring one. Every other field here answers "how
+   * good is this candidate"; this answers the prior question "can it hold the
+   * request at all", and the two must not be blended — a model that cannot fit
+   * the prompt is not a slightly worse choice, it is the wrong one. So it is
+   * consumed by an eligibility filter (see `filterByContextWindow`) rather than
+   * by `autoComposite`.
+   *
+   * This gap was real and silent: the platform has learned per-model windows
+   * from vendor catalogs for a while and used them only DOWNSTREAM, when
+   * shaping the prompt. Selection ran first and could not see them, so an
+   * oversized job could rank a small model first on cost and latency and then
+   * arrive at a prompt shaper whose only remaining option was to cut the
+   * context down to fit — quietly degrading the answer instead of routing to a
+   * model that fits. Absent means "not known", never "too small".
+   */
+  contextWindowTokens?: number | null;
+  /**
+   * Fraction of this PROVIDER's tightest published rate-limit window still
+   * available, 0-1, from the vendor's own response headers on the last real
+   * call (ai-rate-limit-telemetry.ts). Null/absent when the provider publishes
+   * no usable limit headers, or none have been seen yet.
+   *
+   * Only ever used to DEPRIORITIZE, and only near the bottom of the range —
+   * see `rateLimitHeadroomFactor`. The platform already parsed these headers on
+   * every dispatch and rendered them in the admin panel, but routing asked them
+   * exactly one binary question ("is this provider hard-stopped right now?"), so
+   * a provider at 3% headroom ranked identically to one at 95% and bursts piled
+   * onto whichever scored highest until it tripped a limit that was visible all
+   * along. Absent means "no evidence of pressure", never "under pressure".
+   */
+  rateLimitHeadroom?: number | null;
 }
 
 export interface AiRouterSelection {
@@ -323,6 +359,15 @@ function intelligenceWithReliability(candidate: AiRouterCandidate): number {
   ) {
     capability *= candidate.sustainRate;
   }
+  // A FOURTH multiplier, and the only one about the PROVIDER rather than the
+  // model: everything above asks "how well does this model perform", this asks
+  // "is this provider about to refuse the call". Applied last and unconditional
+  // on track record, because unlike the external-uptime prior it is not a
+  // third-party guess we should defer to first-party history over — it is this
+  // platform's own reading of the vendor's own headers from its own last call,
+  // which is as first-party as evidence gets. Unknown headroom returns exactly
+  // 1 and changes nothing.
+  capability *= rateLimitHeadroomFactor(candidate.rateLimitHeadroom);
   return capability;
 }
 
@@ -640,6 +685,36 @@ const AUTO_COMPOSITE_WEIGHTS: Record<
  *  have one — anthropic/claude-sonnet-4-5, openai/gpt-5.6) scored around
  *  -9,878 despite tier-110 intelligence, guaranteeing they lose to any
  *  priced free-tier candidate no matter the intelligence gap. */
+/**
+ * Headroom below which a provider's remaining rate-limit budget starts to
+ * count against it. Above this, normal healthy variance (60% left vs 95% left)
+ * says nothing useful about whether the next call will succeed, and treating it
+ * as a signal would just add noise to every ranking.
+ */
+const RATE_LIMIT_PRESSURE_THRESHOLD = 0.25;
+
+/** Floor on the discount, so this stays a deprioritization and never a ban —
+ *  the same "nudge not ban" posture as the refusal and uptime discounts. A
+ *  provider with almost nothing left is still reachable if it is the only
+ *  candidate that fits. */
+const MIN_RATE_LIMIT_FACTOR = 0.5;
+
+/**
+ * Capability multiplier for remaining rate-limit budget.
+ *
+ * 1.0 (no effect) whenever headroom is unknown or comfortable. Below the
+ * threshold it falls off proportionally toward the floor, so a provider about
+ * to 429 loses to an equally-good one with room — which is exactly the choice
+ * the header data supports and the binary check could not express.
+ */
+function rateLimitHeadroomFactor(headroom: number | null | undefined): number {
+  if (typeof headroom !== 'number' || !Number.isFinite(headroom)) return 1;
+  if (headroom >= RATE_LIMIT_PRESSURE_THRESHOLD) return 1;
+  const clamped = Math.max(0, headroom);
+  const ratio = clamped / RATE_LIMIT_PRESSURE_THRESHOLD;
+  return MIN_RATE_LIMIT_FACTOR + (1 - MIN_RATE_LIMIT_FACTOR) * ratio;
+}
+
 function autoComposite(s: AiRouterCandidateScore, mode: 'auto' | 'auto-budget' | 'auto-frontier' = 'auto'): number {
   const weights = AUTO_COMPOSITE_WEIGHTS[mode];
   const costPenalty =
@@ -709,6 +784,56 @@ function filterByPreference(
 }
 
 /**
+ * Headroom a candidate must leave beyond the estimated prompt, as a fraction
+ * of its own window.
+ *
+ * A model whose window exactly equals the prompt has nowhere to put an answer.
+ * 10% is a deliberately modest reserve: large enough that a candidate scraping
+ * the limit is not chosen over one with real room, small enough that it never
+ * excludes a model that would genuinely have worked.
+ */
+const CONTEXT_HEADROOM_FRACTION = 0.1;
+
+/**
+ * Drop candidates whose context window cannot hold the request.
+ *
+ * FAIL-OPEN, twice over, because both unknowns mean "no evidence of a
+ * problem" rather than "problem":
+ *   - a caller that does not estimate its prompt size filters nothing;
+ *   - a candidate with no known window is never dropped, since an unknown
+ *     window is not a small one.
+ *
+ * And if the filter would empty the pool entirely, the ORIGINAL pool is
+ * returned instead. A request larger than every available model is a real
+ * situation, and the honest response is to route it to the roomiest option and
+ * let the prompt shaper do its job — not to fail the request outright, which is
+ * strictly worse than the pre-existing behaviour this filter improves on.
+ */
+function filterByContextWindow(
+  candidates: AiRouterCandidate[],
+  estimatedPromptTokens: number | undefined,
+): AiRouterCandidate[] {
+  if (
+    typeof estimatedPromptTokens !== 'number' ||
+    !Number.isFinite(estimatedPromptTokens) ||
+    estimatedPromptTokens <= 0
+  ) {
+    return candidates;
+  }
+  const fits = candidates.filter((candidate) => {
+    const window = candidate.contextWindowTokens;
+    if (typeof window !== 'number' || !Number.isFinite(window) || window <= 0) return true;
+    return estimatedPromptTokens <= window * (1 - CONTEXT_HEADROOM_FRACTION);
+  });
+  if (fits.length > 0) return fits;
+  // Nothing fits. Rank by the most room available rather than dropping the
+  // request — a copy, so the caller's array is never reordered in place.
+  return [...candidates].sort(
+    (a, b) => (b.contextWindowTokens ?? 0) - (a.contextWindowTokens ?? 0),
+  );
+}
+
+/**
  * Every eligible candidate, ranked best-first for `mode`, WITH the score
  * breakdown that put it there — the "why" a canned per-mode sentence cannot
  * express (which candidates were even considered, and by how much the winner
@@ -719,9 +844,16 @@ export function rankRouterCandidatesWithScores(
   candidates: AiRouterCandidate[],
   mode: AiRoutingStrategy,
   preferredModel?: string,
+  estimatedPromptTokens?: number,
 ): AiRouterCandidateScore[] {
   if (candidates.length === 0) return [];
-  const pool = filterByPreference(candidates, preferredModel);
+  // Eligibility BEFORE preference, and both before scoring: "can this model
+  // hold the request" is a harder constraint than "did the caller ask for this
+  // family", and neither is a matter of degree that belongs in a score.
+  const pool = filterByPreference(
+    filterByContextWindow(candidates, estimatedPromptTokens),
+    preferredModel,
+  );
   const scored: AiRouterCandidateScore[] = pool.map((candidate) => {
     const base = scoreOne(candidate);
     const withCandidate = { candidate, ...base, compositeScore: null };
@@ -742,8 +874,14 @@ export function rankRouterCandidates(
   candidates: AiRouterCandidate[],
   mode: AiRoutingStrategy,
   preferredModel?: string,
+  estimatedPromptTokens?: number,
 ): AiRouterCandidate[] {
-  return rankRouterCandidatesWithScores(candidates, mode, preferredModel).map((s) => s.candidate);
+  return rankRouterCandidatesWithScores(
+    candidates,
+    mode,
+    preferredModel,
+    estimatedPromptTokens,
+  ).map((s) => s.candidate);
 }
 
 /** Top-ranked candidate only — explicit mode, tests, and any caller that
@@ -753,8 +891,9 @@ export function selectRouterCandidate(
   candidates: AiRouterCandidate[],
   mode: AiRoutingStrategy,
   preferredModel?: string,
+  estimatedPromptTokens?: number,
 ): AiRouterSelection | null {
-  const ranked = rankRouterCandidates(candidates, mode, preferredModel);
+  const ranked = rankRouterCandidates(candidates, mode, preferredModel, estimatedPromptTokens);
   const selected = ranked[0];
   if (!selected) return null;
   return {

@@ -449,7 +449,12 @@ describe('code-assist extraction', () => {
     expect(extractUsage('code-assist', withUsage)).toEqual({
       inputTokens: 910,
       outputTokens: 124,
+      // promptTokenCount INCLUDES cachedContentTokenCount on this surface.
+      uncachedInputTokens: 398,
       cachedInputTokens: 512,
+      // thoughtsTokenCount is Google's reasoning counter; already summed into
+      // outputTokens above, surfaced on its own for diagnosis.
+      reasoningTokens: 40,
     });
     expect(extractStopReason('code-assist', withUsage)).toBe('STOP');
   });
@@ -463,6 +468,8 @@ describe('code-assist extraction', () => {
     expect(extractUsage('code-assist', noThoughts)).toEqual({
       inputTokens: 12,
       outputTokens: 7,
+      // No cached content reported: the whole prompt was billed at full rate.
+      uncachedInputTokens: 12,
     });
   });
 
