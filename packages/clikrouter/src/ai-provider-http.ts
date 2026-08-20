@@ -368,6 +368,72 @@ function buildOauthSurfaceRequest(
 }
 
 /** Build a chat request for the provider's dialect (OpenAI chat or Anthropic Messages). */
+/**
+ * Build one request in the OpenAI **Responses** schema.
+ *
+ * Shared by the two lanes that need that shape — the tools-only detour off
+ * `/chat/completions` (`responsesPath`) and rows that speak Responses and nothing else
+ * (`chatDialect: "openai-responses"`) — so the body shape has exactly one definition.
+ *
+ * The field names are the trap this centralizes: Responses takes `input` rather than `messages`,
+ * hoists the system prompt to `instructions`, caps output with `max_output_tokens` (a third
+ * spelling after `max_tokens` and `max_completion_tokens`), and takes tools FLAT instead of nested
+ * under a `function` key.
+ */
+function buildResponsesRequest(
+  input: ChatTurnInput,
+  base: string,
+  path: string,
+  auth: Record<string, string>,
+): BuiltChatRequest {
+  const inputItems = input.messages
+    .filter((m) => m.role !== "system")
+    .map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    }));
+  // Responses rejects an empty `input`, and a turn can legitimately arrive system-only.
+  if (inputItems.length === 0) inputItems.push({ role: "user", content: "Begin." });
+  const instructions = [
+    input.system,
+    ...input.messages.filter((m) => m.role === "system").map((m) => m.content),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    url: `${base}${path}`,
+    headers: { "Content-Type": "application/json", ...auth },
+    body: {
+      model: input.model,
+      ...(instructions ? { instructions } : {}),
+      input: inputItems,
+      // Responses names the output cap differently again from both chat variants.
+      max_output_tokens: input.maxTokens ?? 700,
+      // Same rule as the other dialects: only sent when the caller asked for one, because
+      // reasoning models reject a non-default temperature outright.
+      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+      // Tools are FLAT here (name/description/parameters at the top level), not nested under a
+      // `function` key the way chat/completions requires.
+      ...(input.tools?.length
+        ? {
+            tools: input.tools.map((t) => ({
+              type: "function",
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            })),
+          }
+        : {}),
+      ...(input.stream ? { stream: true } : {}),
+    },
+    dialect: "openai-responses",
+    // A streamed Responses call answers SSE, and `JSON.parse` on that yields {} — a body that
+    // reads as an empty completion rather than a parse failure. Pairing the flag with the reader
+    // here is what keeps a streamed turn from silently returning nothing.
+    ...(input.stream ? { alwaysSse: true } : {}),
+  };
+}
+
 export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   const spec = getAiProvider(input.provider);
   const cred: ResolvedAiCred = {
@@ -488,45 +554,24 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
     spec?.chatBaseUrl || "https://api.openai.com/v1",
   ).replace(/\/$/, "");
 
+  // RESPONSES-ONLY providers: every call takes this surface, tools or not, because there is no
+  // `/chat/completions` behind this base URL to fall back to — addressing one 404s. Checked before
+  // the tools detour below so the dialect cannot be outranked by a row that also sets
+  // `responsesPath`; both end at the same builder, and the dialect is the broader claim.
+  if (dialect === "openai-responses") {
+    return buildResponsesRequest(input, base, spec?.responsesPath ?? "/responses", auth);
+  }
+
   // TOOLS + Responses surface: `/chat/completions` cannot combine function tools with reasoning on
   // newer models (see `responsesPath`). Same credential and auth headers — only the endpoint and the
   // request/response shape differ.
+  //
+  // Two DIFFERENT reasons reach the same builder, which is why it is shared rather than inlined:
+  // this one moves only tool-carrying calls off a working `/chat/completions`, while a
+  // `chatDialect: "openai-responses"` row has no chat-completions route at all. A second copy of
+  // the Responses body shape is how the two would drift.
   if (input.tools?.length && spec?.responsesPath) {
-    const inputItems = [
-      ...input.messages
-        .filter((m) => m.role !== "system")
-        .map((m) => ({
-          role: m.role === "assistant" ? "assistant" : "user",
-          content: m.content,
-        })),
-    ];
-    if (inputItems.length === 0) inputItems.push({ role: "user", content: "Begin." });
-    const instructions = [
-      input.system,
-      ...input.messages.filter((m) => m.role === "system").map((m) => m.content),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-    return {
-      url: `${base}${spec.responsesPath}`,
-      headers: { "Content-Type": "application/json", ...auth },
-      body: {
-        model: input.model,
-        ...(instructions ? { instructions } : {}),
-        input: inputItems,
-        // Responses names the output cap differently again from both chat variants.
-        max_output_tokens: input.maxTokens ?? 700,
-        // Tools are FLAT here (name/description/parameters at the top level), not nested under a
-        // `function` key the way chat/completions requires.
-        tools: input.tools.map((t) => ({
-          type: "function",
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        })),
-      },
-      dialect: "openai-responses",
-    };
+    return buildResponsesRequest(input, base, spec.responsesPath, auth);
   }
   const messages = [
     ...(input.system
@@ -766,6 +811,66 @@ export function extractStopReason(
   }
   const choices = d.choices as Array<{ finish_reason?: string }> | undefined;
   return choices?.[0]?.finish_reason;
+}
+
+/**
+ * The model that ACTUALLY served the call, as the vendor named it in its own response.
+ *
+ * Not the same question as "which model did we ask for", and the gap between the two is real
+ * money. Three ways they diverge, all of them already live in this registry:
+ *   - A ROUTING GATEWAY picks the model for you. That is Ramp Router's entire product: you send a
+ *     catalogue id and it serves whichever approved model is cheapest right now. Pricing and
+ *     per-model stats keyed on the REQUESTED id describe a call that never happened.
+ *   - An ALIAS resolves to a dated snapshot — `gpt-5` answering as `gpt-5-2026-…`, which is what
+ *     you need when reconciling a bill line against a catalogue row.
+ *   - A FALLBACK list (Router's `models:` candidates) silently moves to candidate 2 or 3 after an
+ *     upstream 429/502. Without this field, that failover is invisible after the fact.
+ *
+ * Returned VERBATIM, never normalized or matched against our catalogue — same rule as
+ * `stopReason`. It is evidence about what the vendor did, and a cleaned-up version of that is no
+ * longer evidence. Undefined when a dialect does not name one, which is not an error.
+ */
+export function extractServedModel(
+  dialect: BuiltChatRequest["dialect"],
+  data: unknown,
+): string | undefined {
+  // Guarded rather than blind-cast: this reads a body that may be a failed parse ({} from
+  // readAiChatResponseBody), a non-object, or — on the SDK lane, where `response.body` is only
+  // populated for HTTP transports — undefined. A missing served model is a normal outcome here,
+  // never a reason to throw inside result assembly.
+  if (!data || typeof data !== "object") return undefined;
+  const d = data as Record<string, unknown>;
+  if (dialect === "code-assist") {
+    // Gemini names it `modelVersion`, one envelope deep — and only sometimes.
+    const version = codeAssistPayload(d).modelVersion;
+    return typeof version === "string" && version ? version : undefined;
+  }
+  // Every other dialect here — openai-chat, both Responses surfaces, and anthropic-messages —
+  // spells it `model` at the top level of the response body.
+  const model = d.model;
+  return typeof model === "string" && model ? model : undefined;
+}
+
+/**
+ * The vendor's service/capacity tier for THIS call, when it names one.
+ *
+ * Cost-relevant, not cosmetic: OpenAI's `service_tier` distinguishes `flex`/`priority`/`default`
+ * capacity at DIFFERENT prices, and Ramp Router's Flex opt-in (`allow_flex_tier`) rides the same
+ * field. Two calls to the same model id can bill differently and, without this, look identical in
+ * our own records.
+ *
+ * Verbatim for the same reason as `extractServedModel`. Anthropic and Code Assist publish no
+ * equivalent, so undefined there is correct rather than missing.
+ */
+export function extractServiceTier(
+  dialect: BuiltChatRequest["dialect"],
+  data: unknown,
+): string | undefined {
+  if (dialect === "anthropic-messages" || dialect === "code-assist") return undefined;
+  // Same guard as extractServedModel — see its comment.
+  if (!data || typeof data !== "object") return undefined;
+  const tier = (data as Record<string, unknown>).service_tier;
+  return typeof tier === "string" && tier ? tier : undefined;
 }
 
 /** Token counts parsed from a response body — the same shape AiChatTurnResult.usage carries. */
