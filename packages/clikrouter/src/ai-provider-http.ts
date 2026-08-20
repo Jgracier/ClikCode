@@ -813,6 +813,66 @@ export function extractStopReason(
   return choices?.[0]?.finish_reason;
 }
 
+/**
+ * The model that ACTUALLY served the call, as the vendor named it in its own response.
+ *
+ * Not the same question as "which model did we ask for", and the gap between the two is real
+ * money. Three ways they diverge, all of them already live in this registry:
+ *   - A ROUTING GATEWAY picks the model for you. That is Ramp Router's entire product: you send a
+ *     catalogue id and it serves whichever approved model is cheapest right now. Pricing and
+ *     per-model stats keyed on the REQUESTED id describe a call that never happened.
+ *   - An ALIAS resolves to a dated snapshot — `gpt-5` answering as `gpt-5-2026-…`, which is what
+ *     you need when reconciling a bill line against a catalogue row.
+ *   - A FALLBACK list (Router's `models:` candidates) silently moves to candidate 2 or 3 after an
+ *     upstream 429/502. Without this field, that failover is invisible after the fact.
+ *
+ * Returned VERBATIM, never normalized or matched against our catalogue — same rule as
+ * `stopReason`. It is evidence about what the vendor did, and a cleaned-up version of that is no
+ * longer evidence. Undefined when a dialect does not name one, which is not an error.
+ */
+export function extractServedModel(
+  dialect: BuiltChatRequest["dialect"],
+  data: unknown,
+): string | undefined {
+  // Guarded rather than blind-cast: this reads a body that may be a failed parse ({} from
+  // readAiChatResponseBody), a non-object, or — on the SDK lane, where `response.body` is only
+  // populated for HTTP transports — undefined. A missing served model is a normal outcome here,
+  // never a reason to throw inside result assembly.
+  if (!data || typeof data !== "object") return undefined;
+  const d = data as Record<string, unknown>;
+  if (dialect === "code-assist") {
+    // Gemini names it `modelVersion`, one envelope deep — and only sometimes.
+    const version = codeAssistPayload(d).modelVersion;
+    return typeof version === "string" && version ? version : undefined;
+  }
+  // Every other dialect here — openai-chat, both Responses surfaces, and anthropic-messages —
+  // spells it `model` at the top level of the response body.
+  const model = d.model;
+  return typeof model === "string" && model ? model : undefined;
+}
+
+/**
+ * The vendor's service/capacity tier for THIS call, when it names one.
+ *
+ * Cost-relevant, not cosmetic: OpenAI's `service_tier` distinguishes `flex`/`priority`/`default`
+ * capacity at DIFFERENT prices, and Ramp Router's Flex opt-in (`allow_flex_tier`) rides the same
+ * field. Two calls to the same model id can bill differently and, without this, look identical in
+ * our own records.
+ *
+ * Verbatim for the same reason as `extractServedModel`. Anthropic and Code Assist publish no
+ * equivalent, so undefined there is correct rather than missing.
+ */
+export function extractServiceTier(
+  dialect: BuiltChatRequest["dialect"],
+  data: unknown,
+): string | undefined {
+  if (dialect === "anthropic-messages" || dialect === "code-assist") return undefined;
+  // Same guard as extractServedModel — see its comment.
+  if (!data || typeof data !== "object") return undefined;
+  const tier = (data as Record<string, unknown>).service_tier;
+  return typeof tier === "string" && tier ? tier : undefined;
+}
+
 /** Token counts parsed from a response body — the same shape AiChatTurnResult.usage carries. */
 export interface AiTokenUsage {
   inputTokens?: number;

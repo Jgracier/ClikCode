@@ -4,6 +4,8 @@ import {
   buildAiAuthHeaders,
   buildAiChatRequest,
   extractChatText,
+  extractServedModel,
+  extractServiceTier,
   extractStopReason,
   extractToolCalls,
   extractUsage,
@@ -188,6 +190,51 @@ describe('buildAiChatRequest — openai-responses dialect', () => {
     ].join('\n');
     const body = await readAiChatResponseBody(req, { text: async () => sse });
     expect(extractChatText(req.dialect, body)).toBe('pong');
+  });
+});
+
+// The two facts that arrive on every response and used to be dropped. The case that matters most
+// is a routing gateway, where the served model is CHOSEN per request and the requested id is not
+// evidence of what was billed.
+describe('extractServedModel / extractServiceTier', () => {
+  it('reads the served model off every dialect that names one', () => {
+    // A gateway answering with a DIFFERENT model than the caller asked for — the whole point.
+    expect(extractServedModel('openai-responses', { model: 'anthropic:claude-haiku-4-5' })).toBe(
+      'anthropic:claude-haiku-4-5',
+    );
+    expect(extractServedModel('openai-chat', { model: 'gpt-5-2026-04-01' })).toBe('gpt-5-2026-04-01');
+    expect(extractServedModel('anthropic-messages', { model: 'claude-opus-5' })).toBe('claude-opus-5');
+    expect(extractServedModel('codex-responses', { model: 'gpt-5-codex' })).toBe('gpt-5-codex');
+    // Gemini spells it differently, one envelope deep.
+    expect(
+      extractServedModel('code-assist', { response: { modelVersion: 'gemini-2.5-flash-001' } }),
+    ).toBe('gemini-2.5-flash-001');
+  });
+
+  it('returns undefined rather than inventing a model when the vendor names none', () => {
+    // NOT the requested model: "confirmed X" and "said nothing" must stay distinguishable.
+    expect(extractServedModel('openai-chat', {})).toBeUndefined();
+    expect(extractServedModel('openai-responses', { model: '' })).toBeUndefined();
+    expect(extractServedModel('openai-chat', { model: 42 })).toBeUndefined();
+    expect(extractServedModel('code-assist', { response: {} })).toBeUndefined();
+  });
+
+  it('reads service_tier only where the vendor publishes one', () => {
+    expect(extractServiceTier('openai-responses', { service_tier: 'flex' })).toBe('flex');
+    expect(extractServiceTier('openai-chat', { service_tier: 'default' })).toBe('default');
+    // Anthropic and Code Assist have no such concept — undefined is correct, not missing.
+    expect(extractServiceTier('anthropic-messages', { service_tier: 'flex' })).toBeUndefined();
+    expect(extractServiceTier('code-assist', { service_tier: 'flex' })).toBeUndefined();
+    expect(extractServiceTier('openai-chat', {})).toBeUndefined();
+  });
+
+  it('survives a malformed or absent body without throwing', () => {
+    for (const body of [undefined, null, 'not-json', 0]) {
+      expect(() => extractServedModel('openai-chat', body)).not.toThrow();
+      expect(() => extractServiceTier('openai-chat', body)).not.toThrow();
+      expect(extractServedModel('openai-chat', body)).toBeUndefined();
+      expect(extractServiceTier('openai-chat', body)).toBeUndefined();
+    }
   });
 });
 
