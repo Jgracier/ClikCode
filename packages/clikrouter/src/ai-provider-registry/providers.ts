@@ -12,6 +12,14 @@ import {
 export const AI_PROVIDERS = [
   {
     id: "xai",
+    // Automatic on every grok model per xAI's docs — no request parameter,
+    // so again only prefix stability is ours to control.
+    // (docs.x.ai/developers/advanced-api-usage/prompt-caching)
+    //
+    // NOTE, same shape as Fireworks below: xAI documents `x-grok-conv-id` as
+    // the header that maximises hit rate by keeping one conversation on one
+    // cache. Not sent today.
+    promptCaching: "automatic",
     contextWindow: 256_000,
     maxOutput: 32_000,
     // Context windows from xAI's published model table. xAI states a context
@@ -343,6 +351,13 @@ export const AI_PROVIDERS = [
   },
   {
     id: "groq",
+    // Automatic, and not switchable: Groq's own docs state caching "works
+    // automatically on all your API requests to supported models with no code
+    // changes required and no additional fees", cannot be manually disabled,
+    // and discounts cached input 50%. So there is nothing for this platform to
+    // send and nothing for an operator to turn off — only prefix stability
+    // decides whether it hits. (console.groq.com/docs/prompt-caching)
+    promptCaching: "automatic",
     // Batch API — probed live 2026-08-20 (401, so the route exists and
     // authenticates). Async submission at 50% of the standard rate.
     batch: {
@@ -447,6 +462,17 @@ export const AI_PROVIDERS = [
   },
   {
     id: "fireworks",
+    // Automatic: "enabled by default for all Fireworks models and
+    // deployments", matching the longest cached prefix of the request and
+    // processing only the remainder. Retention is stated as at least several
+    // minutes and up to several hours depending on model and load.
+    // (docs.fireworks.ai/guides/prompt-caching)
+    //
+    // NOTE for a future dispatch change: Fireworks routes across replicas, so
+    // hit rate depends on landing on the replica holding the prefix — the
+    // `x-session-affinity` header is what pins that. Not sent today, which is
+    // a known and measurable cause of misses rather than a mystery.
+    promptCaching: "automatic",
     docsPricingCatalog: "fireworks",
     contextWindow: 128_000,
     keyUrl: "https://app.fireworks.ai/settings/users/api-keys",
