@@ -100,12 +100,35 @@ describe('responses usage + stop reason', () => {
     },
   };
 
-  it('maps usage into the AI-SDK shape (input/output/cachedInput)', () => {
+  it('maps usage into the AI-SDK shape, decomposing input and output', () => {
     expect(extractUsage('openai-responses', completed)).toEqual({
       inputTokens: 1452,
       outputTokens: 312,
+      // input_tokens INCLUDES the cached count on this surface, so the
+      // full-rate slice is the difference — the number cost estimation
+      // actually multiplies by inMTok.
+      uncachedInputTokens: 172,
       cachedInputTokens: 1280,
+      // Already inside output_tokens; reported separately so a turn that
+      // spends its whole budget reasoning is visible.
+      reasoningTokens: 256,
     });
+  });
+
+  it('keeps the input decomposition summing back to the reported total', () => {
+    const usage = extractUsage('openai-responses', completed);
+    expect((usage.uncachedInputTokens ?? 0) + (usage.cachedInputTokens ?? 0)).toBe(
+      usage.inputTokens,
+    );
+  });
+
+  it('never lets a cached count larger than the total produce a negative slice', () => {
+    // Defensive: a truncated or inconsistent body must not yield a negative
+    // uncached count, which downstream would price as a DISCOUNT.
+    const inconsistent = {
+      usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 999 } },
+    };
+    expect(extractUsage('openai-responses', inconsistent).uncachedInputTokens).toBe(0);
   });
 
   it('parses usage from the terminal response.completed SSE event end-to-end', () => {
@@ -119,7 +142,9 @@ describe('responses usage + stop reason', () => {
     expect(extractUsage('codex-responses', body)).toEqual({
       inputTokens: 1452,
       outputTokens: 312,
+      uncachedInputTokens: 172,
       cachedInputTokens: 1280,
+      reasoningTokens: 256,
     });
     expect(extractStopReason('codex-responses', body)).toBe('stop');
   });
@@ -138,7 +163,13 @@ describe('responses usage + stop reason', () => {
   it('omits individual fields the body does not carry', () => {
     expect(
       extractUsage('codex-responses', { usage: { input_tokens: 10, output_tokens: 3 } }),
-    ).toEqual({ inputTokens: 10, outputTokens: 3 });
+    ).toEqual({
+      inputTokens: 10,
+      outputTokens: 3,
+      // No cache details in the body: every input token was billed at the
+      // full rate, which is a fact the body DOES carry, not an invention.
+      uncachedInputTokens: 10,
+    });
     expect(extractUsage('codex-responses', { usage: { input_tokens: 'NaNsense' } })).toEqual({});
   });
 

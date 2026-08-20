@@ -227,6 +227,39 @@ export interface AiProviderSpec {
   /** Provider metadata key containing an SDK-reported total request cost. */
   sdkCostMetadataKey?: string;
   /**
+   * Path into the provider's OWN raw usage object (`LanguageModelUsage.raw`,
+   * which the OpenAI-compatible adapter passes through verbatim) at which a
+   * total USD cost for the call sits.
+   *
+   * THE SECOND, WIDER ROUTE TO GROUND TRUTH. `sdkCostMetadataKey` only works
+   * for vendors whose first-party AI SDK package parses cost into
+   * `providerMetadata` — exactly one row does (Perplexity). Most vendors that
+   * report a real cost are served by the generic OpenAI-compatible adapter,
+   * which parses no vendor-specific fields at all but does hand the untouched
+   * usage object back. Reading a declared path out of it costs nothing and is
+   * the difference between billing a catalog ESTIMATE and billing the
+   * vendor's own figure.
+   *
+   * Safe by construction: a path that does not resolve to a finite number
+   * yields undefined, and the caller falls back to the estimate exactly as
+   * before. So a vendor that stops publishing the field, or an account that
+   * never enabled it, degrades to the pre-existing behaviour rather than
+   * producing a wrong number.
+   */
+  usageCostUsdPath?: readonly string[];
+  /**
+   * Request-body fields that ASK this vendor to report its cost, merged into
+   * the call as provider options (the OpenAI-compatible adapter spreads
+   * `providerOptions[<row id>]` straight into the body).
+   *
+   * Declared alongside `usageCostUsdPath` because for several vendors the cost
+   * is opt-in per request — OpenRouter returns `usage.cost` only when the body
+   * carries `usage: { include: true }`. Without this the path above would
+   * silently never resolve, which reads as "this vendor doesn't report cost"
+   * when in fact nobody asked.
+   */
+  usageAccountingOptions?: Readonly<Record<string, unknown>>;
+  /**
    * A button-driven flow that MINTS this provider's API key.
    *
    * Distinct from `oauth`: the result is a plain key written to `envKey`, with
@@ -408,11 +441,23 @@ export interface AiProviderSpec {
    * novita, sambanova — whose offered set is thousands of third-party models
    * that change without notice. Writing prefixes for those would be inventing
    * per-model facts about models we do not control, i.e. exactly the guessing
-   * this field replaced. Their real per-model window is already in the catalog
-   * response each one serves (OpenRouter's `context_length`, HF's
-   * `max_position_embeddings`), which is where a correct fix reads it from —
-   * a runtime lookup, not more rows here. Until that exists they keep the
-   * floor, deliberately.
+   * this field replaced.
+   *
+   * THE RUNTIME LOOKUP THIS COMMENT ONCE CALLED FOR NOW EXISTS. Discovery reads
+   * each vendor's own per-model window out of the catalog response
+   * (OpenRouter's `context_length` / `top_provider.context_length`, Mistral's
+   * `max_context_length` — see probe-adapters.ts's deriveContextWindow) and
+   * persists it as AiProviderModel.contextWindowTokens; the catalog feeds
+   * (models.dev / LiteLLM) backfill it for models whose own vendor publishes
+   * none. platform-domains' resolveModelTokenLimits is the ONE place the two
+   * sources are arbitrated — real per-model evidence wins, this floor stands in
+   * where none exists — and ai-router-candidates.ts now attaches the merged
+   * value to every routable candidate so SELECTION can refuse a model that
+   * cannot hold the prompt, not just the prompt shaper afterwards.
+   *
+   * So the floor below is exactly that now: a floor of last resort, load-bearing
+   * only where no vendor and no feed has ever published a window. It is no
+   * longer the aggregators' normal answer.
    */
   contextWindow?: number;
   /** Cap on a single request's output tokens. Absent = the caller's own ceiling. */

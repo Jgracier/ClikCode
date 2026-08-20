@@ -30,6 +30,7 @@ import type {
   TranscriptionModel,
 } from "ai";
 import { APICallError, jsonSchema, streamText, tool } from "ai";
+import type { JSONValue } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createAzure } from "@ai-sdk/azure";
@@ -352,11 +353,39 @@ export interface AiChatTurnResult {
    * has to re-coerce a stringified argument back.
    */
   toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
-  /** Observed token usage. `inputTokens` is what a context budget calibrates on. */
+  /**
+   * Observed token usage. `inputTokens` is what a context budget calibrates on.
+   *
+   * THE DECOMPOSITION IS THE POINT. `inputTokens` is the TOTAL, and the AI SDK
+   * normalizes that consistently across vendors whose own wire formats disagree
+   * (Anthropic reports `input_tokens` EXCLUDING cache and lists the cache
+   * counters separately; OpenAI reports an `input_tokens` that already includes
+   * them). Reading only the total and one cache counter therefore could not be
+   * priced correctly without a per-vendor branch — so all three sub-counts are
+   * carried, and the invariant
+   *
+   *     inputTokens === uncachedInputTokens + cachedInputTokens + cacheWriteInputTokens
+   *
+   * holds for every provider the SDK serves. A field is absent when the vendor
+   * reported nothing for it, never 0 standing in for silence.
+   */
   usage: {
     inputTokens?: number;
     outputTokens?: number;
+    /** Input tokens billed at the FULL rate — neither read from nor written to cache. */
+    uncachedInputTokens?: number;
+    /** Cache-READ input tokens; discounted (up to 10x) where a vendor prices them. */
     cachedInputTokens?: number;
+    /** Cache-WRITE input tokens; billed at a PREMIUM (typically 1.25x) where a vendor prices them. */
+    cacheWriteInputTokens?: number;
+    /**
+     * Reasoning tokens, already INCLUDED in `outputTokens`. Carried separately
+     * because the split is the only way to see a model that spent its whole
+     * output budget thinking and returned nothing — a real, diagnosed failure
+     * mode on this platform (see the registry's `modelWindows` note) that the
+     * combined total renders invisible.
+     */
+    reasoningTokens?: number;
   };
   /** Provider response headers, when the transport exposes them (rate limits). */
   headers?: Record<string, string>;
@@ -393,6 +422,47 @@ export function extractPerplexityCostMicroUsd(
   if (typeof totalCost !== "number" || !Number.isFinite(totalCost))
     return undefined;
   return Math.max(0, Math.round(totalCost * 1_000_000));
+}
+
+/**
+ * The vendor's OWN reported USD cost for a call, read from the raw usage
+ * object at the path the registry row declares (`usageCostUsdPath`).
+ *
+ * Summed ACROSS STEPS, because that is where the number actually survives: the
+ * AI SDK's `totalUsage` aggregator rebuilds a fresh usage object from the token
+ * counters and does not carry `raw` forward, while each individual step keeps
+ * the provider's untouched payload. A multi-step tool-calling turn is several
+ * billed requests, so the sum is also the correct total rather than a
+ * convenient one.
+ *
+ * Returns undefined when the row declares no path, when no step carried a
+ * usable number, or when the value is not finite — every one of which leaves
+ * the caller on its existing catalog-rate estimate.
+ */
+export function extractDeclaredUsageCostMicroUsd(
+  provider: string,
+  steps: ReadonlyArray<{ usage?: { raw?: unknown } }>,
+): number | undefined {
+  const path = getAiProvider(provider)?.usageCostUsdPath;
+  if (!path || path.length === 0) return undefined;
+  let totalUsd = 0;
+  let sawOne = false;
+  for (const step of steps) {
+    let cursor: unknown = step.usage?.raw;
+    for (const key of path) {
+      if (!cursor || typeof cursor !== "object") {
+        cursor = undefined;
+        break;
+      }
+      cursor = (cursor as Record<string, unknown>)[key];
+    }
+    const usd = typeof cursor === "string" ? Number(cursor) : cursor;
+    if (typeof usd !== "number" || !Number.isFinite(usd) || usd < 0) continue;
+    totalUsd += usd;
+    sawOne = true;
+  }
+  if (!sawOne) return undefined;
+  return Math.max(0, Math.round(totalUsd * 1_000_000));
 }
 
 /**
@@ -671,6 +741,28 @@ export async function streamAiChatTurn(
   // Observed live 2026-08-09: nvidia's deprecated model id 404'd on every
   // single routed attempt across hours of real traffic for exactly this
   // reason.
+  // VERIFIED key for the reasoning option: @ai-sdk/openai's providerOptionsName
+  // getter returns `config.provider.split(".")[0]`, which is `"openai"` for
+  // every openai model instance (chat AND responses) — read from the installed
+  // package (@ai-sdk/openai 4.0.27), not guessed. The accounting options key is
+  // the ROW ID, because the OpenAI-compatible adapter is constructed with
+  // `name: spec.id` and spreads `providerOptions[name]` into the request body.
+  const turnProviderOptions: Record<string, Record<string, JSONValue>> = {};
+  if (input.reasoningEffort) {
+    turnProviderOptions.openai = { reasoningEffort: input.reasoningEffort };
+  }
+  const accountingOptions = getAiProvider(input.provider)?.usageAccountingOptions;
+  if (accountingOptions) {
+    turnProviderOptions[input.provider] = {
+      ...(turnProviderOptions[input.provider] ?? {}),
+      // The registry declares these as plain data; they are JSON literals by
+      // construction (see `usageAccountingOptions`), and the SDK's option bag
+      // is typed as JSON — the assertion states that contract at the one
+      // boundary where a catalog value becomes a request body.
+      ...(accountingOptions as Record<string, JSONValue>),
+    };
+  }
+
   let capturedStreamError: unknown;
   const result = streamText({
     model,
@@ -688,12 +780,12 @@ export async function streamAiChatTurn(
     // VERIFIED key: @ai-sdk/openai's providerOptionsName getter returns `config.provider.split(".")[0]`,
     // which is `"openai"` for every openai model instance (chat AND responses) — read from the
     // installed package (@ai-sdk/openai 4.0.27), not guessed.
-    ...(input.reasoningEffort
-      ? {
-          providerOptions: {
-            openai: { reasoningEffort: input.reasoningEffort },
-          },
-        }
+    // Provider options are assembled ONCE from every row-declared source, not
+    // as competing conditional spreads: a second `providerOptions` key in this
+    // object literal would silently overwrite the first, which is exactly how
+    // a reasoning-effort turn would have dropped the cost-accounting opt-in.
+    ...(Object.keys(turnProviderOptions).length > 0
+      ? { providerOptions: turnProviderOptions }
       : {}),
     onError: (event) => {
       capturedStreamError = event.error;
@@ -714,9 +806,9 @@ export async function streamAiChatTurn(
     throw capturedStreamError ?? error;
   }
 
-  let calls, usage, response, finishReason, providerMetadata, warnings;
+  let calls, usage, response, finishReason, providerMetadata, warnings, steps;
   try {
-    [calls, usage, response, finishReason, providerMetadata, warnings] =
+    [calls, usage, response, finishReason, providerMetadata, warnings, steps] =
       await Promise.all([
         result.toolCalls,
         result.totalUsage,
@@ -724,6 +816,7 @@ export async function streamAiChatTurn(
         result.finishReason,
         result.providerMetadata,
         result.warnings,
+        result.steps,
       ]);
   } catch (error) {
     // Re-throw the ORIGINAL provider error (with its real statusCode) when
@@ -733,10 +826,18 @@ export async function streamAiChatTurn(
     throw capturedStreamError ?? error;
   }
 
-  const costMicroUsd = extractPerplexityCostMicroUsd(
-    input.provider,
-    providerMetadata as Record<string, unknown> | undefined,
-  );
+  // TWO ROUTES TO THE VENDOR'S OWN FIGURE, in the order of how directly each
+  // is parsed. A first-party package that already decoded cost into provider
+  // metadata is the most trustworthy reading; the declared raw-usage path is
+  // the general fallback for the ~30 rows served by the compatible adapter,
+  // which decodes nothing vendor-specific on its own. Both are EXACT amounts
+  // the vendor charged, so either beats the catalog estimate — and when
+  // neither resolves this stays undefined and the estimate stands.
+  const costMicroUsd =
+    extractPerplexityCostMicroUsd(
+      input.provider,
+      providerMetadata as Record<string, unknown> | undefined,
+    ) ?? extractDeclaredUsageCostMicroUsd(input.provider, steps ?? []);
 
   return {
     text,
@@ -750,7 +851,10 @@ export async function streamAiChatTurn(
     usage: {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      uncachedInputTokens: usage.inputTokenDetails?.noCacheTokens,
       cachedInputTokens: usage.inputTokenDetails?.cacheReadTokens,
+      cacheWriteInputTokens: usage.inputTokenDetails?.cacheWriteTokens,
+      reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
     },
     ...(response.headers ? { headers: response.headers } : {}),
     stopReason: finishReason,
