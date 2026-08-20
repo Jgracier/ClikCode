@@ -65,6 +65,22 @@ describe('resolveLanguageModel', () => {
     expect(resolveLanguageModel({ provider: 'moonshot', model: 'kimi-k2', apiKey: 'k' })).toBeTruthy();
   });
 
+  it('builds a RESPONSES model for an openai-responses row, not the compatible chat adapter', () => {
+    // The split-brain this guards: `createOpenAICompatible` builds {baseURL}/chat/completions,
+    // which a Responses-only gateway (Ramp Router) documents as a 404. Getting this wrong leaves
+    // the hand-rolled HTTP lane working while every SDK-dispatched turn fails, so assert the
+    // SURFACE the SDK picked rather than mere truthiness.
+    expect(hasFirstPartyProvider('router')).toBe(false);
+    const model = resolveLanguageModel({ provider: 'router', model: 'acct-scoped-id', apiKey: 'k' });
+    // `LanguageModel` is `string | LanguageModelV2`; only the object form carries the surface id.
+    expect(typeof model).not.toBe('string');
+    const built = model as Exclude<typeof model, string>;
+    expect(built.provider).toBe('openai.responses');
+    // …and it is NOT the compatible chat adapter, which would name itself '<id>.chat'.
+    expect(built.provider).not.toBe('router.chat');
+    expect(built.modelId).toBe('acct-scoped-id');
+  });
+
   it('refuses an unknown provider instead of inventing an endpoint', () => {
     expect(() => resolveLanguageModel({ provider: 'not-a-provider', model: 'm' })).toThrow(
       /unknown AI provider/,
@@ -203,7 +219,12 @@ describe('modality grouping and text-only routing', () => {
     // 53, not 52: Hetzner Inference (added 2026-08-18) — a plain OpenAI-compatible
     // text(+vision) chat endpoint at inference.hetzner.com/api/v1, text-routable.
     expect(routable.has('hetzner')).toBe(true);
-    expect(routable.size).toBe(53);
+    // 54, not 53: Ramp Router (added 2026-08-20) — a text-only routing gateway. It is the first
+    // routable row that is NOT openAiCompatible: it speaks `openai-responses`, so it is reached at
+    // /v1/responses rather than /chat/completions. Routability is a MODALITY question, not a
+    // dialect one, which is exactly why it belongs in this set.
+    expect(routable.has('router')).toBe(true);
+    expect(routable.size).toBe(54);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {

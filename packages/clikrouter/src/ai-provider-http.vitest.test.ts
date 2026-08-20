@@ -4,6 +4,8 @@ import {
   buildAiAuthHeaders,
   buildAiChatRequest,
   extractChatText,
+  extractServedModel,
+  extractServiceTier,
   extractStopReason,
   extractToolCalls,
   extractUsage,
@@ -98,6 +100,141 @@ describe('buildAiAuthHeaders', () => {
         credentialSource: 'platform-secret',
       }),
     ).toEqual({ 'xi-api-key': 'el_test_key' });
+  });
+});
+
+// A Responses-ONLY provider (Ramp Router) is the case these cover: it publishes no
+// /chat/completions at all, so "did we build the right URL" is not a style question — the
+// chat-completions route is a documented 404 there.
+describe('buildAiChatRequest — openai-responses dialect', () => {
+  const base = {
+    provider: 'router',
+    model: 'some-account-scoped-id',
+    apiKey: 'rtr_test_key',
+    credentialSource: 'env' as const,
+  };
+
+  it('routes a PLAIN turn (no tools) to /responses, never /chat/completions', () => {
+    const req = buildAiChatRequest({
+      ...base,
+      system: 'You are helpful',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 100,
+    });
+    expect(req.dialect).toBe('openai-responses');
+    expect(req.url).toBe('https://api.router.com/v1/responses');
+    expect(req.url).not.toContain('/chat/completions');
+    // Responses field names, all three of which differ from chat/completions.
+    expect(req.body.instructions).toBe('You are helpful');
+    expect(req.body.input).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(req.body.max_output_tokens).toBe(100);
+    expect(req.body.messages).toBeUndefined();
+    expect(req.body.max_tokens).toBeUndefined();
+  });
+
+  it('sends a Bearer token, not the anthropic x-api-key header', () => {
+    const req = buildAiChatRequest({ ...base, messages: [{ role: 'user', content: 'hi' }] });
+    expect(req.headers.Authorization).toBe('Bearer rtr_test_key');
+    expect(req.headers['x-api-key']).toBeUndefined();
+  });
+
+  it('carries tools FLAT, not nested under a function key', () => {
+    const req = buildAiChatRequest({
+      ...base,
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [{ name: 'deploy', description: 'ship it', parameters: { type: 'object' } }],
+    });
+    expect(req.url).toBe('https://api.router.com/v1/responses');
+    expect(req.body.tools).toEqual([
+      { type: 'function', name: 'deploy', description: 'ship it', parameters: { type: 'object' } },
+    ]);
+  });
+
+  it('never sends an empty input array — a system-only turn still gets a user item', () => {
+    const req = buildAiChatRequest({
+      ...base,
+      system: 'Only a system prompt',
+      messages: [],
+    });
+    expect(req.body.input).toEqual([{ role: 'user', content: 'Begin.' }]);
+  });
+
+  it('omits temperature unless the caller asked for one', () => {
+    const withOut = buildAiChatRequest({ ...base, messages: [{ role: 'user', content: 'hi' }] });
+    expect(withOut.body.temperature).toBeUndefined();
+    const withIt = buildAiChatRequest({
+      ...base,
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0.2,
+    });
+    expect(withIt.body.temperature).toBe(0.2);
+  });
+
+  it('pairs stream:true with alwaysSse so the body reader aggregates SSE', async () => {
+    const req = buildAiChatRequest({
+      ...base,
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    });
+    expect(req.body.stream).toBe(true);
+    // Without alwaysSse, JSON.parse over an SSE body yields {} — an empty completion that reads
+    // as a working call returning nothing, which is the failure this pairing exists to prevent.
+    expect(req.alwaysSse).toBe(true);
+    const sse = [
+      'event: response.completed',
+      `data: ${JSON.stringify({
+        type: 'response.completed',
+        response: { output: [{ type: 'message', content: [{ type: 'output_text', text: 'pong' }] }] },
+      })}`,
+      '',
+    ].join('\n');
+    const body = await readAiChatResponseBody(req, { text: async () => sse });
+    expect(extractChatText(req.dialect, body)).toBe('pong');
+  });
+});
+
+// The two facts that arrive on every response and used to be dropped. The case that matters most
+// is a routing gateway, where the served model is CHOSEN per request and the requested id is not
+// evidence of what was billed.
+describe('extractServedModel / extractServiceTier', () => {
+  it('reads the served model off every dialect that names one', () => {
+    // A gateway answering with a DIFFERENT model than the caller asked for — the whole point.
+    expect(extractServedModel('openai-responses', { model: 'anthropic:claude-haiku-4-5' })).toBe(
+      'anthropic:claude-haiku-4-5',
+    );
+    expect(extractServedModel('openai-chat', { model: 'gpt-5-2026-04-01' })).toBe('gpt-5-2026-04-01');
+    expect(extractServedModel('anthropic-messages', { model: 'claude-opus-5' })).toBe('claude-opus-5');
+    expect(extractServedModel('codex-responses', { model: 'gpt-5-codex' })).toBe('gpt-5-codex');
+    // Gemini spells it differently, one envelope deep.
+    expect(
+      extractServedModel('code-assist', { response: { modelVersion: 'gemini-2.5-flash-001' } }),
+    ).toBe('gemini-2.5-flash-001');
+  });
+
+  it('returns undefined rather than inventing a model when the vendor names none', () => {
+    // NOT the requested model: "confirmed X" and "said nothing" must stay distinguishable.
+    expect(extractServedModel('openai-chat', {})).toBeUndefined();
+    expect(extractServedModel('openai-responses', { model: '' })).toBeUndefined();
+    expect(extractServedModel('openai-chat', { model: 42 })).toBeUndefined();
+    expect(extractServedModel('code-assist', { response: {} })).toBeUndefined();
+  });
+
+  it('reads service_tier only where the vendor publishes one', () => {
+    expect(extractServiceTier('openai-responses', { service_tier: 'flex' })).toBe('flex');
+    expect(extractServiceTier('openai-chat', { service_tier: 'default' })).toBe('default');
+    // Anthropic and Code Assist have no such concept — undefined is correct, not missing.
+    expect(extractServiceTier('anthropic-messages', { service_tier: 'flex' })).toBeUndefined();
+    expect(extractServiceTier('code-assist', { service_tier: 'flex' })).toBeUndefined();
+    expect(extractServiceTier('openai-chat', {})).toBeUndefined();
+  });
+
+  it('survives a malformed or absent body without throwing', () => {
+    for (const body of [undefined, null, 'not-json', 0]) {
+      expect(() => extractServedModel('openai-chat', body)).not.toThrow();
+      expect(() => extractServiceTier('openai-chat', body)).not.toThrow();
+      expect(extractServedModel('openai-chat', body)).toBeUndefined();
+      expect(extractServiceTier('openai-chat', body)).toBeUndefined();
+    }
   });
 });
 
