@@ -193,6 +193,18 @@ export interface AiRouterCandidate {
    */
   throughputTokensPerSecond?: number | null;
   /**
+   * MEASURED third-party generation rate for this exact pair, tokens/second
+   * (the public gateway feed's throughput p50).
+   *
+   * A PRIOR, never an override — the same precedence `externalLatencyMs` has
+   * against our own latency EWMA: consulted ONLY where we have no measurement
+   * of our own, and instantly superseded once we do. It exists because
+   * first-party throughput can only be learned by routing to a pair, so
+   * without a prior a never-tried model stays unmeasured indefinitely and the
+   * signal can never help pick it.
+   */
+  externalThroughputTps?: number | null;
+  /**
    * This candidate's VENDOR is currently declaring a major or critical
    * incident on its own public status page (vendor-status-feed.ts).
    *
@@ -407,7 +419,10 @@ function intelligenceWithReliability(
   // caller rather than always-on, because a fast generator is not a better
   // choice for a turn that emits forty tokens.
   if (preferThroughput) {
-    capability *= throughputFactor(candidate.throughputTokensPerSecond);
+    capability *= throughputFactor(
+      candidate.throughputTokensPerSecond,
+      candidate.externalThroughputTps,
+    );
   }
   // A vendor-declared outage, applied last and unconditionally. Unlike the
   // external-uptime prior above, this is not superseded by first-party track
@@ -822,10 +837,23 @@ const VENDOR_INCIDENT_FACTOR = 0.35;
  * 1.0 (no effect) when unmeasured, which is the overwhelmingly common case and
  * must stay neutral — "never generated enough to measure" is not "slow".
  */
-function throughputFactor(tokensPerSecond: number | null | undefined): number {
-  if (typeof tokensPerSecond !== 'number' || !Number.isFinite(tokensPerSecond)) return 1;
-  if (tokensPerSecond <= 0) return 1;
-  const ratio = tokensPerSecond / REFERENCE_TOKENS_PER_SECOND;
+function throughputFactor(
+  tokensPerSecond: number | null | undefined,
+  externalTokensPerSecond?: number | null,
+): number {
+  // Our own EWMA wins outright once it has any samples — a third-party feed
+  // never displaces a first-party measurement. Same precedence latencyScore
+  // applies to externalLatencyMs, and for the same reason.
+  const observed =
+    typeof tokensPerSecond === 'number' && Number.isFinite(tokensPerSecond) && tokensPerSecond > 0
+      ? tokensPerSecond
+      : typeof externalTokensPerSecond === 'number' &&
+          Number.isFinite(externalTokensPerSecond) &&
+          externalTokensPerSecond > 0
+        ? externalTokensPerSecond
+        : null;
+  if (observed === null) return 1;
+  const ratio = observed / REFERENCE_TOKENS_PER_SECOND;
   return Math.max(MIN_THROUGHPUT_FACTOR, Math.min(MAX_THROUGHPUT_FACTOR, ratio));
 }
 
