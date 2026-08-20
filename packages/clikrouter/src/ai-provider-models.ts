@@ -72,6 +72,8 @@ import {
   extractToolCalls,
   extractStopReason,
   extractUsage,
+  extractServedModel,
+  extractServiceTier,
   extractProviderCostMicroUsd,
   type AiToolSpec,
 } from "./ai-provider-http";
@@ -404,6 +406,17 @@ export interface AiChatTurnResult {
   /** Unified finish reason for the turn (e.g. 'stop', 'length', 'tool-calls'), when the SDK resolves one. */
   stopReason?: string;
   /**
+   * The model the vendor says actually served this turn, verbatim — see `extractServedModel`.
+   *
+   * Undefined when the vendor named none. It is deliberately NOT defaulted to the requested model:
+   * "we asked for X and the vendor confirmed X" and "we asked for X and the vendor said nothing"
+   * are different facts, and collapsing them would manufacture a confirmation that never happened.
+   */
+  servedModel?: string;
+  /** Vendor's service/capacity tier for this call (e.g. 'flex', 'default'), verbatim — see
+   *  `extractServiceTier`. Cost-relevant: tiers of the same model bill differently. */
+  serviceTier?: string;
+  /**
    * Vendor-reported EXACT micro-USD cost for this call, when the provider's SDK surfaces one in
    * `providerMetadata` (currently: Perplexity, see `extractPerplexityCostMicroUsd`). Undefined for
    * every other provider — callers pass this straight to `attributeAiInvocation`'s `costMicroUsd`,
@@ -692,6 +705,16 @@ async function dispatchOauthSurfaceChatTurn(
     usage: extractUsage(built.dialect, data),
     headers,
     stopReason: extractStopReason(built.dialect, data),
+    // What actually ran, and on which capacity tier — see the extractors' own doc comments. Both
+    // are already in this body; not reading them is the only reason they were ever lost.
+    ...((): { servedModel?: string } => {
+      const servedModel = extractServedModel(built.dialect, data);
+      return servedModel ? { servedModel } : {};
+    })(),
+    ...((): { serviceTier?: string } => {
+      const serviceTier = extractServiceTier(built.dialect, data);
+      return serviceTier ? { serviceTier } : {};
+    })(),
     ...((() => {
       const costMicroUsd = extractProviderCostMicroUsd(input.provider, built.dialect, data);
       return costMicroUsd !== undefined ? { costMicroUsd } : {};
@@ -870,6 +893,22 @@ export async function streamAiChatTurn(
     },
     ...(response.headers ? { headers: response.headers } : {}),
     stopReason: finishReason,
+    // WHAT ACTUALLY RAN. The SDK already decodes this into `response.modelId` for every provider it
+    // dispatches — it was simply never read. Worth the most on a routing gateway, where the served
+    // model is chosen per-request and the requested id says nothing about what was billed, but an
+    // alias resolving to a dated snapshot makes it useful on ordinary rows too. Empty string is
+    // treated as absent: a blank is the SDK having nothing to report, not a model named "".
+    ...(response.modelId ? { servedModel: response.modelId } : {}),
+    // `response.body` is populated for HTTP-dispatched providers only, so this reads through the
+    // SAME normalized extractor as the raw-fetch lane instead of a second, drifting copy. Absent on
+    // transports that expose no body — correct, not missing.
+    ...((): { serviceTier?: string } => {
+      const serviceTier = extractServiceTier(
+        getAiProvider(input.provider)?.chatDialect ?? "openai-chat",
+        response.body,
+      );
+      return serviceTier ? { serviceTier } : {};
+    })(),
     ...(costMicroUsd !== undefined ? { costMicroUsd } : {}),
     ...(warnings && warnings.length > 0
       ? {
