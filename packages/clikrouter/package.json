@@ -41,7 +41,6 @@
     "@ai-sdk/fal": "^3.0.19",
     "@ai-sdk/fireworks": "^3.0.22",
     "@ai-sdk/gladia": "^3.0.18",
-    "@ai-sdk/google-vertex": "^5.0.38",
     "@ai-sdk/groq": "^4.0.19",
     "@ai-sdk/hume": "^3.0.18",
     "@ai-sdk/lmnt": "^3.0.18",
