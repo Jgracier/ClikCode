@@ -224,7 +224,11 @@ describe('modality grouping and text-only routing', () => {
     // /v1/responses rather than /chat/completions. Routability is a MODALITY question, not a
     // dialect one, which is exactly why it belongs in this set.
     expect(routable.has('router')).toBe(true);
-    expect(routable.size).toBe(54);
+    // 55, not 54: Command Code (added 2026-08-20) — a HARNESS row, so it is routable with no
+    // chatBaseUrl at all, exactly like github-copilot above. Its transport is the vendor's CLI;
+    // routability is still a modality question and this row is text.
+    expect(routable.has('command-code')).toBe(true);
+    expect(routable.size).toBe(55);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {
