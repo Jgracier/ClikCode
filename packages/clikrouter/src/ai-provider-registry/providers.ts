@@ -1174,6 +1174,30 @@ export const AI_PROVIDERS = [
     // frontier model. Per-model zero pricing has no registry expression (see the
     // zai note in ai-zai-pricing.ts, which reaches the same conclusion), and
     // inventing one for a single provider is not a fix.
+    //
+    // RE-MEASURED 2026-08-20, and both known gaps on this row were re-confirmed rather than fixed:
+    //
+    // 1. NO AUTHENTICATED PROBE EXISTS. Swept the obvious candidates — /zen/v1/{key,usage,me,
+    //    account,credits,balance} all 404, and /zen/v1/models answers 200 WITH A BOGUS BEARER, so
+    //    the catalog cannot discriminate a live key from a dead one. The only auth-sensitive
+    //    surface is POST /chat/completions, which does return 401 for a bad or absent key — but
+    //    with a MISLEADING body: `{"type":"error","error":{"type":"ModelError","message":"Model
+    //    grok-code is not supported"}}`, i.e. it reports a model problem while the status reports
+    //    an auth one. A POST probe would also cost a real request. It is not wired because the
+    //    HEALTHY path has never been observed here (no key), and a probe whose success case is
+    //    unexercised is the defect this registry exists to prevent. UNBLOCK: run one POST with a
+    //    real key; if it answers non-401, `probe.kind` can become a POST-based credential check.
+    //    Until then this row's health is a KNOWN false green — a dead key reports healthy.
+    //
+    // 2. THE FREE TIER IS REAL BUT UNREACHABLE FROM HERE. Verified live: a keyless POST to
+    //    `nemotron-3.5-lightning-free` returned a 200 completion, and 7 of the 63 catalog ids carry
+    //    the `-free` suffix. We still cannot route to them: `credentialOptional` only admits a
+    //    credential-less row when it ALSO has a `baseUrlEnvKey` (resolve-credential.ts — that
+    //    escape is for self-hosted/custom endpoints), and this row has none, so with no key the
+    //    provider never enters the candidate pool. Closing that needs per-model access data, and
+    //    the catalog cannot supply it: every row is `{id, object, created, owned_by}` — no pricing,
+    //    no context window. The only free/paid signal is the SUFFIX ON THE ID STRING, and deciding
+    //    what is free by sniffing a model name is exactly the guess the paragraph above refuses.
   },
   {
     id: "tencent",
