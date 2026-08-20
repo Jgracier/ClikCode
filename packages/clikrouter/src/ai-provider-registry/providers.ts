@@ -372,6 +372,18 @@ export const AI_PROVIDERS = [
   },
   {
     id: "mistral",
+    // Caches automatically. Evidence is our OWN production traffic rather than
+    // a docs page: 3,658 invocations across ministral-3b/8b, codestral and
+    // mistral-medium reported 22.2M cache-read input tokens against 41.3M
+    // eligible — a 53.8% hit rate, with per-model rates of 70-90% — while
+    // reporting exactly ZERO cache-write tokens. Reads with no writes is the
+    // signature of vendor-side automatic caching: nothing here ever asked for
+    // a breakpoint, and no write was ever billed.
+    //
+    // This entry previously carried no mechanism at all, which read as "no
+    // caching we can reach" and was simply wrong about the provider serving
+    // the majority of this platform's traffic.
+    promptCaching: "automatic",
     // Batch API — probed live 2026-08-20 (401, so the route exists and
     // authenticates). Async submission at 50% of the standard rate.
     batch: {
@@ -676,6 +688,14 @@ export const AI_PROVIDERS = [
   },
   {
     id: "sambanova",
+    // Also automatic, on the same evidence standard as mistral above, and
+    // recorded with its weaker number rather than rounded up to match: 698
+    // reporting invocations, 491K cache-read tokens against 9.7M eligible — a
+    // 5.0% hit rate, and again zero writes. Low, but consistently non-zero
+    // across hundreds of calls, which is a mechanism operating rather than
+    // noise. A low hit rate is a prompt-stability problem on our side, not
+    // evidence that the vendor does not cache.
+    promptCaching: "automatic",
     // Permanent $0/mo developer tier, 600 RPM, no credit card
     // (sambanova.ai/blog/sambanova-cloud-developer-tier-is-live, verified
     // 2026-08-08) — rate-limit-gated, not credit-gated, so there is no paid

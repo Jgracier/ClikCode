@@ -57,6 +57,18 @@ export interface AiRouterCandidate {
   accessClass: 'subscription' | 'subscription-harness' | 'free-tier' | 'metered' | 'unknown';
   estimatedCostPerMTok: number | null;
   /**
+   * The INPUT half of `estimatedCostPerMTok`, kept separately because caching
+   * only ever discounts input. Absent when no price is on file.
+   */
+  inputCostPerMTok?: number | null;
+  /**
+   * What a CACHE-READ input token costs on this model, per MTok. Absent means
+   * the vendor publishes no cached rate — which is not the same as caching
+   * being free, so an absent value disables the discount below rather than
+   * being read as zero.
+   */
+  cachedInputCostPerMTok?: number | null;
+  /**
    * Live exponential-moving-average response latency in ms (ai-model-latency.ts),
    * or null/absent when never observed. This file stays pure/dependency-free
    * (see the module comment), so it never reads Redis itself — the caller
@@ -591,6 +603,57 @@ function costScore(cost: number | null): number {
   return cost;
 }
 
+
+/**
+ * Per-MTok cost with the cacheable slice of the prompt priced at this
+ * candidate's CACHE-READ rate rather than its base input rate.
+ *
+ * Returns the plain estimate untouched unless every input is present and
+ * usable — a missing cached rate, a missing prefix size, or a prompt estimate
+ * of zero all mean "we cannot say this is cheaper", and the honest answer to
+ * that is the uncached number, not an optimistic one.
+ *
+ * Only the INPUT half is discounted. Caching does nothing for generated
+ * tokens, and applying the discount to the whole figure would under-price
+ * exactly the models with expensive output.
+ */
+export function effectiveCostPerMTok(
+  candidate: AiRouterCandidate,
+  cacheContext?: { cacheablePrefixTokens?: number; estimatedPromptTokens?: number },
+): number | null {
+  const base = candidate.estimatedCostPerMTok;
+  if (typeof base !== 'number' || !Number.isFinite(base)) return base ?? null;
+
+  const cachedRate = candidate.cachedInputCostPerMTok;
+  const inputRate = candidate.inputCostPerMTok;
+  const prefix = cacheContext?.cacheablePrefixTokens;
+  const prompt = cacheContext?.estimatedPromptTokens;
+  if (
+    typeof cachedRate !== 'number' ||
+    !Number.isFinite(cachedRate) ||
+    typeof inputRate !== 'number' ||
+    !Number.isFinite(inputRate) ||
+    typeof prefix !== 'number' ||
+    !Number.isFinite(prefix) ||
+    prefix <= 0 ||
+    typeof prompt !== 'number' ||
+    !Number.isFinite(prompt) ||
+    prompt <= 0
+  ) {
+    return base;
+  }
+
+  // Clamped: a caller whose prefix estimate exceeds its prompt estimate has
+  // given us two numbers that cannot both be right, and the safe reading is
+  // "the whole prompt is prefix" rather than a fraction above 1 that would
+  // discount tokens that do not exist.
+  const cachedFraction = Math.min(1, prefix / prompt);
+  const effectiveInput = cachedRate * cachedFraction + inputRate * (1 - cachedFraction);
+  // Rebuild rather than scale: `base` is input + output, so swapping the input
+  // term out keeps the output term at full price where it belongs.
+  return Math.max(0, base - inputRate + effectiveInput);
+}
+
 /**
  * 3s: the neutral latency assumed for a candidate with no observed average
  * yet (never routed to, or its 24h window lapsed). Deliberately mid-pack —
@@ -677,15 +740,35 @@ export interface AiRouterRankContext {
    * for a final answer or a patch, the reverse.
    */
   preferThroughput?: boolean;
+  /**
+   * How many of this request's prompt tokens are a STABLE prefix that a
+   * prompt cache can serve — the invariant instruction block plus tool
+   * definitions, not the per-request payload.
+   *
+   * When supplied together with `estimatedPromptTokens`, the cost term below
+   * prices that slice at each candidate's CACHE-READ rate instead of its base
+   * input rate. Without it, ranking prices every call as a cold start, which
+   * systematically over-states the cost of exactly the models that cache
+   * cheapest — so the ranker can pick a nominally cheaper model that is
+   * actually dearer over a multi-turn run.
+   *
+   * STEADY STATE, stated rather than hidden: this models turns 2..N, where the
+   * prefix is already resident. Turn 1 pays a write premium instead. That is
+   * the right thing to optimise for on a task that loops, and it is why this
+   * is opt-in per caller rather than applied everywhere — a genuinely
+   * single-shot task should not pass it.
+   */
+  cacheablePrefixTokens?: number;
 }
 
 function scoreOne(
   candidate: AiRouterCandidate,
   preferThroughput = false,
+  cacheContext?: { cacheablePrefixTokens?: number; estimatedPromptTokens?: number },
 ): Omit<AiRouterCandidateScore, 'candidate' | 'compositeScore'> {
   return {
     accessRank: ACCESS_RANK[candidate.accessClass],
-    cost: costScore(candidate.estimatedCostPerMTok),
+    cost: costScore(effectiveCostPerMTok(candidate, cacheContext)),
     intelligence: intelligenceWithReliability(candidate, preferThroughput),
     latencyMs: latencyScore(candidate.avgLatencyMs, candidate.externalLatencyMs),
   };
@@ -999,7 +1082,10 @@ export function rankRouterCandidatesWithScores(
     preferredModel,
   );
   const scored: AiRouterCandidateScore[] = pool.map((candidate) => {
-    const base = scoreOne(candidate, preferThroughput);
+    const base = scoreOne(candidate, preferThroughput, {
+      cacheablePrefixTokens: context?.cacheablePrefixTokens,
+      estimatedPromptTokens,
+    });
     const withCandidate = { candidate, ...base, compositeScore: null };
     return { ...withCandidate, compositeScore: isAutoFamily(mode) ? autoComposite(withCandidate, mode) : null };
   });
