@@ -30,7 +30,7 @@ import type {
   TranscriptionModel,
 } from "ai";
 import { APICallError, jsonSchema, streamText, tool } from "ai";
-import type { JSONValue } from "ai";
+import type { JSONValue, Instructions } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createAzure } from "@ai-sdk/azure";
@@ -293,6 +293,22 @@ export interface AiChatTurnInput {
    *  otherwise. See ChatTurnInput.projectId in ai-provider-http.ts. */
   projectId?: string;
   system?: string;
+  /**
+   * Ask the provider to CACHE this prompt's stable prefix.
+   *
+   * Only meaningful on a provider whose registry row declares
+   * `promptCaching: 'explicit'` — Anthropic caches nothing without a
+   * breakpoint on the request. On an 'automatic' provider this is ignored,
+   * because there is no parameter to send: the vendor decides, and the only
+   * lever is prompt ordering.
+   *
+   * OPT-IN, and deliberately not defaulted on. An explicit cache WRITE costs
+   * about 1.25x the base input rate, so caching a prefix used exactly once is a
+   * 25% loss. It pays from the second reuse inside the TTL — which is the
+   * normal case for an agent loop and the abnormal case for a one-shot call, so
+   * the caller is the only layer that knows which it is.
+   */
+  cachePrompt?: boolean;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   tools?: AiChatTool[];
   /**
@@ -798,10 +814,40 @@ export async function streamAiChatTurn(
     };
   }
 
+  // ── PROMPT CACHING ────────────────────────────────────────────────────────
+  // Anthropic caches nothing without a breakpoint on the request, so this is
+  // where the platform's cached tokens come from at all on that vendor. The
+  // breakpoint rides the SYSTEM message because Anthropic caches everything up
+  // to and INCLUDING the marked block, and its request order puts tools before
+  // system — so one breakpoint here covers the whole stable region (every tool
+  // schema plus the instructions), which is by far the largest repeated span in
+  // an agent loop.
+  //
+  // Sent only when the caller opted in AND the row declares 'explicit'. An
+  // 'automatic' provider has no parameter to receive this, and sending one
+  // would be inventing an option that vendor does not have.
+  const spec = getAiProvider(input.provider);
+  const useExplicitCache =
+    input.cachePrompt === true && spec?.promptCaching === "explicit";
+  const systemMessage: Instructions | undefined = input.system
+    ? useExplicitCache
+      ? {
+          role: "system",
+          content: input.system,
+          // 5m, not 1h: the default TTL is the one the platform pays for at
+          // 1.25x, and the 1h tier costs more to write. An agent loop reuses
+          // its prefix within seconds, so the longer window buys nothing here
+          // and the pricing scrape reads the 5m column to match (see
+          // ai-anthropic-pricing.ts).
+          providerOptions: { anthropic: { cacheControl: { type: "ephemeral", ttl: "5m" } } },
+        }
+      : input.system
+    : undefined;
+
   let capturedStreamError: unknown;
   const result = streamText({
     model,
-    ...(input.system ? { system: input.system } : {}),
+    ...(systemMessage ? { system: systemMessage } : {}),
     messages: input.messages,
     ...(Object.keys(toolSet).length > 0 ? { tools: toolSet } : {}),
     ...(Object.keys(toolSet).length > 0 && input.toolChoice ? { toolChoice: input.toolChoice } : {}),

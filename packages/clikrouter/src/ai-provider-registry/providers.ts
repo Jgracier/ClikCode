@@ -46,6 +46,17 @@ export const AI_PROVIDERS = [
   },
   {
     id: "anthropic",
+    // Caches NOTHING unless the request carries a cache_control breakpoint, and
+    // charges 1.25x to write one — so it pays off only when the marked prefix is
+    // reused inside the TTL, which is why this is agent-gated rather than always on.
+    promptCaching: "explicit",
+    // Batch API — probed live 2026-08-20 (401, so the route exists and
+    // authenticates). Async submission at 50% of the standard rate.
+    batch: {
+      url: "https://api.anthropic.com/v1/messages/batches",
+      completionWindow: "24h",
+      discount: "50%",
+    },
     contextWindow: 200_000,
     maxOutput: 32_000,
     // Per-model, from Anthropic's published model table. Every current
@@ -109,6 +120,17 @@ export const AI_PROVIDERS = [
   },
   {
     id: "openai",
+    // Caches on its own for prompts over ~1024 tokens, matching the longest stable
+    // PREFIX. No parameter exists to enable or disable it; the only lever is
+    // prompt ordering, which is why no agent toggle is offered for it.
+    promptCaching: "automatic",
+    // Batch API — probed live 2026-08-20 (401, so the route exists and
+    // authenticates). Async submission at 50% of the standard rate.
+    batch: {
+      url: "https://api.openai.com/v1/batches",
+      completionWindow: "24h",
+      discount: "50%",
+    },
     docsPricingCatalog: "openai",
     contextWindow: 128_000,
     maxOutput: 16_000,
@@ -321,6 +343,13 @@ export const AI_PROVIDERS = [
   },
   {
     id: "groq",
+    // Batch API — probed live 2026-08-20 (401, so the route exists and
+    // authenticates). Async submission at 50% of the standard rate.
+    batch: {
+      url: "https://api.groq.com/openai/v1/batches",
+      completionWindow: "24h",
+      discount: "50%",
+    },
     docsPricingCatalog: "groq",
     // Real, hard-gated free tier — EVERY model, no credits system at all:
     // 30 RPM / 6K TPM / 14,400 requests/day (console.groq.com/docs/rate-limits,
@@ -343,6 +372,13 @@ export const AI_PROVIDERS = [
   },
   {
     id: "mistral",
+    // Batch API — probed live 2026-08-20 (401, so the route exists and
+    // authenticates). Async submission at 50% of the standard rate.
+    batch: {
+      url: "https://api.mistral.ai/v1/batch/jobs",
+      completionWindow: "24h",
+      discount: "50%",
+    },
     docsPricingCatalog: "mistral",
     // La Plateforme's free "Experiment" workspace tier: rate-limited access
     // to every model (including Mistral Large), ~1B tokens/month, $0
@@ -373,6 +409,9 @@ export const AI_PROVIDERS = [
   },
   {
     id: "deepseek",
+    // Context caching on disk, activated by the vendor with no request parameter —
+    // its published cache-HIT price is the corroboration that it caches at all.
+    promptCaching: "automatic",
     docsPricingCatalog: "deepseek",
     contextWindow: 128_000,
     maxOutput: 8_000,
