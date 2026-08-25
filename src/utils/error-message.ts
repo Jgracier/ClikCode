@@ -85,6 +85,18 @@ export function toCliErrorMessageBase(error: unknown): string {
     /^fetch failed$/i.test(message.trim()) ||
     /\bfetch failed\b/i.test(message) ||
     /UND_ERR/i.test(code);
+  // A LOCAL timeout is not an outage, and conflating them is expensive. The
+  // client aborts on its own deadline while the server keeps working, so
+  // "temporarily unavailable — please retry" invites a second upload of
+  // something that already succeeded. Say what actually happened and say that
+  // the work may have landed.
+  if (code === 'ECONNABORTED' && /timeout of \d+ms exceeded/i.test(message)) {
+    return (
+      `${message}. The request was abandoned HERE, not refused by the server — ` +
+      'it may still have completed. Check the current state before retrying, ' +
+      'especially for a publish or upload.'
+    );
+  }
   if (
     status === 502 || status === 503 || status === 504 ||
     (status >= 520 && status <= 526) ||
