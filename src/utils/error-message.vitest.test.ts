@@ -47,6 +47,28 @@ describe('problem+json reaches the CLI user', () => {
     expect(rendered).toContain('trace zz');
   });
 
+  // A local abort is OUR deadline expiring, not the platform refusing. Told it
+  // was "temporarily unavailable — please retry", an operator re-uploads a 57MB
+  // publish the server already completed. This is why the ECONNABORTED branch
+  // sits ABOVE the outage branch.
+  it('does not call a local timeout an outage, and says the work may have landed', () => {
+    const rendered = toCliErrorMessage({
+      code: 'ECONNABORTED',
+      message: 'timeout of 30000ms exceeded',
+    });
+    expect(rendered).not.toContain('temporarily unavailable');
+    expect(rendered).toContain('timeout of 30000ms exceeded');
+    expect(rendered).toMatch(/may still have completed/i);
+  });
+
+  // ECONNABORTED WITHOUT a timeout message is a genuine connection abort and
+  // keeps its outage wording.
+  it('keeps the outage message for a non-timeout ECONNABORTED', () => {
+    expect(toCliErrorMessage({ code: 'ECONNABORTED', message: 'socket hang up' })).toContain(
+      'temporarily unavailable'
+    );
+  });
+
   it('still prefers the unavailable-platform message for a 503', () => {
     expect(toCliErrorMessage({ response: { status: 503, data: PROD_404_BODY } })).toContain(
       'temporarily unavailable'
