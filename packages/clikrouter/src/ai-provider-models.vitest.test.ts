@@ -11,6 +11,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { APICallError } from 'ai';
 import {
   resolveLanguageModel,
+  resolveSpeechModel,
+  resolveTranscriptionModel,
+  resolveEmbeddingModel,
+  resolveImageModel,
+  modalityFactoryProviderIds,
+  hasModalityDispatch,
   hasFirstPartyProvider,
   firstPartyProviderIds,
   isPermanentAiCallFailure,
@@ -18,6 +24,7 @@ import {
   isBillingAiCallFailure,
   resolveRateLimitRetryAfterMs,
   streamAiChatTurn,
+  type AiDispatchedModality,
 } from './ai-provider-models';
 import {
   AI_PROVIDERS as AI_PROVIDERS_CONST,
@@ -132,7 +139,7 @@ describe('resolveLanguageModel', () => {
     expect(unreachable).toEqual([]);
   });
 
-  it('covers 13 first-party language-model providers and no speech/transcription ones', () => {
+  it('covers 13 first-party language-model providers; non-language dispatch lives in its own tables', () => {
     // Was 17: the "google-vertex" factory was removed 2026-08-13 as
     // unreachable — no registry row has ever carried that id, so the factory
     // could never be selected (resolveLanguageModel keys factories by
@@ -143,11 +150,179 @@ describe('resolveLanguageModel', () => {
     // openAiCompatible-contract describe block at the bottom of this file.
     const ids = firstPartyProviderIds();
     expect(ids).toHaveLength(13);
-    // Adding a speech or transcription provider here would surface it in the admin console's model
-    // picker as a selectable remediation model and then fail at request time.
+    // The LANGUAGE table stays language-only: adding a speech or transcription
+    // provider here would surface it in the admin console's model picker as a
+    // selectable remediation model and then fail at request time. Those
+    // providers now HAVE dispatch — through resolveSpeechModel & co.'s own
+    // per-modality tables, asserted in the suite below — just never this one.
     for (const nonLm of ['elevenlabs', 'deepgram', 'assemblyai', 'voyage', 'lmnt', 'hume', 'revai']) {
       expect(ids).not.toContain(nonLm);
     }
+  });
+});
+
+// ── SPEECH / TRANSCRIPTION / EMBEDDING / IMAGE DISPATCH ─────────────────────
+//
+// These tables replaced imports-without-dispatch: 11 @ai-sdk factories were
+// imported and never referenced, so every audio/vision/embedding registry row
+// was a connect-form that could never serve a request. The invariants that
+// keep the fix honest:
+//   1. table ⊆ registry: a table may only name a provider whose row DECLARES
+//      that modality — otherwise dispatch exists the console cannot offer;
+//   2. registry ⊆ table: every row declaring a dispatched modality has a
+//      factory entry — otherwise the console offers a connect form that still
+//      cannot serve a request, the exact defect this replaced;
+//   3. every entry constructs against a stub credential with NO network —
+//      model construction must be pure, or resolution itself would spend money;
+//   4. an unknown or wrong-modality provider fails with a named error, never a
+//      request aimed at nothing.
+describe('per-modality factory tables — speech / transcription / embedding / image', () => {
+  const DISPATCHED: readonly AiDispatchedModality[] = [
+    'speech',
+    'transcription',
+    'embedding',
+    'image',
+  ];
+
+  const RESOLVERS: Record<AiDispatchedModality, (input: {
+    provider: string;
+    model: string;
+    apiKey?: string;
+    baseUrl?: string;
+    env?: Record<string, string | undefined>;
+  }) => unknown> = {
+    speech: resolveSpeechModel,
+    transcription: resolveTranscriptionModel,
+    embedding: resolveEmbeddingModel,
+    image: resolveImageModel,
+  };
+
+  /** A real model id for a row, from the registry's own data. */
+  function modelIdFor(spec: AiProviderSpec): string {
+    return spec.staticModels?.[0] ?? spec.defaultModel ?? 'stub-model';
+  }
+
+  /** Rows whose declared modalities include `modality`. */
+  function declaringRows(modality: AiDispatchedModality): string[] {
+    return AI_PROVIDERS.filter((p) => providerModalities(p).includes(modality))
+      .map((p) => p.id)
+      .sort();
+  }
+
+  it('each table names EXACTLY the providers whose registry rows declare that modality', () => {
+    // Both inclusions at once. A table entry without the row marker is
+    // dispatch the console cannot offer; a row marker without the entry is
+    // the original connect-form-only defect. `video` is deliberately not in
+    // DISPATCHED: fal/xai/replicate really export video models, but the `ai`
+    // package's video surface is still experimental, so declared-video rows
+    // have no resolver yet and are not held to this.
+    for (const modality of DISPATCHED) {
+      expect(modalityFactoryProviderIds(modality), modality).toEqual(declaringRows(modality));
+    }
+  });
+
+  it('the four tables carry the full audio/vision/embedding fleet, not a token sample', () => {
+    // The concrete rosters, named so a silent shrink is visible in review.
+    expect(modalityFactoryProviderIds('speech')).toEqual([
+      'deepgram', 'elevenlabs', 'fal', 'hume', 'lmnt', 'microsoft-foundry', 'mistral', 'openai', 'xai',
+    ]);
+    expect(modalityFactoryProviderIds('transcription')).toEqual([
+      'assemblyai', 'deepgram', 'elevenlabs', 'fal', 'gladia', 'groq', 'microsoft-foundry', 'mistral', 'openai', 'revai', 'xai',
+    ]);
+    expect(modalityFactoryProviderIds('embedding')).toEqual([
+      'cohere', 'fireworks', 'microsoft-foundry', 'mistral', 'openai', 'perplexity', 'together', 'voyage',
+    ]);
+    expect(modalityFactoryProviderIds('image')).toEqual([
+      'fal', 'fireworks', 'luma', 'microsoft-foundry', 'openai', 'replicate', 'together', 'xai',
+    ]);
+  });
+
+  it('EVERY table entry constructs a model from a stub credential with zero network traffic', () => {
+    // Construction must be pure: a factory that phones home at build time
+    // would bill a tenant for resolving a model it never called. fetch is
+    // stubbed to a thrower, so any request fails the test loudly.
+    vi.stubGlobal('fetch', vi.fn(() => {
+      throw new Error('model CONSTRUCTION must not make network calls');
+    }));
+    try {
+      for (const modality of DISPATCHED) {
+        for (const id of modalityFactoryProviderIds(modality)) {
+          const spec = AI_PROVIDERS.find((p) => p.id === id)!;
+          const model = RESOLVERS[modality]({
+            provider: id,
+            model: modelIdFor(spec),
+            apiKey: 'stub-credential',
+            // microsoft-foundry's whole base is operator-supplied
+            // (chatBaseUrl "{baseUrl}"); the per-call override stands in for
+            // it exactly as the language resolver's own tests do.
+            ...(spec.chatBaseUrl === '{baseUrl}'
+              ? { baseUrl: 'https://stub-resource.example.test/v1' }
+              : {}),
+          });
+          expect(model, `${modality}:${id}`).toBeTruthy();
+        }
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('refuses an unknown provider with the same named error as the language resolver', () => {
+    for (const modality of DISPATCHED) {
+      expect(
+        () => RESOLVERS[modality]({ provider: 'not-a-provider', model: 'm', apiKey: 'k' }),
+        modality,
+      ).toThrow(/unknown AI provider/);
+    }
+  });
+
+  it('refuses a KNOWN provider that lacks the modality, naming what it does declare', () => {
+    // anthropic's @ai-sdk package stubs every non-language method with a
+    // NoSuchModelError thrower, so it must not be resolvable for any of these.
+    for (const modality of DISPATCHED) {
+      expect(hasModalityDispatch('anthropic', modality)).toBe(false);
+      expect(
+        () => RESOLVERS[modality]({ provider: 'anthropic', model: 'm', apiKey: 'k' }),
+        modality,
+      ).toThrow(new RegExp(`anthropic has no ${modality} models`));
+    }
+    // …and a single-modality row is refused OUTSIDE its modality: Voyage
+    // embeds, it does not speak.
+    expect(() => resolveSpeechModel({ provider: 'voyage', model: 'voyage-4', apiKey: 'k' })).toThrow(
+      /voyage has no speech models/,
+    );
+    expect(() =>
+      resolveEmbeddingModel({ provider: 'elevenlabs', model: 'eleven_v3', apiKey: 'k' }),
+    ).toThrow(/elevenlabs has no embedding models/);
+  });
+
+  it('openai embeddings: the flagship first-party path builds the SDK embedding surface', () => {
+    // The registry row now declares "embedding" and the table dispatches it —
+    // the pair of facts the cross-check test holds for every provider, spelled
+    // out here for the one most callers will actually use.
+    expect(hasModalityDispatch('openai', 'embedding')).toBe(true);
+    expect(providerModalities(getAiProvider('openai')!)).toContain('embedding');
+    const model = resolveEmbeddingModel({
+      provider: 'openai',
+      model: 'text-embedding-3-small',
+      apiKey: 'k',
+    });
+    // EmbeddingModel is `string | EmbeddingModelV*`; only the object form
+    // carries the surface id. Assert the surface, not mere truthiness — the
+    // same discipline the openai-responses language test above uses.
+    expect(typeof model).not.toBe('string');
+    const built = model as Exclude<typeof model, string>;
+    expect(built.modelId).toBe('text-embedding-3-small');
+    expect(String(built.provider)).toContain('openai');
+  });
+
+  it('openai embeddings: an unknown MODEL id still constructs (model ids are catalog data, not code)', () => {
+    // Same contract as the language resolver: the table keys on the provider,
+    // never the model id — a new embedding model is a catalog update, not a
+    // code change, so construction must not gate on a known-ids list.
+    expect(
+      resolveEmbeddingModel({ provider: 'openai', model: 'text-embedding-99-future', apiKey: 'k' }),
+    ).toBeTruthy();
   });
 });
 

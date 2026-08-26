@@ -17,9 +17,11 @@
  * A provider's factory is an IMPORT, and imports cannot be expressed as catalog data. So the table
  * is the one unavoidable code-side fact: one line per provider, no conditionals, no behaviour. Every
  * other decision — key env var, base URL, default model, whether the provider is OpenAI-shaped —
- * stays where it belongs, in the registry row. A provider ABSENT from this table is not an error: it
- * falls through to the OpenAI-compatible adapter using its own `chatBaseUrl`, which is how ~15 of the
- * rows already work (only 4 of 30 ever declared a dialect, and 3 of those restated the default).
+ * stays where it belongs, in the registry row. A provider ABSENT from the LANGUAGE table is not an
+ * error: it falls through to the OpenAI-compatible adapter using its own `chatBaseUrl`, which is how
+ * ~40 of the registry's 66 rows work (very few ever declared a dialect — most restate the default).
+ * The non-language tables (speech / transcription / embedding / image, below) have NO such fallback:
+ * those endpoints are not uniformly OpenAI-shaped, so absence there is a named error, never a guess.
  */
 
 import type {
@@ -46,7 +48,11 @@ import { createPerplexity } from "@ai-sdk/perplexity";
 import { createBaseten } from "@ai-sdk/baseten";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 // Audio, visual and embedding packages. Same rule as above: an import cannot be catalog data, so the
-// tables further down are the one code-side fact and everything else stays in the registry row.
+// per-modality factory tables below (FIRST_PARTY_SPEECH/TRANSCRIPTION/EMBEDDING/IMAGE_FACTORIES,
+// consumed by resolveSpeechModel & co.) are the one code-side fact and everything else stays in the
+// registry row. Every method named in those tables was READ from the installed package's own
+// dist/*.d.ts + dist/index.js — several packages type a modality method that only throws
+// NoSuchModelError (a ProviderV4 interface stub), and a stub must never earn a table entry.
 import { createElevenLabs } from "@ai-sdk/elevenlabs";
 import { createLMNT } from "@ai-sdk/lmnt";
 import { createHume } from "@ai-sdk/hume";
@@ -240,6 +246,227 @@ export function resolveLanguageModel(input: ResolveModelInput): LanguageModel {
     apiKey: input.apiKey,
     baseURL,
   })(modelId);
+}
+
+// ── SPEECH / TRANSCRIPTION / EMBEDDING / IMAGE DISPATCH ─────────────────────
+//
+// Same architecture as FIRST_PARTY_FACTORIES above: keyed by OUR registry row
+// id, one line per provider, no behaviour. Two deliberate differences from the
+// language table:
+//
+//   1. NO OpenAI-compatible fallback. `createOpenAICompatible` only speaks the
+//      chat/completions dialect family; a speech, transcription, embedding or
+//      image endpoint has no uniform wire shape to fall back to, so a row
+//      absent from its modality table is a NAMED error at construction rather
+//      than a request aimed at the wrong route.
+//   2. Some vendors' SDK factories take NO model id (xai speech/transcription
+//      and gladia transcription serve one fixed model; hume's speech model id
+//      is the empty sentinel) — those entries simply ignore the resolved id,
+//      which callers still supply from the row's staticModels.
+//
+// EVERY entry was verified against the installed package's dist output, not
+// vendor docs and not memory. The traps this avoided, worth recording so the
+// next audit does not "fix" them back in:
+//   - Most @ai-sdk packages TYPE textEmbeddingModel()/imageModel() because the
+//     ProviderV4 interface requires them, but implement them as
+//     NoSuchModelError throwers (groq, deepgram, elevenlabs, assemblyai,
+//     gladia, revai, cerebras, deepseek, anthropic, xai embeddings; mistral,
+//     cohere, perplexity, hume, lmnt images; fal/replicate embeddings). A
+//     table built from the .d.ts alone would dispatch straight into a throw.
+//   - @ai-sdk/replicate authenticates with `apiToken`, not `apiKey`.
+//   - @ai-sdk/perplexity REALLY does implement embeddings at the installed
+//     version, however surprising. @ai-sdk/baseten's embedding factory is
+//     also real but requires a per-deployment modelURL and throws at
+//     construction without one — a catalog model id cannot address it, so
+//     baseten is deliberately absent here and undeclared in the registry.
+//   - The pure-audio packages (elevenlabs, lmnt, hume, deepgram, revai,
+//     gladia, assemblyai) accept `apiKey` only — no `baseURL` setting exists,
+//     so a base-URL override is silently inapplicable there.
+//   - @ai-sdk/google is NOT installed (the google row dispatches language via
+//     the OpenAI-compat shim), so google embedding/image have no factory to
+//     name and are deliberately absent.
+//   - Video is real in @ai-sdk/xai, @ai-sdk/fal and @ai-sdk/replicate but the
+//     `ai` package's video surface is still experimental
+//     (Experimental_VideoModelV4); no video table is declared yet.
+
+/** Returns a callable that builds this modality's model from a model id. */
+type ModalityFactory<M> = (opts: FactoryOptions) => (modelId: string) => M;
+
+/** Registry id → text-to-speech factory. Method verified real (non-stub) in each installed package. */
+const FIRST_PARTY_SPEECH_FACTORIES: Readonly<
+  Record<string, ModalityFactory<SpeechModel>>
+> = {
+  openai: (o) => (m) => createOpenAI(o).speech(m),
+  "microsoft-foundry": (o) => (m) => createAzure(o).speech(m),
+  // Fixed-model surface: XaiProvider.speech() takes no id (grok voice).
+  xai: (o) => () => createXai(o).speech(),
+  mistral: (o) => (m) => createMistral(o).speech(m),
+  elevenlabs: (o) => (m) => createElevenLabs(o).speech(m),
+  lmnt: (o) => (m) => createLMNT(o).speech(m),
+  // HumeProvider.speech() takes no id — the SDK's model id is the '' sentinel;
+  // the row's staticModels surface it as "default".
+  hume: (o) => () => createHume(o).speech(),
+  deepgram: (o) => (m) => createDeepgram(o).speech(m),
+  fal: (o) => (m) => createFal(o).speech(m),
+};
+
+/** Registry id → speech-to-text factory. */
+const FIRST_PARTY_TRANSCRIPTION_FACTORIES: Readonly<
+  Record<string, ModalityFactory<TranscriptionModel>>
+> = {
+  openai: (o) => (m) => createOpenAI(o).transcription(m),
+  "microsoft-foundry": (o) => (m) => createAzure(o).transcription(m),
+  // Fixed-model surface: XaiProvider.transcription() takes no id.
+  xai: (o) => () => createXai(o).transcription(),
+  mistral: (o) => (m) => createMistral(o).transcription(m),
+  groq: (o) => (m) => createGroq(o).transcription(m),
+  elevenlabs: (o) => (m) => createElevenLabs(o).transcription(m),
+  deepgram: (o) => (m) => createDeepgram(o).transcription(m),
+  // @ai-sdk/revai types a CLOSED model-id union ('machine' | 'low_cost' |
+  // 'fusion') with no `(string & {})` widening and does not export the type.
+  // Model ids are catalog data here (the row's staticModels carry that exact
+  // set), so the assertion states the boundary rather than closing the table
+  // over a vendor union it cannot import.
+  revai: (o) => (m) =>
+    createRevai(o).transcription(m as Parameters<ReturnType<typeof createRevai>['transcription']>[0]),
+  // Fixed-model surface: GladiaProvider.transcription() takes no id.
+  gladia: (o) => () => createGladia(o).transcription(),
+  assemblyai: (o) => (m) => createAssemblyAI(o).transcription(m),
+  fal: (o) => (m) => createFal(o).transcription(m),
+};
+
+/** Registry id → text-embedding factory. */
+const FIRST_PARTY_EMBEDDING_FACTORIES: Readonly<
+  Record<string, ModalityFactory<EmbeddingModel>>
+> = {
+  openai: (o) => (m) => createOpenAI(o).textEmbeddingModel(m),
+  "microsoft-foundry": (o) => (m) => createAzure(o).textEmbeddingModel(m),
+  mistral: (o) => (m) => createMistral(o).textEmbeddingModel(m),
+  cohere: (o) => (m) => createCohere(o).textEmbeddingModel(m),
+  together: (o) => (m) => createTogetherAI(o).textEmbeddingModel(m),
+  fireworks: (o) => (m) => createFireworks(o).textEmbeddingModel(m),
+  perplexity: (o) => (m) => createPerplexity(o).textEmbeddingModel(m),
+  voyage: (o) => (m) => createVoyage(o).textEmbeddingModel(m),
+};
+
+/** Registry id → image-generation factory. */
+const FIRST_PARTY_IMAGE_FACTORIES: Readonly<
+  Record<string, ModalityFactory<ImageModel>>
+> = {
+  openai: (o) => (m) => createOpenAI(o).image(m),
+  "microsoft-foundry": (o) => (m) => createAzure(o).image(m),
+  xai: (o) => (m) => createXai(o).image(m),
+  together: (o) => (m) => createTogetherAI(o).image(m),
+  fireworks: (o) => (m) => createFireworks(o).image(m),
+  fal: (o) => (m) => createFal(o).image(m),
+  luma: (o) => (m) => createLuma(o).image(m),
+  // @ai-sdk/replicate's credential setting is `apiToken`, not `apiKey`.
+  replicate: (o) => (m) =>
+    createReplicate({
+      apiToken: o.apiKey,
+      ...(o.baseURL ? { baseURL: o.baseURL } : {}),
+    }).image(m),
+};
+
+/** The four dispatched non-language modalities. `text` and `video` are deliberately not members:
+ *  text has its own resolver above, and video has no stable surface in the installed `ai` package. */
+export type AiDispatchedModality = Extract<
+  AiModality,
+  "speech" | "transcription" | "embedding" | "image"
+>;
+
+const MODALITY_FACTORY_TABLES = {
+  speech: FIRST_PARTY_SPEECH_FACTORIES,
+  transcription: FIRST_PARTY_TRANSCRIPTION_FACTORIES,
+  embedding: FIRST_PARTY_EMBEDDING_FACTORIES,
+  image: FIRST_PARTY_IMAGE_FACTORIES,
+} as const;
+
+/** Every provider id that can actually be dispatched for `modality` — the table keys, sorted.
+ *  The registry cross-check test holds these ⊆ the rows DECLARING that modality, so the console
+ *  can trust a declared modality to be dispatchable and vice versa. */
+export function modalityFactoryProviderIds(
+  modality: AiDispatchedModality,
+): string[] {
+  return Object.keys(MODALITY_FACTORY_TABLES[modality]).sort();
+}
+
+/** True when `providerId` has a real (non-stub) factory for `modality`. */
+export function hasModalityDispatch(
+  providerId: string,
+  modality: AiDispatchedModality,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(
+    MODALITY_FACTORY_TABLES[modality],
+    providerId,
+  );
+}
+
+/**
+ * Shared core for the four non-language resolvers. Mirrors resolveLanguageModel
+ * exactly — same registry lookup, same model-id defaulting, same base-URL
+ * precedence (per-call override > env override > row default) — minus the
+ * OpenAI-compatible fallback, which does not exist for these modalities (see
+ * the table header above). Errors are constructed to name the exact gap: an
+ * unknown row, a row that declares the modality but lost its table entry, or a
+ * row that simply has no models of this kind.
+ */
+function resolveModalityModel<M>(
+  modality: AiDispatchedModality,
+  table: Readonly<Record<string, ModalityFactory<M>>>,
+  input: ResolveModelInput,
+): M {
+  const spec = getAiProvider(input.provider);
+  if (!spec) throw new Error(`unknown AI provider: ${input.provider}`);
+  const factory = table[spec.id];
+  if (!factory) {
+    const declared = providerModalities(spec);
+    throw new Error(
+      declared.includes(modality)
+        ? `provider ${spec.id} declares ${modality} but has no dispatch entry in the ${modality} factory table — the installed @ai-sdk package must expose a real (non-stub) ${modality} factory before the row may declare it`
+        : `provider ${spec.id} has no ${modality} models (declares: ${declared.join(", ")})`,
+    );
+  }
+  const modelId = String(input.model || spec.defaultModel || "").trim();
+  if (!modelId) throw new Error(`no model id for provider ${input.provider}`);
+  const env = input.env ?? process.env;
+  const baseURL = resolveBaseUrl(spec, env, input.baseUrl);
+  const opts: FactoryOptions = {
+    apiKey: input.apiKey,
+    ...(baseURL ? { baseURL } : {}),
+  };
+  return factory(opts)(modelId);
+}
+
+/** Build the text-to-speech model for a provider+model pair. Same signature contract as
+ *  resolveLanguageModel: provider and model are SEPARATE fields, never a joined string. */
+export function resolveSpeechModel(input: ResolveModelInput): SpeechModel {
+  return resolveModalityModel("speech", FIRST_PARTY_SPEECH_FACTORIES, input);
+}
+
+/** Build the speech-to-text model for a provider+model pair. */
+export function resolveTranscriptionModel(
+  input: ResolveModelInput,
+): TranscriptionModel {
+  return resolveModalityModel(
+    "transcription",
+    FIRST_PARTY_TRANSCRIPTION_FACTORIES,
+    input,
+  );
+}
+
+/** Build the text-embedding model for a provider+model pair. */
+export function resolveEmbeddingModel(input: ResolveModelInput): EmbeddingModel {
+  return resolveModalityModel(
+    "embedding",
+    FIRST_PARTY_EMBEDDING_FACTORIES,
+    input,
+  );
+}
+
+/** Build the image-generation model for a provider+model pair. */
+export function resolveImageModel(input: ResolveModelInput): ImageModel {
+  return resolveModalityModel("image", FIRST_PARTY_IMAGE_FACTORIES, input);
 }
 
 // ── One streamed, tool-calling chat turn ────────────────────────────────────
@@ -910,7 +1137,7 @@ export async function streamAiChatTurn(
   // TWO ROUTES TO THE VENDOR'S OWN FIGURE, in the order of how directly each
   // is parsed. A first-party package that already decoded cost into provider
   // metadata is the most trustworthy reading; the declared raw-usage path is
-  // the general fallback for the ~30 rows served by the compatible adapter,
+  // the general fallback for the ~40 rows served by the compatible adapter,
   // which decodes nothing vendor-specific on its own. Both are EXACT amounts
   // the vendor charged, so either beats the catalog estimate — and when
   // neither resolves this stays undefined and the estimate stands.
