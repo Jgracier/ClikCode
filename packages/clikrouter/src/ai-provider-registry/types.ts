@@ -348,6 +348,23 @@ export interface AiProviderSpec {
     /** Short note shown where Set would be, e.g. Integrations ownership. */
     note: string;
   };
+  /**
+   * This provider's key is the SAME PlatformSecret a Compute-tab vendor uses.
+   *
+   * Distinct from `credentialManagedElsewhere`, which REPLACES the Set button
+   * because another surface owns the credential. These vendors sell compute and
+   * inference off one key and are settable from either tab — the badge exists
+   * because neither tab said so, which made setting it here look like it might
+   * be a different credential, or like it might break the compute one.
+   *
+   * The manifest deliberately rows such a key ONCE: a second row would be two
+   * inputs writing one secret, where the later save silently overwrites the
+   * earlier. Sharing is the right design; the omission was only saying it.
+   */
+  credentialSharedWith?: {
+    /** Where else this exact key is used, e.g. "Compute -> GPU". */
+    note: string;
+  };
   /** True when the provider speaks the OpenAI chat-completions dialect. */
   openAiCompatible?: boolean;
   /**

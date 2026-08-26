@@ -456,6 +456,10 @@ export const AI_PROVIDERS = [
     keyUrl: "https://api.together.ai/settings/api-keys",
     label: "Together AI",
     envKey: "TOGETHER_API_KEY",
+    // One key, two tabs: this vendor sells compute AND inference off it.
+    // Settable from either — the badge exists because neither tab said
+    // they were the same secret.
+    credentialSharedWith: { note: "Shared with Compute -> GPU (batch)" },
     chatBaseUrl: "https://api.together.xyz/v1",
     probe: { kind: "openai-models", url: "https://api.together.xyz/v1/models" },
     openAiCompatible: true,
@@ -504,6 +508,10 @@ export const AI_PROVIDERS = [
     keyUrl: "https://app.baseten.co/settings/api_keys",
     label: "Baseten",
     envKey: "BASETEN_API_KEY",
+    // One key, two tabs: this vendor sells compute AND inference off it.
+    // Settable from either — the badge exists because neither tab said
+    // they were the same secret.
+    credentialSharedWith: { note: "Shared with Compute -> GPU (dedicated deployments)" },
     // Chat completions still go through the inference host — unaffected by
     // the probe change below.
     chatBaseUrl: "https://inference.baseten.co/v1",
@@ -801,6 +809,10 @@ export const AI_PROVIDERS = [
     keyUrl: "https://novita.ai/settings/key-management",
     label: "Novita AI",
     envKey: "NOVITA_API_KEY",
+    // One key, two tabs: this vendor sells compute AND inference off it.
+    // Settable from either — the badge exists because neither tab said
+    // they were the same secret.
+    credentialSharedWith: { note: "Shared with Compute -> GPU" },
     chatBaseUrl: "https://api.novita.ai/v3/openai",
     // The catalog is public, so keep credential health explicitly unsupported
     // and discover models through the separate catalog URL.
@@ -1051,6 +1063,23 @@ export const AI_PROVIDERS = [
     // request time via urlParamEnvKey (see resolveProviderUrl in
     // ai-provider-http.ts).
     urlParamEnvKey: "CLOUDFLARE_AI_ACCOUNT_ID",
+    // The account id is settable HERE now, which it was not while this row
+    // borrowed the compute credential. A templated base URL must either
+    // prompt for its segment or declare the value comes from elsewhere —
+    // ai-provider-models asserts exactly that, and caught the gap when
+    // `credentialManagedElsewhere` was removed without a prompt replacing it.
+    //
+    // The consent fills it, so this prompt is the OVERRIDE path: point Workers
+    // AI at a different Cloudflare account without touching DNS or Workers.
+    urlParamPrompt: {
+      label: "Cloudflare account ID",
+      help: "Filled in by the Cloudflare connect. Set it only to use a different account than compute.",
+      placeholder: "0123456789abcdef0123456789abcdef",
+      // 32 lowercase hex — Cloudflare account ids are fixed-width, so a
+      // pasted dashboard URL fragment or an api token is rejected here
+      // rather than at request time as a 404 nobody can read.
+      pattern: "^[0-9a-f]{32}$",
+    },
     chatBaseUrl:
       "https://api.cloudflare.com/client/v4/accounts/{urlParam}/ai/v1",
     // Account-scoped model search is authenticated and returns the models
@@ -1061,13 +1090,15 @@ export const AI_PROVIDERS = [
       kind: "cloudflare-models",
       url: "https://api.cloudflare.com/client/v4/accounts/{urlParam}/ai/models/search",
     },
-    // Same CLOUDFLARE_OAUTH_TOKEN as Platform secrets (DNS + Workers AI). Connect
-    // lives ONLY on Platform secrets → Cloudflare so one consent cannot be
-    // forked or overwritten from the AI tab. This row still shows green /
-    // models / usage when that token is present.
-    credentialManagedElsewhere: {
-      note: "Controlled in Platform secrets → Cloudflare",
-    },
+    // Workers AI has its OWN pair now (CLOUDFLARE_AI_TOKEN /
+    // CLOUDFLARE_AI_ACCOUNT_ID), written by the Cloudflare consent alongside the
+    // compute pair. `credentialManagedElsewhere` is deliberately GONE: it
+    // REPLACES the Set button, which was right while this row borrowed the DNS
+    // token — a second Connect could have forked one consent. With a credential
+    // of its own, suppressing Set would leave an operator unable to do the one
+    // thing the split was for: point AI at a different Cloudflare account, or a
+    // token scoped to AI alone, without touching compute. The consent still
+    // fills it, so the normal path still pastes nothing.
     openAiCompatible: true,
   },
   {
@@ -1765,6 +1796,10 @@ export const AI_PROVIDERS = [
     unitPricingCatalog: "fal",
     label: "fal.ai",
     envKey: "FAL_API_KEY",
+    // One key, two tabs: this vendor sells compute AND inference off it.
+    // Settable from either — the badge exists because neither tab said
+    // they were the same secret.
+    credentialSharedWith: { note: "Shared with Compute -> GPU" },
     keyUrl: "https://fal.ai/dashboard/keys",
     probe: { kind: "unsupported" },
     // Curated from @ai-sdk/fal image/video/speech/transcription unions —
