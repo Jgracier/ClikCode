@@ -1036,11 +1036,21 @@ export const AI_PROVIDERS = [
     contextWindow: 32_000,
     keyUrl: "https://dash.cloudflare.com/profile/api-tokens",
     label: "Cloudflare Workers AI",
-    envKey: "CLOUDFLARE_OAUTH_TOKEN",
+    // ITS OWN CREDENTIAL, filled by the Cloudflare connect.
+    //
+    // This read CLOUDFLARE_OAUTH_TOKEN directly, which made the AI tab's row a
+    // pointer at another tab ("managed in Compute") and coupled Workers AI to
+    // the token that also runs DNS. The connect writes both pairs, so the
+    // normal path is unchanged; what this buys is the ability to scope or
+    // repoint AI without touching the compute token.
+    //
+    // A one-shot boot migration seeds these from the compute pair for installs
+    // that connected before this split — see loadPlatformSecrets.
+    envKey: "CLOUDFLARE_AI_TOKEN",
     // Account id is baked into the path, not sent as a header — resolved at
-    // request time from CLOUDFLARE_ACCOUNT_ID via urlParamEnvKey (see
-    // resolveProviderUrl in ai-provider-http.ts).
-    urlParamEnvKey: "CLOUDFLARE_ACCOUNT_ID",
+    // request time via urlParamEnvKey (see resolveProviderUrl in
+    // ai-provider-http.ts).
+    urlParamEnvKey: "CLOUDFLARE_AI_ACCOUNT_ID",
     chatBaseUrl:
       "https://api.cloudflare.com/client/v4/accounts/{urlParam}/ai/v1",
     // Account-scoped model search is authenticated and returns the models
