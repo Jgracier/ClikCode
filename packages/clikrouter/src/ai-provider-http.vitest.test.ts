@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   aggregateResponsesSse,
   buildAiAuthHeaders,
@@ -352,6 +352,38 @@ describe('buildAiChatRequest', () => {
       { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
     ]);
     expect(req.alwaysSse).toBe(true);
+  });
+
+  // The Codex backend rejects max_output_tokens outright (400, live-verified
+  // 2026-08-10), so the builder must omit it — but the caller who asked for a
+  // cap must hear about the drop, once per process, not have it silently eaten.
+  it('drops maxTokens on the codex lane, warning once and never sending the param', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const build = () =>
+        buildAiChatRequest({
+          provider: 'openai',
+          model: 'gpt-5.1-codex',
+          apiKey: 'oauth-token',
+          credentialSource: 'oauth',
+          maxTokens: 512,
+          messages: [{ role: 'user', content: 'hi' }],
+        });
+      const first = build();
+      const second = build();
+      // The vendor 400s on the param, so it must be absent under every spelling.
+      for (const req of [first, second]) {
+        expect(req.dialect).toBe('codex-responses');
+        expect(req.body.max_output_tokens).toBeUndefined();
+        expect(req.body.max_tokens).toBeUndefined();
+        expect(req.body.max_completion_tokens).toBeUndefined();
+      }
+      // Once per process — the second identical call must not warn again.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/maxTokens.*cannot be enforced/s);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   // The chokepoint guard. Anthropic's HTTP API DOES answer a Claude

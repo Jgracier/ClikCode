@@ -245,6 +245,13 @@ function splitSystemAndTurns(input: ChatTurnInput): {
  * for these providers: the CLI's only privileged act was knowing this host, these
  * headers and this body shape.
  */
+/**
+ * One-shot latch for the codex-lane maxTokens drop warning below. Per process,
+ * not per call: the drop is a property of the surface, not of any one request,
+ * and this builder sits on the hot path of every subscription chat turn.
+ */
+let warnedCodexMaxTokensDropped = false;
+
 function buildOauthSurfaceRequest(
   input: ChatTurnInput,
   spec: NonNullable<ReturnType<typeof getAiProvider>>,
@@ -309,6 +316,22 @@ function buildOauthSurfaceRequest(
     };
   }
 
+  // codex-responses. See the max_output_tokens comment below: a caller-supplied
+  // cap cannot be enforced on this surface, and silently eating it would let a
+  // caller believe a budget guard exists when it does not. Say the drop out
+  // loud (same idiom as the northflank spec.image warn), once per process so a
+  // chatty lane does not flood the logs.
+  if (input.maxTokens !== undefined && !warnedCodexMaxTokensDropped) {
+    warnedCodexMaxTokensDropped = true;
+    console.warn(
+      `[clikrouter] maxTokens (${input.maxTokens}) cannot be enforced on the ChatGPT-subscription ` +
+        `Codex surface and is being dropped: this internal backend rejects the public Responses ` +
+        `API's max_output_tokens param (400, verified live 2026-08-10) and no replacement name is ` +
+        `documented. The request is sent uncapped. Use an API-key credential if a hard output cap ` +
+        `is required.`,
+    );
+  }
+
   // codex-responses. Three body fields are NOT optional here, each for its own
   // reason (all three verified against the Codex CLI's own wire format):
   //   store:false   — the backend rejects a stored request outright, so every
@@ -347,9 +370,16 @@ function buildOauthSurfaceRequest(
       // 2026-08-10, `400 Unsupported parameter: max_output_tokens`, on the
       // very first real dispatch this surface ever received. No verified
       // replacement name exists yet (this endpoint is undocumented — see the
-      // PR's own reviewer note), so omitted rather than guessed; a caller
-      // that needs a real cap here should re-test against a live token
-      // before adding one back.
+      // PR's own reviewer note), so omitted rather than guessed. The drop is
+      // announced via the one-shot console.warn above rather than swallowed.
+      // Before EVER adding a cap back here, re-test against a live ChatGPT
+      // OAuth token (not an API key — the api-key branch is a different
+      // surface with different rules): (1) send `max_output_tokens` and
+      // confirm whether the 400 still reproduces; (2) if it does, try the
+      // candidate spelling against a real dispatch and confirm both that the
+      // request is accepted AND that the stream actually truncates at the
+      // cap — an accepted-but-ignored param is worse than the omission,
+      // because it would silence the warn while enforcing nothing.
       ...(input.tools?.length
         ? {
             tools: input.tools.map((t) => ({
