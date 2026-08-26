@@ -365,6 +365,28 @@ export interface AiProviderSpec {
     /** Where else this exact key is used, e.g. "Compute -> GPU". */
     note: string;
   };
+  /**
+   * This provider's OWN credential is WRITTEN by another surface's consent, and
+   * is still settable here.
+   *
+   * The third of three, and each says something the others cannot:
+   *   credentialManagedElsewhere  another surface OWNS it — no Set button here.
+   *   credentialSharedWith        the same key as another tab's vendor.
+   *   credentialFilledBy          its own key, populated by a consent elsewhere,
+   *                               overridable here.
+   *
+   * Workers AI is the case: the Cloudflare connect writes CLOUDFLARE_AI_TOKEN
+   * alongside the compute pair, so nobody pastes anything on the normal path —
+   * but an operator can still point AI at a different account without touching
+   * DNS or Workers. Filing it as `managedElsewhere` would suppress the Set
+   * button and remove exactly the override the split exists to provide; filing
+   * it as nothing at all leaves it looking like an unconnectable provider,
+   * which is what ai-provider-oauth-verdicts caught.
+   */
+  credentialFilledBy?: {
+    /** The surface whose consent writes it, e.g. "the Cloudflare connect". */
+    note: string;
+  };
   /** True when the provider speaks the OpenAI chat-completions dialect. */
   openAiCompatible?: boolean;
   /**
