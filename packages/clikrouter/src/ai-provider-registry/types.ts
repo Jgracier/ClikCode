@@ -56,9 +56,18 @@ export type AiProbeKind =
  * (`?client_version=0.144.1`, `User-Agent: codex-tui/0.144.1`,
  * `version: 0.144.1`) inside a switch case in the probe module, where bumping
  * the pin meant finding all of them.
+ *
+ * ENV-OVERRIDABLE, because the pin is impersonating a vendor CLI the vendor
+ * versions on their own schedule: if OpenAI or Google ever starts rejecting an
+ * old client string, the fix is an env var and a restart, not a code deploy.
+ * Boot-time env is the right tier here — these feed registry rows built at
+ * module load, so a console-pasted live value could never reach them anyway.
  */
-export const OPENAI_CODEX_CLIENT_VERSION = "0.144.1";
-export const GEMINI_CLI_CLIENT_VERSION = "0.1";
+export const OPENAI_CODEX_CLIENT_VERSION =
+  (typeof process !== "undefined" && process.env?.OPENAI_CODEX_CLIENT_VERSION?.trim()) ||
+  "0.144.1";
+export const GEMINI_CLI_CLIENT_VERSION =
+  (typeof process !== "undefined" && process.env?.GEMINI_CLI_CLIENT_VERSION?.trim()) || "0.1";
 
 export type AiCredentialSource = "oauth" | "platform-secret" | "env";
 
