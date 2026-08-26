@@ -1058,6 +1058,10 @@ export const AI_PROVIDERS = [
     //
     // A one-shot boot migration seeds these from the compute pair for installs
     // that connected before this split — see loadPlatformSecrets.
+    // Its connect surface: the Cloudflare consent writes this key. Declared so
+    // the row is not mistaken for an unconnectable provider, WITHOUT
+    // suppressing Set the way credentialManagedElsewhere would.
+    credentialFilledBy: { note: "Filled by the Cloudflare connect" },
     envKey: "CLOUDFLARE_AI_TOKEN",
     // Account id is baked into the path, not sent as a header — resolved at
     // request time via urlParamEnvKey (see resolveProviderUrl in
