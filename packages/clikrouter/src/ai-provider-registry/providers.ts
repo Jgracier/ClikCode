@@ -36,6 +36,12 @@ export const AI_PROVIDERS = [
     defaultModel: "grok-4-1-fast",
     label: "Grok (xAI)",
     envKey: "GROK_API_KEY",
+    // @ai-sdk/xai really implements image, plus fixed-model speech() and
+    // transcription() (no model-id parameter — one served model each). Its
+    // embeddings method is a NoSuchModelError stub, so "embedding" is NOT
+    // declared. Video exists in the package but only behind the `ai`
+    // package's experimental surface, so it is not declared either.
+    modalities: ["text", "image", "speech", "transcription"],
     chatBaseUrl: "https://api.x.ai/v1",
     chatDialect: "openai-chat",
     authHeader: "bearer",
@@ -173,6 +179,12 @@ export const AI_PROVIDERS = [
     defaultModel: "gpt-5.1",
     label: "OpenAI",
     envKey: "OPENAI_API_KEY",
+    // Beyond chat: the installed @ai-sdk/openai implements real embedding /
+    // image / speech / transcription factories (read from its dist, not from
+    // memory) — dispatched via resolveEmbeddingModel & co. in
+    // ai-provider-models.ts. "text" stays first: category and routability
+    // derive from it.
+    modalities: ["text", "embedding", "image", "speech", "transcription"],
     chatBaseUrl: "https://api.openai.com/v1",
     chatDialect: "openai-chat",
     authHeader: "bearer",
@@ -378,6 +390,9 @@ export const AI_PROVIDERS = [
     defaultModel: "llama-3.3-70b-versatile",
     label: "Groq",
     envKey: "GROQ_API_KEY",
+    // @ai-sdk/groq implements a real transcription factory (whisper family);
+    // its embedding/image methods are NoSuchModelError stubs, not declared.
+    modalities: ["text", "transcription"],
     chatBaseUrl: "https://api.groq.com/openai/v1",
     probe: {
       kind: "openai-models",
@@ -430,6 +445,9 @@ export const AI_PROVIDERS = [
     defaultModel: "mistral-large-latest",
     label: "Mistral",
     envKey: "MISTRAL_API_KEY",
+    // @ai-sdk/mistral implements real embedding, speech and transcription
+    // (Voxtral) factories; its image method is a NoSuchModelError stub.
+    modalities: ["text", "embedding", "speech", "transcription"],
     chatBaseUrl: "https://api.mistral.ai/v1",
     probe: { kind: "openai-models", url: "https://api.mistral.ai/v1/models" },
     openAiCompatible: true,
@@ -456,6 +474,8 @@ export const AI_PROVIDERS = [
     keyUrl: "https://api.together.ai/settings/api-keys",
     label: "Together AI",
     envKey: "TOGETHER_API_KEY",
+    // @ai-sdk/togetherai implements real embedding and image factories.
+    modalities: ["text", "embedding", "image"],
     // One key, two tabs: this vendor sells compute AND inference off it.
     // Settable from either — the badge exists because neither tab said
     // they were the same secret.
@@ -482,6 +502,8 @@ export const AI_PROVIDERS = [
     keyUrl: "https://app.fireworks.ai/settings/users/api-keys",
     label: "Fireworks AI",
     envKey: "FIREWORKS_API_KEY",
+    // @ai-sdk/fireworks implements real embedding and image factories.
+    modalities: ["text", "embedding", "image"],
     chatBaseUrl: "https://api.fireworks.ai/inference/v1",
     probe: {
       kind: "openai-models",
@@ -508,6 +530,13 @@ export const AI_PROVIDERS = [
     keyUrl: "https://app.baseten.co/settings/api_keys",
     label: "Baseten",
     envKey: "BASETEN_API_KEY",
+    // @ai-sdk/baseten's embedding factory is real but PER-DEPLOYMENT: it
+    // requires a modelURL option naming the customer's own deployed endpoint
+    // and throws at construction without one ("No model URL provided for
+    // embeddings"). A catalog model id cannot address it, so no embedding
+    // modality is declared — dispatch here would be a guaranteed constructor
+    // throw, not a working lane. (Its image method is a NoSuchModelError stub.)
+    modalities: ["text"],
     // One key, two tabs: this vendor sells compute AND inference off it.
     // Settable from either — the badge exists because neither tab said
     // they were the same secret.
@@ -685,6 +714,9 @@ export const AI_PROVIDERS = [
     defaultModel: "command-a-03-2025",
     label: "Cohere",
     envKey: "COHERE_API_KEY",
+    // @ai-sdk/cohere implements a real embedding factory (its image method is
+    // a NoSuchModelError stub; reranking exists but has no `ai`-level surface).
+    modalities: ["text", "embedding"],
     // Cohere's documented OpenAI-compatibility host is api.cohere.ai (not
     // .com); live-verified /models 401s without a key (endpoint exists,
     // requires auth) — free trial keys work here too.
@@ -882,6 +914,9 @@ export const AI_PROVIDERS = [
     defaultModel: "sonar",
     label: "Perplexity Sonar",
     envKey: "PERPLEXITY_API_KEY",
+    // Surprising but READ from the installed dist: @ai-sdk/perplexity
+    // implements a real embedding factory ("perplexity.embedding").
+    modalities: ["text", "embedding"],
     chatBaseUrl: "https://api.perplexity.ai",
     chatPath: "/v1/sonar",
     // A REAL credential probe, despite Perplexity's own OpenAPI declaring an
@@ -991,6 +1026,9 @@ export const AI_PROVIDERS = [
     keyUrl: "https://ai.azure.com/",
     label: "Microsoft Foundry",
     envKey: "AZURE_AI_API_KEY",
+    // @ai-sdk/azure implements real embedding / image / speech / transcription
+    // factories against the same operator-supplied base the language lane uses.
+    modalities: ["text", "embedding", "image", "speech", "transcription"],
     baseUrlEnvKey: "AZURE_AI_BASE_URL",
     chatBaseUrl: "{baseUrl}",
     authHeader: "api-key",
