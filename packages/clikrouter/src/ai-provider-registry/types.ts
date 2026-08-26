@@ -41,7 +41,6 @@ export type AiProbeKind =
   | "anthropic-models" // GET url with x-api-key (or Bearer for OAuth) + anthropic-version
   | "google-code-assist" // Google Gemini CLI OAuth account/tier probe
   | "cloudflare-models" // Cloudflare account-scoped Workers AI model search
-  | "google-tokeninfo" // OAuth access-token introspection; 400 = dead credential
   | "openrouter-key" // GET /key with Bearer (OpenRouter's /models is unauthenticated)
   | "unsupported"; // no probe adapter
 
@@ -162,8 +161,7 @@ export interface AiProviderSpec {
    */
   apiKeyAccessClass?: "free-tier";
   /** Credential health probe. `url` is required for every kind except
-   *  'unsupported'. For 'google-tokeninfo' the token is appended as the
-   *  `access_token` query param by the probe module. `catalogUrl` is an
+   *  'unsupported'. `catalogUrl` is an
    *  optional SEPARATE unauthenticated models-list call for providers whose
    *  cheapest authenticated probe (`url`) doesn't itself return a model list
    *  (e.g. Hugging Face's whoami vs OpenRouter's /key) — fetched once after a
