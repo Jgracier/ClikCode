@@ -600,6 +600,60 @@ export function resolveRateLimitRetryAfterMs(error: unknown): number | undefined
  * than isPermanentAiCallFailure above, since escalating wrongly costs every
  * OTHER model at that provider a wasted routing window, not just this one.
  */
+/**
+ * The provider refused this REQUEST for being too big — not this MODEL for
+ * being broken.
+ *
+ * The distinction is the whole point. Everything else `isPermanentAiCallFailure`
+ * catches is a durable property of the model or the credential: a renamed id, a
+ * dead key, a revoked entitlement. "Reduce your message size" is a property of
+ * what WE sent, and the very next request may be a tenth the size.
+ *
+ * WHAT TREATING IT AS PERMANENT COST, measured 2026-08-26: groq answers an
+ * over-budget prompt with 413 and the text "Request too large ... on tokens per
+ * minute (TPM): Limit 8000, Requested 10909". 413 is neither 429 nor 5xx, so the
+ * AI SDK marks it non-retryable, so isPermanentAiCallFailure returned true, so
+ * both qwen models were cooled for TWENTY-FOUR HOURS — for the offence of being
+ * sent a prompt the platform had built too large. Every subsequent oversized
+ * turn re-cooled them for another 24h, so the exclusion renewed itself
+ * indefinitely and no amount of fixing the prompt could bring them back inside
+ * the window. Two perfectly healthy models, locked out by our own bug.
+ *
+ * Detected by SHAPE, not by provider: a status code where one is published, and
+ * the vendor-independent phrasings otherwise, because most providers report this
+ * as a 400 or a 429 with the explanation only in the body.
+ */
+export function isRequestTooLargeFailure(error: unknown): boolean {
+  if (!APICallError.isInstance(error)) return false;
+  // 413 Content Too Large is the only status that means this unambiguously.
+  if (error.statusCode === 413) return true;
+  const text = `${error.message} ${typeof error.responseBody === 'string' ? error.responseBody : ''}`;
+  return /request too large|reduce your message size|maximum context length|context[_ ]length[_ ]exceeded|prompt is too long|too many (?:input )?tokens/i.test(
+    text,
+  );
+}
+
+/**
+ * The token ceiling a provider NAMED while refusing an oversized request.
+ *
+ * Vendors state it outright — groq's "Limit 8000, Requested 10909" — and it is
+ * the same number the rate-limit headers carry, from a provider that may not
+ * have sent those headers. Learning it here means one refusal is enough to stop
+ * the router ever sending that provider an over-budget request again, instead of
+ * rediscovering the ceiling on every turn.
+ *
+ * Returns null unless the text genuinely names a limit; a guessed ceiling would
+ * exclude a provider that never published one.
+ */
+export function parseNamedTokenLimit(error: unknown): number | null {
+  if (!APICallError.isInstance(error)) return null;
+  const text = `${error.message} ${typeof error.responseBody === 'string' ? error.responseBody : ''}`;
+  const match = /\blimit[^0-9]{0,12}([0-9][0-9,_]{2,})/i.exec(text);
+  if (!match?.[1]) return null;
+  const value = Number.parseInt(match[1].replace(/[,_]/g, ''), 10);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 export function isAccountScopedAiCallFailure(error: unknown): boolean {
   if (!APICallError.isInstance(error)) return false;
   return (
