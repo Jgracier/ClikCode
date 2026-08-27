@@ -212,6 +212,20 @@ export interface AiRouterCandidate {
    */
   rateLimitHeadroom?: number | null;
   /**
+   * How much room this candidate's PROVIDER has left — money, subscription
+   * window, or rate-limit bucket — normalized to one factor by
+   * ai-provider-capacity.ts. 1 means no adjustment (plenty, or nothing
+   * published); below 1 discounts a provider close to refusing.
+   *
+   * A CONSTRAINT, never a quality: a provider with more credit is not a better
+   * model, only less likely to 402 mid-turn, so this can never exceed 1. It is
+   * separate from `rateLimitHeadroom` because that reads one window from the
+   * last response's headers, while this folds in the vendor's own balance
+   * endpoint — the number that told us openrouter, moonshot and hyperbolic were
+   * at $0.00 while the router treated them as ordinary candidates.
+   */
+  capacityFactor?: number | null;
+  /**
    * Observed generation rate in output tokens per second
    * (ai-model-throughput.ts), or null/absent when this pair has never produced
    * a long enough turn to measure.
@@ -453,6 +467,17 @@ function intelligenceWithReliability(
     comfortable: RATE_LIMIT_PRESSURE_THRESHOLD,
     floor: MIN_RATE_LIMIT_FACTOR,
   });
+
+  // Account-level room to serve: credit balance and subscription windows, which
+  // the per-response rate-limit headers above cannot see. Already computed as a
+  // penalty-only factor by ai-provider-capacity.ts.
+  if (
+    typeof candidate.capacityFactor === 'number' &&
+    Number.isFinite(candidate.capacityFactor) &&
+    candidate.capacityFactor > 0
+  ) {
+    capability *= Math.min(1, candidate.capacityFactor);
+  }
 
   if (preferThroughput) {
     capability *= throughputFactor(
