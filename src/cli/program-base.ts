@@ -128,6 +128,8 @@ export function buildBaseProgram(config: Conf): Command {
         config.set('seenBanner', true);
       }
 
+      // One-off URL override is `CLIKDEPLOY_API_URL` (see #495). `--local` is
+      // the localhost shorthand. `--api-url` is not a registered global flag.
       if (opts.local) {
         const localFromEnv = String(process.env.CLIKDEPLOY_LOCAL_API_URL || '').trim();
         const localFromConfig = String(config.get(CONFIG_KEYS.LOCAL_API_URL) || '').trim();
