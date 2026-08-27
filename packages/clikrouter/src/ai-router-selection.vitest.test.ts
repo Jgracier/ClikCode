@@ -309,10 +309,12 @@ describe('agenticIndex + trackRecordSuccessRate — capability is REAL EVIDENCE 
     expect(ranked[1]!.intelligence).toBe(4.2);
   });
 
-  it('agenticIndex takes PRECEDENCE over arenaScore when both are present — measured agentic beats crowd preference', () => {
-    // A model can be crowd-favorite (high arena Elo) yet measure poorly on
-    // real agentic tasks — the router dispatches agent loops, so the agentic
-    // measurement must win, even when it is the LOWER number.
+  it('WEIGHTS the agentic measurement above arena without discarding arena', () => {
+    // A model can be crowd-favorite (high arena Elo) yet measure poorly on real
+    // agentic tasks — the router dispatches agent loops, so the agentic number
+    // must LEAD. It used to win outright and arena was thrown away entirely;
+    // both are real measurements of the same question, so both now count, 2:1.
+    // See ai-evidence.ts: better evidence earns more weight, never a veto.
     const candidates: AiRouterCandidate[] = [
       { provider: 'both', model: 'm', accessClass: 'subscription', estimatedCostPerMTok: null, agenticIndex: 41, arenaScore: 93 },
       { provider: 'arena-only', model: 'm', accessClass: 'subscription', estimatedCostPerMTok: null, arenaScore: 60 },
@@ -320,44 +322,51 @@ describe('agenticIndex + trackRecordSuccessRate — capability is REAL EVIDENCE 
     const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
     const both = ranked.find((s) => s.candidate.provider === 'both')!;
     const arenaOnly = ranked.find((s) => s.candidate.provider === 'arena-only')!;
-    expect(both.intelligence).toBe(41);
+    // (41*2 + 93*1) / 3 — the agentic number dominates but arena still moves it.
+    expect(both.intelligence).toBeCloseTo(58.333, 2);
+    expect(both.intelligence).toBeGreaterThan(41); // arena was NOT discarded
+    expect(both.intelligence).toBeLessThan(93); // agentic still leads
     expect(arenaOnly.intelligence).toBe(60);
-    expect(ranked[0]!.candidate.provider).toBe('arena-only');
   });
 
-  it('trackRecordSuccessRate MULTIPLIES capability rather than replacing it, and never applies when absent', () => {
+  it('trackRecordSuccessRate is CENTRED on the expected rate, not a pure penalty', () => {
     const candidates: AiRouterCandidate[] = [
       { provider: 'unreliable', model: 'm', accessClass: 'subscription', estimatedCostPerMTok: null, agenticIndex: 80, trackRecordSuccessRate: 0.4 },
       { provider: 'unproven', model: 'm', accessClass: 'subscription', estimatedCostPerMTok: null, agenticIndex: 80 },
+      { provider: 'excellent', model: 'm', accessClass: 'subscription', estimatedCostPerMTok: null, agenticIndex: 80, trackRecordSuccessRate: 0.99 },
     ];
     const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
-    const unreliable = ranked.find((s) => s.candidate.provider === 'unreliable')!;
-    const unproven = ranked.find((s) => s.candidate.provider === 'unproven')!;
-    // Same real benchmark capability (80), but the platform has actually seen
-    // 'unreliable' succeed only 40% of the time — that must crush its
-    // effective score, not just nudge it.
-    expect(unreliable.intelligence).toBe(32);
-    // No track record yet is NOT the same as a confirmed-bad one — capability
-    // stays at the full, unpenalized 80.
-    expect(unproven.intelligence).toBe(80);
-    // The real evidence of unreliability must actually change the outcome.
-    expect(ranked[0]!.candidate.provider).toBe('unproven');
+    const get = (p: string) => ranked.find((s) => s.candidate.provider === p)!;
+    // Confirmed-bad is still crushed — that half of the behaviour was correct.
+    expect(get('unreliable').intelligence).toBeLessThan(50);
+    // No record yet is NOT confirmed-bad: unadjusted, as before.
+    expect(get('unproven').intelligence).toBe(80);
+    // NEW, and the point: a measured 99% now BEATS having no record. It used to
+    // lose to it, because every multiplier was <= 1 and absence skipped them —
+    // so the platform demoted models for the crime of having been measured.
+    expect(get('excellent').intelligence).toBeGreaterThan(80);
+    expect(ranked[0]!.candidate.provider).toBe('excellent');
+    expect(ranked[ranked.length - 1]!.candidate.provider).toBe('unreliable');
   });
 
-  it('composes both signals: agenticIndex as the base, trackRecordSuccessRate as the multiplier', () => {
+  it('composes both signals: the benchmark is the base, the record is the multiplier', () => {
     const candidates: AiRouterCandidate[] = [
       { provider: 'c', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80, trackRecordSuccessRate: 0.5 },
     ];
     const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
-    expect(ranked[0]!.intelligence).toBe(40);
+    // 0.5 is well below the 0.9 expectation, so capability is discounted from 80.
+    expect(ranked[0]!.intelligence).toBeLessThan(80);
+    expect(ranked[0]!.intelligence).toBeGreaterThan(0);
   });
 
-  it('trackRecordSuccessRate still applies its multiplier even with no agenticIndex (against the neutral default)', () => {
-    const candidates: AiRouterCandidate[] = [
-      { provider: 'proven-mediocre', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, trackRecordSuccessRate: 0.9 },
+  it('applies the record against the neutral default when there is no benchmark', () => {
+    const atExpectation: AiRouterCandidate[] = [
+      { provider: 'as-expected', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, trackRecordSuccessRate: 0.9 },
     ];
-    const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
-    expect(ranked[0]!.intelligence).toBe(45); // 50 * 0.9
+    // Exactly the expected rate == no adjustment == the neutral 50. This is the
+    // equivalence the old shape broke: "measured and normal" now scores the same
+    // as "never measured", instead of strictly worse.
+    expect(rankRouterCandidatesWithScores(atExpectation, 'frontier')[0]!.intelligence).toBeCloseTo(50, 6);
   });
 });
 
@@ -389,23 +398,16 @@ describe('capabilityRefusalCount — a NUDGE against real observed "I can\'t do 
 
   it('composes with trackRecordSuccessRate as a second, independent multiplier', () => {
     const candidates: AiRouterCandidate[] = [
-      { provider: 'both-signals', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80, trackRecordSuccessRate: 0.5, capabilityRefusalCount: 1 },
+      { provider: 'both-signals', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80, trackRecordSuccessRate: 0.5, capabilityRefusalCount: 2 },
+      { provider: 'clean-record', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0, agenticIndex: 80, trackRecordSuccessRate: 0.5 },
     ];
     const ranked = rankRouterCandidatesWithScores(candidates, 'frontier');
-    expect(ranked[0]!.intelligence).toBeCloseTo(80 * 0.5 * 0.85, 5);
-  });
-
-  it('a real, repeated refusal nudges a cheaper model below a clean-record alternative it used to beat', () => {
-    const candidates: AiRouterCandidate[] = [
-      { provider: 'weak-but-untested', model: 'small', accessClass: 'free-tier', estimatedCostPerMTok: 0.04, capabilityRefusalCount: 3 },
-      { provider: 'clean-record', model: 'other', accessClass: 'free-tier', estimatedCostPerMTok: 0.1 },
-    ];
-    // Both start from the same NEUTRAL_CAPABILITY_SCORE (50, no agenticIndex)
-    // — without the penalty they'd tie on intelligence and auto mode would
-    // prefer the cheaper one. 3 refusals cut the first to 50*0.55=27.5,
-    // enough for auto's blend to prefer the clean-record alternative despite
-    // its higher price.
-    const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
+    const get = (p: string) => ranked.find((s) => s.candidate.provider === p)!;
+    // The refusal discount is INDEPENDENT of the record discount: with the same
+    // 0.5 rate, observed refusals must cost strictly more. Asserted as a relation
+    // rather than an exact product so the two factors can be tuned separately
+    // without this test becoming a transcription of the arithmetic.
+    expect(get('both-signals').intelligence).toBeLessThan(get('clean-record').intelligence);
     expect(ranked[0]!.candidate.provider).toBe('clean-record');
   });
 });
@@ -426,17 +428,23 @@ describe('external endpoint-health priors — seed the blanks, never displace fi
     expect(ranked[1]!.latencyMs).toBe(3000);
   });
 
-  it('our own EWMA always wins over the external prior once it has samples', () => {
-    // The pair with a REAL observed 2500ms EWMA also carries a rosy 100ms
-    // external number — the prior must be ignored entirely, so the genuinely
-    // faster first-party-measured sibling ranks first.
+  it('our own EWMA LEADS the external prior without silencing it', () => {
+    // Was: "always wins ... the prior must be ignored entirely". A single
+    // first-party sample used to veto a feed built from thousands of
+    // observations. It now leads by weight (2:1) — the genuinely
+    // first-party-faster sibling still ranks first, but the rosy 100ms prior
+    // does move the slow pair's score instead of being discarded.
     const candidates: AiRouterCandidate[] = [
       { provider: 'a', model: 'own-slow-ext-fast', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, avgLatencyMs: 2500, externalLatencyMs: 100 },
       { provider: 'b', model: 'own-fast', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, avgLatencyMs: 800 },
     ];
     const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
     expect(ranked[0]!.candidate.model).toBe('own-fast');
-    expect(ranked[1]!.latencyMs).toBe(2500); // EWMA, not the 100ms prior
+    const slow = ranked.find((s) => s.candidate.model === 'own-slow-ext-fast')!;
+    // (2500*2 + 100*1) / 3 — between the two readings, nearer ours.
+    expect(slow.latencyMs).toBeCloseTo(1700, 0);
+    expect(slow.latencyMs).toBeLessThan(2500); // the feed was heard
+    expect(slow.latencyMs).toBeGreaterThan(100); // but did not take over
   });
 
   it('low external uptime deprioritizes a pair we have NO track record for', () => {
@@ -461,16 +469,18 @@ describe('external endpoint-health priors — seed the blanks, never displace fi
     expect(ranked[0]!.intelligence).toBe(ranked[1]!.intelligence);
   });
 
-  it('first-party track record supersedes the external uptime prior entirely', () => {
-    // Same 44% external uptime, but WE have real dispatch history for the
-    // pair (perfect success rate) — the prior must not touch the score, so
-    // the two candidates tie on intelligence.
+  it('external uptime still counts for a pair we DO have a track record for', () => {
+    // Was: "supersedes the prior entirely", asserting the two tie. That gate
+    // (`trackRecordSuccessRate == null`) meant a vendor endpoint flapping at 44%
+    // could not lower a model whose handful of first-party calls happened to
+    // land. Both are real measurements of reliability, so both count.
     const candidates: AiRouterCandidate[] = [
       { provider: 'proven', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, trackRecordSuccessRate: 1, externalUptime: 44 },
       { provider: 'also-proven', model: 'm', accessClass: 'free-tier', estimatedCostPerMTok: 0.1, trackRecordSuccessRate: 1 },
     ];
     const ranked = rankRouterCandidatesWithScores(candidates, 'auto');
-    expect(ranked[0]!.intelligence).toBe(ranked[1]!.intelligence);
+    expect(ranked[0]!.candidate.provider).toBe('also-proven');
+    expect(ranked[0]!.intelligence).toBeGreaterThan(ranked[1]!.intelligence);
   });
 
   it('the uptime discount is floored — a deprioritization, never a ban', () => {
