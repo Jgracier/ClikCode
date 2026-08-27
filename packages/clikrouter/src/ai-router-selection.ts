@@ -10,6 +10,17 @@
 //
 // Pure and dependency-free on purpose: no db/redis/env access, so it is safe for both the server
 // (ai-default-llm.ts) and — if a client ever needs it — a browser bundle.
+//
+// The one import below is a sibling PURE module (ai-evidence.ts) — how several
+// sources of one measurement are combined, and how a measurement becomes a score
+// multiplier. It carries no I/O either, so the property above is intact.
+
+import {
+  centeredFactor,
+  constraintFactor,
+  fuseEvidence,
+  sampleWeight,
+} from './ai-evidence';
 
 /**
  * 'auto' / 'auto-budget' / 'auto-frontier' are the "auto family" — all three
@@ -192,7 +203,7 @@ export interface AiRouterCandidate {
    * no usable limit headers, or none have been seen yet.
    *
    * Only ever used to DEPRIORITIZE, and only near the bottom of the range —
-   * see `rateLimitHeadroomFactor`. The platform already parsed these headers on
+   * see `constraintFactor` (ai-evidence.ts). The platform already parsed these headers on
    * every dispatch and rendered them in the admin panel, but routing asked them
    * exactly one binary question ("is this provider hard-stopped right now?"), so
    * a provider at 3% headroom ranked identically to one at 95% and bursts piled
@@ -200,6 +211,20 @@ export interface AiRouterCandidate {
    * along. Absent means "no evidence of pressure", never "under pressure".
    */
   rateLimitHeadroom?: number | null;
+  /**
+   * How much room this candidate's PROVIDER has left — money, subscription
+   * window, or rate-limit bucket — normalized to one factor by
+   * ai-provider-capacity.ts. 1 means no adjustment (plenty, or nothing
+   * published); below 1 discounts a provider close to refusing.
+   *
+   * A CONSTRAINT, never a quality: a provider with more credit is not a better
+   * model, only less likely to 402 mid-turn, so this can never exceed 1. It is
+   * separate from `rateLimitHeadroom` because that reads one window from the
+   * last response's headers, while this folds in the vendor's own balance
+   * endpoint — the number that told us openrouter, moonshot and hyperbolic were
+   * at $0.00 while the router treated them as ordinary candidates.
+   */
+  capacityFactor?: number | null;
   /**
    * Observed generation rate in output tokens per second
    * (ai-model-throughput.ts), or null/absent when this pair has never produced
@@ -317,6 +342,18 @@ function normalize(value: string): string {
  * enough samples) exists to differentiate with — that is the honest state
  * of what is actually known, not a regression to fix by guessing again.
  */
+/**
+ * How much a first-party measurement may outweigh a third-party feed once it is
+ * fully sampled. 2:1 — ours counts double, and NEVER silences theirs. See
+ * ai-evidence.ts's header for why outright precedence was the wrong reading of
+ * "our measurement is better evidence".
+ */
+const FIRST_PARTY_FULL_WEIGHT = 2;
+const EXTERNAL_FEED_WEIGHT = 1;
+
+/** Samples at which a first-party reading carries its full weight. */
+const LATENCY_TRUSTED_SAMPLES = 20;
+
 const NEUTRAL_CAPABILITY_SCORE = 50;
 
 /**
@@ -335,13 +372,17 @@ const NEUTRAL_CAPABILITY_SCORE = 50;
  *   3. NEUTRAL_CAPABILITY_SCORE when neither exists.
  */
 function baseCapabilityScore(candidate: AiRouterCandidate): number {
-  if (typeof candidate.agenticIndex === 'number' && Number.isFinite(candidate.agenticIndex)) {
-    return candidate.agenticIndex;
-  }
-  if (typeof candidate.arenaScore === 'number' && Number.isFinite(candidate.arenaScore)) {
-    return candidate.arenaScore;
-  }
-  return NEUTRAL_CAPABILITY_SCORE;
+  // BOTH benchmarks, weighted — not "agentic wins, arena ignored". They measure
+  // genuinely different things (task-fit vs breadth of human preference) and are
+  // both real measurements of the same underlying question. The agentic index is
+  // the better-fitting one, so it counts double; the arena score still moves the
+  // result rather than being discarded the moment the other exists.
+  return (
+    fuseEvidence([
+      { value: candidate.agenticIndex, weight: FIRST_PARTY_FULL_WEIGHT },
+      { value: candidate.arenaScore, weight: EXTERNAL_FEED_WEIGHT },
+    ]) ?? NEUTRAL_CAPABILITY_SCORE
+  );
 }
 
 /**
@@ -363,97 +404,88 @@ function intelligenceWithReliability(
   preferThroughput = false,
 ): number {
   let capability = baseCapabilityScore(candidate);
-  if (
-    typeof candidate.trackRecordSuccessRate === 'number' &&
-    Number.isFinite(candidate.trackRecordSuccessRate)
-  ) {
-    capability *= candidate.trackRecordSuccessRate;
-  }
-  // A SECOND, independent multiplier — deliberately not folded into the
-  // track-record one above: trackRecordSuccessRate answers "did the HTTP
-  // call succeed", while this answers "did the model actually USE an
-  // available tool instead of hallucinating a refusal" — a real model this
-  // platform has caught doing that repeatedly gets discounted here even on
-  // a call that "succeeded" by every other measure. A NUDGE, not a ban —
-  // 15% off per observed refusal, floored at a 60% total cut, so a model
-  // with real advantages elsewhere (free/subscription access, low latency)
-  // can still win; it just has to actually earn it against a clean-record
-  // alternative instead of coasting on being cheapest. See
-  // ai-model-capability.ts's own header for why this is a decaying,
-  // cross-provider, "nudge not ban" signal rather than the binary
-  // vendor/tested/observed tool-calling-SUPPORT tiers above it.
+
+  // ── QUALITY SIGNALS: symmetric, centred on what is expected ───────────────
+  // Each of these used to be `capability *= rate` — penalty-only, skipped when
+  // absent. A 98%-reliable model was multiplied by 0.98 while a model nobody had
+  // ever called was multiplied by nothing, so knowing a model was GOOD ranked it
+  // below knowing nothing at all. See ai-evidence.ts for the measured case.
+  //
+  // Centred instead: at the expected rate the factor is exactly 1 — identical to
+  // having no data, which is the correct equivalence ("assumed to perform as
+  // expected"). Above it earns a bounded bonus; below it takes the same discount
+  // it always did.
+  capability *= centeredFactor(candidate.trackRecordSuccessRate, {
+    expected: EXPECTED_SUCCESS_RATE,
+    min: 0.2,
+    max: 1.15,
+  });
+
+  // Tool-call refusals stay penalty-only and are NOT centred: zero refusals is
+  // the norm, not an achievement, so there is no "better than expected" side to
+  // reward. Same 15%-per-refusal nudge, floored, as before.
   if (
     typeof candidate.capabilityRefusalCount === 'number' &&
     Number.isFinite(candidate.capabilityRefusalCount) &&
     candidate.capabilityRefusalCount > 0
   ) {
-    const refusalFactor = Math.max(0.4, 1 - candidate.capabilityRefusalCount * 0.15);
-    capability *= refusalFactor;
+    capability *= Math.max(0.4, 1 - candidate.capabilityRefusalCount * 0.15);
   }
-  // EXTERNAL-UPTIME PRIOR — applies ONLY in the total absence of first-party
-  // track record for this pair (the exact opposite precedence of the three
-  // multipliers around it, which all ARE first-party evidence): a pair we
-  // have real dispatch history for is scored on that history alone, however
-  // it disagrees with a third-party feed. Where we know nothing, a MEASURED
-  // uptime_last_1d below LOW_EXTERNAL_UPTIME_THRESHOLD (endpoint flapping at
-  // its own aggregator, observed live: nebius@llama-3.3 at 44% while healthy
-  // siblings sat at 96-100%) is real negative evidence that pair would waste
-  // a first attempt — a proportional discount, floored so this stays a
-  // deprioritization, never a ban (same "nudge not ban" posture as the
-  // refusal discount above). Uptime AT/ABOVE the threshold changes nothing:
-  // normal healthy variance (97% vs 99.9%) is not a capability signal.
+
+  // EXTERNAL UPTIME — now ALWAYS consulted, not only when first-party history is
+  // absent. It used to be gated on `trackRecordSuccessRate == null`, which is the
+  // same one-source-wins mistake as latency and throughput: a pair with a track
+  // record had its uptime feed discarded entirely, so a vendor endpoint flapping
+  // at 44% could not lower a model whose few first-party calls happened to land.
+  // Both are real measurements of reliability, so both count — the first-party
+  // rate leads by weight (above), and this contributes a smaller, bounded
+  // adjustment of its own rather than an all-or-nothing veto.
+  capability *= centeredFactor(candidate.externalUptime, {
+    expected: EXPECTED_EXTERNAL_UPTIME,
+    min: 0.5,
+    max: 1.05,
+  });
+
+  // Long-horizon completion, once there are enough samples to mean anything.
   if (
-    (candidate.trackRecordSuccessRate === undefined || candidate.trackRecordSuccessRate === null) &&
-    typeof candidate.externalUptime === 'number' &&
-    Number.isFinite(candidate.externalUptime) &&
-    candidate.externalUptime < LOW_EXTERNAL_UPTIME_THRESHOLD
-  ) {
-    capability *= Math.max(0.5, Math.max(0, candidate.externalUptime) / 100);
-  }
-  // A THIRD, independent multiplier, same "real evidence, no threshold
-  // means unadjusted" shape as the two above. Diagnosed root cause of a real
-  // production bug: NEUTRAL_CAPABILITY_SCORE collapses ~97% of candidates to
-  // the same flat 50 (no OpenRouter benchmark match), so a tied score fell
-  // through to "whichever model answers fastest" — a small, cheap model
-  // that reliably gives up mid-task still won on latency alone, because
-  // nothing measured whether it could actually FINISH a multi-step loop.
-  // sustainRate is that missing measurement, sourced from this platform's
-  // own agent-loop outcomes (ai-model-task-completion.ts), not a guess.
-  // sustainSampleSize is read here (not just trusted from the read layer's
-  // MIN_SUSTAIN_SAMPLES gate) so this file stays honest about its own
-  // trust threshold rather than silently inheriting whatever the caller
-  // happened to fetch with.
-  if (
-    typeof candidate.sustainRate === 'number' &&
-    Number.isFinite(candidate.sustainRate) &&
     typeof candidate.sustainSampleSize === 'number' &&
     candidate.sustainSampleSize >= MIN_SUSTAIN_SAMPLES_TRUSTED
   ) {
-    capability *= candidate.sustainRate;
+    capability *= centeredFactor(candidate.sustainRate, {
+      expected: EXPECTED_SUSTAIN_RATE,
+      min: 0.3,
+      max: 1.1,
+    });
   }
-  // A FOURTH multiplier, and the only one about the PROVIDER rather than the
-  // model: everything above asks "how well does this model perform", this asks
-  // "is this provider about to refuse the call". Applied last and unconditional
-  // on track record, because unlike the external-uptime prior it is not a
-  // third-party guess we should defer to first-party history over — it is this
-  // platform's own reading of the vendor's own headers from its own last call,
-  // which is as first-party as evidence gets. Unknown headroom returns exactly
-  // 1 and changes nothing.
-  capability *= rateLimitHeadroomFactor(candidate.rateLimitHeadroom);
-  // Generation rate, on the requests where it means anything. Gated by the
-  // caller rather than always-on, because a fast generator is not a better
-  // choice for a turn that emits forty tokens.
+
+  // ── CONSTRAINT SIGNALS: penalty-only, deliberately asymmetric ─────────────
+  // A provider sitting at 95% free quota is not BETTER than one at 60% free — it
+  // is merely unconstrained, and paying a bonus for idleness would rank an unused
+  // provider above a proven busy one. Same for a declared incident: there is no
+  // "extra healthy". These stay one-directional on purpose; see ai-evidence.ts.
+  capability *= constraintFactor(candidate.rateLimitHeadroom, {
+    comfortable: RATE_LIMIT_PRESSURE_THRESHOLD,
+    floor: MIN_RATE_LIMIT_FACTOR,
+  });
+
+  // Account-level room to serve: credit balance and subscription windows, which
+  // the per-response rate-limit headers above cannot see. Already computed as a
+  // penalty-only factor by ai-provider-capacity.ts.
+  if (
+    typeof candidate.capacityFactor === 'number' &&
+    Number.isFinite(candidate.capacityFactor) &&
+    candidate.capacityFactor > 0
+  ) {
+    capability *= Math.min(1, candidate.capacityFactor);
+  }
+
   if (preferThroughput) {
     capability *= throughputFactor(
       candidate.throughputTokensPerSecond,
       candidate.externalThroughputTps,
     );
   }
-  // A vendor-declared outage, applied last and unconditionally. Unlike the
-  // external-uptime prior above, this is not superseded by first-party track
-  // record: that prior describes how a pair behaves in GENERAL, while this
-  // describes what the vendor says is happening RIGHT NOW, and a good history
-  // is no reason to route into an incident the vendor has already announced.
+
   if (candidate.vendorIncident === true) {
     capability *= VENDOR_INCIDENT_FACTOR;
   }
@@ -464,6 +496,18 @@ function intelligenceWithReliability(
  *  here (this file is deliberately dependency-free, see the module header)
  *  rather than imported, so a caller that fetched with a looser threshold
  *  can never leak an under-trusted rate into scoring. */
+/**
+ * What a competent model is EXPECTED to achieve — the centre each quality factor
+ * scales around (ai-evidence.ts's centeredFactor).
+ *
+ * Real domain numbers, deliberately NOT a median of whatever is in the pool
+ * today: a pool median drifts with the pool, so a fleet-wide degradation would
+ * quietly redefine "expected" downward and nothing would score badly again.
+ */
+const EXPECTED_SUCCESS_RATE = 0.9;
+const EXPECTED_SUSTAIN_RATE = 0.8;
+const EXPECTED_EXTERNAL_UPTIME = 97;
+
 const MIN_SUSTAIN_SAMPLES_TRUSTED = 5;
 
 /**
@@ -730,27 +774,31 @@ const NEUTRAL_LATENCY_MS = 3_000;
 function latencyScore(
   avgLatencyMs: number | null | undefined,
   externalLatencyMs?: number | null,
+  latencySampleCount?: number | null,
 ): number {
-  if (typeof avgLatencyMs === 'number' && !Number.isNaN(avgLatencyMs) && Number.isFinite(avgLatencyMs)) {
-    // Our own EWMA always wins once it has any samples — the external prior
-    // below never displaces a first-party measurement.
-    return Math.max(0, avgLatencyMs);
-  }
-  // No first-party samples: a MEASURED external latency (ai-endpoint-health-
-  // feed.ts — see AiRouterCandidate['externalLatencyMs']) stands in for the
-  // neutral constant, and ONLY for the neutral constant. This is exactly the
-  // "unknown is not confirmed bad" blank NEUTRAL_LATENCY_MS covers — a real
-  // third-party measurement of this exact pair is strictly better evidence
-  // than a flat guess, while still instantly superseded by our own EWMA the
-  // first time we actually route to the pair.
-  if (
-    typeof externalLatencyMs === 'number' &&
-    !Number.isNaN(externalLatencyMs) &&
-    Number.isFinite(externalLatencyMs)
-  ) {
-    return Math.max(0, externalLatencyMs);
-  }
-  return NEUTRAL_LATENCY_MS;
+  // WEIGHTED, not vetoed. Our EWMA used to win outright the instant it had any
+  // samples at all, so a single unlucky first request permanently displaced a
+  // feed built from thousands of observations of the same pair. It still leads —
+  // that is what the weight is for — but only in proportion to how much of it
+  // there is, and the external measurement always contributes.
+  //
+  // Sample count is optional: a caller that cannot supply one gets the full
+  // first-party weight, which is the pre-existing behaviour for every candidate
+  // source that does not track it.
+  const fused = fuseEvidence([
+    {
+      value: typeof avgLatencyMs === 'number' ? Math.max(0, avgLatencyMs) : null,
+      weight:
+        latencySampleCount === undefined || latencySampleCount === null
+          ? FIRST_PARTY_FULL_WEIGHT
+          : sampleWeight(latencySampleCount, LATENCY_TRUSTED_SAMPLES, FIRST_PARTY_FULL_WEIGHT),
+    },
+    {
+      value: typeof externalLatencyMs === 'number' ? Math.max(0, externalLatencyMs) : null,
+      weight: EXTERNAL_FEED_WEIGHT,
+    },
+  ]);
+  return fused ?? NEUTRAL_LATENCY_MS;
 }
 
 /** The mode-level rationale shown to the admin — shared by selectRouterCandidate
@@ -791,6 +839,10 @@ export function reasonFor(mode: AiRoutingStrategy, normalizedPreferred?: string)
  */
 export interface AiRouterRankContext {
   /** Rough prompt size in tokens; drives context-window eligibility. */
+  /**
+   * Best-effort ACTUAL prompt size in tokens — see filterByContextWindow's doc
+   * for the two consumers and why this must not be inflated "to be safe".
+   */
   estimatedPromptTokens?: number;
   /**
    * This request is generation-heavy — a long answer rather than a short
@@ -930,21 +982,7 @@ const RATE_LIMIT_PRESSURE_THRESHOLD = 0.25;
  *  candidate that fits. */
 const MIN_RATE_LIMIT_FACTOR = 0.5;
 
-/**
- * Capability multiplier for remaining rate-limit budget.
- *
- * 1.0 (no effect) whenever headroom is unknown or comfortable. Below the
- * threshold it falls off proportionally toward the floor, so a provider about
- * to 429 loses to an equally-good one with room — which is exactly the choice
- * the header data supports and the binary check could not express.
- */
-function rateLimitHeadroomFactor(headroom: number | null | undefined): number {
-  if (typeof headroom !== 'number' || !Number.isFinite(headroom)) return 1;
-  if (headroom >= RATE_LIMIT_PRESSURE_THRESHOLD) return 1;
-  const clamped = Math.max(0, headroom);
-  const ratio = clamped / RATE_LIMIT_PRESSURE_THRESHOLD;
-  return MIN_RATE_LIMIT_FACTOR + (1 - MIN_RATE_LIMIT_FACTOR) * ratio;
-}
+
 
 /**
  * Reference generation rate, tokens/second, that scores neutral.
@@ -985,17 +1023,22 @@ function throughputFactor(
   tokensPerSecond: number | null | undefined,
   externalTokensPerSecond?: number | null,
 ): number {
-  // Our own EWMA wins outright once it has any samples — a third-party feed
-  // never displaces a first-party measurement. Same precedence latencyScore
-  // applies to externalLatencyMs, and for the same reason.
-  const observed =
-    typeof tokensPerSecond === 'number' && Number.isFinite(tokensPerSecond) && tokensPerSecond > 0
-      ? tokensPerSecond
-      : typeof externalTokensPerSecond === 'number' &&
-          Number.isFinite(externalTokensPerSecond) &&
-          externalTokensPerSecond > 0
-        ? externalTokensPerSecond
-        : null;
+  // Both readings count. Our own EWMA used to win outright over the feed; it now
+  // leads by weight, so a pair we have measured once is not treated as more
+  // authoritative than an aggregator that has measured it continuously.
+  const observed = fuseEvidence([
+    {
+      value: typeof tokensPerSecond === 'number' && tokensPerSecond > 0 ? tokensPerSecond : null,
+      weight: FIRST_PARTY_FULL_WEIGHT,
+    },
+    {
+      value:
+        typeof externalTokensPerSecond === 'number' && externalTokensPerSecond > 0
+          ? externalTokensPerSecond
+          : null,
+      weight: EXTERNAL_FEED_WEIGHT,
+    },
+  ]);
   if (observed === null) return 1;
   const ratio = observed / REFERENCE_TOKENS_PER_SECOND;
   return Math.max(MIN_THROUGHPUT_FACTOR, Math.min(MAX_THROUGHPUT_FACTOR, ratio));
@@ -1094,6 +1137,24 @@ const CONTEXT_HEADROOM_FRACTION = 0.1;
  * situation, and the honest response is to route it to the roomiest option and
  * let the prompt shaper do its job — not to fail the request outright, which is
  * strictly worse than the pre-existing behaviour this filter improves on.
+ */
+/**
+ * CONSUMER 1 OF THE PROMPT-SIZE ESTIMATE: "can this model HOLD the request".
+ *
+ * Tolerant of over-reporting, and deliberately builds its own margin on top via
+ * CONTEXT_HEADROOM_FRACTION — an inflated estimate here only leaves a model out
+ * of the pool that might have squeezed it in, and the fail-open below catches
+ * the case where that empties the pool.
+ *
+ * CONSUMER 2 lives in ai-router-candidates.ts: "will this PROVIDER ACCEPT a
+ * request this size", against its published token bucket. That one is NOT
+ * tolerant of over-reporting — an inflated number there removes the provider
+ * outright, which is exactly how a 9,407-token estimate of a 4,789-token turn
+ * excluded the only provider able to answer (2026-08-26).
+ *
+ * The two want OPPOSITE errors from one number, so the number must be ACCURATE
+ * rather than conservative, and each consumer adds whatever margin it needs
+ * itself. Anyone adding a third consumer: state which of the two you are.
  */
 function filterByContextWindow(
   candidates: AiRouterCandidate[],

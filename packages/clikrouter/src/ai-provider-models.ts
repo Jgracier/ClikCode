@@ -827,6 +827,60 @@ export function resolveRateLimitRetryAfterMs(error: unknown): number | undefined
  * than isPermanentAiCallFailure above, since escalating wrongly costs every
  * OTHER model at that provider a wasted routing window, not just this one.
  */
+/**
+ * The provider refused this REQUEST for being too big — not this MODEL for
+ * being broken.
+ *
+ * The distinction is the whole point. Everything else `isPermanentAiCallFailure`
+ * catches is a durable property of the model or the credential: a renamed id, a
+ * dead key, a revoked entitlement. "Reduce your message size" is a property of
+ * what WE sent, and the very next request may be a tenth the size.
+ *
+ * WHAT TREATING IT AS PERMANENT COST, measured 2026-08-26: groq answers an
+ * over-budget prompt with 413 and the text "Request too large ... on tokens per
+ * minute (TPM): Limit 8000, Requested 10909". 413 is neither 429 nor 5xx, so the
+ * AI SDK marks it non-retryable, so isPermanentAiCallFailure returned true, so
+ * both qwen models were cooled for TWENTY-FOUR HOURS — for the offence of being
+ * sent a prompt the platform had built too large. Every subsequent oversized
+ * turn re-cooled them for another 24h, so the exclusion renewed itself
+ * indefinitely and no amount of fixing the prompt could bring them back inside
+ * the window. Two perfectly healthy models, locked out by our own bug.
+ *
+ * Detected by SHAPE, not by provider: a status code where one is published, and
+ * the vendor-independent phrasings otherwise, because most providers report this
+ * as a 400 or a 429 with the explanation only in the body.
+ */
+export function isRequestTooLargeFailure(error: unknown): boolean {
+  if (!APICallError.isInstance(error)) return false;
+  // 413 Content Too Large is the only status that means this unambiguously.
+  if (error.statusCode === 413) return true;
+  const text = `${error.message} ${typeof error.responseBody === 'string' ? error.responseBody : ''}`;
+  return /request too large|reduce your message size|maximum context length|context[_ ]length[_ ]exceeded|prompt is too long|too many (?:input )?tokens/i.test(
+    text,
+  );
+}
+
+/**
+ * The token ceiling a provider NAMED while refusing an oversized request.
+ *
+ * Vendors state it outright — groq's "Limit 8000, Requested 10909" — and it is
+ * the same number the rate-limit headers carry, from a provider that may not
+ * have sent those headers. Learning it here means one refusal is enough to stop
+ * the router ever sending that provider an over-budget request again, instead of
+ * rediscovering the ceiling on every turn.
+ *
+ * Returns null unless the text genuinely names a limit; a guessed ceiling would
+ * exclude a provider that never published one.
+ */
+export function parseNamedTokenLimit(error: unknown): number | null {
+  if (!APICallError.isInstance(error)) return null;
+  const text = `${error.message} ${typeof error.responseBody === 'string' ? error.responseBody : ''}`;
+  const match = /\blimit[^0-9]{0,12}([0-9][0-9,_]{2,})/i.exec(text);
+  if (!match?.[1]) return null;
+  const value = Number.parseInt(match[1].replace(/[,_]/g, ''), 10);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 export function isAccountScopedAiCallFailure(error: unknown): boolean {
   if (!APICallError.isInstance(error)) return false;
   return (
@@ -859,6 +913,21 @@ export function isBillingAiCallFailure(error: unknown): boolean {
 }
 
 /**
+ * The vendor's explanation, trimmed to something safe to put in a log line and a
+ * message field. Empty string when the body says nothing useful, so the caller's
+ * template degrades to exactly what it produced before rather than to " —".
+ */
+function summarizeErrorBody(body: string | undefined): string {
+  if (typeof body !== 'string') return '';
+  // Collapse whitespace so a pretty-printed JSON body does not become a
+  // twenty-line log entry, then take the head.
+  const flat = body.replace(/\s+/g, ' ').trim();
+  if (!flat) return '';
+  const MAX = 300;
+  return `: ${flat.length > MAX ? `${flat.slice(0, MAX)}…` : flat}`;
+}
+
+/**
  * Build an APICallError with a real statusCode from a failed direct-transport
  * HTTP response, so isPermanentAiCallFailure/isAccountScopedAiCallFailure
  * (both of which only recognize APICallError instances) classify a dead Codex
@@ -874,7 +943,21 @@ function oauthSurfaceApiCallError(
   responseBody: string,
 ): APICallError {
   return new APICallError({
-    message: `${status} response from subscription surface`,
+    // THE VENDOR'S OWN REASON GOES IN THE MESSAGE, not just in responseBody.
+    //
+    // `responseBody` below has always carried it, and every consumer that
+    // matters records `error.message` alone: the routing-decision log, the
+    // per-model outcome store, the admin AI panel. So for eleven days a real,
+    // fixable Google Code Assist failure was recorded platform-wide as the bare
+    // string "400 response from subscription surface" — a status with no cause,
+    // in the one place an operator would look. (It is now a 403; nobody could
+    // tell, because neither number came with an explanation.)
+    //
+    // Truncated hard and redacted, because this string lands in logs and in an
+    // admin UI: a vendor error body can be large and can echo request content
+    // back. 300 chars is comfortably enough for the sentence that names the
+    // cause and far short of anything worth streaming into a log line.
+    message: `${status} response from subscription surface${summarizeErrorBody(responseBody)}`,
     url,
     requestBodyValues: requestBody,
     statusCode: status,
