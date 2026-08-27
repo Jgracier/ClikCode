@@ -686,6 +686,21 @@ export function isBillingAiCallFailure(error: unknown): boolean {
 }
 
 /**
+ * The vendor's explanation, trimmed to something safe to put in a log line and a
+ * message field. Empty string when the body says nothing useful, so the caller's
+ * template degrades to exactly what it produced before rather than to " —".
+ */
+function summarizeErrorBody(body: string | undefined): string {
+  if (typeof body !== 'string') return '';
+  // Collapse whitespace so a pretty-printed JSON body does not become a
+  // twenty-line log entry, then take the head.
+  const flat = body.replace(/\s+/g, ' ').trim();
+  if (!flat) return '';
+  const MAX = 300;
+  return `: ${flat.length > MAX ? `${flat.slice(0, MAX)}…` : flat}`;
+}
+
+/**
  * Build an APICallError with a real statusCode from a failed direct-transport
  * HTTP response, so isPermanentAiCallFailure/isAccountScopedAiCallFailure
  * (both of which only recognize APICallError instances) classify a dead Codex
@@ -701,7 +716,21 @@ function oauthSurfaceApiCallError(
   responseBody: string,
 ): APICallError {
   return new APICallError({
-    message: `${status} response from subscription surface`,
+    // THE VENDOR'S OWN REASON GOES IN THE MESSAGE, not just in responseBody.
+    //
+    // `responseBody` below has always carried it, and every consumer that
+    // matters records `error.message` alone: the routing-decision log, the
+    // per-model outcome store, the admin AI panel. So for eleven days a real,
+    // fixable Google Code Assist failure was recorded platform-wide as the bare
+    // string "400 response from subscription surface" — a status with no cause,
+    // in the one place an operator would look. (It is now a 403; nobody could
+    // tell, because neither number came with an explanation.)
+    //
+    // Truncated hard and redacted, because this string lands in logs and in an
+    // admin UI: a vendor error body can be large and can echo request content
+    // back. 300 chars is comfortably enough for the sentence that names the
+    // cause and far short of anything worth streaming into a log line.
+    message: `${status} response from subscription surface${summarizeErrorBody(responseBody)}`,
     url,
     requestBodyValues: requestBody,
     statusCode: status,
