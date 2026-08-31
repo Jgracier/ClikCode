@@ -1102,6 +1102,18 @@ export const AI_PROVIDERS = [
     // rejected there, the fix is an `oauthChat` at the accepted host, not a
     // harness — Foundry publishes no CLI.
     subscriptionTransport: "direct",
+    // SHARED connect credential: Foundry and the Azure compute connection use the
+    // SAME app registration, so the tenant (like id + secret) is one value settable
+    // from either surface. Optional here — a multi-tenant app uses /common and needs
+    // no tenant; a single-tenant app requires it. Subscription id stays compute-only.
+    oauthSharedFields: [
+      {
+        envKey: "AZURE_OAUTH_TENANT_ID",
+        label: "Tenant ID",
+        helpText:
+          "Directory (tenant) ID of the shared Azure app — the SAME value as the Azure compute connection. Leave blank for a multi-tenant app (uses /common); set it for a single-tenant app.",
+      },
+    ],
     // ARM identifiers for genuine vendor pricing (ai-azure-arm.ts). The
     // credential doing the ARM auth is the SAME Azure OAuth app already
     // collected for cloud-provider connect (AZURE_OAUTH_CLIENT_ID/SECRET/
