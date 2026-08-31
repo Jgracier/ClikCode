@@ -751,6 +751,30 @@ export const AI_PROVIDERS = [
       catalogUrl: "https://router.huggingface.co/v1/models",
     },
     openAiCompatible: true,
+    // DIRECT, and no `oauthChat` override — same reasoning as chutes.
+    //
+    // The OAuth connect flow (config/platform-ai.json) requests the
+    // `inference-api` scope alongside openid/profile — the scope HF documents
+    // as "make inference calls", not identity-only. The token is minted at
+    // huggingface.co/oauth/token, the SAME top-level vendor as the inference
+    // host, and the subscription spends on the SAME OpenAI-compatible surface
+    // the API key already uses (router.huggingface.co/v1) — so there is no
+    // second endpoint to declare. `oauthChat` exists only for vendors whose
+    // subscription traffic goes somewhere else entirely (OpenAI → the Codex
+    // backend, Google → Code Assist); HF is not one of them. The token arrives
+    // as a Bearer (buildAiAuthHeaders' default mode for this row), which is
+    // exactly the shape an OAuth access token takes.
+    //
+    // NOT OBSERVED, and stated plainly: a real HF OAuth access token actually
+    // ACCEPTED at router.huggingface.co/v1. No token could be minted here — HF
+    // publishes no first-party public client id, so `oauth` connect stays gated
+    // on the operator setting CLIKAGENT_HUGGINGFACE_OAUTH_CLIENT_ID (that gate
+    // is a connect-flow concern, orthogonal to which transport spends the
+    // resulting token). If the token turns out to be rejected there, the fix is
+    // an `oauthChat` pointing at whatever host does accept it — NOT a harness,
+    // because HF publishes no CLI harness at all. Until an operator connects,
+    // the unaffected API-key path (paste an HF access token) still applies.
+    subscriptionTransport: "direct",
   },
   {
     id: "sambanova",
@@ -1034,6 +1058,32 @@ export const AI_PROVIDERS = [
     authHeader: "api-key",
     probe: { kind: "openai-models", url: "{baseUrl}/models" },
     openAiCompatible: true,
+    // DIRECT, and no `oauthChat` override.
+    //
+    // The OAuth connect flow (config/platform-ai.json) requests
+    // `https://cognitiveservices.azure.com/.default` + offline_access — the
+    // `.default` scope grants inference against the Foundry resource once the
+    // account carries the "Cognitive Services User" role (Microsoft Learn,
+    // "keyless authentication with Microsoft Entra ID"), not identity-only. The
+    // Entra token is minted at login.microsoftonline.com but its AUDIENCE is
+    // cognitiveservices.azure.com, and it is spent as `Authorization: Bearer`
+    // against the operator's own AZURE_AI_BASE_URL — the SAME inference host the
+    // API key already uses. That is not a different surface, so no `oauthChat`:
+    // the auth host differing from the resource host is just how OAuth works.
+    //
+    // `authHeader: "api-key"` governs the KEY tier only; buildAiAuthHeaders
+    // already sends an OAuth credential for this row as Bearer (its api-key
+    // branch is gated on !isOauth), which is exactly what a keyless Entra token
+    // requires — Foundry rejects the Entra token sent as `api-key`.
+    //
+    // NOT OBSERVED, stated plainly: a real Entra token accepted at a live
+    // Foundry inference endpoint. The connection reuses the existing Azure OAuth
+    // app (AZURE_OAUTH_CLIENT_ID/SECRET), so it is spendable only once that app
+    // registers /api/admin/ai/oauth/callback AND AZURE_AI_BASE_URL is set;
+    // absent the base URL the connection is skipped for traffic. If the token is
+    // rejected there, the fix is an `oauthChat` at the accepted host, not a
+    // harness — Foundry publishes no CLI.
+    subscriptionTransport: "direct",
     // ARM identifiers for genuine vendor pricing (ai-azure-arm.ts). The
     // credential doing the ARM auth is the SAME Azure OAuth app already
     // collected for cloud-provider connect (AZURE_OAUTH_CLIENT_ID/SECRET/

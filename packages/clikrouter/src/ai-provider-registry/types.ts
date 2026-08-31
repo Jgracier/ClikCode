@@ -200,10 +200,15 @@ export interface AiProviderSpec {
    *               genuinely no HTTP surface — and the subscription is still
    *               fully spendable, through `@xai-official/grok`.
    *   undefined — this provider has no working subscription dispatch at all, so
-   *               an OAuth credential for it can be connected but not spent
-   *               (today: huggingface, microsoft-foundry — rows with an OAuth
-   *               connection and neither a known subscription endpoint nor a
-   *               vendor CLI).
+   *               an OAuth credential for it can be connected but not spent (a
+   *               row with an OAuth connection and neither a known subscription
+   *               endpoint nor a vendor CLI). No row is in this state today:
+   *               huggingface and microsoft-foundry — the last two — now
+   *               dispatch 'direct' onto the same inference host their API key
+   *               uses, on the strength of an inference-granting OAuth scope
+   *               (inference-api / cognitiveservices.azure.com/.default). The
+   *               state is kept because a newly added OAuth provider legitimately
+   *               starts here until its dispatch is established.
    *
    * An API KEY is unaffected by this field in every case — it always dispatches
    * over plain HTTP to `chatBaseUrl`.
