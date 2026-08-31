@@ -175,6 +175,38 @@ describe("modelTokenLimits", () => {
     expect(xai!.oauthChat).toBeUndefined();
   });
 
+  // huggingface and microsoft-foundry moved from "connectable but unspendable" (subscriptionTransport
+  // undefined) to a real DIRECT dispatch: their OAuth flows request an inference-granting scope
+  // (inference-api / cognitiveservices.azure.com/.default) and the token spends on the SAME inference
+  // host the API key uses, so no `oauthChat` override exists — that is the load-bearing negative,
+  // because adding one would wrongly claim a separate subscription surface (the OpenAI/Google case).
+  it("spends huggingface and microsoft-foundry directly on their own inference host", () => {
+    for (const id of ["huggingface", "microsoft-foundry"]) {
+      const spec = providers.find((p) => p.id === id);
+      expect(spec, id).toBeTruthy();
+      expect(spec!.oauth, id).toBe(true);
+      expect(spec!.subscriptionTransport, id).toBe("direct");
+      expect(subscriptionIsSpendable(spec), id).toBe(true);
+      expect(subscriptionDispatchesDirect(spec), id).toBe(true);
+      expect(subscriptionUsesHarness(spec), id).toBe(false);
+      // Same host as the API key: no separate subscription surface to declare.
+      expect(spec!.oauthChat, id).toBeUndefined();
+    }
+  });
+
+  // No OAuth provider is left in the "connectable but unspendable" state (subscriptionTransport
+  // undefined). A row that offers `oauth` must declare HOW that subscription is spent, or the AI tab
+  // ships a connect button that mints a token nothing can use.
+  it("leaves no oauth provider without a subscription transport", () => {
+    for (const provider of providers) {
+      if (!provider.oauth) continue;
+      expect(
+        subscriptionIsSpendable(provider),
+        `${provider.id} is oauth:true but has no subscriptionTransport`,
+      ).toBe(true);
+    }
+  });
+
   // The harness tier must be provider-agnostic: xAI is admitted on exactly the terms Anthropic is,
   // with no xai-shaped special case anywhere in the gate.
   it("treats xai and anthropic identically at the harness gate", () => {
