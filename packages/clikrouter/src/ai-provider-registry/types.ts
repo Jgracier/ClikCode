@@ -657,6 +657,24 @@ export interface AiProviderSpec {
     /** Shown under the field so an unfamiliar Azure-specific concept is explained. */
     helpText?: string;
   }[];
+  /**
+   * Connect credentials this provider SHARES with another domain's connect flow,
+   * set inline alongside client id/secret — part of the connect credential set,
+   * NOT pricing (contrast `pricingLookupFields`).
+   *
+   * Microsoft Foundry shares Azure's app registration with the Azure compute
+   * connection: id + secret + `AZURE_OAUTH_TENANT_ID`. The tenant is the same
+   * value on both surfaces, so it is settable from either. Carried as catalog
+   * DATA (not a `provider === 'microsoft-foundry'` branch in the panel) so any
+   * future shared-credential provider declares it here. Optional at connect time
+   * — a multi-tenant Azure app uses `/common` and needs no tenant; a single-
+   * tenant app requires it (see resolveAuthorizationUrl in oauth-helpers.ts).
+   */
+  oauthSharedFields?: readonly {
+    envKey: string;
+    label: string;
+    helpText?: string;
+  }[];
 }
 
 /**
