@@ -252,6 +252,42 @@ function splitSystemAndTurns(input: ChatTurnInput): {
  */
 let warnedCodexMaxTokensDropped = false;
 
+/**
+ * The OpenAI `/chat/completions` request BODY. Shared by the API-key path and
+ * the `grok-chat` OAuth subscription proxy, which speaks the identical dialect
+ * on a different host — factoring it out is what stops the two from drifting.
+ */
+function openAiChatCompletionsBody(
+  input: ChatTurnInput,
+  spec: ReturnType<typeof getAiProvider>,
+): Record<string, unknown> {
+  const messages = [
+    ...(input.system ? [{ role: "system" as const, content: input.system }] : []),
+    ...input.messages,
+  ];
+  return {
+    model: input.model,
+    // Only sent when the caller explicitly wants one — reasoning models reject a
+    // non-default temperature; omitting it is safe on every model.
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    // Same cap, provider's own parameter name — see `usesMaxCompletionTokens`.
+    ...(spec?.usesMaxCompletionTokens
+      ? { max_completion_tokens: input.maxTokens ?? 700 }
+      : { max_tokens: input.maxTokens ?? 700 }),
+    ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
+    ...(input.tools?.length
+      ? {
+          tools: input.tools.map((t) => ({
+            type: "function",
+            function: { name: t.name, description: t.description, parameters: t.parameters },
+          })),
+        }
+      : {}),
+    ...(input.stream ? { stream: true, stream_options: { include_usage: true } } : {}),
+    messages,
+  };
+}
+
 function buildOauthSurfaceRequest(
   input: ChatTurnInput,
   spec: NonNullable<ReturnType<typeof getAiProvider>>,
@@ -265,6 +301,28 @@ function buildOauthSurfaceRequest(
     ...auth,
     ...(surface.headers ?? {}),
   };
+
+  if (surface.dialect === "grok-chat") {
+    // A plain OpenAI `/v1/chat/completions` subscription proxy
+    // (xAI's cli-chat-proxy.grok.com): the SAME body the API-key path builds, on
+    // a different host, with the pinned headers already merged above
+    // (`X-XAI-Token-Auth: xai-grok-cli`) plus the Bearer OAuth token. The one
+    // per-request header is `x-grok-model-override`: this proxy routes on the
+    // header, NOT the body's `model` field (from the CLI's own shipped docs).
+    // Omitted when no model is known — the proxy's default route (grok-build)
+    // needs no override. The Bearer token is already proven against this host by
+    // the billing adapter in ai-adapters/xai.ts; NOT OBSERVED is a live chat
+    // turn, so the response is parsed as the plain openai-chat shape it advertises.
+    return {
+      url: `${base}${surface.path ?? "/chat/completions"}`,
+      headers: {
+        ...headers,
+        ...(input.model ? { "x-grok-model-override": input.model } : {}),
+      },
+      body: openAiChatCompletionsBody(input, spec),
+      dialect: "openai-chat",
+    };
+  }
 
   if (surface.dialect === "code-assist") {
     // The method is a ':'-suffix on the version root, not a path segment.
@@ -603,44 +661,13 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   if (input.tools?.length && spec?.responsesPath) {
     return buildResponsesRequest(input, base, spec.responsesPath, auth);
   }
-  const messages = [
-    ...(input.system
-      ? [{ role: "system" as const, content: input.system }]
-      : []),
-    ...input.messages,
-  ];
   return {
     url: `${base}${spec?.chatPath ?? "/chat/completions"}`,
     headers: {
       "Content-Type": "application/json",
       ...auth,
     },
-    body: {
-      model: input.model,
-      // Only sent when the caller explicitly wants one — see the identical
-      // comment on the anthropic-messages branch above. OpenAI's own o3/o4
-      // reasoning models reject a non-default temperature the same way some
-      // Claude models now reject the param outright; omitting it by default
-      // is the one behavior that is safe for every model on every dialect.
-      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-      // Same cap, provider's own parameter name — see `usesMaxCompletionTokens` in the registry.
-      ...(spec?.usesMaxCompletionTokens
-        ? { max_completion_tokens: input.maxTokens ?? 700 }
-        : { max_tokens: input.maxTokens ?? 700 }),
-      ...(input.responseFormat
-        ? { response_format: input.responseFormat }
-        : {}),
-      ...(input.tools?.length
-        ? {
-            tools: input.tools.map((t) => ({
-              type: "function",
-              function: { name: t.name, description: t.description, parameters: t.parameters },
-            })),
-          }
-        : {}),
-      ...(input.stream ? { stream: true, stream_options: { include_usage: true } } : {}),
-      messages,
-    },
+    body: openAiChatCompletionsBody(input, spec),
     dialect: "openai-chat",
   };
 }

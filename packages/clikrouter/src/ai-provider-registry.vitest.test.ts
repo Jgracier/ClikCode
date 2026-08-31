@@ -160,19 +160,20 @@ describe("modelTokenLimits", () => {
     });
   });
 
-  // xAI's subscription tier moved from "connectable but unspendable" to "spendable through the
-  // vendor's CLI" when xAI published one (@xai-official/grok). Both halves are pinned, because the
-  // half that did NOT change is the one most likely to be eroded by a later edit: api.x.ai is
-  // measured to answer an xAI OAuth bearer with 403, so there is still no HTTP dispatch surface.
-  it("spends an xAI subscription through the harness, and never over HTTP", () => {
+  // xAI's subscription now spends DIRECT over the Grok CLI's OWN subscription proxy
+  // (cli-chat-proxy.grok.com), so its harness row was deleted. api.x.ai still 403s the OAuth bearer —
+  // the direct surface is the SEPARATE proxy host, addressed via `oauthChat` with the pinned CLI
+  // header. The load-bearing negative is that it is NOT a harness anymore.
+  it("spends an xAI subscription DIRECT over the grok-cli proxy, not a harness", () => {
     const xai = providers.find((p) => p.id === "xai");
     expect(xai).toBeTruthy();
-    expect(xai!.subscriptionTransport).toBe("harness");
+    expect(xai!.subscriptionTransport).toBe("direct");
     expect(subscriptionIsSpendable(xai)).toBe(true);
-    expect(subscriptionUsesHarness(xai)).toBe(true);
-    // The load-bearing negative: no `oauthChat` surface, and no direct dispatch.
-    expect(subscriptionDispatchesDirect(xai)).toBe(false);
-    expect(xai!.oauthChat).toBeUndefined();
+    expect(subscriptionDispatchesDirect(xai)).toBe(true);
+    expect(subscriptionUsesHarness(xai)).toBe(false);
+    expect(xai!.oauthChat?.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
+    expect(xai!.oauthChat?.dialect).toBe("grok-chat");
+    expect(xai!.oauthChat?.headers?.["X-XAI-Token-Auth"]).toBe("xai-grok-cli");
   });
 
   // huggingface and microsoft-foundry moved from "connectable but unspendable" (subscriptionTransport
@@ -207,13 +208,16 @@ describe("modelTokenLimits", () => {
     }
   });
 
-  // The harness tier must be provider-agnostic: xAI is admitted on exactly the terms Anthropic is,
-  // with no xai-shaped special case anywhere in the gate.
-  it("treats xai and anthropic identically at the harness gate", () => {
-    const xai = providers.find((p) => p.id === "xai");
-    const anthropic = providers.find((p) => p.id === "anthropic");
-    for (const fn of [subscriptionIsSpendable, subscriptionUsesHarness, subscriptionDispatchesDirect]) {
-      expect(fn(xai), fn.name).toBe(fn(anthropic));
+  // The harness gate must be provider-agnostic — a row is harness because it DECLARES itself so, with
+  // no name check anywhere. Asserted across whatever rows currently declare the harness transport
+  // (anthropic today, plus github-copilot) rather than pinned to one provider.
+  it("treats every harness-transport subscription identically at the gate", () => {
+    const harnessRows = providers.filter((p) => p.subscriptionTransport === "harness");
+    expect(harnessRows.length).toBeGreaterThan(0);
+    for (const p of harnessRows) {
+      expect(subscriptionUsesHarness(p), p.id).toBe(true);
+      expect(subscriptionDispatchesDirect(p), p.id).toBe(false);
+      expect(subscriptionIsSpendable(p), p.id).toBe(true);
     }
   });
 

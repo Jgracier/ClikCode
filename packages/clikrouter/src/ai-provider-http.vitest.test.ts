@@ -402,29 +402,63 @@ describe('buildAiChatRequest', () => {
     ).toThrow(/cannot be dispatched over HTTP.*harness/s);
   });
 
-  // xAI used to be THIS test's subject — it was the registry's example of a provider that could be
-  // connected but never spent. It is a harness row now (xAI publishes @xai-official/grok), so it
-  // belongs with anthropic above. The measured fact underneath is unchanged and is exactly why it is
-  // 'harness' and not 'direct': api.x.ai answers an xAI OAuth bearer with 403, so this chokepoint
-  // must still refuse to build the request — only the reason it gives has changed.
-  it('refuses to build an HTTP request for an xAI subscription, pointing at the CLI', () => {
-    expect(() =>
-      buildAiChatRequest({
-        provider: 'xai',
-        model: 'grok-4-1-fast',
-        apiKey: 'oauth-token',
-        credentialSource: 'oauth',
-        messages: [{ role: 'user', content: 'hi' }],
-      }),
-    ).toThrow(/cannot be dispatched over HTTP.*harness/s);
+  // xAI spends its subscription DIRECT over the Grok CLI's OWN proxy (cli-chat-proxy.grok.com), so the
+  // chokepoint BUILDS the request now rather than refusing it. api.x.ai still 403s the bearer — the
+  // point is that the subscription's real surface is the SEPARATE proxy host, addressed by grok-chat:
+  // OpenAI-compatible body, the pinned CLI header, and the model carried in x-grok-model-override
+  // because the proxy routes on the header, not the body.
+  it('routes an xAI OAuth credential to the grok-cli proxy with the pinned CLI headers', () => {
+    const req = buildAiChatRequest({
+      provider: 'xai',
+      model: 'grok-4-1-fast',
+      apiKey: 'oauth-token',
+      credentialSource: 'oauth',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(req.dialect).toBe('openai-chat');
+    expect(req.url).toBe('https://cli-chat-proxy.grok.com/v1/chat/completions');
+    expect(req.headers.Authorization).toBe('Bearer oauth-token');
+    expect(req.headers['X-XAI-Token-Auth']).toBe('xai-grok-cli');
+    expect(req.headers['x-grok-model-override']).toBe('grok-4-1-fast');
+    expect(req.body.model).toBe('grok-4-1-fast');
+    expect(req.body.messages).toEqual([{ role: 'user', content: 'hi' }]);
   });
 
+  // No model known → the proxy's default route (grok-build) needs no override, so the header is omitted.
+  it('omits x-grok-model-override when no model is set', () => {
+    const req = buildAiChatRequest({
+      provider: 'xai',
+      model: '',
+      apiKey: 'oauth-token',
+      credentialSource: 'oauth',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(req.headers['x-grok-model-override']).toBeUndefined();
+  });
+
+  // huggingface now dispatches its subscription DIRECT — its OAuth token spends on the SAME
+  // OpenAI-compatible host the API key uses (router.huggingface.co), as a Bearer, with no oauthChat
+  // override and no harness. (microsoft-foundry is the same shape against its operator base URL.)
+  it('builds a direct openai-chat request for a huggingface OAuth credential', () => {
+    const req = buildAiChatRequest({
+      provider: 'huggingface',
+      model: 'meta-llama/Llama-3.1-8B-Instruct',
+      apiKey: 'hf-oauth-token',
+      credentialSource: 'oauth',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(req.dialect).toBe('openai-chat');
+    expect(req.url).toBe('https://router.huggingface.co/v1/chat/completions');
+    expect(req.headers.Authorization).toBe('Bearer hf-oauth-token');
+  });
+
+  // The guard still fires for a provider that genuinely has NO subscription transport — here a plain
+  // API-key provider handed an OAuth credential: there is simply no subscription surface to build for.
   it('refuses to build one for a provider with no subscription transport', () => {
     expect(() =>
       buildAiChatRequest({
-        // huggingface has an OAuth connection but neither a subscription endpoint nor a vendor CLI.
-        provider: 'huggingface',
-        model: 'meta-llama/Llama-3.1-8B-Instruct',
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
         apiKey: 'oauth-token',
         credentialSource: 'oauth',
         messages: [{ role: 'user', content: 'hi' }],

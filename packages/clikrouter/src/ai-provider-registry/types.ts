@@ -447,21 +447,34 @@ export interface AiProviderSpec {
    * subscription token — the SECOND DIMENSION for chat, exactly as
    * `probe.bySource` is for health.
    *
-   * Declared because two vendors route subscription traffic to a COMPLETELY
+   * Declared because several vendors route subscription traffic to a COMPLETELY
    * different surface than their public API, and the token is rejected on the
    * public one by design (measured here: OpenAI 401 `Missing scopes:
-   * model.request`; Google 403 on generativelanguage). The vendor's own CLI is
-   * not doing anything privileged — it is calling a different HTTPS endpoint
-   * with a different body shape. So this is a ROW DATUM (host + dialect +
-   * pinned client headers), not a reason to shell out to that CLI.
+   * model.request`; Google 403 on generativelanguage; xAI 403 on api.x.ai). The
+   * vendor's own CLI is not doing anything privileged — it is calling a
+   * different HTTPS endpoint, sometimes with a different body shape. So this is
+   * a ROW DATUM (host + dialect + pinned client headers), not a reason to shell
+   * out to that CLI: once the endpoint and its headers are known, the harness is
+   * pure overhead and its row is deleted (see the openai/google/xai history in
+   * ai-harness-registry.ts).
+   *
+   * Dialects:
+   *   codex-responses — OpenAI's internal Responses backend (stateless, SSE).
+   *   code-assist     — Google's Code Assist `:generateContent`.
+   *   grok-chat       — a plain OpenAI `/v1/chat/completions` subscription proxy
+   *                     (xAI's cli-chat-proxy.grok.com). Same body as the API-key
+   *                     path; the ONLY differences are the host and the pinned
+   *                     headers, one of which (`x-grok-model-override`) carries
+   *                     the model because the proxy routes on it, not the body.
    *
    * `path` is appended to `baseUrl` when the dialect needs one (Codex's
-   * `/responses`); the Code Assist dialect builds `:generateContent` itself
-   * because the method rides in the URL as a `:`-suffix, not a path segment.
+   * `/responses`, grok's `/chat/completions`); the Code Assist dialect builds
+   * `:generateContent` itself because the method rides in the URL as a
+   * `:`-suffix, not a path segment.
    */
   oauthChat?: {
     baseUrl: string;
-    dialect: "codex-responses" | "code-assist";
+    dialect: "codex-responses" | "code-assist" | "grok-chat";
     path?: string;
     /** Pinned client identification the vendor's own CLI sends verbatim. */
     headers?: Readonly<Record<string, string>>;
