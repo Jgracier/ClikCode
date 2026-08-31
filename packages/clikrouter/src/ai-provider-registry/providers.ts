@@ -48,15 +48,33 @@ export const AI_PROVIDERS = [
     probe: { kind: "openai-models", url: "https://api.x.ai/v1/models" },
     openAiCompatible: true,
     oauth: true,
-    // xAI publishes its own non-interactive CLI (`@xai-official/grok`, maintainer
-    // xai-security <security@x.ai>), and that CLI is the ONLY working way to spend
-    // a Grok subscription. Deliberately NOT 'direct': the measured fact that put
-    // this row at "unspendable" for so long has not changed — api.x.ai still
-    // answers an xAI OAuth bearer with 403, and there is no `oauthChat` surface
-    // here because no such surface is known to exist. What changed is that a
-    // harness transport now does. See the xai row in ai-harness-registry.ts for
-    // the adapter and exactly what was and was not observed.
-    subscriptionTransport: "harness",
+    // DIRECT over the Grok CLI's OWN subscription proxy — the harness is deleted.
+    //
+    // api.x.ai answers an xAI OAuth bearer with 403 (measured), which is why a
+    // Grok subscription is NOT spendable on the public developer API. But the
+    // subscription is not entitled to that API at all — the `@xai-official/grok`
+    // CLI spends it against a SEPARATE host, `cli-chat-proxy.grok.com`, an
+    // OpenAI-compatible `/v1/chat/completions` surface. That endpoint and its two
+    // pinned headers were read VERBATIM off the shipped CLI binary's own embedded
+    // docs (grok 1.0.3, decompressed and inspected):
+    //   - Authorization: Bearer <oauth token>   (the session token)
+    //   - X-XAI-Token-Auth: xai-grok-cli         (makes the proxy validate a CLI
+    //                                             session token — pinned, static)
+    //   - x-grok-model-override: <model>         (the proxy routes on THIS header,
+    //                                             not the body; injected per turn
+    //                                             by the grok-chat dialect)
+    // The same host + Bearer is ALREADY proven in-repo: ai-adapters/xai.ts reads
+    // cli-chat-proxy.grok.com/rest/billing with exactly this token. NOT OBSERVED
+    // (stated plainly): a live chat turn accepted there — no browser-completed
+    // device login was available to this probe. If the chat surface turns out to
+    // reject the token, the fix is a corrected `oauthChat`, NOT a harness: the CLI
+    // adds nothing here beyond calling this endpoint, which is why its row is gone.
+    subscriptionTransport: "direct",
+    oauthChat: {
+      baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      dialect: "grok-chat",
+      headers: { "X-XAI-Token-Auth": "xai-grok-cli" },
+    },
   },
   {
     id: "anthropic",
