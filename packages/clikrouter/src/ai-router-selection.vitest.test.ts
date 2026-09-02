@@ -1,3 +1,4 @@
+// @smoke
 import { describe, expect, it } from 'vitest';
 import {
   selectRouterCandidate,
