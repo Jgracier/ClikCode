@@ -295,13 +295,29 @@ export interface AiRouterCandidateScore {
   compositeScore: number | null;
 }
 
+/**
+ * The access-tier order every mode ranks by, best first:
+ *
+ *   subscription → free-tier → metered → unknown
+ *
+ * SUBSCRIPTION AHEAD OF FREE, and the reason is measured rather than tasteful.
+ * Included capacity is already paid for and is where the operator's strongest
+ * models live; a vendor free tier is rate-limited (20 requests/day at one
+ * vendor), often account-dependent, and is the tier a vendor moves to billing
+ * from. With free-tier ranked FIRST (as this table had it), a connected
+ * Anthropic subscription with 62% of its window unused was never chosen once
+ * in 30 days while a "free" 3B model took 3,903 calls — the router preferred
+ * the cheapest-looking tier over the one it had actually been given.
+ *
+ * 'subscription' and 'subscription-harness' share a rank on purpose: both are
+ * non-metered included capacity. The transport distinction matters for
+ * ELIGIBILITY (ai-router-candidates.ts), never for how an eligible candidate
+ * ranks.
+ */
 const ACCESS_RANK: Record<AiRouterCandidate['accessClass'], number> = {
-  'free-tier': 0,
-  subscription: 1,
-  // Same rank as 'subscription' — both are non-metered included capacity;
-  // the transport distinction matters for ELIGIBILITY (ai-router-candidates.ts),
-  // not for how a harness-dispatched candidate should rank once it IS eligible.
-  'subscription-harness': 1,
+  subscription: 0,
+  'subscription-harness': 0,
+  'free-tier': 1,
   metered: 2,
   unknown: 3,
 };
