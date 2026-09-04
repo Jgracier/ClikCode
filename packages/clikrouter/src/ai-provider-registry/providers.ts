@@ -440,12 +440,17 @@ export const AI_PROVIDERS = [
       discount: "50%",
     },
     docsPricingCatalog: "mistral",
-    // La Plateforme's free "Experiment" workspace tier: rate-limited access
-    // to every model (including Mistral Large), ~1B tokens/month, $0
-    // (docs.mistral.ai/admin/user-management-finops/tier, verified
-    // 2026-08-08). A workspace is assigned Experiment OR a paid tier, never
-    // both, so this never silently escalates to billing.
-    apiKeyAccessClass: "free-tier",
+    // apiKeyAccessClass DELIBERATELY NOT DECLARED. This row said 'free-tier' on
+    // the strength of La Plateforme's "Experiment" workspace tier — but which
+    // tier a WORKSPACE is on is a fact about the operator's account, not about
+    // the vendor, and this registry cannot see it. MEASURED 2026-09-04: with
+    // the flag set, the router treated every Mistral key as $0 and put it first
+    // on every allowMetered:false lane — 3,903 invocations in 30 days on a
+    // workspace that is on a PAID tier, the single largest metered spend on the
+    // platform, all under a policy that said "never spend". An API key at a
+    // vendor that bills per token is metered until the platform can positively
+    // observe otherwise; an operator whose workspace genuinely is on Experiment
+    // opts a task into `allowMetered` and nothing changes for them.
     contextWindow: 128_000,
     // Voxtral Small is NOT a 128K model despite inheriting the row default —
     // live-verified 2026-08-10 from a real dispatch failure: "Prompt 79419 >
@@ -804,26 +809,16 @@ export const AI_PROVIDERS = [
     // noise. A low hit rate is a prompt-stability problem on our side, not
     // evidence that the vendor does not cache.
     promptCaching: "automatic",
-    // Permanent $0/mo developer tier, 600 RPM, no credit card
-    // (sambanova.ai/blog/sambanova-cloud-developer-tier-is-live, verified
-    // 2026-08-08) — rate-limit-gated, not credit-gated, so there is no paid
-    // plan it silently escalates to. (Separately: a one-time $5/3-month
-    // credit also exists on top of this, unrelated to the free tier itself.)
-    //
-    // THE SIZE OF THE TIER, recorded 2026-08-13 because ranking cannot see it:
-    // the free developer tier is 20 REQUESTS PER DAY. The 600 RPM figure above
-    // is the burst rate, not the daily allowance, and the two read very
-    // differently at a routing decision. `apiKeyAccessClass` has exactly two
-    // states — 'free-tier' or metered — with no way to say "free but
-    // negligible", so this stays free-tier: it IS free and it IS hard-gated
-    // (429, no card, no silent escalation), which is what the flag asserts.
-    // What it cannot say is that the twenty-first request of the day fails, so
-    // treating SambaNova as a dependable free lane will disappoint. Expressing
-    // that honestly needs a quota dimension on the class, not a lie in this
-    // field — and the failure mode of leaving it as-is is a 429 (recoverable,
-    // and already handled by the cooldown path), whereas demoting it to metered
-    // would wrongly bill-gate a genuinely free provider.
-    apiKeyAccessClass: "free-tier",
+    // apiKeyAccessClass DELIBERATELY NOT DECLARED. The developer tier is real
+    // (sambanova.ai/blog/sambanova-cloud-developer-tier-is-live) but it is 20
+    // REQUESTS PER DAY, and the twenty-first is not a 429 — MEASURED 2026-08-16,
+    // a real dispatch answered `402 "A payment method is required"`, i.e. the
+    // vendor asked to bill. A tier the router cannot see the edge of, on an
+    // account the vendor will happily move to billing, is not "positively
+    // free" in the sense the allowMetered gate needs (see ai-router-candidates:
+    // "exclude anything not POSITIVELY known free"). With the flag set, this
+    // provider took 699 invocations in 30 days on allowMetered:false lanes. An
+    // operator who wants the 20/day lane opts the task into `allowMetered`.
     contextWindow: 64_000,
     keyUrl: "https://cloud.sambanova.ai/apis",
     label: "SambaNova",

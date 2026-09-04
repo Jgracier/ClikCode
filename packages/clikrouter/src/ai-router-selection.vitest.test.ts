@@ -23,8 +23,19 @@ describe('selectRouterCandidate', () => {
     { provider: 'openrouter', model: 'openrouter/claude-haiku-4', accessClass: 'metered', estimatedCostPerMTok: 0.2, agenticIndex: 60 },
   ];
 
-  it('prefers lower-cost free-tier models in budget mode', () => {
+  it('prefers included subscription capacity over free-tier models in budget mode', () => {
+    // Access tier is budget mode's primary key, and subscription is the top
+    // tier: capacity already paid for beats a rate-limited vendor free tier
+    // (see ACCESS_RANK's own doc comment for the measured reason).
     const selected = selectRouterCandidate(candidates, 'budget');
+    expect(selected?.model).toBe('openrouter/claude-sonnet-4');
+  });
+
+  it('prefers the cheapest free-tier model in budget mode when no subscription is in the pool', () => {
+    const selected = selectRouterCandidate(
+      candidates.filter((c) => c.accessClass !== 'subscription'),
+      'budget',
+    );
     expect(selected?.model).toBe('openrouter/llama-3.1-8b');
   });
 
@@ -92,10 +103,13 @@ describe('selectRouterCandidate', () => {
       expect(selected?.model).toBe('claude-sonnet-4-5-20250929');
     });
 
-    it('still prefers free-tier over subscription when intelligence is genuinely equal', () => {
-      // accessRank's own -0/-10 spread should still decide equal-intelligence
-      // ties — the fix removes cost as a SEPARATE penalty for subscription/
-      // free-tier, it does not remove accessRank's preference for free.
+    it('prefers subscription over free-tier when intelligence is genuinely equal', () => {
+      // accessRank's own 0/-10 spread decides equal-intelligence ties, and
+      // subscription is the top tier: included capacity the operator connected
+      // beats a vendor free tier the operator merely has a key for. This used
+      // to assert the opposite, and that ordering is how a connected Anthropic
+      // subscription went unused for 30 days while a "free" tier took every
+      // call (see ACCESS_RANK).
       const candidates: AiRouterCandidate[] = [
         { provider: 'openai', model: 'gpt-4o', accessClass: 'subscription', estimatedCostPerMTok: null, avgLatencyMs: 3000, agenticIndex: 70 },
         {
@@ -108,7 +122,7 @@ describe('selectRouterCandidate', () => {
         },
       ];
       const selected = selectRouterCandidate(candidates, 'auto');
-      expect(selected?.model).toBe('qwen2.5-72b');
+      expect(selected?.model).toBe('gpt-4o');
     });
 
     it('still penalizes cost normally for metered/unknown access, where it is a real per-call charge', () => {
