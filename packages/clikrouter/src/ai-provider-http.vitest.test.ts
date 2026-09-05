@@ -402,37 +402,34 @@ describe('buildAiChatRequest', () => {
     ).toThrow(/cannot be dispatched over HTTP.*harness/s);
   });
 
-  // xAI spends its subscription DIRECT over the Grok CLI's OWN proxy (cli-chat-proxy.grok.com), so the
-  // chokepoint BUILDS the request now rather than refusing it. api.x.ai still 403s the bearer — the
-  // point is that the subscription's real surface is the SEPARATE proxy host, addressed by grok-chat:
-  // OpenAI-compatible body, the pinned CLI header, and the model carried in x-grok-model-override
-  // because the proxy routes on the header, not the body.
-  it('routes an xAI OAuth credential to the grok-cli proxy with the pinned CLI headers', () => {
+  // xAI's subscription has NO HTTP surface this platform may drive: its CLI proxy
+  // (cli-chat-proxy.grok.com) answered every bare-client turn 426 `Grok CLI version (none) is
+  // outdated` (prod, 2026-09-05) because it gates on the CLI's own version header, and api.x.ai
+  // 403s the bearer on chat. The chokepoint therefore REFUSES rather than builds — and the refusal
+  // repeats the row's measured reason, so a lane that reaches it reports the same fact the router's
+  // exclusion does instead of a generic "use an API key". An API key for the same provider is
+  // untouched: it still builds the ordinary api.x.ai request.
+  it('refuses an xAI OAuth credential with the registry reason, while its API key still builds', () => {
+    expect(() =>
+      buildAiChatRequest({
+        provider: 'xai',
+        model: 'grok-4-1-fast',
+        apiKey: 'oauth-token',
+        credentialSource: 'oauth',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    ).toThrow(/subscriptionTransport: none.*426.*Grok CLI version.*GROK_API_KEY/s);
+
     const req = buildAiChatRequest({
       provider: 'xai',
       model: 'grok-4-1-fast',
-      apiKey: 'oauth-token',
-      credentialSource: 'oauth',
+      apiKey: 'xai-api-key',
+      credentialSource: 'env',
       messages: [{ role: 'user', content: 'hi' }],
     });
-    expect(req.dialect).toBe('openai-chat');
-    expect(req.url).toBe('https://cli-chat-proxy.grok.com/v1/chat/completions');
-    expect(req.headers.Authorization).toBe('Bearer oauth-token');
-    expect(req.headers['X-XAI-Token-Auth']).toBe('xai-grok-cli');
-    expect(req.headers['x-grok-model-override']).toBe('grok-4-1-fast');
-    expect(req.body.model).toBe('grok-4-1-fast');
-    expect(req.body.messages).toEqual([{ role: 'user', content: 'hi' }]);
-  });
-
-  // No model known → the proxy's default route (grok-build) needs no override, so the header is omitted.
-  it('omits x-grok-model-override when no model is set', () => {
-    const req = buildAiChatRequest({
-      provider: 'xai',
-      model: '',
-      apiKey: 'oauth-token',
-      credentialSource: 'oauth',
-      messages: [{ role: 'user', content: 'hi' }],
-    });
+    expect(req.url).toBe('https://api.x.ai/v1/chat/completions');
+    expect(req.headers.Authorization).toBe('Bearer xai-api-key');
+    expect(req.headers['X-XAI-Token-Auth']).toBeUndefined();
     expect(req.headers['x-grok-model-override']).toBeUndefined();
   });
 

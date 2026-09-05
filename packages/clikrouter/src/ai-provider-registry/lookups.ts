@@ -129,11 +129,29 @@ export function subscriptionUsesHarness(
 }
 
 /** True when a subscription credential for this provider can be spent at all,
- *  by either transport. False means connectable but unusable (xAI today). */
+ *  by either transport. False means connectable but unusable (xAI today — see
+ *  `subscriptionUnsupportedReason` on its row for the measured reason). */
 export function subscriptionIsSpendable(
   spec: AiProviderSpec | undefined,
 ): boolean {
   return Boolean(spec?.subscriptionTransport);
+}
+
+/**
+ * The one sentence every surface repeats when a subscription cannot be spent:
+ * the row's own `subscriptionUnsupportedReason`, or — for a row that offers
+ * `oauth` without stating why its subscription is unspendable — a generic line
+ * that still names the missing datum, so the gap is visible rather than a
+ * silent skip. Undefined when the subscription IS spendable.
+ */
+export function subscriptionUnsupportedReason(
+  spec: AiProviderSpec | undefined,
+): string | undefined {
+  if (!spec || subscriptionIsSpendable(spec)) return undefined;
+  return (
+    spec.subscriptionUnsupportedReason ??
+    `${spec.id} declares no subscription transport (neither a direct OAuth surface nor a vendor CLI harness)`
+  );
 }
 
 /** Rows grouped for the admin console, in header order, skipping empty sections. */

@@ -6,6 +6,7 @@ import {
   modelTokenLimits,
   subscriptionDispatchesDirect,
   subscriptionIsSpendable,
+  subscriptionUnsupportedReason,
   subscriptionUsesHarness,
   type AiProviderSpec,
 } from "./ai-provider-registry";
@@ -160,20 +161,35 @@ describe("modelTokenLimits", () => {
     });
   });
 
-  // xAI's subscription now spends DIRECT over the Grok CLI's OWN subscription proxy
-  // (cli-chat-proxy.grok.com), so its harness row was deleted. api.x.ai still 403s the OAuth bearer —
-  // the direct surface is the SEPARATE proxy host, addressed via `oauthChat` with the pinned CLI
-  // header. The load-bearing negative is that it is NOT a harness anymore.
-  it("spends an xAI subscription DIRECT over the grok-cli proxy, not a harness", () => {
+  // xAI's subscription is CONNECTABLE BUT NOT SPENDABLE. Its only chat surface is the Grok CLI's
+  // proxy (cli-chat-proxy.grok.com), which this row dispatched onto DIRECT from 2026-08-31 — and
+  // which answered every real turn 426 `Grok CLI version (none) is outdated` (prod, 2026-09-05):
+  // the proxy gates on the CLI's own version header and admits only a current CLI build. Spoofing
+  // that header is not a transport, and the CLI is not in the worker image, so there is no
+  // `oauthChat`, no harness, and the row states the measured reason. The load-bearing negatives are
+  // that NEITHER transport is declared — an admitted-then-426 candidate is exactly what this prevents.
+  it("declares xAI's subscription unspendable, with the measured reason on the row", () => {
     const xai = providers.find((p) => p.id === "xai");
     expect(xai).toBeTruthy();
-    expect(xai!.subscriptionTransport).toBe("direct");
-    expect(subscriptionIsSpendable(xai)).toBe(true);
-    expect(subscriptionDispatchesDirect(xai)).toBe(true);
+    expect(xai!.oauth).toBe(true);
+    expect(xai!.subscriptionTransport).toBeUndefined();
+    expect(xai!.oauthChat).toBeUndefined();
+    expect(subscriptionIsSpendable(xai)).toBe(false);
+    expect(subscriptionDispatchesDirect(xai)).toBe(false);
     expect(subscriptionUsesHarness(xai)).toBe(false);
-    expect(xai!.oauthChat?.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
-    expect(xai!.oauthChat?.dialect).toBe("grok-chat");
-    expect(xai!.oauthChat?.headers?.["X-XAI-Token-Auth"]).toBe("xai-grok-cli");
+    expect(subscriptionUnsupportedReason(xai)).toMatch(/426.*Grok CLI version/);
+    expect(subscriptionUnsupportedReason(xai)).toMatch(/GROK_API_KEY/);
+  });
+
+  // The helper is silent for a spendable row and never silent for an unspendable one: a row that
+  // forgets its reason still gets a sentence naming the missing datum, so no lane can skip a
+  // subscription without saying why.
+  it("has a reason for every unspendable subscription and none for a spendable one", () => {
+    expect(subscriptionUnsupportedReason(providers.find((p) => p.id === "openai"))).toBeUndefined();
+    expect(subscriptionUnsupportedReason(undefined)).toBeUndefined();
+    expect(subscriptionUnsupportedReason({ id: "later", oauth: true } as AiProviderSpec)).toMatch(
+      /later declares no subscription transport/,
+    );
   });
 
   // huggingface and microsoft-foundry moved from "connectable but unspendable" (subscriptionTransport
@@ -195,17 +211,25 @@ describe("modelTokenLimits", () => {
     }
   });
 
-  // No OAuth provider is left in the "connectable but unspendable" state (subscriptionTransport
-  // undefined). A row that offers `oauth` must declare HOW that subscription is spent, or the AI tab
-  // ships a connect button that mints a token nothing can use.
-  it("leaves no oauth provider without a subscription transport", () => {
+  // A row that offers `oauth` must either declare HOW that subscription is spent or state WHY it
+  // cannot be — otherwise the AI tab ships a connect button that mints a token nothing can use, and
+  // nothing anywhere says so. xai is the one row in the second state today (measured, see its row);
+  // it is named here so a second silent one cannot appear beside it.
+  it("leaves no oauth provider without a subscription transport or a stated reason", () => {
+    const unspendable: string[] = [];
     for (const provider of providers) {
       if (!provider.oauth) continue;
+      if (subscriptionIsSpendable(provider)) {
+        expect(provider.subscriptionUnsupportedReason, `${provider.id} is spendable yet carries a reason`).toBeUndefined();
+        continue;
+      }
       expect(
-        subscriptionIsSpendable(provider),
-        `${provider.id} is oauth:true but has no subscriptionTransport`,
-      ).toBe(true);
+        provider.subscriptionUnsupportedReason,
+        `${provider.id} is oauth:true with no subscriptionTransport and no subscriptionUnsupportedReason`,
+      ).toMatch(/\S/);
+      unspendable.push(provider.id);
     }
+    expect(unspendable).toEqual(["xai"]);
   });
 
   // The harness gate must be provider-agnostic — a row is harness because it DECLARES itself so, with
