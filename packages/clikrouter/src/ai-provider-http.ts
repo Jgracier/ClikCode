@@ -6,6 +6,7 @@
 // Server-only (no client imports).
 
 import { randomUUID } from "node:crypto";
+import { toGeminiToolParameters } from "./gemini-schema";
 import {
   getAiProvider,
   subscriptionDispatchesDirect,
@@ -279,13 +280,24 @@ function openAiChatCompletionsBody(
       ? {
           tools: input.tools.map((t) => ({
             type: "function",
-            function: { name: t.name, description: t.description, parameters: t.parameters },
+            // Google's OpenAI-compatible endpoint validates `parameters` as
+            // its own Schema subset too — same projection as the OAuth dialect.
+            function:
+              spec?.id === "google"
+                ? geminiFunctionDeclaration(t)
+                : { name: t.name, description: t.description, parameters: t.parameters },
           })),
         }
       : {}),
     ...(input.stream ? { stream: true, stream_options: { include_usage: true } } : {}),
     messages,
   };
+}
+
+/** One tool as Gemini declares it: `parameters` omitted for an argument-less tool. */
+function geminiFunctionDeclaration(t: AiToolSpec): { name: string; description: string; parameters?: Record<string, unknown> } {
+  const parameters = toGeminiToolParameters(t.parameters);
+  return { name: t.name, description: t.description, ...(parameters ? { parameters } : {}) };
 }
 
 function buildOauthSurfaceRequest(
@@ -352,11 +364,10 @@ function buildOauthSurfaceRequest(
             ? {
                 tools: [
                   {
-                    functionDeclarations: input.tools.map((t) => ({
-                      name: t.name,
-                      description: t.description,
-                      parameters: t.parameters,
-                    })),
+                    // Google's Schema subset — see gemini-schema.ts. The raw
+                    // zod-produced JSON Schema (`$schema`, additionalProperties,
+                    // …) is rejected with HTTP 400 before any model runs.
+                    functionDeclarations: input.tools.map((t) => geminiFunctionDeclaration(t)),
                   },
                 ],
               }
