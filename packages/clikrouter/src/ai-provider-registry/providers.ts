@@ -237,15 +237,27 @@ export const AI_PROVIDERS = [
       // identifies its client by a PINNED version in three places (query param,
       // User-Agent, `version` header) — so the pin is ONE declared string here
       // rather than three copies inside a switch case in the probe module.
+      //
+      // THE VERDICT IS A REAL TURN on `oauthChat` below (`subscription-turn`),
+      // not this catalog call. MEASURED 2026-09-05 on prod: this list answered
+      // 200 every hour while the token had never produced ONE invocation —
+      // the models were held out by a model-health sweep that sent the same
+      // token to api.openai.com (wrong host, "Missing scopes:
+      // api.responses.write") and cooled every catalog row permanently. A
+      // catalog GET cannot say whether `/codex/responses` will serve; only
+      // `/codex/responses` can.
       bySource: {
         oauth: {
-          kind: "openai-codex-models",
-          url: "https://chatgpt.com/backend-api/codex/models",
-          query: { client_version: OPENAI_CODEX_CLIENT_VERSION },
-          headers: {
-            "User-Agent": `codex-tui/${OPENAI_CODEX_CLIENT_VERSION}`,
-            originator: "codex_cli_rs",
-            version: OPENAI_CODEX_CLIENT_VERSION,
+          kind: "subscription-turn",
+          catalog: {
+            kind: "openai-codex-models",
+            url: "https://chatgpt.com/backend-api/codex/models",
+            query: { client_version: OPENAI_CODEX_CLIENT_VERSION },
+            headers: {
+              "User-Agent": `codex-tui/${OPENAI_CODEX_CLIENT_VERSION}`,
+              originator: "codex_cli_rs",
+              version: OPENAI_CODEX_CLIENT_VERSION,
+            },
           },
         },
       },
@@ -337,6 +349,25 @@ export const AI_PROVIDERS = [
           kind: "openai-models",
           url: "https://generativelanguage.googleapis.com/v1beta/openai/models",
           headers: {},
+        },
+        // THE VERDICT IS A REAL `:generateContent` TURN on `oauthChat` below.
+        // MEASURED 2026-09-05 on prod: `:loadCodeAssist` answered 200 for the
+        // platform token every hour (sweep wrote `ok`), while the one real
+        // dispatch on the same token — a pinned gemini-2.5-flash turn — was
+        // refused `403 You do not have a valid license of this product`. The
+        // account/tier call and the generate call are different entitlements;
+        // the probe must exercise the one dispatch spends. The base `url`
+        // above stays as the catalog (discovery) call run after a pass.
+        oauth: {
+          kind: "subscription-turn",
+          catalog: {
+            kind: "google-code-assist",
+            url: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+            headers: {
+              "X-Goog-Api-Client": `google-cloud-sdk gemini-cli/${GEMINI_CLI_CLIENT_VERSION}`,
+              "User-Agent": `GeminiCLI/${GEMINI_CLI_CLIENT_VERSION}`,
+            },
+          },
         },
       },
     },
