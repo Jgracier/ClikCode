@@ -129,8 +129,8 @@ export function subscriptionUsesHarness(
 }
 
 /** True when a subscription credential for this provider can be spent at all,
- *  by either transport. False means connectable but unusable (xAI today — see
- *  `subscriptionUnsupportedReason` on its row for the measured reason). */
+ *  by either transport. False means connectable but unusable (no row today;
+ *  such a row states why in `subscriptionUnsupportedReason`). */
 export function subscriptionIsSpendable(
   spec: AiProviderSpec | undefined,
 ): boolean {

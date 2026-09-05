@@ -542,11 +542,12 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   // have to remember. The same throw covers a provider with no subscription
   // transport at all, for the same reason: there is no surface to build for.
   //
-  // xAI is the sharpest case for throwing rather than trying, in BOTH of its
-  // historical states: api.x.ai is MEASURED to answer an xAI OAuth bearer with
-  // 403 on chat, and its CLI proxy is MEASURED (2026-09-05) to answer a bare
-  // HTTP client with 426 — so an HTTP attempt here cannot succeed; it can only
-  // burn the request. A transport-less row carries the measured reason
+  // xAI is the sharpest case for throwing rather than trying: api.x.ai is
+  // MEASURED to answer an xAI OAuth bearer with 403 on chat, and its CLI proxy
+  // is MEASURED (2026-09-05) to answer a bare HTTP client with 426 — so an HTTP
+  // attempt here cannot succeed; it can only burn the request. Its row is
+  // 'harness' (the Grok CLI, baked into the worker image, is the transport). A
+  // transport-less row carries the measured reason
   // (`subscriptionUnsupportedReason`) and it is repeated here verbatim, so the
   // lane that reaches this throw reports the same fact the router's exclusion
   // and the admin console do.

@@ -405,11 +405,11 @@ describe('buildAiChatRequest', () => {
   // xAI's subscription has NO HTTP surface this platform may drive: its CLI proxy
   // (cli-chat-proxy.grok.com) answered every bare-client turn 426 `Grok CLI version (none) is
   // outdated` (prod, 2026-09-05) because it gates on the CLI's own version header, and api.x.ai
-  // 403s the bearer on chat. The chokepoint therefore REFUSES rather than builds — and the refusal
-  // repeats the row's measured reason, so a lane that reaches it reports the same fact the router's
-  // exclusion does instead of a generic "use an API key". An API key for the same provider is
-  // untouched: it still builds the ordinary api.x.ai request.
-  it('refuses an xAI OAuth credential with the registry reason, while its API key still builds', () => {
+  // 403s the bearer on chat. The row is therefore 'harness' (the vendor's own CLI is the transport,
+  // baked into the worker image), and the chokepoint REFUSES an OAuth credential the same way it
+  // refuses Anthropic's — pointing the lane at runHarnessChat. An API key for the same provider is
+  // untouched: it still builds the ordinary api.x.ai request, with none of the CLI-proxy headers.
+  it('refuses an xAI OAuth credential toward the harness, while its API key still builds', () => {
     expect(() =>
       buildAiChatRequest({
         provider: 'xai',
@@ -418,7 +418,7 @@ describe('buildAiChatRequest', () => {
         credentialSource: 'oauth',
         messages: [{ role: 'user', content: 'hi' }],
       }),
-    ).toThrow(/subscriptionTransport: none.*426.*Grok CLI version.*GROK_API_KEY/s);
+    ).toThrow(/subscriptionTransport: harness.*runHarnessChat/s);
 
     const req = buildAiChatRequest({
       provider: 'xai',

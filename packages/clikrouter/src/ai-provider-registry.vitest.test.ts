@@ -161,24 +161,28 @@ describe("modelTokenLimits", () => {
     });
   });
 
-  // xAI's subscription is CONNECTABLE BUT NOT SPENDABLE. Its only chat surface is the Grok CLI's
-  // proxy (cli-chat-proxy.grok.com), which this row dispatched onto DIRECT from 2026-08-31 — and
-  // which answered every real turn 426 `Grok CLI version (none) is outdated` (prod, 2026-09-05):
-  // the proxy gates on the CLI's own version header and admits only a current CLI build. Spoofing
-  // that header is not a transport, and the CLI is not in the worker image, so there is no
-  // `oauthChat`, no harness, and the row states the measured reason. The load-bearing negatives are
-  // that NEITHER transport is declared — an admitted-then-426 candidate is exactly what this prevents.
-  it("declares xAI's subscription unspendable, with the measured reason on the row", () => {
+  // xAI's subscription is spent through the vendor's OWN CLI and nothing else. Its CLI proxy
+  // (cli-chat-proxy.grok.com) answered every bare-client turn 426 `Grok CLI version (none) is
+  // outdated` (prod, 2026-09-05) because it gates on the CLI's own version header, and api.x.ai
+  // 403s the bearer on chat — so there is no `oauthChat` (spoofing the header is not a transport)
+  // and the row is 'harness', with `@xai-official/grok` baked into the worker image. The
+  // load-bearing negatives: no direct surface, no unsupported-reason (it IS spendable), and the
+  // subscription's probe is a real CLI turn (`bySource.oauth: harness-turn`), never api.x.ai.
+  it("spends xAI's subscription through its CLI harness, probed on that same transport", () => {
     const xai = providers.find((p) => p.id === "xai");
     expect(xai).toBeTruthy();
     expect(xai!.oauth).toBe(true);
-    expect(xai!.subscriptionTransport).toBeUndefined();
+    expect(xai!.subscriptionTransport).toBe("harness");
     expect(xai!.oauthChat).toBeUndefined();
-    expect(subscriptionIsSpendable(xai)).toBe(false);
+    expect(xai!.subscriptionUnsupportedReason).toBeUndefined();
+    expect(subscriptionIsSpendable(xai)).toBe(true);
     expect(subscriptionDispatchesDirect(xai)).toBe(false);
-    expect(subscriptionUsesHarness(xai)).toBe(false);
-    expect(subscriptionUnsupportedReason(xai)).toMatch(/426.*Grok CLI version/);
-    expect(subscriptionUnsupportedReason(xai)).toMatch(/GROK_API_KEY/);
+    expect(subscriptionUsesHarness(xai)).toBe(true);
+    expect(subscriptionUnsupportedReason(xai)).toBeUndefined();
+    expect(xai!.probe.bySource?.oauth?.kind).toBe("harness-turn");
+    // The API key keeps its own HTTP probe on the developer API.
+    expect(xai!.probe.kind).toBe("openai-models");
+    expect(xai!.probe.url).toBe("https://api.x.ai/v1/models");
   });
 
   // The helper is silent for a spendable row and never silent for an unspendable one: a row that
@@ -213,8 +217,9 @@ describe("modelTokenLimits", () => {
 
   // A row that offers `oauth` must either declare HOW that subscription is spent or state WHY it
   // cannot be — otherwise the AI tab ships a connect button that mints a token nothing can use, and
-  // nothing anywhere says so. xai is the one row in the second state today (measured, see its row);
-  // it is named here so a second silent one cannot appear beside it.
+  // nothing anywhere says so. No row is in the second state today (xai was, for the hours between
+  // losing its direct surface and its CLI being baked into the worker image — see its row); the list
+  // is asserted empty so the next silent one cannot appear without being named here.
   it("leaves no oauth provider without a subscription transport or a stated reason", () => {
     const unspendable: string[] = [];
     for (const provider of providers) {
@@ -229,7 +234,7 @@ describe("modelTokenLimits", () => {
       ).toMatch(/\S/);
       unspendable.push(provider.id);
     }
-    expect(unspendable).toEqual(["xai"]);
+    expect(unspendable).toEqual([]);
   });
 
   // The harness gate must be provider-agnostic — a row is harness because it DECLARES itself so, with
