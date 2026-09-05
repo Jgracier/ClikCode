@@ -482,6 +482,21 @@ export interface AiProviderSpec {
    */
   chatDialect?: "openai-chat" | "anthropic-messages" | "openai-responses";
   /**
+   * How this endpoint validates a tool's `parameters` JSON Schema.
+   *
+   * `"json-schema"` (the default when omitted) sends the tool's raw JSON Schema,
+   * as OpenAI and every OpenAI-compatible vendor accept it. `"gemini"` projects
+   * it through geminiFunctionDeclaration to Gemini's restricted Schema subset —
+   * Google's OpenAI-compatible endpoint (and the Code Assist OAuth surface)
+   * REJECT raw JSON Schema on tool calls, 400-ing every tool-carrying turn.
+   *
+   * A registry field rather than an `id === "google"` branch in the body builder:
+   * every agent turn carries tools, so a new Gemini-family or strict-validator
+   * row must be able to DECLARE this and get correct behaviour without a code
+   * change (and without silently 400-ing on its first tool call).
+   */
+  toolSchemaDialect?: "json-schema" | "gemini";
+  /**
    * Dispatch overrides that apply ONLY when the credential is an OAuth
    * subscription token — the SECOND DIMENSION for chat, exactly as
    * `probe.bySource` is for health.
