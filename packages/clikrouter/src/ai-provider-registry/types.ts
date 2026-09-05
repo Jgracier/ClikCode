@@ -192,23 +192,22 @@ export interface AiProviderSpec {
    *               real vendor endpoints, not a wrapper around a CLI.
    *   'harness' — the vendor's own CLI is the supported way to spend this
    *               subscription, and is therefore the PRIMARY and only path for
-   *               it (Anthropic → Claude Code, xAI → Grok Build). Not a
-   *               fallback: no HTTP attempt is made first, and nothing "falls
-   *               back" to it. xAI is the clearest illustration of why this is a
-   *               separate state rather than "direct or nothing": api.x.ai is
-   *               measured to answer its own OAuth bearer with 403, so there is
-   *               genuinely no HTTP surface — and the subscription is still
-   *               fully spendable, through `@xai-official/grok`.
+   *               it (Anthropic → Claude Code). Not a fallback: no HTTP attempt
+   *               is made first, and nothing "falls back" to it. This is a
+   *               separate state rather than "direct or nothing" because a
+   *               vendor can answer its own OAuth bearer with 403 on the public
+   *               API (api.x.ai does) while the subscription is still fully
+   *               spendable through the vendor's CLI.
    *   undefined — this provider has no working subscription dispatch at all, so
    *               an OAuth credential for it can be connected but not spent (a
    *               row with an OAuth connection and neither a known subscription
-   *               endpoint nor a vendor CLI). No row is in this state today:
-   *               huggingface and microsoft-foundry — the last two — now
-   *               dispatch 'direct' onto the same inference host their API key
-   *               uses, on the strength of an inference-granting OAuth scope
-   *               (inference-api / cognitiveservices.azure.com/.default). The
-   *               state is kept because a newly added OAuth provider legitimately
-   *               starts here until its dispatch is established.
+   *               endpoint nor a vendor CLI baked into the worker image). A row
+   *               in this state MUST say why in `subscriptionUnsupportedReason`
+   *               so the router's exclusion, the HTTP chokepoint's refusal and
+   *               the admin console all carry the same fact. xAI is in this
+   *               state today (see its row); huggingface and microsoft-foundry
+   *               left it by dispatching 'direct' onto the same inference host
+   *               their API key uses.
    *
    * An API KEY is unaffected by this field in every case — it always dispatches
    * over plain HTTP to `chatBaseUrl`.
@@ -219,6 +218,20 @@ export interface AiProviderSpec {
    * that meant to skip only the unusable ones.
    */
   subscriptionTransport?: "direct" | "harness";
+  /**
+   * WHY a subscription (OAuth) credential for this provider cannot be spent —
+   * required exactly when `subscriptionTransport` is undefined on a row that
+   * still offers `oauth`. This is the one sentence every surface repeats
+   * (router exclusion detail, HTTP chokepoint throw, credential-health probe
+   * result), so a connected-but-unspendable subscription is never a SILENT
+   * skip: the row says what is broken and what would unblock it.
+   *
+   * Prose, not a code: the reason is vendor-specific evidence (a measured
+   * status, a header the vendor now requires) that changes when the vendor
+   * does, and the reader is an operator deciding whether to reconnect, buy an
+   * API key, or wait.
+   */
+  subscriptionUnsupportedReason?: string;
   /** Vendor documentation pricing table merged into discovered models. */
   docsPricingCatalog?:
     | "cloudflare"
@@ -455,26 +468,32 @@ export interface AiProviderSpec {
    * different HTTPS endpoint, sometimes with a different body shape. So this is
    * a ROW DATUM (host + dialect + pinned client headers), not a reason to shell
    * out to that CLI: once the endpoint and its headers are known, the harness is
-   * pure overhead and its row is deleted (see the openai/google/xai history in
+   * pure overhead and its row is deleted (see the openai/google history in
    * ai-harness-registry.ts).
+   *
+   * THE LIMIT OF THAT RULE, measured 2026-09-05: the surface must be one the
+   * vendor serves to a plain HTTP client. xAI's cli-chat-proxy.grok.com was
+   * declared here as a `grok-chat` dialect on the strength of its host + two
+   * pinned headers, and then answered every real turn with 426 `Your Grok CLI
+   * version (none) is outdated` — the proxy gates on the CLI's own
+   * `x-grok-client-version` and only admits a current Grok CLI build. Sending
+   * that header from a server that is not the CLI would be spoofing a client
+   * identity to evade a vendor control, so the dialect was deleted and xAI's
+   * row carries `subscriptionUnsupportedReason` instead. A surface is only
+   * `oauthChat` material when a bare HTTP request the vendor's CLI would also
+   * send is ACCEPTED — not when it happens to be the CLI's upstream.
    *
    * Dialects:
    *   codex-responses — OpenAI's internal Responses backend (stateless, SSE).
    *   code-assist     — Google's Code Assist `:generateContent`.
-   *   grok-chat       — a plain OpenAI `/v1/chat/completions` subscription proxy
-   *                     (xAI's cli-chat-proxy.grok.com). Same body as the API-key
-   *                     path; the ONLY differences are the host and the pinned
-   *                     headers, one of which (`x-grok-model-override`) carries
-   *                     the model because the proxy routes on it, not the body.
    *
    * `path` is appended to `baseUrl` when the dialect needs one (Codex's
-   * `/responses`, grok's `/chat/completions`); the Code Assist dialect builds
-   * `:generateContent` itself because the method rides in the URL as a
-   * `:`-suffix, not a path segment.
+   * `/responses`); the Code Assist dialect builds `:generateContent` itself
+   * because the method rides in the URL as a `:`-suffix, not a path segment.
    */
   oauthChat?: {
     baseUrl: string;
-    dialect: "codex-responses" | "code-assist" | "grok-chat";
+    dialect: "codex-responses" | "code-assist";
     path?: string;
     /** Pinned client identification the vendor's own CLI sends verbatim. */
     headers?: Readonly<Record<string, string>>;

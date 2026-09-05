@@ -10,6 +10,7 @@ import { toGeminiToolParameters } from "./gemini-schema";
 import {
   getAiProvider,
   subscriptionDispatchesDirect,
+  subscriptionUnsupportedReason,
   type AiProviderId,
   type AiProviderSpec,
 } from "./ai-provider-registry";
@@ -254,9 +255,10 @@ function splitSystemAndTurns(input: ChatTurnInput): {
 let warnedCodexMaxTokensDropped = false;
 
 /**
- * The OpenAI `/chat/completions` request BODY. Shared by the API-key path and
- * the `grok-chat` OAuth subscription proxy, which speaks the identical dialect
- * on a different host — factoring it out is what stops the two from drifting.
+ * The OpenAI `/chat/completions` request BODY, in one place so an OAuth surface
+ * that speaks the identical dialect on a different host (none today — xAI's
+ * `grok-chat` was the one, deleted 2026-09-05 when its proxy proved CLI-only)
+ * cannot drift from the API-key path.
  */
 function openAiChatCompletionsBody(
   input: ChatTurnInput,
@@ -313,28 +315,6 @@ function buildOauthSurfaceRequest(
     ...auth,
     ...(surface.headers ?? {}),
   };
-
-  if (surface.dialect === "grok-chat") {
-    // A plain OpenAI `/v1/chat/completions` subscription proxy
-    // (xAI's cli-chat-proxy.grok.com): the SAME body the API-key path builds, on
-    // a different host, with the pinned headers already merged above
-    // (`X-XAI-Token-Auth: xai-grok-cli`) plus the Bearer OAuth token. The one
-    // per-request header is `x-grok-model-override`: this proxy routes on the
-    // header, NOT the body's `model` field (from the CLI's own shipped docs).
-    // Omitted when no model is known — the proxy's default route (grok-build)
-    // needs no override. The Bearer token is already proven against this host by
-    // the billing adapter in ai-adapters/xai.ts; NOT OBSERVED is a live chat
-    // turn, so the response is parsed as the plain openai-chat shape it advertises.
-    return {
-      url: `${base}${surface.path ?? "/chat/completions"}`,
-      headers: {
-        ...headers,
-        ...(input.model ? { "x-grok-model-override": input.model } : {}),
-      },
-      body: openAiChatCompletionsBody(input, spec),
-      dialect: "openai-chat",
-    };
-  }
 
   if (surface.dialect === "code-assist") {
     // The method is a ':'-suffix on the version root, not a path segment.
@@ -562,11 +542,14 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
   // have to remember. The same throw covers a provider with no subscription
   // transport at all, for the same reason: there is no surface to build for.
   //
-  // xAI is now a harness row, not a transport-less one, and it is the sharpest
-  // case for throwing rather than trying: api.x.ai is MEASURED to answer an xAI
-  // OAuth bearer with 403, so an HTTP attempt here cannot succeed — it can only
-  // burn the request and mask the fact that the CLI is where that credential is
-  // spent.
+  // xAI is the sharpest case for throwing rather than trying, in BOTH of its
+  // historical states: api.x.ai is MEASURED to answer an xAI OAuth bearer with
+  // 403 on chat, and its CLI proxy is MEASURED (2026-09-05) to answer a bare
+  // HTTP client with 426 — so an HTTP attempt here cannot succeed; it can only
+  // burn the request. A transport-less row carries the measured reason
+  // (`subscriptionUnsupportedReason`) and it is repeated here verbatim, so the
+  // lane that reaches this throw reports the same fact the router's exclusion
+  // and the admin console do.
   if (input.credentialSource === "oauth" && !subscriptionDispatchesDirect(spec)) {
     const transport = spec?.subscriptionTransport ?? "none";
     throw new Error(
@@ -574,7 +557,7 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
         `(subscriptionTransport: ${transport}). ` +
         (transport === "harness"
           ? "Route it through the vendor's CLI (runHarnessChat) instead."
-          : "This provider has no working subscription dispatch; use an API key."),
+          : `This provider has no working subscription dispatch: ${subscriptionUnsupportedReason(spec) ?? "use an API key"}`),
     );
   }
 
