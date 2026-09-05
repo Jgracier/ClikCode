@@ -134,8 +134,17 @@ export const AI_PROVIDERS = [
     chatDialect: "anthropic-messages",
     authHeader: "auto",
     probe: {
+      // API KEY tier: an HTTP catalog GET on the same host the key is spent on.
       kind: "anthropic-models",
       url: "https://api.anthropic.com/v1/models",
+      // SUBSCRIPTION tier: probed on the surface it is SPENT on — a minimal real
+      // turn through the Claude Code CLI harness, on the worker — NOT this HTTP
+      // catalog GET. Same rule and same fix as xai (57a4c758f): a subscription's
+      // probe transport must match its dispatch transport, or admission reports
+      // "spendable" for an OAuth token a real CLI turn would refuse (scope /
+      // beta-header / version gating on /v1/messages). Without this, oauth fell
+      // through to the api-key `anthropic-models` GET above and could lie.
+      bySource: { oauth: { kind: "harness-turn" } },
     },
     oauth: true,
     // The two tiers are cleanly separated here, and this is the one row where
@@ -328,6 +337,11 @@ export const AI_PROVIDERS = [
     envKey: "GOOGLE_API_KEY",
     chatBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     chatDialect: "openai-chat",
+    // Google validates tool `parameters` as Gemini's restricted Schema subset on
+    // BOTH its OpenAI-compatible endpoint and the Code Assist OAuth surface, so
+    // tool schemas are projected rather than sent raw. Declared as data so this
+    // is not an `id === "google"` branch in the body builder.
+    toolSchemaDialect: "gemini",
     authHeader: "bearer",
     openAiCompatible: true,
     // OAuth uses Code Assist; API keys use the public OpenAI-compatible endpoint.

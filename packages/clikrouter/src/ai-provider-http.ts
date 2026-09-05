@@ -282,10 +282,12 @@ function openAiChatCompletionsBody(
       ? {
           tools: input.tools.map((t) => ({
             type: "function",
-            // Google's OpenAI-compatible endpoint validates `parameters` as
-            // its own Schema subset too — same projection as the OAuth dialect.
+            // An endpoint that validates `parameters` as Gemini's Schema subset
+            // (spec.toolSchemaDialect === 'gemini') gets the projected form; every
+            // other endpoint gets raw JSON Schema. Registry-driven, not an
+            // `id === "google"` branch — see AiProviderSpec.toolSchemaDialect.
             function:
-              spec?.id === "google"
+              spec?.toolSchemaDialect === "gemini"
                 ? geminiFunctionDeclaration(t)
                 : { name: t.name, description: t.description, parameters: t.parameters },
           })),
