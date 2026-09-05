@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_PROVIDERS,
   DEFAULT_CONTEXT_WINDOW,
+  getAiProvider,
   isTextRoutable,
   modelTokenLimits,
   subscriptionDispatchesDirect,
@@ -183,6 +184,22 @@ describe("modelTokenLimits", () => {
     // The API key keeps its own HTTP probe on the developer API.
     expect(xai!.probe.kind).toBe("openai-models");
     expect(xai!.probe.url).toBe("https://api.x.ai/v1/models");
+  });
+
+  // Same rule for the DIRECT-transport subscriptions: the verdict is a real turn on
+  // `oauthChat`, and the catalog call is demoted to discovery under `catalog`.
+  // MEASURED 2026-09-05: the catalog calls answered 200 hourly for tokens with zero
+  // invocations ever (google's real turn: 403 "no valid license").
+  it("probes every direct-transport subscription by a real turn on its dispatch surface, catalog demoted to discovery", () => {
+    for (const id of ["openai", "google"]) {
+      const spec = getAiProvider(id)!;
+      expect(spec.subscriptionTransport).toBe("direct");
+      expect(spec.oauthChat).toBeDefined();
+      const cell = spec.probe.bySource?.oauth;
+      expect(cell?.kind, id).toBe("subscription-turn");
+      expect(cell?.catalog?.kind, id).toBe(id === "openai" ? "openai-codex-models" : "google-code-assist");
+      expect(cell?.catalog?.url, id).toMatch(/^https:\/\//);
+    }
   });
 
   // The helper is silent for a spendable row and never silent for an unspendable one: a row that

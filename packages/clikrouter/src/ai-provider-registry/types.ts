@@ -48,6 +48,17 @@ export type AiProbeKind =
   // worker, so the probe exercises exactly the transport dispatch uses. Declared
   // per (provider, credentialKind) via `bySource`, never as a base kind.
   | "harness-turn"
+  // A minimal REAL turn over the vendor's DIRECT subscription surface (registry
+  // `oauthChat`) — for a subscription that dispatches over HTTP (openai → Codex
+  // backend, google → Code Assist). MEASURED 2026-09-05 on prod: both rows were
+  // probed by a CATALOG call on that host (`/codex/models`, `:loadCodeAssist`)
+  // which answered 200 while every real turn on the same token failed (Code
+  // Assist `:generateContent` 403 "no valid license"), so the sweep wrote `ok`
+  // and the router's probe-error exclusion could never fire. Same rule as
+  // `harness-turn`: the probe certifies the surface dispatch uses, or nothing.
+  // The cell's `catalog` names the discovery call that runs ONLY after the turn
+  // passes — it populates the model picker and never decides the verdict.
+  | "subscription-turn"
   | "unsupported"; // no probe adapter
 
 /**
@@ -104,6 +115,12 @@ export interface AiProbeEndpoint {
   query?: Readonly<Record<string, string>>;
   /** Extra HTTP statuses that mean "bad credential" for THIS endpoint. */
   authFailedStatuses?: readonly number[];
+  /**
+   * For `kind: "subscription-turn"` only: the model-catalog call run AFTER the
+   * turn has passed. Discovery, never the verdict — see AiProbeKind's own note
+   * on why a catalog call cannot certify a subscription.
+   */
+  catalog?: Omit<AiProbeEndpoint, "catalog">;
 }
 
 /**
