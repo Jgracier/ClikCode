@@ -147,6 +147,14 @@ export const AI_PROVIDERS = [
     // requires spoofing `x-app: cli` and `user-agent: claude-cli/<version>` to
     // stay out of an aggressively rate-limited bucket — imitating the client
     // rather than being it.
+    //
+    // ONE LOGIN, NOT TWO. 'harness' does NOT mean a separate interactive
+    // `claude login` on the worker. The platform's OAuth connection for this
+    // row (config/platform-ai.json) is minted with Claude Code's own public
+    // client and inference scopes — the identical credential the CLI's login
+    // writes — and the harness row hands that token to the CLI per run through
+    // CLAUDE_CODE_OAUTH_TOKEN (ai-harness-registry.ts `authEnv`). The admin's
+    // one Connect is the harness's login.
     subscriptionTransport: "harness",
     docsPricingCatalog: "anthropic",
   },
