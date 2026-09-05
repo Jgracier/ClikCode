@@ -45,51 +45,44 @@ export const AI_PROVIDERS = [
     chatBaseUrl: "https://api.x.ai/v1",
     chatDialect: "openai-chat",
     authHeader: "bearer",
-    // This probe is for the API KEY. The OAuth (subscription) token is never
-    // sent here: api.x.ai answers a Grok subscription bearer with 200 on
-    // /v1/models and 403 on every chat call, so an "ok" there certified a
-    // credential nothing could spend (MEASURED 2026-09-05: the hourly sweep
-    // wrote `ok, HTTP 200` for the xai OAuth token in the same hour three
-    // enrichment jobs failed on it). The credential-health probe reports an
-    // unspendable subscription as `unsupported` with the reason below, keyed on
-    // `subscriptionTransport` being absent — not on this provider's name.
-    probe: { kind: "openai-models", url: "https://api.x.ai/v1/models" },
+    // This probe is for the API KEY (`bySource.oauth` below is the subscription's).
+    // The OAuth token is never sent here: api.x.ai answers a Grok subscription
+    // bearer with 200 on /v1/models and 403 on every chat call, so an "ok" there
+    // certified a credential nothing could spend (MEASURED 2026-09-05: the hourly
+    // sweep wrote `ok, HTTP 200` for the xai OAuth token in the same hour three
+    // enrichment jobs failed on it). A subscription is probed on the surface it
+    // is SPENT on — a minimal real turn through the CLI harness, on the worker.
+    probe: {
+      kind: "openai-models",
+      url: "https://api.x.ai/v1/models",
+      bySource: { oauth: { kind: "harness-turn" } },
+    },
     openAiCompatible: true,
     oauth: true,
-    // CONNECTABLE BUT NOT SPENDABLE — no subscription transport, on evidence.
+    // SUBSCRIPTION = THE VENDOR'S OWN CLI, and nothing else.
     //
     // A Grok subscription is entitled to exactly one chat surface, the one the
-    // `@xai-official/grok` CLI calls: `cli-chat-proxy.grok.com/v1/chat/completions`
-    // with `X-XAI-Token-Auth: xai-grok-cli` + Bearer (api.x.ai answers the same
-    // bearer with 403 on chat — measured). This row dispatched DIRECT onto that
-    // proxy from 2026-08-31 (commit 7d04a37a1) on the reading that the CLI added
-    // nothing beyond the host and two headers. MEASURED 2026-09-05 on prod: every
-    // real turn was refused —
-    //   426 {"error":"Your Grok CLI version (none) is outdated. Please update to
-    //        version 0.1.202 or later via `grok update` ..."}
-    // The proxy gates on `x-grok-client-version` (the shipped grok 1.0.13 binary
-    // sends `x-grok-client-version: 1.0.13`, `x-grok-client-identifier`,
-    // `x-grok-client-mode` and `User-Agent: grok-cli/<v>` — read off the
-    // decompressed binary), and admits only a current CLI build. That is a vendor
-    // client-integrity control, not a dialect detail: sending the header from a
-    // server that is not the CLI would be spoofing a client identity to get past
-    // a block, which this platform does not do. So there is no legitimate DIRECT
-    // surface, and no `harness` either — the Grok CLI is not baked into the
-    // worker image (only Claude Code is, apps/web/Dockerfile.worker), so a
-    // harness row would be admitted and then fail every run.
+    // `@xai-official/grok` CLI calls: `cli-chat-proxy.grok.com` (api.x.ai
+    // answers the same bearer with 403 on chat — measured). That proxy gates on
+    // the CLI's own `x-grok-client-version` (+ identifier/mode/User-Agent
+    // grok-cli/<v>, read off the decompressed binary) and admits only a current
+    // build: this row dispatched DIRECT onto it from 2026-08-31 (7d04a37a1) and
+    // every real turn was refused 426 "Your Grok CLI version (none) is outdated"
+    // (prod, 2026-09-05). Sending that header from a server that is not the CLI
+    // would be spoofing a client identity to get past a vendor control, so it
+    // is not done; instead the CLI itself is the transport, BAKED into the
+    // worker image beside Claude Code (apps/web/Dockerfile.worker
+    // `ARG GROK_CLI_VERSION`) and driven as a subprocess by the harness row in
+    // ai-harness-registry.ts — which sends its own version header legitimately.
     //
-    // UNBLOCK (either restores `subscriptionTransport`): bake `@xai-official/grok`
-    // into Dockerfile.worker the way Claude Code is and restore the verified
-    // harness row from commit 7d04a37a1^ (headless `--output-format json`,
-    // GROK_HOME-scoped config, auth.json credential file) — the CLI then sends
-    // its own version header legitimately; or xAI publishes a server-side
-    // subscription surface. Until then the API key (GROK_API_KEY) is xAI's only
-    // spendable tier, and the router excludes the subscription with the reason
-    // below instead of letting a lane discover it one 426 at a time.
-    subscriptionUnsupportedReason:
-      "xAI's subscription surface (cli-chat-proxy.grok.com) admits only a current Grok CLI " +
-      "build (HTTP 426 'Grok CLI version (none) is outdated', measured 2026-09-05) and the " +
-      "CLI is not baked into the worker image — connect a GROK_API_KEY to route to xAI",
+    // ONE LOGIN, NOT TWO — same shape as anthropic below. The platform's xai
+    // OAuth connection (config/platform-ai.json) is minted with public client
+    // b1a00492-…, which is the Grok CLI's OWN OIDC client (its auth.json keys
+    // the credential by that id), and the harness row hands that token to the
+    // CLI per run through its documented External Auth Provider contract
+    // (registry `authEnv` + `loginArgv`). The admin's one Connect is the CLI's
+    // login; the API key (GROK_API_KEY) is the separate metered tier.
+    subscriptionTransport: "harness",
   },
   {
     id: "anthropic",

@@ -42,6 +42,12 @@ export type AiProbeKind =
   | "google-code-assist" // Google Gemini CLI OAuth account/tier probe
   | "cloudflare-models" // Cloudflare account-scoped Workers AI model search
   | "openrouter-key" // GET /key with Bearer (OpenRouter's /models is unauthenticated)
+  // A minimal REAL turn through the vendor's CLI harness (ai-harness-registry) —
+  // for a subscription whose only surface IS that CLI (xai). Not an HTTP call
+  // at all: the credential-health probe hands it to the harness runner, on the
+  // worker, so the probe exercises exactly the transport dispatch uses. Declared
+  // per (provider, credentialKind) via `bySource`, never as a base kind.
+  | "harness-turn"
   | "unsupported"; // no probe adapter
 
 /**
@@ -204,10 +210,13 @@ export interface AiProviderSpec {
    *               endpoint nor a vendor CLI baked into the worker image). A row
    *               in this state MUST say why in `subscriptionUnsupportedReason`
    *               so the router's exclusion, the HTTP chokepoint's refusal and
-   *               the admin console all carry the same fact. xAI is in this
-   *               state today (see its row); huggingface and microsoft-foundry
-   *               left it by dispatching 'direct' onto the same inference host
-   *               their API key uses.
+   *               the admin console all carry the same fact. No row is in this
+   *               state today: xAI was (2026-09-05, between losing its direct
+   *               surface and its CLI being baked into the worker image) and
+   *               left it as 'harness'; huggingface and microsoft-foundry left
+   *               it by dispatching 'direct' onto the same inference host their
+   *               API key uses. The datum stays for the next vendor that lands
+   *               here.
    *
    * An API KEY is unaffected by this field in every case — it always dispatches
    * over plain HTTP to `chatBaseUrl`.
@@ -479,7 +488,7 @@ export interface AiProviderSpec {
    * `x-grok-client-version` and only admits a current Grok CLI build. Sending
    * that header from a server that is not the CLI would be spoofing a client
    * identity to evade a vendor control, so the dialect was deleted and xAI's
-   * row carries `subscriptionUnsupportedReason` instead. A surface is only
+   * subscription is spent through its CLI instead ('harness'). A surface is only
    * `oauthChat` material when a bare HTTP request the vendor's CLI would also
    * send is ACCEPTED — not when it happens to be the CLI's upstream.
    *
