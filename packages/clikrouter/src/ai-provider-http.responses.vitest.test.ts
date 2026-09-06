@@ -265,4 +265,42 @@ describe('responses usage + stop reason', () => {
     // No status at all → absent, not invented.
     expect(extractStopReason('codex-responses', {})).toBeUndefined();
   });
+  // THE terra tool-call failure: on a tool-calling turn the Codex store:false
+  // surface streams the function_call as a response.output_item.done event and
+  // returns response.completed with an EMPTY output[]. extractToolCalls walks
+  // output[], so without reconstruction the calls vanish and the agent step loop
+  // reports "0 tool call(s), no output" (VERIFIED live 2026-09-05 against
+  // gpt-5.6-terra: 4 function_call items, completed.output []).
+  it('reconstructs function_call items from output_item.done when completed output[] is empty', () => {
+    const call = { id: 'fc_1', type: 'function_call', status: 'completed', name: 'send_notification', arguments: '{"to":"op","message":"hi"}', call_id: 'call_1' };
+    const sse = [
+      'data: {"type":"response.created","response":{"id":"r1"}}',
+      `data: ${JSON.stringify({ type: 'response.output_item.done', item: { id: 'rs_1', type: 'reasoning', summary: [] } })}`,
+      `data: ${JSON.stringify({ type: 'response.output_item.done', item: call })}`,
+      `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [], usage: { input_tokens: 9, output_tokens: 3 } } })}`,
+      'data: [DONE]',
+    ].join('\n');
+    const body = aggregateResponsesSse(sse);
+    // The tool call is recovered for the step loop...
+    expect(extractToolCalls('codex-responses', body)).toEqual([
+      { name: 'send_notification', args: { to: 'op', message: 'hi' } },
+    ]);
+    // ...and the reasoning item is carried but ignored, and the stop reason is
+    // correctly 'tool-calls' (there IS a function_call in the rebuilt output).
+    expect(extractChatText('codex-responses', body)).toBe('');
+    expect(extractStopReason('codex-responses', body)).toBe('tool-calls');
+    expect(extractUsage('codex-responses', body).outputTokens).toBe(3);
+  });
+
+  it('reconstructs a message item from output_item.done (text turn, no deltas needed)', () => {
+    const msg = { id: 'msg_1', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: 'all systems green.' }] };
+    const sse = [
+      `data: ${JSON.stringify({ type: 'response.output_item.done', item: { id: 'rs_1', type: 'reasoning', summary: [] } })}`,
+      `data: ${JSON.stringify({ type: 'response.output_item.done', item: msg })}`,
+      `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [] } })}`,
+    ].join('\n');
+    const body = aggregateResponsesSse(sse);
+    expect(extractChatText('codex-responses', body)).toBe('all systems green.');
+    expect(extractStopReason('codex-responses', body)).toBe('stop');
+  });
 });

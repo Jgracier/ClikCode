@@ -726,6 +726,17 @@ export function buildAiChatRequest(input: ChatTurnInput): BuiltChatRequest {
  */
 export function aggregateResponsesSse(sseText: string): Record<string, unknown> {
   const deltas: string[] = [];
+  // Every output item the stream reports done — message, function_call, reasoning
+  // — in arrival order. The Codex `store:false` surface streams these as
+  // `response.output_item.done` events and then returns `response.completed` with
+  // an EMPTY `output[]` (VERIFIED live 2026-09-05 against gpt-5.6-terra: a
+  // tool-calling turn emitted 4 function_call items and a text turn a message
+  // item, while `completed.response.output` was `[]` in BOTH cases). Every
+  // extractor below — for TEXT and for TOOL CALLS alike — walks `output[]`, so
+  // without rebuilding it from these items the whole turn reads as empty and the
+  // agent step loop reports "@<agent> ended the step without producing any
+  // output" (0 tool calls, 0 output, whatever the token count).
+  const items: Array<Record<string, unknown>> = [];
   let completed: Record<string, unknown> | undefined;
   let failed: Record<string, unknown> | undefined;
 
@@ -739,7 +750,7 @@ export function aggregateResponsesSse(sseText: string): Record<string, unknown> 
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
       // A partial frame at the tail of a truncated stream is not fatal — the
-      // deltas collected so far are still a real (if short) answer.
+      // items/deltas collected so far are still a real (if short) answer.
       continue;
     }
     const type = typeof event.type === "string" ? event.type : "";
@@ -747,76 +758,61 @@ export function aggregateResponsesSse(sseText: string): Record<string, unknown> 
       completed = event.response as Record<string, unknown> | undefined;
     } else if (type === "response.failed" || type === "error") {
       failed = (event.response as Record<string, unknown> | undefined) ?? event;
+    } else if (
+      type === "response.output_item.done" &&
+      event.item &&
+      typeof event.item === "object"
+    ) {
+      items.push(event.item as Record<string, unknown>);
     } else if (type === "response.output_text.delta" && typeof event.delta === "string") {
       deltas.push(event.delta);
     }
   }
 
-  const joined = deltas.join("");
+  // Rebuild output[] from the streamed items whenever the terminal frame carries
+  // none. When the frame DOES carry its own output (the public openai-responses
+  // surface, not the Codex one), it is trusted as-is. usage / status /
+  // incomplete_details are always preserved for cost + stop-reason parsing.
+  const rebuilt = reconstructResponsesOutput(items, deltas);
   if (completed) {
-    // The Codex `store:false` surface streams the answer as `output_text.delta`
-    // events but returns `response.completed` with an EMPTY `output[]` — VERIFIED
-    // live 2026-09-05 against gpt-5.6-terra: the deltas carried "pong" while
-    // `completed.response.output` was `[]`. Every extractor below walks `output[]`,
-    // so returning the terminal frame verbatim makes a fully successful turn read
-    // as empty prose, which the agent step loop then reports as "@<agent> ended
-    // the step without producing any output" (the 5224-token, 0-tool, 0-output
-    // symptom). When the terminal frame already carries message text we trust it;
-    // otherwise we splice the streamed deltas back in as the one message item the
-    // extractor expects, preserving `usage`/`status`/`incomplete_details` so cost
-    // accounting and stop-reason parsing are untouched.
-    if (joined && !responseOutputHasText(completed)) {
-      const existing = Array.isArray(completed.output) ? completed.output : [];
-      return {
-        ...completed,
-        output: [
-          ...existing,
-          {
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: joined }],
-          },
-        ],
-      };
+    const own = Array.isArray(completed.output) ? completed.output : [];
+    if (own.length === 0 && rebuilt.length > 0) {
+      return { ...completed, output: rebuilt };
     }
     return completed;
   }
   // A failed stream must surface as an error body, never as empty prose that
   // the caller would report as a successful blank completion.
   if (failed) return failed;
-  // Terminal event missing (truncated stream): synthesize the same Responses
-  // shape from the deltas so the extractors still find the text.
-  return {
-    output: [
-      {
-        type: "message",
-        content: [{ type: "output_text", text: joined }],
-      },
-    ],
-  };
+  // Terminal event missing (truncated stream): the reconstructed items are the
+  // only answer we have.
+  return { output: rebuilt };
 }
 
 /**
- * True when a Responses-shaped object already carries assistant prose in its
- * `output[]` — a `message` item with a non-empty `output_text` part. Used by the
- * SSE aggregator to decide whether the terminal frame stands on its own or needs
- * the streamed deltas spliced in. Mirrors the walk in `extractChatText`'s
- * responses branch so the two never disagree about what counts as "has text".
+ * Rebuild a Responses `output[]` from the items a Codex SSE stream reported done.
+ * Prefers the REAL items (message / function_call / reasoning, in order) so BOTH
+ * extractChatText and extractToolCalls see exactly what the model produced — a
+ * tool-calling turn keeps its function_call items, a prose turn its message item.
+ * Falls back to a message synthesized from raw output_text deltas only when no
+ * items were captured (a stream truncated before its first output_item.done).
  */
-function responseOutputHasText(response: Record<string, unknown>): boolean {
-  const output = response.output;
-  if (!Array.isArray(output)) return false;
-  return output.some(
-    (item) =>
-      item?.type === "message" &&
-      Array.isArray(item.content) &&
-      item.content.some(
-        (part: { type?: string; text?: string }) =>
-          part?.type === "output_text" &&
-          typeof part.text === "string" &&
-          part.text.length > 0,
-      ),
-  );
+function reconstructResponsesOutput(
+  items: ReadonlyArray<Record<string, unknown>>,
+  deltas: ReadonlyArray<string>,
+): Array<Record<string, unknown>> {
+  if (items.length > 0) return [...items];
+  const joined = deltas.join("");
+  if (joined.length > 0) {
+    return [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: joined }],
+      },
+    ];
+  }
+  return [];
 }
 
 /**
