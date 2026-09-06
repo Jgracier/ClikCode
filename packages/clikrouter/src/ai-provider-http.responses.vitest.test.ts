@@ -74,6 +74,42 @@ describe('openai responses dialect', () => {
     expect(extractToolCalls('openai-responses', {})).toEqual([]);
     expect(extractChatText('openai-responses', {})).toBe('');
   });
+
+  // Regression: the Codex `store:false` surface streams the answer as
+  // `output_text.delta` events but returns `response.completed` with an EMPTY
+  // `output[]` (VERIFIED live 2026-09-05 against gpt-5.6-terra: deltas carried the
+  // whole reply, completed.output was []). Returning the terminal frame verbatim
+  // made a successful turn read as empty prose → "ended the step without producing
+  // any output". The aggregator must splice the streamed text back in.
+  it('backfills streamed deltas when response.completed carries an empty output[]', () => {
+    const sse = [
+      'data: {"type":"response.created","response":{"id":"r1"}}',
+      'data: {"type":"response.output_text.delta","delta":"po"}',
+      'data: {"type":"response.output_text.delta","delta":"ng"}',
+      'data: {"type":"response.output_text.done"}',
+      `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [], usage: { input_tokens: 5, output_tokens: 1 } } })}`,
+      'data: [DONE]',
+    ].join('\n');
+    const body = aggregateResponsesSse(sse);
+    // Text is recovered for the extractor the agent step loop relies on...
+    expect(extractChatText('codex-responses', body)).toBe('pong');
+    // ...without clobbering the terminal frame's status/usage (cost + stop reason).
+    expect(extractStopReason('codex-responses', body)).toBe('stop');
+    expect(extractUsage('codex-responses', body).outputTokens).toBe(1);
+  });
+
+  it('trusts the terminal frame when it already carries message text (no double-append)', () => {
+    const sse = [
+      'data: {"type":"response.output_text.delta","delta":"hello"}',
+      `data: ${JSON.stringify({
+        type: 'response.completed',
+        response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'hello' }] }] },
+      })}`,
+    ].join('\n');
+    const body = aggregateResponsesSse(sse);
+    // Exactly one copy — the deltas are NOT spliced when the frame already has text.
+    expect(extractChatText('codex-responses', body)).toBe('hello');
+  });
 });
 
 // Usage + stop reason from the Responses terminal object — the whole reason a
