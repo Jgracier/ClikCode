@@ -66,6 +66,7 @@ import { createLuma } from "@ai-sdk/luma";
 import { createReplicate } from "@ai-sdk/replicate";
 import {
   getAiProvider,
+  modelReasoningEffort,
   providerModalities,
   subscriptionDispatchesDirect,
   type AiModality,
@@ -999,6 +1000,12 @@ async function dispatchOauthSurfaceChatTurn(
     ...(tools.length > 0 && input.toolChoice ? { toolChoice: input.toolChoice } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
     ...(input.projectId ? { projectId: input.projectId } : {}),
+    // Reasoning effort must cross into the raw-HTTP oauth surface too — the SDK
+    // path applies it via providerOptions, but this branch bypasses the SDK, so
+    // without this the Codex subscription (the one live subscription) reasoned at
+    // the backend default and paid the worst-case latency. See
+    // responsesReasoningFragment in ai-provider-http.ts.
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
   });
 
   const response = await fetch(built.url, {
@@ -1066,6 +1073,21 @@ export async function streamAiChatTurn(
   // credentialSource 'oauth' in the first place — resolveEffectiveCredential
   // refuses to hand one out except in 'harness' mode, whose callers dispatch
   // it through their own separate runHarnessChat, never through this function.
+  // NORMALIZE reasoning effort ONCE, here, for every dispatch path. When the
+  // caller didn't pin an effort, fall back to the registry's per-model default
+  // (modelReasoningEffort) — which is "low" for the reasoning models this
+  // platform serves — so a reasoning turn runs at its intended, lowest-latency
+  // effort UNIFORMLY: the raw-HTTP oauth/Codex surface (below) and the SDK path
+  // (providerOptions.openai.reasoningEffort, further down) alike. Without this,
+  // each caller had to remember to pass it, none did, and every reasoning turn
+  // paid the backend's heavier default (MEASURED 2026-09-05: ~2.4x worst-case
+  // latency on gpt-5.6-terra). A non-reasoning model yields undefined and the
+  // parameter is simply never sent.
+  const effort = input.reasoningEffort ?? modelReasoningEffort(input.provider, input.model);
+  if (effort && effort !== input.reasoningEffort) {
+    input = { ...input, reasoningEffort: effort };
+  }
+
   if (input.credentialSource === "oauth" && subscriptionDispatchesDirect(getAiProvider(input.provider))) {
     return dispatchOauthSurfaceChatTurn(input);
   }

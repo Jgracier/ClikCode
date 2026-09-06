@@ -44,6 +44,38 @@ describe('openai responses dialect', () => {
     expect(body.tools).toEqual([{ type: 'function', name: 'set_app_env', description: 'set env', parameters: TOOLS[0].parameters }]);
   });
 
+  it('sends reasoning.effort on the responses body when the caller sets it (latency lever)', () => {
+    const b = buildAiChatRequest({
+      ...base, messages: [{ role: 'user', content: 'hi' }], tools: TOOLS, reasoningEffort: 'low',
+    } as never);
+    expect((b.body as Record<string, unknown>).reasoning).toEqual({ effort: 'low' });
+  });
+
+  it('OMITS reasoning when effort is a value the surface rejects (minimal 400s on Codex)', () => {
+    const b = buildAiChatRequest({
+      ...base, messages: [{ role: 'user', content: 'hi' }], tools: TOOLS, reasoningEffort: 'minimal',
+    } as never);
+    expect(b.body).not.toHaveProperty('reasoning');
+  });
+
+  it('omits reasoning entirely when no effort is set (non-reasoning model)', () => {
+    const b = buildAiChatRequest({ ...base, messages: [{ role: 'user', content: 'hi' }], tools: TOOLS } as never);
+    expect(b.body).not.toHaveProperty('reasoning');
+  });
+
+  it('carries reasoning.effort onto the Codex oauth surface too', () => {
+    const b = buildAiChatRequest({
+      provider: 'openai',
+      model: 'gpt-5.6-terra',
+      apiKey: 'oauth-token',
+      credentialSource: 'oauth',
+      messages: [{ role: 'user', content: 'hi' }],
+      reasoningEffort: 'low',
+    } as never);
+    expect(b.dialect).toBe('codex-responses');
+    expect((b.body as Record<string, unknown>).reasoning).toEqual({ effort: 'low' });
+  });
+
   it('extracts tool calls from the output array, ignoring reasoning items', () => {
     const payload = { output: [
       { type: 'reasoning', summary: [] },
