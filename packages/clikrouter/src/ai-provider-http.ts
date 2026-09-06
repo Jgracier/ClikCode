@@ -13,7 +13,33 @@ import {
   subscriptionUnsupportedReason,
   type AiProviderId,
   type AiProviderSpec,
+  type AiReasoningEffort,
 } from "./ai-provider-registry";
+
+/**
+ * The `reasoning.effort` body fragment for a Responses-shaped request, or `{}`
+ * when no effort applies. Sending a LOWER effort is a real latency lever on a
+ * reasoning model: MEASURED 2026-09-05 on the live Codex backend, gpt-5.6-terra
+ * on a hard prompt spent 1034 reasoning tokens / 25.3s at the backend default vs
+ * ~150-216 / ~10s at `effort: "low"` — a ~2.4x worst-case cut with much tighter
+ * variance. The registry already declares "low" for these models
+ * (`modelReasoningEffort`); this is the seam that finally sends it on the raw
+ * HTTP path (the SDK path applies it via providerOptions).
+ *
+ * Only an ALLOWLISTED value is sent. The Codex surface 400s on `effort: "minimal"`
+ * (MEASURED same day), and "none"/"xhigh"/"max" are not accepted by the public
+ * Responses API either — so an unrecognized value is OMITTED (fall back to the
+ * backend default) rather than allowed to 400 the whole turn. That keeps a future
+ * registry change to one of those from silently breaking every reasoning turn.
+ */
+function responsesReasoningFragment(
+  effort: AiReasoningEffort | undefined,
+): { reasoning: { effort: AiReasoningEffort } } | Record<string, never> {
+  if (effort === "low" || effort === "medium" || effort === "high") {
+    return { reasoning: { effort } };
+  }
+  return {};
+}
 
 /**
  * The literal a row writes where ONE operator-supplied path/host segment goes
@@ -194,6 +220,15 @@ export interface ChatTurnInput {
    * looks like an outage rather than a malformed request.
    */
   projectId?: string;
+  /**
+   * Reasoning effort for a reasoning-capable model, sourced from
+   * `modelReasoningEffort(provider, model)`. Lower effort = fewer hidden
+   * reasoning tokens = lower latency (see `responsesReasoningFragment`). Only
+   * honoured on the Responses-shaped surfaces (openai-responses / codex-responses);
+   * ignored elsewhere. Never invent one — a non-reasoning model rejects the
+   * parameter outright.
+   */
+  reasoningEffort?: AiReasoningEffort;
 }
 
 export interface BuiltChatRequest {
@@ -415,6 +450,9 @@ function buildOauthSurfaceRequest(
       // Required for stateless operation with store:false — without it the
       // model's own reasoning cannot be carried across turns.
       include: ["reasoning.encrypted_content"],
+      // Cap reasoning effort when the model is reasoning-capable — the latency
+      // lever proven on this exact surface (see responsesReasoningFragment).
+      ...responsesReasoningFragment(input.reasoningEffort),
       // NOT `max_output_tokens` — that name is the PUBLIC Responses API's
       // param (see the api-key-only branch above, where it's correct). This
       // internal ChatGPT-backend surface rejects it outright: confirmed live
@@ -490,6 +528,9 @@ function buildResponsesRequest(
       input: inputItems,
       // Responses names the output cap differently again from both chat variants.
       max_output_tokens: input.maxTokens ?? 700,
+      // Reasoning effort (latency lever) — same allowlisted fragment the Codex
+      // surface uses; omitted for a non-reasoning model or an unaccepted value.
+      ...responsesReasoningFragment(input.reasoningEffort),
       // Same rule as the other dialects: only sent when the caller asked for one, because
       // reasoning models reject a non-default temperature outright.
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
