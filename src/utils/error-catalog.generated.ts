@@ -127,6 +127,21 @@ export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
     severity: 'warning',
     userFacing: true,
   },
+  SERVER_DOCKER_NOT_READY: {
+    message: 'Docker is not ready on the target server.',
+    remediation:
+      'Wait for the agent to finish setting up Docker (or fix the Docker failure it reported) and retry the deploy.',
+    httpStatus: 409,
+    severity: 'warning',
+    userFacing: true,
+  },
+  APP_DELETE_IN_PROGRESS: {
+    message: 'This app is currently being deleted.',
+    remediation: 'Wait for the delete to finish; then re-create the app if you still need it.',
+    httpStatus: 409,
+    severity: 'warning',
+    userFacing: true,
+  },
   APP_NOT_FOUND: {
     message: 'The requested app was not found.',
     remediation: 'Verify the app id/name and that it belongs to your account.',
