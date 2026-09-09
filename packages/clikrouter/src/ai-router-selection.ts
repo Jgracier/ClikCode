@@ -688,8 +688,39 @@ export function resolveChatCapable(model: {
     : isLikelyChatModel(model.id);
 }
 
+/**
+ * "No price on file", as a sortable number.
+ *
+ * Deliberately absurd so an unpriced candidate sorts LAST in the price-ordered
+ * comparators, where it is only ever separating two candidates already tied on
+ * everything that matters. It is NOT a cost estimate and must never be
+ * multiplied by anything — see UNKNOWN_COST_PER_MTOK.
+ */
+export const NO_PRICE_SENTINEL = 1_000_000;
+
+/**
+ * What an unpriced candidate is ASSUMED to cost when a weighted blend needs a
+ * number rather than an ordering.
+ *
+ * Sized above the dearest thing this platform would really route to (a frontier
+ * pair runs roughly $200/MTok in and out combined), so an unknown price is
+ * treated as "probably the most expensive option here" — a real penalty that
+ * still leaves the candidate reachable when it is the only one that fits.
+ *
+ * The alternative, which is what happened before, is multiplying the SENTINEL:
+ * at the balanced 0.01 rate that is a flat -10,000 against an intelligence term
+ * worth at most ~125, i.e. an 80x veto. That is an absolute exclusion produced
+ * by arithmetic rather than by a rule, it is invisible in the explain output,
+ * and it silently prevents the cost path's own documented policy for unpriced
+ * calls (bill at the fallback ceiling, raise an ERROR, record
+ * costBasis='unpriced') from ever running.
+ */
+const UNKNOWN_COST_PER_MTOK = 250;
+
 function costScore(cost: number | null): number {
-  if (typeof cost !== 'number' || Number.isNaN(cost) || !Number.isFinite(cost)) return 1_000_000;
+  if (typeof cost !== 'number' || Number.isNaN(cost) || !Number.isFinite(cost)) {
+    return NO_PRICE_SENTINEL;
+  }
   return cost;
 }
 
@@ -1079,9 +1110,13 @@ function throughputFactor(
 
 function autoComposite(s: AiRouterCandidateScore, mode: 'auto' | 'auto-budget' | 'auto-frontier' = 'auto'): number {
   const weights = AUTO_COMPOSITE_WEIGHTS[mode];
+  // The sentinel is an ORDERING, not a price. Blending it multiplies a made-up
+  // 1,000,000 by a real rate and produces a veto nobody wrote down; an assumed
+  // dear price produces a penalty proportionate to every other term.
+  const blendCost = s.cost >= NO_PRICE_SENTINEL ? UNKNOWN_COST_PER_MTOK : s.cost;
   const costPenalty =
     s.candidate.accessClass === 'metered' || s.candidate.accessClass === 'unknown'
-      ? s.cost * weights.costPenaltyRate
+      ? blendCost * weights.costPenaltyRate
       : 0;
   return (
     s.intelligence * weights.intelligence -
