@@ -665,25 +665,67 @@ export function isSafetyClassifierModel(modelId: string): boolean {
 }
 
 /**
- * Whether a model is eligible for text chat routing, preferring real
- * evidence over a guess: a discovered model's `chatCapable` field (set at
- * catalog-parse time from the vendor's OWN per-model modality field —
- * OpenRouter/HuggingFace architecture.output_modalities, Cloudflare
- * task.name — see probe-adapters.ts's deriveChatCapable) is authoritative
- * when the vendor published one for this model. `isLikelyChatModel`'s name
- * heuristic is only the fallback for the (common) case where the vendor's
- * catalog carries no modality field at all. isFillInMiddleModel and
- * isSafetyClassifierModel are checked FIRST and override both — see their
- * own doc comments for why.
+ * Whether a model is eligible for text chat routing.
+ *
+ * ── THE PRECEDENCE, AND WHY IT CHANGED ─────────────────────────────────────
+ *
+ * A vendor's `chatCapable` used to override the name denylist, on the ordinary
+ * and usually-correct principle that a published fact beats a guess. Two
+ * exceptions were carved out by hand after two production incidents
+ * (isFillInMiddleModel, isSafetyClassifierModel), each with the same
+ * explanation: `architecture.output_modalities` answers "does this model emit
+ * text", which is NOT the question being asked. A FIM completer emits text. A
+ * moderation classifier emits text. Neither holds a conversation.
+ *
+ * MEASURED against all 430 models of OpenRouter's live public catalog on
+ * 2026-09-09, every one of which publishes output_modalities, so this is the
+ * whole population and not a sample. The denylist and the vendor field
+ * disagree on 16 models, always in the same direction (vendor says chat, name
+ * says not — the reverse never occurs once). All 16 are genuinely not chat
+ * models: eight image generators (google/gemini-3-pro-image,
+ * openai/gpt-5-image, …), two audio models (openai/gpt-audio,
+ * gpt-audio-mini), the three safety classifiers and one FIM-adjacent entry the
+ * hand-carved vetoes already caught, and mistralai/voxtral-small-24b-2507.
+ *
+ * The denylist was right 16 times out of 16. The vendor field, read as
+ * `includes("text")`, was wrong 16 times out of 16 on exactly the cases where
+ * the two disagree.
+ *
+ * That last name is why this is not a tidy-up. voxtral is the model whose
+ * doc comment in isLikelyChatModel records the 2026-08-10 incident: every
+ * remediation run for the whole 20-app fleet routed to Mistral's AUDIO family,
+ * which was handed tool definitions and asked to propose code fixes. The fix
+ * at the time widened the denylist, which worked for `mistral/voxtral-*`
+ * because Mistral's own catalog publishes no modality field. The IDENTICAL
+ * model reached through OpenRouter publishes `output_modalities: ["text"]`
+ * (true — it transcribes audio INTO text), so chatCapable came back true, the
+ * denylist was skipped, and the documented incident stayed reachable through a
+ * second door for a month.
+ *
+ * So the denylist is now absolute, which is what the two hand-carved vetoes
+ * already were — one rule instead of a general principle plus a growing list
+ * of exceptions to it, each added after something broke.
+ *
+ * WHAT THIS COSTS, stated rather than buried: a future chat model whose name
+ * trips a pattern can no longer be rescued by its vendor's catalog. That cost
+ * is real and it is the right trade. The denylist is deliberately narrow and
+ * currently produces zero false positives across the entire live catalog; the
+ * failure it prevents is a fleet-wide outage where an audio model silently
+ * becomes the agent runtime's model of choice, and the failure it can cause is
+ * that the router picks a different chat model. Those are not comparable.
+ *
+ * A vendor NEGATIVE still wins, unchanged: `chatCapable: false` excludes a
+ * model the denylist would have kept. There is no measured case of the two
+ * disagreeing in that direction, and a vendor saying its own model does not
+ * emit text is answering exactly the question asked.
  */
 export function resolveChatCapable(model: {
   id: string;
   chatCapable?: boolean;
 }): boolean {
+  if (!isLikelyChatModel(model.id)) return false;
   if (isFillInMiddleModel(model.id) || isSafetyClassifierModel(model.id)) return false;
-  return model.chatCapable !== undefined
-    ? model.chatCapable
-    : isLikelyChatModel(model.id);
+  return model.chatCapable ?? true;
 }
 
 /**

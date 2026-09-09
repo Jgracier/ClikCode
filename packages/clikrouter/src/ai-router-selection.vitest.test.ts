@@ -228,11 +228,51 @@ describe('isLikelyChatModel', () => {
 });
 
 describe('resolveChatCapable', () => {
-  it('trusts the vendor-published field over the name heuristic when present', () => {
-    // A name the heuristic would exclude, but the vendor's own catalog says is text-output.
-    expect(resolveChatCapable({ id: '@cf/some-vendor/new-tts-family-chat-model', chatCapable: true })).toBe(true);
-    // A name the heuristic would keep, but the vendor's own catalog says is not text-output.
+  // MEASURED over all 430 models of OpenRouter's live catalog on 2026-09-09 —
+  // the whole population, since every one publishes output_modalities. The
+  // denylist and the vendor field disagree on 16 models, always in the same
+  // direction, and the denylist is right on all 16. A vendor emitting text is
+  // not a vendor holding a conversation.
+  it('does NOT let a vendor field rescue a name the denylist excludes', () => {
+    // Real ids from that disagreement set, not invented shapes.
+    for (const id of [
+      'google/gemini-3-pro-image',
+      'openai/gpt-5-image-mini',
+      'openai/gpt-audio',
+      'openai/gpt-audio-mini',
+    ]) {
+      expect(resolveChatCapable({ id, chatCapable: true }), id).toBe(false);
+    }
+  });
+
+  // THE ONE THAT MATTERS. isLikelyChatModel's own doc comment records the
+  // 2026-08-10 incident where every remediation run for the whole 20-app fleet
+  // routed to Mistral's audio family. That fix widened the denylist, which
+  // worked only because Mistral's catalog publishes no modality field. The
+  // same model through OpenRouter publishes output_modalities: ["text"] —
+  // true, it transcribes audio INTO text — so it came back chatCapable and
+  // walked straight past the denylist for a month.
+  it('vetoes voxtral through a vendor that calls it text-output', () => {
+    expect(resolveChatCapable({ id: 'mistralai/voxtral-small-24b-2507', chatCapable: true })).toBe(
+      false,
+    );
+  });
+
+  it('still lets a vendor NEGATIVE exclude a name the denylist would keep', () => {
+    // Unchanged, and deliberately so: a vendor saying its own model does not
+    // emit text is answering exactly the question being asked. No measured
+    // case of the two disagreeing in this direction exists.
     expect(resolveChatCapable({ id: 'plain-looking-name', chatCapable: false })).toBe(false);
+  });
+
+  it('admits an unrecognized name whether or not a vendor vouches for it', () => {
+    // The denylist stays a DENYLIST — a new model whose name matches nothing
+    // is eligible, with or without a catalog field. Making it absolute must
+    // not turn it into an allowlist.
+    expect(resolveChatCapable({ id: 'newvendor/some-future-model-v2' })).toBe(true);
+    expect(resolveChatCapable({ id: 'newvendor/some-future-model-v2', chatCapable: true })).toBe(
+      true,
+    );
   });
 
   it('falls back to the name heuristic when the vendor publishes no modality field', () => {
