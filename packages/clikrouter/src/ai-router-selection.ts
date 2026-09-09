@@ -110,6 +110,17 @@ export interface AiRouterCandidate {
    */
   agenticIndex?: number | null;
   /**
+   * Artificial Analysis' general-capability index, from the SAME object
+   * `agenticIndex` comes from and published through the vendor's own catalog.
+   *
+   * Declared in the benchmark module's response type and extracted by nothing
+   * until now. Fused as corroborating evidence rather than given precedence:
+   * the agentic index measures tool-driven task completion, which is what this
+   * router dispatches, so it stays dominant. This gives the term a
+   * VENDOR-PUBLISHED second opinion before it falls back to a community feed.
+   */
+  intelligenceIndex?: number | null;
+  /**
    * LMArena text-arena human-preference rating, percentile-scaled to 0-100
    * across the current leaderboard snapshot (platform-domains'
    * ai-quality-feed.ts) — a SECOND real intelligence source with much wider
@@ -396,6 +407,12 @@ function baseCapabilityScore(candidate: AiRouterCandidate): number {
   return (
     fuseEvidence([
       { value: candidate.agenticIndex, weight: FIRST_PARTY_FULL_WEIGHT },
+      // Same publisher as the agentic index and reached through the vendor's
+      // own catalog, so it is better provenance than the community arena — but
+      // it measures general capability rather than the agent loops this router
+      // actually runs, so it corroborates at the arena's weight rather than
+      // competing with the agentic number.
+      { value: candidate.intelligenceIndex, weight: EXTERNAL_FEED_WEIGHT },
       { value: candidate.arenaScore, weight: EXTERNAL_FEED_WEIGHT },
     ]) ?? NEUTRAL_CAPABILITY_SCORE
   );
