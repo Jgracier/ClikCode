@@ -864,21 +864,79 @@ export function effectiveCostPerMTok(
 }
 
 /**
- * 3s: the neutral latency assumed for a candidate with no observed average
- * yet (never routed to, or its 24h window lapsed). Deliberately mid-pack —
- * a brand-new candidate should not outrank a PROVEN-fast one on the strength
- * of having no data (that would make "never tried" a strategy), but it also
- * must not be penalized as if it were confirmed slow, which would mean a
- * newly configured model can never win a ranking until routed to once by
- * some other means. Same "unknown is not confirmed bad" reasoning as
- * NEUTRAL_CAPABILITY_SCORE above.
+ * Fallback neutral latency for a candidate with no observed average yet (never
+ * routed to, or its 24h window lapsed), used only when the pool being ranked
+ * cannot supply a middle of its own.
+ *
+ * MID-PACK IS THE INTENT AND 3s IS NOT MID-PACK. A brand-new candidate should
+ * not outrank a PROVEN-fast one on the strength of having no data — that would
+ * make "never tried" a strategy — but it must not be penalized as if it were
+ * confirmed slow either, or a newly configured model can never win a ranking
+ * until something else routes to it first. That reasoning is right and the
+ * number stopped matching it: MEASURED against HuggingFace's live router
+ * catalog on 2026-09-09, 135 models carry a vendor-measured first-token
+ * latency with a median of 649ms and a maximum of 3,458ms. 3,000ms sits near
+ * the 95th percentile of what real endpoints actually do, so "unknown" was
+ * being scored as one of the slowest things on the table. At the auto family's
+ * latency weight of 2, that is a standing ~4.7-point penalty on every candidate
+ * nobody has measured yet — larger than the penalty a maximally expensive model
+ * pays, and applied for having no evidence rather than bad evidence.
+ *
+ * So the neutral is now the pool's own median measured latency, which makes
+ * mid-pack true by construction instead of aspirational, and keeps being true
+ * as endpoints get faster without anyone maintaining a number. Same reasoning
+ * and same shape as poolReferenceThroughput below; see its doc comment for why
+ * a pool median is right for a speed signal and stays wrong for the quality
+ * factors it sits beside.
+ *
+ * This constant survives for the degenerate case: a pool with fewer than
+ * MIN_LATENCY_REFERENCE_SAMPLES measured candidates has no middle to find.
  */
 const NEUTRAL_LATENCY_MS = 3_000;
+
+/** Below this many measured candidates, the pool cannot define its own middle.
+ *  Three is the smallest count where a median is a middle rather than a
+ *  restatement of one reading — same threshold, same reason, as throughput. */
+const MIN_LATENCY_REFERENCE_SAMPLES = 3;
+
+/**
+ * The latency that scores neutral for THIS ranking: the median of what the
+ * candidates on the table were actually measured at.
+ *
+ * Exported so the choice is testable on its own, and null when the pool is too
+ * small to have a middle, in which case callers fall back to NEUTRAL_LATENCY_MS.
+ */
+export function poolReferenceLatency(
+  candidates: readonly AiRouterCandidate[],
+): number | null {
+  const observed = candidates
+    .map((c) =>
+      fuseEvidence([
+        {
+          value: typeof c.avgLatencyMs === 'number' ? Math.max(0, c.avgLatencyMs) : null,
+          weight: FIRST_PARTY_FULL_WEIGHT,
+        },
+        {
+          value:
+            typeof c.externalLatencyMs === 'number' ? Math.max(0, c.externalLatencyMs) : null,
+          weight: EXTERNAL_FEED_WEIGHT,
+        },
+      ]),
+    )
+    .filter((v): v is number => v !== null)
+    .sort((a, b) => a - b);
+  if (observed.length < MIN_LATENCY_REFERENCE_SAMPLES) return null;
+  const mid = Math.floor(observed.length / 2);
+  return observed.length % 2 === 1
+    ? observed[mid]!
+    : (observed[mid - 1]! + observed[mid]!) / 2;
+}
 
 function latencyScore(
   avgLatencyMs: number | null | undefined,
   externalLatencyMs?: number | null,
   latencySampleCount?: number | null,
+  referenceLatencyMs?: number | null,
 ): number {
   // WEIGHTED, not vetoed. Our EWMA used to win outright the instant it had any
   // samples at all, so a single unlucky first request permanently displaced a
@@ -902,7 +960,10 @@ function latencyScore(
       weight: EXTERNAL_FEED_WEIGHT,
     },
   ]);
-  return fused ?? NEUTRAL_LATENCY_MS;
+  if (fused !== null) return fused;
+  return typeof referenceLatencyMs === 'number' && referenceLatencyMs >= 0
+    ? referenceLatencyMs
+    : NEUTRAL_LATENCY_MS;
 }
 
 /** The mode-level rationale shown to the admin — shared by selectRouterCandidate
@@ -983,12 +1044,18 @@ function scoreOne(
   preferThroughput = false,
   cacheContext?: { cacheablePrefixTokens?: number; estimatedPromptTokens?: number },
   referenceThroughput: number | null = null,
+  referenceLatency: number | null = null,
 ): Omit<AiRouterCandidateScore, 'candidate' | 'compositeScore'> {
   return {
     accessRank: ACCESS_RANK[candidate.accessClass],
     cost: costScore(effectiveCostPerMTok(candidate, cacheContext)),
     intelligence: intelligenceWithReliability(candidate, preferThroughput, referenceThroughput),
-    latencyMs: latencyScore(candidate.avgLatencyMs, candidate.externalLatencyMs),
+    latencyMs: latencyScore(
+      candidate.avgLatencyMs,
+      candidate.externalLatencyMs,
+      undefined,
+      referenceLatency,
+    ),
   };
 }
 
@@ -1375,6 +1442,11 @@ export function rankRouterCandidatesWithScores(
   // not against a number that predates them. Skipped entirely when the caller
   // did not ask for throughput, so no ranking pays for a signal it ignores.
   const referenceThroughput = preferThroughput ? poolReferenceThroughput(pool) : null;
+  // The neutral latency is a property of THIS pool too, and unconditionally so:
+  // unlike throughput, latency is scored on every request. A candidate nobody
+  // has measured must sit in the middle of the models it is actually competing
+  // with — that is what "unknown is not confirmed bad" means here.
+  const referenceLatency = poolReferenceLatency(pool);
   const scored: AiRouterCandidateScore[] = pool.map((candidate) => {
     const base = scoreOne(
       candidate,
@@ -1384,6 +1456,7 @@ export function rankRouterCandidatesWithScores(
         estimatedPromptTokens,
       },
       referenceThroughput,
+      referenceLatency,
     );
     const withCandidate = { candidate, ...base, compositeScore: null };
     return { ...withCandidate, compositeScore: isAutoFamily(mode) ? autoComposite(withCandidate, mode) : null };
