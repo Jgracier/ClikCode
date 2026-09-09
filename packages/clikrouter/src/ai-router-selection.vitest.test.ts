@@ -548,3 +548,36 @@ describe('external endpoint-health priors — seed the blanks, never displace fi
     expect(ranked[0]!.intelligence).toBe(30); // 60 × 0.5 floor
   });
 });
+
+// ============================================
+// FOUND IN PRODUCTION, NOT BY A TEST
+// ============================================
+// `admin ai chat --explain` against the live platform showed
+// groq/whisper-large-v3 and groq/whisper-large-v3-turbo sitting in the chat
+// candidate pool — speech-to-text models offered as answers to a chat turn.
+//
+// The rule was already right HERE. What was wrong is that production did not
+// run this function: ai-router-candidates.ts had its own copy of the
+// precedence, which applied the FIM and safety vetoes absolutely but let a
+// vendor's chatCapable field beat the name denylist. Groq publishes a
+// chatCapable fact for whisper (it does emit text — a transcript), so the
+// vendor won and `whisper`, named explicitly in the denylist, was never
+// consulted. The same voxtral failure through a second door, one file over.
+//
+// These pin the rule for the ids that were actually in the live pool, so the
+// next reimplementation of it fails here.
+describe('resolveChatCapable — the ids production was really offering', () => {
+  it('refuses a speech-to-text model its vendor calls chat-capable', () => {
+    for (const id of ['whisper-large-v3', 'whisper-large-v3-turbo']) {
+      expect(resolveChatCapable({ id, chatCapable: true }), id).toBe(false);
+    }
+  });
+
+  it('still admits the genuine chat models that shared that pool', () => {
+    // The other side of the same pool — a veto that also removed these would
+    // have emptied the router rather than cleaned it.
+    for (const id of ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'allam-2-7b', 'groq/compound']) {
+      expect(resolveChatCapable({ id, chatCapable: true }), id).toBe(true);
+    }
+  });
+});
