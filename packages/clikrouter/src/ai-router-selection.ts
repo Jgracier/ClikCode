@@ -906,30 +906,52 @@ const MIN_LATENCY_REFERENCE_SAMPLES = 3;
  * Exported so the choice is testable on its own, and null when the pool is too
  * small to have a middle, in which case callers fall back to NEUTRAL_LATENCY_MS.
  */
+/**
+ * The middle of what a pool was actually measured at, or null when it is too
+ * small to have one.
+ *
+ * ONE implementation for both speed references below. They arrived a commit
+ * apart and were the same twelve lines twice — collect the fused readings, drop
+ * the pairs nobody has measured, take the median, refuse to invent one from
+ * fewer than three. Only the extractor differed, so only the extractor is a
+ * parameter.
+ *
+ * `minSamples` is 3 for both callers and named rather than inlined because it
+ * is a judgement, not an accident: three is the smallest count where a median
+ * is a middle rather than a restatement of one reading.
+ */
+function poolMedian(
+  candidates: readonly AiRouterCandidate[],
+  observe: (candidate: AiRouterCandidate) => number | null,
+  minSamples: number,
+): number | null {
+  const observed = candidates
+    .map(observe)
+    .filter((v): v is number => v !== null)
+    .sort((a, b) => a - b);
+  if (observed.length < minSamples) return null;
+  const mid = Math.floor(observed.length / 2);
+  return observed.length % 2 === 1 ? observed[mid]! : (observed[mid - 1]! + observed[mid]!) / 2;
+}
+
 export function poolReferenceLatency(
   candidates: readonly AiRouterCandidate[],
 ): number | null {
-  const observed = candidates
-    .map((c) =>
+  return poolMedian(
+    candidates,
+    (c) =>
       fuseEvidence([
         {
           value: typeof c.avgLatencyMs === 'number' ? Math.max(0, c.avgLatencyMs) : null,
           weight: FIRST_PARTY_FULL_WEIGHT,
         },
         {
-          value:
-            typeof c.externalLatencyMs === 'number' ? Math.max(0, c.externalLatencyMs) : null,
+          value: typeof c.externalLatencyMs === 'number' ? Math.max(0, c.externalLatencyMs) : null,
           weight: EXTERNAL_FEED_WEIGHT,
         },
       ]),
-    )
-    .filter((v): v is number => v !== null)
-    .sort((a, b) => a - b);
-  if (observed.length < MIN_LATENCY_REFERENCE_SAMPLES) return null;
-  const mid = Math.floor(observed.length / 2);
-  return observed.length % 2 === 1
-    ? observed[mid]!
-    : (observed[mid - 1]! + observed[mid]!) / 2;
+    MIN_LATENCY_REFERENCE_SAMPLES,
+  );
 }
 
 function latencyScore(
@@ -1248,15 +1270,7 @@ function fusedThroughput(candidate: AiRouterCandidate): number | null {
 export function poolReferenceThroughput(
   candidates: readonly AiRouterCandidate[],
 ): number | null {
-  const observed = candidates
-    .map((c) => fusedThroughput(c))
-    .filter((v): v is number => v !== null)
-    .sort((a, b) => a - b);
-  if (observed.length < MIN_THROUGHPUT_REFERENCE_SAMPLES) return null;
-  const mid = Math.floor(observed.length / 2);
-  return observed.length % 2 === 1
-    ? observed[mid]!
-    : (observed[mid - 1]! + observed[mid]!) / 2;
+  return poolMedian(candidates, fusedThroughput, MIN_THROUGHPUT_REFERENCE_SAMPLES);
 }
 
 function throughputFactor(
