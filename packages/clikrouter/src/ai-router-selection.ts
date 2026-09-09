@@ -435,6 +435,7 @@ function baseCapabilityScore(candidate: AiRouterCandidate): number {
 function intelligenceWithReliability(
   candidate: AiRouterCandidate,
   preferThroughput = false,
+  referenceThroughput: number | null = null,
 ): number {
   let capability = baseCapabilityScore(candidate);
 
@@ -513,10 +514,7 @@ function intelligenceWithReliability(
   }
 
   if (preferThroughput) {
-    capability *= throughputFactor(
-      candidate.throughputTokensPerSecond,
-      candidate.externalThroughputTps,
-    );
+    capability *= throughputFactor(candidate, referenceThroughput);
   }
 
   if (candidate.vendorIncident === true) {
@@ -942,11 +940,12 @@ function scoreOne(
   candidate: AiRouterCandidate,
   preferThroughput = false,
   cacheContext?: { cacheablePrefixTokens?: number; estimatedPromptTokens?: number },
+  referenceThroughput: number | null = null,
 ): Omit<AiRouterCandidateScore, 'candidate' | 'compositeScore'> {
   return {
     accessRank: ACCESS_RANK[candidate.accessClass],
     cost: costScore(effectiveCostPerMTok(candidate, cacheContext)),
-    intelligence: intelligenceWithReliability(candidate, preferThroughput),
+    intelligence: intelligenceWithReliability(candidate, preferThroughput, referenceThroughput),
     latencyMs: latencyScore(candidate.avgLatencyMs, candidate.externalLatencyMs),
   };
 }
@@ -1049,15 +1048,43 @@ const MIN_RATE_LIMIT_FACTOR = 0.5;
 
 
 /**
- * Reference generation rate, tokens/second, that scores neutral.
+ * Fallback reference generation rate, tokens/second, used only when the pool
+ * being ranked cannot supply one of its own.
  *
- * Not a measured median — a hardcoded snapshot of one would be the same
- * slow-moving guess this file removed from capability scoring. It is a round
- * number in the middle of the range mainstream hosted models actually produce,
- * so a candidate at the reference neither gains nor loses, a genuinely fast one
- * gains a little, and a genuinely slow one loses a little.
+ * WHY IT IS A FALLBACK NOW, AND NOT THE RULE. This was the rule, and it did
+ * not work: a fixed reference makes the factor an ABSOLUTE judgement about
+ * fast-vs-slow, and the absolute it was anchored to went stale. With the band
+ * below (0.8x to 1.25x), a constant 50 means the whole discriminating range is
+ * 40-62.5 tok/s. Every reading this platform actually collects sits above it —
+ * a mainstream hosted model today generates well past 100 tok/s, and the
+ * endpoint-health feed routinely reports three figures — so every measured
+ * candidate pinned to MAX_THROUGHPUT_FACTOR and the signal separated nothing.
+ * A 70 tok/s model and a 400 tok/s model scored identically, which is the exact
+ * opposite of what the caller asked for by setting `preferThroughput`.
+ *
+ * WHY A POOL MEDIAN IS RIGHT HERE AND WRONG FOR QUALITY. EXPECTED_SUCCESS_RATE
+ * and friends above argue explicitly against pool medians, and that argument
+ * still holds — for them. A success rate has an absolute standard of good, so
+ * letting the pool define "expected" would let a fleet-wide degradation quietly
+ * redefine it downward and nothing would ever score badly again. Throughput has
+ * no such standard: there is no rate that is simply "bad", only rates that are
+ * slower than the alternatives on the table. The question `preferThroughput`
+ * asks is comparative by construction — "of the models I could send this
+ * generation to, which one produces fastest" — so the honest reference is the
+ * pool being chosen from, and it stays correct at any era's speeds without
+ * anyone maintaining a number.
+ *
+ * This constant survives for the degenerate case only: a pool with fewer than
+ * MIN_THROUGHPUT_REFERENCE_SAMPLES measured candidates has no median worth the
+ * name, and comparing one or two readings against themselves would say more
+ * about the sample than the models.
  */
 const REFERENCE_TOKENS_PER_SECOND = 50;
+
+/** Below this many measured candidates, the pool cannot define its own middle
+ *  and the fixed fallback above is used instead. Three is the smallest count
+ *  where a median is a middle rather than a restatement of one reading. */
+const MIN_THROUGHPUT_REFERENCE_SAMPLES = 3;
 
 /** Bounds on the throughput adjustment. Deliberately narrow: throughput is a
  *  real signal but a secondary one, and a model that generates twice as fast
@@ -1083,28 +1110,57 @@ const VENDOR_INCIDENT_FACTOR = 0.35;
  * 1.0 (no effect) when unmeasured, which is the overwhelmingly common case and
  * must stay neutral — "never generated enough to measure" is not "slow".
  */
-function throughputFactor(
-  tokensPerSecond: number | null | undefined,
-  externalTokensPerSecond?: number | null,
-): number {
+function fusedThroughput(candidate: AiRouterCandidate): number | null {
   // Both readings count. Our own EWMA used to win outright over the feed; it now
   // leads by weight, so a pair we have measured once is not treated as more
   // authoritative than an aggregator that has measured it continuously.
-  const observed = fuseEvidence([
+  const own = candidate.throughputTokensPerSecond;
+  const external = candidate.externalThroughputTps;
+  return fuseEvidence([
     {
-      value: typeof tokensPerSecond === 'number' && tokensPerSecond > 0 ? tokensPerSecond : null,
+      value: typeof own === 'number' && own > 0 ? own : null,
       weight: FIRST_PARTY_FULL_WEIGHT,
     },
     {
-      value:
-        typeof externalTokensPerSecond === 'number' && externalTokensPerSecond > 0
-          ? externalTokensPerSecond
-          : null,
+      value: typeof external === 'number' && external > 0 ? external : null,
       weight: EXTERNAL_FEED_WEIGHT,
     },
   ]);
+}
+
+/**
+ * The generation rate that scores neutral for THIS ranking: the median of what
+ * the candidates on the table were actually measured to produce.
+ *
+ * Exported so the choice is testable on its own, and null whenever the pool is
+ * too small to have a middle — callers fall back to REFERENCE_TOKENS_PER_SECOND,
+ * whose doc comment explains why that is a last resort rather than the rule.
+ */
+export function poolReferenceThroughput(
+  candidates: readonly AiRouterCandidate[],
+): number | null {
+  const observed = candidates
+    .map((c) => fusedThroughput(c))
+    .filter((v): v is number => v !== null)
+    .sort((a, b) => a - b);
+  if (observed.length < MIN_THROUGHPUT_REFERENCE_SAMPLES) return null;
+  const mid = Math.floor(observed.length / 2);
+  return observed.length % 2 === 1
+    ? observed[mid]!
+    : (observed[mid - 1]! + observed[mid]!) / 2;
+}
+
+function throughputFactor(
+  candidate: AiRouterCandidate,
+  referenceTokensPerSecond: number | null,
+): number {
+  const observed = fusedThroughput(candidate);
   if (observed === null) return 1;
-  const ratio = observed / REFERENCE_TOKENS_PER_SECOND;
+  const reference =
+    referenceTokensPerSecond !== null && referenceTokensPerSecond > 0
+      ? referenceTokensPerSecond
+      : REFERENCE_TOKENS_PER_SECOND;
+  const ratio = observed / reference;
   return Math.max(MIN_THROUGHPUT_FACTOR, Math.min(MAX_THROUGHPUT_FACTOR, ratio));
 }
 
@@ -1271,11 +1327,22 @@ export function rankRouterCandidatesWithScores(
     filterByContextWindow(candidates, estimatedPromptTokens),
     preferredModel,
   );
+  // The neutral generation rate is a property of THIS pool, computed once from
+  // the same eligible set being scored rather than per candidate — a candidate
+  // must be measured against the alternatives it is actually competing with,
+  // not against a number that predates them. Skipped entirely when the caller
+  // did not ask for throughput, so no ranking pays for a signal it ignores.
+  const referenceThroughput = preferThroughput ? poolReferenceThroughput(pool) : null;
   const scored: AiRouterCandidateScore[] = pool.map((candidate) => {
-    const base = scoreOne(candidate, preferThroughput, {
-      cacheablePrefixTokens: context?.cacheablePrefixTokens,
-      estimatedPromptTokens,
-    });
+    const base = scoreOne(
+      candidate,
+      preferThroughput,
+      {
+        cacheablePrefixTokens: context?.cacheablePrefixTokens,
+        estimatedPromptTokens,
+      },
+      referenceThroughput,
+    );
     const withCandidate = { candidate, ...base, compositeScore: null };
     return { ...withCandidate, compositeScore: isAutoFamily(mode) ? autoComposite(withCandidate, mode) : null };
   });
