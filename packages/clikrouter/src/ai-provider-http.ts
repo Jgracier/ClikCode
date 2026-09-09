@@ -185,7 +185,23 @@ export interface ChatTurnInput {
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   temperature?: number;
   maxTokens?: number;
-  /** OpenAI response_format; ignored on anthropic-messages. */
+  /**
+   * OpenAI response_format; ignored on anthropic-messages.
+   *
+   * NO CALLER SETS THIS TODAY, and that is why the router does not gate on
+   * structured-output support even though it knows which models have it
+   * (`AiProviderModel.structuredOutput`, populated from vendor catalogs and both
+   * feeds). Building the filter now would add an unreachable branch; the fact is
+   * normalized and waiting instead.
+   *
+   * THE FIRST CALLER TO SET THIS SHOULD ALSO GATE ON IT. Sending a schema to a
+   * model that does not implement response_format is the same defect class as
+   * sending `temperature` to a model that rejects it — 1,403 models did, and it
+   * was found in production rather than by reading. The gate belongs beside the
+   * vision one in ai-router-candidates.ts, which has exactly the right shape:
+   * exclude an explicit false, prefer a confirmed true, fail open at the pool
+   * level so missing metadata never empties it.
+   */
   responseFormat?: { type: string };
   stream?: boolean;
   /**
