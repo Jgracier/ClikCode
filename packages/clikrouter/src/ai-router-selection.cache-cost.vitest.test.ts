@@ -164,3 +164,64 @@ describe('measured hit rate beats the declared prefix', () => {
     expect(cost).toBe(50);
   });
 });
+
+// ============================================
+// A CACHE THE VENDOR WOULD NEVER GRANT
+// ============================================
+// Knowing a model CAN cache says nothing about whether THIS prompt will. Every
+// vendor enforces a minimum cacheable prefix, and MEASURED 2026-09-10 against
+// LiteLLM's published table: 226 models state one, and 80 of them require MORE
+// than the 1,500 tokens the ClikNet remediation agent declares — Claude Opus
+// 4.6/4.7 and Haiku 4.5 sit at 2048 and 4096.
+//
+// For those the router was pricing the prefix at the cache-read rate for a
+// cache that never happens: the same shape as the long-context tier pricing
+// that under-billed roughly half of 385 models before it was found. The
+// caller's own comment says "Never optimistic", and it was optimistic here.
+describe('the vendor minimum cacheable prefix', () => {
+  const model = (over: Partial<AiRouterCandidate> = {}): AiRouterCandidate =>
+    ({
+      provider: 'anthropic',
+      model: 'm',
+      accessClass: 'metered',
+      estimatedCostPerMTok: 20,
+      inputCostPerMTok: 10,
+      cachedInputCostPerMTok: 1,
+      ...over,
+    }) as AiRouterCandidate;
+
+  // The agent's real numbers: a 1,500-token prefix inside a 6,000-token prompt.
+  const ctx = { cacheablePrefixTokens: 1_500, estimatedPromptTokens: 6_000 };
+
+  it('withdraws the discount when the prefix is below the vendor minimum', () => {
+    // Haiku 4.5 / Opus 4.6 sit at 4096 — this prefix never caches, so the
+    // input slice must be priced at the full rate.
+    expect(effectiveCostPerMTok(model({ promptCacheMinTokens: 4_096 }), ctx)).toBe(20);
+  });
+
+  it('keeps the discount when the prefix clears the minimum', () => {
+    // 1024 is the common Anthropic/OpenAI floor and this prefix clears it, so
+    // a quarter of the prompt really is cached.
+    const cost = effectiveCostPerMTok(model({ promptCacheMinTokens: 1_024 }), ctx);
+    expect(cost).toBeLessThan(20);
+    expect(cost).toBeCloseTo(20 - 10 + (1 * 0.25 + 10 * 0.75), 6);
+  });
+
+  it('keeps the discount when no minimum is on file', () => {
+    // Absent must mean "no known minimum", never "assume the worst" — a silent
+    // feed would otherwise start repricing models that genuinely do cache.
+    expect(effectiveCostPerMTok(model(), ctx)).toBeLessThan(20);
+    expect(effectiveCostPerMTok(model({ promptCacheMinTokens: null }), ctx)).toBeLessThan(20);
+  });
+
+  it('lets a MEASURED hit rate override the threshold entirely', () => {
+    // Once this pair has real observations, what actually cached beats any
+    // estimate about what should — the precedence the file already holds.
+    const measured = model({
+      promptCacheMinTokens: 4_096,
+      observedCacheHitRate: 0.5,
+      observedCacheEligibleTokens: 200_000,
+    });
+    expect(effectiveCostPerMTok(measured, ctx)).toBeLessThan(20);
+  });
+});
