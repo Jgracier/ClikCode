@@ -80,6 +80,21 @@ export interface AiRouterCandidate {
    */
   cachedInputCostPerMTok?: number | null;
   /**
+   * Minimum prompt-prefix tokens before this model's cache applies at all.
+   *
+   * KNOWING A MODEL CAN CACHE SAYS NOTHING ABOUT WHETHER THIS PROMPT WILL.
+   * MEASURED 2026-09-10 from LiteLLM's published table: 226 models state a
+   * minimum and 80 of them sit ABOVE the 1,500-token prefix the ClikNet
+   * remediation agent declares — Claude Opus 4.6/4.7 and Haiku 4.5 at 2048 and
+   * 4096. For those, the caller's prefix would never be cached and the discount
+   * below was pure invention.
+   *
+   * Absent means no known minimum, and must keep meaning that: withdrawing a
+   * real discount because a feed is silent would be the same error in the other
+   * direction.
+   */
+  promptCacheMinTokens?: number | null;
+  /**
    * OBSERVED share of eligible input tokens this pair actually served from
    * cache, 0-1, with the prompt tokens it was measured over.
    *
@@ -804,6 +819,19 @@ function cachedFractionFor(
     !Number.isFinite(prompt) ||
     prompt <= 0
   ) {
+    return null;
+  }
+  // BELOW THE VENDOR'S MINIMUM, NOTHING CACHES. A model that supports prompt
+  // caching still refuses to cache a prefix shorter than its own threshold, so
+  // claiming the cache-read rate for one is inventing a discount the vendor
+  // will not grant — the same shape as the long-context tier pricing that
+  // under-billed roughly half of 385 models before it was found.
+  //
+  // Only a KNOWN minimum can withdraw the discount. An absent one means "no
+  // minimum on file", never "assume the worst", or a silent feed would start
+  // repricing models that genuinely do cache.
+  const minPrefix = candidate.promptCacheMinTokens;
+  if (typeof minPrefix === 'number' && Number.isFinite(minPrefix) && prefix < minPrefix) {
     return null;
   }
   // Clamped: a caller whose prefix estimate exceeds its prompt estimate has
