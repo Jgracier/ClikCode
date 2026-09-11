@@ -1616,6 +1616,31 @@ export const AI_PROVIDERS = [
     openAiCompatible: true,
   },
   {
+    id: "eigenai",
+    contextWindow: 32_000,
+    keyUrl: "https://app.eigenai.com/api-keys",
+    label: "EigenAI",
+    envKey: "EIGENAI_API_KEY",
+    // docs.eigenai.com/products/model-api/api-reference/base-url (fetched
+    // 2026-09-10) settles the base URL that was left open on 2026-07-31:
+    // api-web.eigenai.com/api/v1, Bearer auth, OpenAI chat/completions shape.
+    // The other host in EigenCloud's launch material (eigenai.eigencloud.xyz)
+    // does not resolve.
+    chatBaseUrl: "https://api-web.eigenai.com/api/v1",
+    // The docs publish NO model ids (every example is "YOUR_MODEL") and no
+    // models-list path, so there is nothing true to put in staticModels.
+    // `/models` is the OpenAI-compatible convention, NOT documented and NOT
+    // live-verified: the origin answered Cloudflare 1033 (tunnel down) on
+    // 2026-09-10. Probing it is still the honest choice — a wrong path shows
+    // on the card as an HTTP error, where `unsupported` would leave the
+    // provider set, silent, and with no models to route to.
+    probe: {
+      kind: "openai-models",
+      url: "https://api-web.eigenai.com/api/v1/models",
+    },
+    openAiCompatible: true,
+  },
+  {
     id: "ionet",
     contextWindow: 32_000,
     keyUrl: "https://ai.io.net/ai/api-keys",
