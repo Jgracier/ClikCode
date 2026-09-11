@@ -403,7 +403,10 @@ describe('modality grouping and text-only routing', () => {
     // chatBaseUrl at all, exactly like github-copilot above. Its transport is the vendor's CLI;
     // routability is still a modality question and this row is text.
     expect(routable.has('command-code')).toBe(true);
-    expect(routable.size).toBe(55);
+    // 56, not 55: EigenAI (wired 2026-09-10) — OpenAI-compatible text chat at
+    // api-web.eigenai.com/api/v1. Its manifest row had existed with no registry entry.
+    expect(routable.has('eigenai')).toBe(true);
+    expect(routable.size).toBe(56);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {
