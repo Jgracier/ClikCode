@@ -41,6 +41,21 @@ export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
     severity: 'error',
     userFacing: true,
   },
+  DEPLOY_AWAITING_REQUIRED_CHECKS: {
+    message: 'This push deploy is waiting for the required checks on its commit.',
+    remediation: 'It starts automatically when the required checks succeed, and is refused if any of them fails.',
+    httpStatus: 202,
+    severity: 'info',
+    userFacing: true,
+  },
+  SOURCE_COMMIT_UNRESOLVED: {
+    message: 'Could not resolve the commit to deploy.',
+    remediation:
+      'Check that the repository and branch (or commit) exist and that ClikDeploy can read the repository — connect the Git provider or install the GitHub App for a private repo — then deploy again.',
+    httpStatus: 422,
+    severity: 'error',
+    userFacing: true,
+  },
   AGENT_DOCKER_OP_FAILED: {
     message: 'A Docker operation on the target server failed.',
     remediation: 'Verify the Docker daemon is healthy and has capacity, then retry.',
