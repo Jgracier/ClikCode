@@ -560,9 +560,8 @@ export const AI_PROVIDERS = [
     envKey: "TOGETHER_API_KEY",
     // @ai-sdk/togetherai implements real embedding and image factories.
     modalities: ["text", "embedding", "image"],
-    // One key, two tabs: this vendor sells compute AND inference off it.
-    // Settable from either — the badge exists because neither tab said
-    // they were the same secret.
+    // One key, two pools: this vendor sells compute AND inference off it. It is
+    // set on its manifest category's home; the other pool's card links there.
     credentialSharedWith: { note: "Shared with Compute -> GPU (batch)" },
     chatBaseUrl: "https://api.together.xyz/v1",
     probe: { kind: "openai-models", url: "https://api.together.xyz/v1/models" },
@@ -621,9 +620,8 @@ export const AI_PROVIDERS = [
     // modality is declared — dispatch here would be a guaranteed constructor
     // throw, not a working lane. (Its image method is a NoSuchModelError stub.)
     modalities: ["text"],
-    // One key, two tabs: this vendor sells compute AND inference off it.
-    // Settable from either — the badge exists because neither tab said
-    // they were the same secret.
+    // One key, two pools: this vendor sells compute AND inference off it. It is
+    // set on its manifest category's home; the other pool's card links there.
     credentialSharedWith: { note: "Shared with Compute -> GPU (dedicated deployments)" },
     // Chat completions still go through the inference host — unaffected by
     // the probe change below.
@@ -939,9 +937,8 @@ export const AI_PROVIDERS = [
     keyUrl: "https://novita.ai/settings/key-management",
     label: "Novita AI",
     envKey: "NOVITA_API_KEY",
-    // One key, two tabs: this vendor sells compute AND inference off it.
-    // Settable from either — the badge exists because neither tab said
-    // they were the same secret.
+    // One key, two pools: this vendor sells compute AND inference off it. It is
+    // set on its manifest category's home; the other pool's card links there.
     credentialSharedWith: { note: "Shared with Compute -> GPU" },
     chatBaseUrl: "https://api.novita.ai/v3/openai",
     // The catalog is public, so keep credential health explicitly unsupported
@@ -1999,9 +1996,8 @@ export const AI_PROVIDERS = [
     unitPricingCatalog: "fal",
     label: "fal.ai",
     envKey: "FAL_API_KEY",
-    // One key, two tabs: this vendor sells compute AND inference off it.
-    // Settable from either — the badge exists because neither tab said
-    // they were the same secret.
+    // One key, two pools: this vendor sells compute AND inference off it. It is
+    // set on its manifest category's home; the other pool's card links there.
     credentialSharedWith: { note: "Shared with Compute -> GPU" },
     keyUrl: "https://fal.ai/dashboard/keys",
     probe: { kind: "unsupported" },

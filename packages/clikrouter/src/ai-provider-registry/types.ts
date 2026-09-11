@@ -404,9 +404,9 @@ export interface AiProviderSpec {
    *
    * Distinct from `credentialManagedElsewhere`, which REPLACES the Set button
    * because another surface owns the credential. These vendors sell compute and
-   * inference off one key and are settable from either tab — the badge exists
-   * because neither tab said so, which made setting it here look like it might
-   * be a different credential, or like it might break the compute one.
+   * inference off one key. The key is set on ONE pool — its manifest category's
+   * home (apps/web/src/lib/integrations/credential-homes.ts) — and the other
+   * pool's card shows it with a link there. The badge says the key is shared.
    *
    * The manifest deliberately rows such a key ONCE: a second row would be two
    * inputs writing one secret, where the later save silently overwrites the
