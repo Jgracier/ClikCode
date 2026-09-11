@@ -560,9 +560,6 @@ export const AI_PROVIDERS = [
     envKey: "TOGETHER_API_KEY",
     // @ai-sdk/togetherai implements real embedding and image factories.
     modalities: ["text", "embedding", "image"],
-    // One key, two pools: this vendor sells compute AND inference off it. It is
-    // set on its manifest category's home; the other pool's card links there.
-    credentialSharedWith: { note: "Shared with Compute -> GPU (batch)" },
     chatBaseUrl: "https://api.together.xyz/v1",
     probe: { kind: "openai-models", url: "https://api.together.xyz/v1/models" },
     openAiCompatible: true,
@@ -620,9 +617,6 @@ export const AI_PROVIDERS = [
     // modality is declared — dispatch here would be a guaranteed constructor
     // throw, not a working lane. (Its image method is a NoSuchModelError stub.)
     modalities: ["text"],
-    // One key, two pools: this vendor sells compute AND inference off it. It is
-    // set on its manifest category's home; the other pool's card links there.
-    credentialSharedWith: { note: "Shared with Compute -> GPU (dedicated deployments)" },
     // Chat completions still go through the inference host — unaffected by
     // the probe change below.
     chatBaseUrl: "https://inference.baseten.co/v1",
@@ -937,9 +931,6 @@ export const AI_PROVIDERS = [
     keyUrl: "https://novita.ai/settings/key-management",
     label: "Novita AI",
     envKey: "NOVITA_API_KEY",
-    // One key, two pools: this vendor sells compute AND inference off it. It is
-    // set on its manifest category's home; the other pool's card links there.
-    credentialSharedWith: { note: "Shared with Compute -> GPU" },
     chatBaseUrl: "https://api.novita.ai/v3/openai",
     // The catalog is public, so keep credential health explicitly unsupported
     // and discover models through the separate catalog URL.
@@ -1229,20 +1220,21 @@ export const AI_PROVIDERS = [
     //
     // A one-shot boot migration seeds these from the compute pair for installs
     // that connected before this split — see loadPlatformSecrets.
-    // Its connect surface: the Cloudflare consent writes this key. Declared so
-    // the row is not mistaken for an unconnectable provider, WITHOUT
-    // suppressing Set the way credentialManagedElsewhere would.
-    credentialFilledBy: { note: "Filled by the Cloudflare connect" },
+    // Its Connect runs the Cloudflare consent, which writes this key (and the
+    // compute pair). Same start contract as OpenRouter's key mint — POST,
+    // answers { authorizationUrl } — so the card's Connect button needs no
+    // provider branch. The key row stays settable as the override path.
+    keyMint: {
+      label: "Connect Cloudflare",
+      startEndpoint: "/api/admin/platform-connect/cloudflare/start",
+    },
     envKey: "CLOUDFLARE_AI_TOKEN",
     // Account id is baked into the path, not sent as a header — resolved at
     // request time via urlParamEnvKey (see resolveProviderUrl in
     // ai-provider-http.ts).
     urlParamEnvKey: "CLOUDFLARE_AI_ACCOUNT_ID",
-    // The account id is settable HERE now, which it was not while this row
-    // borrowed the compute credential. A templated base URL must either
-    // prompt for its segment or declare the value comes from elsewhere —
-    // ai-provider-models asserts exactly that, and caught the gap when
-    // `credentialManagedElsewhere` was removed without a prompt replacing it.
+    // The account id is settable HERE. A templated base URL must prompt for
+    // its segment — ai-provider-models asserts exactly that.
     //
     // The consent fills it, so this prompt is the OVERRIDE path: point Workers
     // AI at a different Cloudflare account without touching DNS or Workers.
@@ -1265,15 +1257,11 @@ export const AI_PROVIDERS = [
       kind: "cloudflare-models",
       url: "https://api.cloudflare.com/client/v4/accounts/{urlParam}/ai/models/search",
     },
-    // Workers AI has its OWN pair now (CLOUDFLARE_AI_TOKEN /
+    // Workers AI has its OWN pair (CLOUDFLARE_AI_TOKEN /
     // CLOUDFLARE_AI_ACCOUNT_ID), written by the Cloudflare consent alongside the
-    // compute pair. `credentialManagedElsewhere` is deliberately GONE: it
-    // REPLACES the Set button, which was right while this row borrowed the DNS
-    // token — a second Connect could have forked one consent. With a credential
-    // of its own, suppressing Set would leave an operator unable to do the one
-    // thing the split was for: point AI at a different Cloudflare account, or a
-    // token scoped to AI alone, without touching compute. The consent still
-    // fills it, so the normal path still pastes nothing.
+    // compute pair. Both stay settable on the card, so an operator can point AI
+    // at a different Cloudflare account, or a token scoped to AI alone, without
+    // touching compute. The consent fills them, so the normal path pastes nothing.
     openAiCompatible: true,
   },
   {
@@ -1996,9 +1984,6 @@ export const AI_PROVIDERS = [
     unitPricingCatalog: "fal",
     label: "fal.ai",
     envKey: "FAL_API_KEY",
-    // One key, two pools: this vendor sells compute AND inference off it. It is
-    // set on its manifest category's home; the other pool's card links there.
-    credentialSharedWith: { note: "Shared with Compute -> GPU" },
     keyUrl: "https://fal.ai/dashboard/keys",
     probe: { kind: "unsupported" },
     // Curated from @ai-sdk/fal image/video/speech/transcription unions —

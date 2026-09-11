@@ -865,12 +865,8 @@ describe('openAiCompatible rows: probe and chat derive from the SAME base URL', 
     // base with no /v1 and get a bare 404 that never checked the key.
     for (const p of AI_PROVIDERS.filter((row) => row.chatBaseUrl?.includes('{urlParam}'))) {
       expect(p.urlParamEnvKey, `${p.id} templates {urlParam} with no env key`).toBeTruthy();
-      // A row whose value is collected elsewhere (cloudflare: Platform
-      // secrets, alongside the OAuth token it arrives with) declares that by
-      // having no prompt — but then it must say where, or nobody can set it.
-      if (!p.urlParamPrompt) {
-        expect(p.credentialManagedElsewhere, `${p.id} has no prompt and no elsewhere`).toBeTruthy();
-      }
+      // Every key a card holds is set on that card, so the segment needs a prompt.
+      expect(p.urlParamPrompt, `${p.id} templates {urlParam} with no prompt to set it`).toBeTruthy();
     }
   });
 
