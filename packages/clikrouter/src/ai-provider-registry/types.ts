@@ -389,55 +389,6 @@ export interface AiProviderSpec {
     /** POST endpoint that starts the flow; responds { authorizationUrl }. */
     startEndpoint: string;
   };
-  /**
-   * API key is NOT edited on the AI tab (no Set / Replace / Delete / keyMint).
-   * Status still goes green when `envKey` is configured elsewhere (e.g.
-   * Platform secrets → Connect Cloudflare writes CLOUDFLARE_OAUTH_TOKEN). Models,
-   * health, and usage still render on the AI row.
-   */
-  credentialManagedElsewhere?: {
-    /** Short note shown where Set would be, e.g. Integrations ownership. */
-    note: string;
-  };
-  /**
-   * This provider's key is the SAME PlatformSecret a Compute-tab vendor uses.
-   *
-   * Distinct from `credentialManagedElsewhere`, which REPLACES the Set button
-   * because another surface owns the credential. These vendors sell compute and
-   * inference off one key. The key is set on ONE pool — its manifest category's
-   * home (apps/web/src/lib/integrations/credential-homes.ts) — and the other
-   * pool's card shows it with a link there. The badge says the key is shared.
-   *
-   * The manifest deliberately rows such a key ONCE: a second row would be two
-   * inputs writing one secret, where the later save silently overwrites the
-   * earlier. Sharing is the right design; the omission was only saying it.
-   */
-  credentialSharedWith?: {
-    /** Where else this exact key is used, e.g. "Compute -> GPU". */
-    note: string;
-  };
-  /**
-   * This provider's OWN credential is WRITTEN by another surface's consent, and
-   * is still settable here.
-   *
-   * The third of three, and each says something the others cannot:
-   *   credentialManagedElsewhere  another surface OWNS it — no Set button here.
-   *   credentialSharedWith        the same key as another tab's vendor.
-   *   credentialFilledBy          its own key, populated by a consent elsewhere,
-   *                               overridable here.
-   *
-   * Workers AI is the case: the Cloudflare connect writes CLOUDFLARE_AI_TOKEN
-   * alongside the compute pair, so nobody pastes anything on the normal path —
-   * but an operator can still point AI at a different account without touching
-   * DNS or Workers. Filing it as `managedElsewhere` would suppress the Set
-   * button and remove exactly the override the split exists to provide; filing
-   * it as nothing at all leaves it looking like an unconnectable provider,
-   * which is what ai-provider-oauth-verdicts caught.
-   */
-  credentialFilledBy?: {
-    /** The surface whose consent writes it, e.g. "the Cloudflare connect". */
-    note: string;
-  };
   /** True when the provider speaks the OpenAI chat-completions dialect. */
   openAiCompatible?: boolean;
   /**
