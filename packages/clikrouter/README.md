@@ -1,7 +1,7 @@
 # @clikdeploy/clikrouter
 
 Provider-agnostic AI request normalization and router-selection logic: one
-dialect layer across 67 providers (registry, request building, response
+dialect layer across 68 providers (registry, request building, response
 extraction) plus the candidate-ranking algorithm.
 
 ## Scope — what lives here vs. what doesn't

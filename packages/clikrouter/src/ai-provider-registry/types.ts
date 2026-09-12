@@ -192,6 +192,18 @@ export interface AiProviderSpec {
    *
    *  `bySource` is the SECOND DIMENSION. See {@link AiProbeSpec}. */
   probe: AiProbeSpec;
+  /**
+   * Boolean field in each catalog model that authoritatively declares a free
+   * model. This lets catalog parsing preserve explicit zero prices without a
+   * provider-name branch or treating every ambiguous zero as free.
+   */
+  catalogFreeModelBooleanField?: string;
+  /**
+   * Optional provider-specific performance facts carried by the model catalog.
+   * The value names the schema, not the provider, so probe execution remains
+   * registry-driven as more catalogs expose their own upstream telemetry.
+   */
+  catalogEndpointPerfShape?: "huggingface-upstreams";
   /** What this provider can actually DO. Omitted means `["text"]`, which is what
    *  every row predating audio/visual support is, so the field stays absent on
    *  the ~30 text rows instead of restating the default 30 times.
@@ -298,6 +310,14 @@ export interface AiProviderSpec {
    * producing a wrong number.
    */
   usageCostUsdPath?: readonly string[];
+  /**
+   * Path into the provider's complete response/chunk at which it reports the
+   * settled USD cost for that request. Unlike `usageCostUsdPath`, this covers
+   * OpenAI-compatible gateways whose billing envelope sits beside `choices`.
+   * The compatible adapter captures it before schema normalization discards
+   * unknown top-level response fields.
+   */
+  responseCostUsdPath?: readonly string[];
   /**
    * Request-body fields that ASK this vendor to report its cost, merged into
    * the call as provider options (the OpenAI-compatible adapter spreads

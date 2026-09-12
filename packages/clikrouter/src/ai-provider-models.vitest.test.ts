@@ -23,6 +23,7 @@ import {
   isAccountScopedAiCallFailure,
   isBillingAiCallFailure,
   resolveRateLimitRetryAfterMs,
+  extractDeclaredResponseCostMicroUsd,
   streamAiChatTurn,
   type AiDispatchedModality,
 } from './ai-provider-models';
@@ -157,6 +158,54 @@ describe('resolveLanguageModel', () => {
     // per-modality tables, asserted in the suite below — just never this one.
     for (const nonLm of ['elevenlabs', 'deepgram', 'assemblyai', 'voyage', 'lmnt', 'hume', 'revai']) {
       expect(ids).not.toContain(nonLm);
+    }
+  });
+});
+
+describe('CheaperInference settled-cost normalization', () => {
+  it('converts the captured fixed-precision USD string to integer micro-USD', () => {
+    expect(
+      extractDeclaredResponseCostMicroUsd('cheaper-inference', {
+        'cheaper-inference': { settledCostUsd: '0.000123' },
+      }),
+    ).toBe(123);
+  });
+
+  it('fails back to catalog pricing when the extension is absent or malformed', () => {
+    expect(extractDeclaredResponseCostMicroUsd('cheaper-inference', {})).toBeUndefined();
+    expect(
+      extractDeclaredResponseCostMicroUsd('cheaper-inference', {
+        'cheaper-inference': { settledCostUsd: 'not-money' },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('captures the billing envelope from a streaming completion', async () => {
+    const sse = [
+      'data: {"id":"ci-1","object":"chat.completion.chunk","created":0,"model":"gpt-5.4","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}',
+      'data: {"id":"ci-1","object":"chat.completion.chunk","created":0,"model":"gpt-5.4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2},"cheaper_inference":{"billing":{"status":"settled","billed_cost_usd":"0.000321","currency":"USD"}}}',
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(sse, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })),
+    );
+    try {
+      const result = await streamAiChatTurn({
+        provider: 'cheaper-inference',
+        model: 'gpt-5.4',
+        apiKey: 'ci_live_test',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(result.text).toBe('done');
+      expect(result.costMicroUsd).toBe(321);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });
@@ -406,7 +455,7 @@ describe('modality grouping and text-only routing', () => {
     // 56, not 55: EigenAI (wired 2026-09-10) — OpenAI-compatible text chat at
     // api-web.eigenai.com/api/v1. Its manifest row had existed with no registry entry.
     expect(routable.has('eigenai')).toBe(true);
-    expect(routable.size).toBe(56);
+    expect(routable.size).toBe(57);
   });
 
   it('embeddings group under Text but are still NOT routable', () => {
