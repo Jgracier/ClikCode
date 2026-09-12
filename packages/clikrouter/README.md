@@ -39,7 +39,14 @@ supplies the live signals from its own Redis/Postgres-backed stores.
   OpenAI-compatible fallback.
 - `ai-router-selection.ts` — the candidate-ranking algorithm: given a list
   of eligible candidates and their live signals, produce a ranked
-  selection with a human-readable reason.
+  selection with a human-readable reason. Six strategies: `auto` /
+  `auto-budget` / `auto-frontier` (blend + explore), `budget` / `frontier`
+  (lexicographic), `explicit` (pin). `ACCESS_RANK` prefers connected
+  `subscription` / `subscription-harness` (0) over `free-tier` (1). The
+  metered gate lives in `buildEligibleRouterCandidates` in platform-domains,
+  not a deleted `filterAiRouteCandidatesByBilling`. Shipped agent-runtime
+  task rows default `strategy: "auto"`, `allowMetered: false`,
+  `allowOauth: true`.
 
 ## Renaming
 
