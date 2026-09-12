@@ -826,6 +826,7 @@ export const AI_PROVIDERS = [
       url: "https://huggingface.co/api/whoami-v2",
       catalogUrl: "https://router.huggingface.co/v1/models",
     },
+    catalogEndpointPerfShape: "huggingface-upstreams",
     openAiCompatible: true,
     // DIRECT, and no `oauthChat` override — same reasoning as chutes.
     //
@@ -1709,6 +1710,29 @@ export const AI_PROVIDERS = [
       kind: "unsupported",
       catalogUrl: "https://ai-gateway.vercel.sh/v1/models",
     },
+    openAiCompatible: true,
+  },
+  {
+    id: "cheaper-inference",
+    // OpenAI-compatible inference marketplace. The catalog moves with live
+    // supply, so GET /v1/models — not a static/default list — owns model ids,
+    // capabilities, context/output limits and customer-facing prices.
+    contextWindow: 32_000,
+    keyUrl: "https://platform.cheaperinference.com/dashboard/keys",
+    label: "Cheaper Inference",
+    envKey: "CHEAPER_INFERENCE_API_KEY",
+    chatBaseUrl: "https://api.cheaperinference.com/v1",
+    chatDialect: "openai-chat",
+    authHeader: "bearer",
+    probe: {
+      kind: "openai-models",
+      url: "https://api.cheaperinference.com/v1/models",
+    },
+    catalogFreeModelBooleanField: "is_free",
+    // The successful response's billing envelope contains the settled charge
+    // as a fixed-precision USD string. Preserve it so ClikDeploy's credit debit
+    // uses the real marketplace bill instead of a catalog estimate.
+    responseCostUsdPath: ["cheaper_inference", "billing", "billed_cost_usd"],
     openAiCompatible: true,
   },
   {

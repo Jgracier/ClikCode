@@ -246,6 +246,9 @@ export function resolveLanguageModel(input: ResolveModelInput): LanguageModel {
     name: spec.id,
     apiKey: input.apiKey,
     baseURL,
+    ...(spec.responseCostUsdPath
+      ? { metadataExtractor: responseCostMetadataExtractor(spec.id, spec.responseCostUsdPath) }
+      : {}),
   })(modelId);
 }
 
@@ -732,6 +735,65 @@ export function extractDeclaredUsageCostMicroUsd(
   }
   if (!sawOne) return undefined;
   return Math.max(0, Math.round(totalUsd * 1_000_000));
+}
+
+/** Settled provider cost captured from a complete response or stream chunk by
+ * the compatible adapter's metadata hook. Kept in USD until this boundary so
+ * it follows the same conversion and rounding rule as raw-usage costs. */
+export function extractDeclaredResponseCostMicroUsd(
+  provider: string,
+  providerMetadata: Record<string, unknown> | undefined,
+): number | undefined {
+  if (!getAiProvider(provider)?.responseCostUsdPath) return undefined;
+  const metadata = providerMetadata?.[provider];
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const raw = (metadata as Record<string, unknown>).settledCostUsd;
+  const usd = typeof raw === "string" ? Number(raw) : raw;
+  if (typeof usd !== "number" || !Number.isFinite(usd) || usd < 0) return undefined;
+  return Math.max(0, Math.round(usd * 1_000_000));
+}
+
+function valueAtPath(value: unknown, path: readonly string[]): unknown {
+  let cursor = value;
+  for (const key of path) {
+    if (!cursor || typeof cursor !== "object") return undefined;
+    cursor = (cursor as Record<string, unknown>)[key];
+  }
+  return cursor;
+}
+
+/** Capture a vendor extension before @ai-sdk/openai-compatible validates the
+ * standard OpenAI fields and drops unknown top-level properties. */
+function responseCostMetadataExtractor(provider: string, path: readonly string[]) {
+  const read = (body: unknown): number | string | undefined => {
+    const raw = valueAtPath(body, path);
+    const usd = typeof raw === "string" ? Number(raw) : raw;
+    return typeof usd === "number" && Number.isFinite(usd) && usd >= 0
+      ? (raw as number | string)
+      : undefined;
+  };
+  return {
+    async extractMetadata({ parsedBody }: { parsedBody: unknown }) {
+      const settledCostUsd = read(parsedBody);
+      return settledCostUsd === undefined
+        ? undefined
+        : { [provider]: { settledCostUsd } };
+    },
+    createStreamExtractor() {
+      let settledCostUsd: number | string | undefined;
+      return {
+        processChunk(chunk: unknown) {
+          const found = read(chunk);
+          if (found !== undefined) settledCostUsd = found;
+        },
+        buildMetadata() {
+          return settledCostUsd === undefined
+            ? undefined
+            : { [provider]: { settledCostUsd } };
+        },
+      };
+    },
+  };
 }
 
 /**
@@ -1250,7 +1312,12 @@ export async function streamAiChatTurn(
     extractPerplexityCostMicroUsd(
       input.provider,
       providerMetadata as Record<string, unknown> | undefined,
-    ) ?? extractDeclaredUsageCostMicroUsd(input.provider, steps ?? []);
+    ) ??
+    extractDeclaredResponseCostMicroUsd(
+      input.provider,
+      providerMetadata as Record<string, unknown> | undefined,
+    ) ??
+    extractDeclaredUsageCostMicroUsd(input.provider, steps ?? []);
 
   return {
     text,
