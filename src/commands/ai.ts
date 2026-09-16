@@ -1,7 +1,7 @@
 /** Local ClikDeploy AI harness lifecycle, account aliases, and durable session settings. */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -26,6 +26,8 @@ interface HarnessSession {
 interface HarnessState {
   version: number;
   installationId: string;
+  /** Bearer secret for the loopback protocol; never rendered by CLI commands or HTTP responses. */
+  localApiToken: string;
   accounts: AiHarnessAccount[];
   sessions: HarnessSession[];
 }
@@ -44,10 +46,18 @@ async function readState(): Promise<HarnessState> {
     if (parsed.version !== HARNESS_STATE_VERSION || !Array.isArray(parsed.accounts) || !Array.isArray(parsed.sessions)) {
       throw new Error('unsupported local AI harness state');
     }
+    // State written by the metadata-only preview gets a secret lazily on its
+    // first secure start, preserving account aliases without exposing a window
+    // where they are served unauthenticated.
+    if (!parsed.localApiToken) {
+      const upgraded = { ...parsed, localApiToken: randomBytes(32).toString('base64url') } as HarnessState;
+      await writeState(upgraded);
+      return upgraded;
+    }
     return parsed as HarnessState;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    return { version: HARNESS_STATE_VERSION, installationId: randomUUID(), accounts: [], sessions: [] };
+    return { version: HARNESS_STATE_VERSION, installationId: randomUUID(), localApiToken: randomBytes(32).toString('base64url'), accounts: [], sessions: [] };
   }
 }
 
@@ -76,6 +86,14 @@ function methodAndPath(request: IncomingMessage): `${string} ${string}` {
   return `${request.method ?? 'GET'} ${new URL(request.url ?? '/', 'http://127.0.0.1').pathname}`;
 }
 
+function authorized(request: IncomingMessage, expected: string): boolean {
+  const value = request.headers.authorization;
+  if (!value?.startsWith('Bearer ')) return false;
+  const presented = Buffer.from(value.slice('Bearer '.length));
+  const secret = Buffer.from(expected);
+  return presented.length === secret.length && timingSafeEqual(presented, secret);
+}
+
 /** Starts an intentionally loopback-only metadata service. It exposes no provider tokens and does not execute a model turn. */
 export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
   const port = Number(options.port ?? DEFAULT_PORT);
@@ -86,6 +104,8 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
       const route = methodAndPath(request);
       if (route === 'GET /v1/health') {
         sendJson(response, 200, { status: 'ok', installationId: state.installationId, credentialBoundary: 'local-only' });
+      } else if (!authorized(request, state.localApiToken)) {
+        sendJson(response, 401, { error: 'unauthorized' });
       } else if (route === 'GET /v1/accounts') {
         sendJson(response, 200, { accounts: state.accounts.map(accountView) });
       } else if (route === 'GET /v1/models') {
