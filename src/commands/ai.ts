@@ -75,7 +75,22 @@ async function readState(): Promise<HarnessState> {
       await writeState(upgraded);
       return upgraded;
     }
-    return { ...(parsed as HarnessState), invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [] };
+    // Older previews did not include a failover preference. Migrate those
+    // sessions to the safe default so a local account does not remain stuck
+    // after its known quota window is exhausted.
+    const sessions: HarnessSession[] = (parsed.sessions as HarnessSession[]).map((session) => ({
+      ...session,
+      accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
+    }));
+    const now = Date.now();
+    const accounts = (parsed.accounts as AiHarnessAccount[]).map((account) => (
+      account.quotaState === 'exhausted' && account.quotaRetryAt && Date.parse(account.quotaRetryAt) <= now
+        ? { ...account, quotaState: 'available' as const, quotaRetryAt: undefined }
+        : account
+    ));
+    const normalized = { ...(parsed as HarnessState), accounts, sessions, invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [] };
+    if (JSON.stringify(normalized) !== JSON.stringify(parsed)) await writeState(normalized);
+    return normalized;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     const fresh: HarnessState = {
@@ -166,7 +181,7 @@ function isUsageExhaustion(error: unknown): boolean {
   const status = (error as { statusCode?: unknown; response?: { status?: unknown } } | null)?.statusCode
     ?? (error as { response?: { status?: unknown } } | null)?.response?.status;
   if (status === 402 || status === 429) return true;
-  return /(?:quota|usage limit|rate limit|too many requests|billing|credit)/i.test(error instanceof Error ? error.message : String(error));
+  return /(?:quota exceeded|quota exhausted|usage limit|rate limit|too many requests|credits? exhausted)/i.test(error instanceof Error ? error.message : String(error));
 }
 
 /** Starts an intentionally loopback-only harness service. It exposes no provider tokens. */
@@ -329,6 +344,43 @@ export async function aiSessionShow(id: string): Promise<void> {
   emitJson({ session, resumed: true });
 }
 
+const HARNESS_SHORTCUTS: Record<string, string> = {
+  claude: 'anthropic', codex: 'openai', opencode: 'opencode', antigravity: 'antigravity',
+  grok: 'xai', hermes: 'nous', copilot: 'github-copilot', command: 'command-code',
+};
+
+/** Shared slash-command grammar for a future TTY client and the headless CLI. */
+export async function aiSessionCommand(id: string, input: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const words = input.trim().replace(/^\//, '').split(/\s+/).filter(Boolean);
+  const head = words.shift()?.toLowerCase();
+  if (!head) throw new Error('slash command is required');
+  if (head === 'settings') return emitJson({ panel: 'settings', session, controls: ['route', 'account', 'model', 'effort', 'accountFailover'] });
+  if (head === 'accounts') {
+    const action = words.shift()?.toLowerCase();
+    if (action === 'add') {
+      const shortcut = words.shift()?.toLowerCase();
+      const provider = shortcut ? (HARNESS_SHORTCUTS[shortcut] ?? shortcut) : undefined;
+      if (!provider) throw new Error('usage: /accounts add <harness>');
+      return emitJson({ panel: 'add-account', provider, next: `clikdeploy ai accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
+    }
+    if (action === 'failover') {
+      const setting = words.shift();
+      if (setting !== 'auto' && setting !== 'never') throw new Error('usage: /accounts failover auto|never');
+      session.accountFailover = setting === 'auto' ? 'on-quota-exhausted' : 'never';
+      session.updatedAt = new Date().toISOString();
+      await writeState(state);
+      return emitJson({ panel: 'accounts', session, accountFailover: session.accountFailover });
+    }
+    return emitJson({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['add', 'remove', 'failover auto|never'] });
+  }
+  const provider = HARNESS_SHORTCUTS[head];
+  if (provider) return emitJson({ panel: 'provider-accounts', provider, session, accounts: state.accounts.filter((account) => account.provider === provider).map(accountView), controls: ['add', 'remove', 'select', 'failover'] });
+  throw new Error(`unknown slash command: /${head}`);
+}
+
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
  * only in this process and record normalized, credential-free usage.
@@ -363,15 +415,18 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
     if (!exhaustedAccount) throw error;
     exhaustedAccount.quotaState = 'exhausted';
     exhaustedAccount.quotaRetryAt = new Date(Date.now() + 60_000).toISOString();
+    // Preserve the quota signal even if there is no alternate account or its
+    // retry fails. It is a local scheduling fact, never a provider secret.
+    await writeState(state);
     const fallback = state.accounts.find((item) =>
       item.id !== exhaustedAccount.id && item.provider === exhaustedAccount.provider && item.status === 'ready' && item.quotaState !== 'exhausted'
       && item.authKind === 'api-key' && item.models.includes(model),
     );
     if (!fallback) throw error;
     switchedFrom = exhaustedAccount.id;
+    turn = await invoke(fallback);
     account = fallback;
     session.accountId = fallback.id;
-    turn = await invoke(fallback);
   }
   const invocation = {
     id: randomUUID(), accountId: account.id, provider: session.provider ?? account.provider, model,
