@@ -24,6 +24,7 @@ interface HarnessSession {
   effort: string;
   createdAt: string;
   updatedAt: string;
+  messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
 interface HarnessState {
@@ -330,7 +331,7 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route !== 'local') throw new Error('gateway session execution requires a connected, authorized gateway device');
+  if (session.route === 'gateway') throw new Error('use aiGatewaySessionSend for gateway sessions');
   if (!session.accountId) throw new Error('local AI session has no account selected');
   const account = state.accounts.find((item) => item.id === session.accountId);
   if (!account) throw new Error('local AI session account was removed');
@@ -347,7 +348,7 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
     model,
     apiKey: localApiKey(account),
     credentialSource: 'env',
-    messages: [{ role: 'user', content: text }],
+    messages: [...(session.messages ?? []), { role: 'user', content: text }],
     reasoningEffort: session.effort as never,
   });
   const invocation = {
@@ -356,9 +357,57 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
     outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt,
   };
   state.invocations.push(invocation);
+  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }].slice(-40);
   session.updatedAt = new Date().toISOString();
   await writeState(state);
   emitJson({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation });
+}
+
+/** Send a gateway session through the existing authenticated platform assistant stream. */
+export async function aiGatewaySessionSend(config: Conf, id: string, prompt: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.route !== 'gateway') return aiSessionSend(id, prompt);
+  const text = prompt.trim();
+  if (!text) throw new Error('prompt is required');
+  const baseUrl = ApiClient.getApiUrl(config).replace(/\/$/, '');
+  const apiKey = ApiClient.getApiKeyForUrl(config, baseUrl);
+  if (!apiKey) throw new Error('ClikDeploy Gateway is not connected; run `clikdeploy ai gateway login` first');
+  const startedAt = Date.now();
+  const response = await fetch(`${baseUrl}/api/assistant/chat`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json' },
+    body: JSON.stringify({ message: text, messages: session.messages ?? [], mode: 'plan' }),
+  });
+  if (!response.ok || !response.body) throw new Error(`gateway AI request failed (${response.status})`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let reply = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary >= 0) {
+      const frame = buffer.slice(0, boundary).trim();
+      buffer = buffer.slice(boundary + 2);
+      if (frame.startsWith('data:')) {
+        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string };
+        if (event.type === 'delta' && typeof event.text === 'string') reply += event.text;
+        if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
+      }
+      boundary = buffer.indexOf('\n\n');
+    }
+  }
+  if (!reply) throw new Error('gateway AI response contained no text');
+  const invocation = { id: randomUUID(), accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform', at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
+  state.invocations.push(invocation);
+  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: reply }].slice(-40);
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
+  emitJson({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
 }
 
 export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string }): Promise<void> {
