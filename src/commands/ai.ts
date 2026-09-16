@@ -59,7 +59,19 @@ async function readState(): Promise<HarnessState> {
     return { ...(parsed as HarnessState), invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [] };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    return { version: HARNESS_STATE_VERSION, installationId: randomUUID(), localApiToken: randomBytes(32).toString('base64url'), accounts: [], sessions: [], invocations: [] };
+    const fresh: HarnessState = {
+      version: HARNESS_STATE_VERSION,
+      installationId: randomUUID(),
+      localApiToken: randomBytes(32).toString('base64url'),
+      accounts: [],
+      sessions: [],
+      invocations: [],
+    };
+    // The device identity and its loopback bearer must survive the first
+    // process exit; otherwise a gateway registration could be valid only for
+    // the process that happened to create it.
+    await writeState(fresh);
+    return fresh;
   }
 }
 
