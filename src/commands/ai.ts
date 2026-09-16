@@ -5,9 +5,11 @@ import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'n
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 import type Conf from 'conf';
 import { streamAiChatTurn } from '@clikdeploy/clikrouter/ai-provider-models';
-import type { AiHarnessAccount, AiHarnessAuthKind, AiHarnessRoute } from '@clikdeploy/clikrouter/ai-local-harness';
+import { AI_LOCAL_HARNESSES, localHarnessForCommand, localHarnessForProvider, type AiHarnessAccount, type AiHarnessAuthKind, type AiHarnessRoute } from '@clikdeploy/clikrouter/ai-local-harness';
 import { ApiClient } from '../api/client.js';
 import { emitJson } from '../utils/structured-output.js';
 
@@ -247,6 +249,11 @@ export async function aiAccountsList(): Promise<void> {
   emitJson({ accounts: state.accounts.map(accountView) });
 }
 
+/** Lists the normalized local account surfaces without probing provider credentials. */
+export async function aiAccountProviders(): Promise<void> {
+  emitJson({ harnesses: AI_LOCAL_HARNESSES });
+}
+
 export async function aiModelsList(): Promise<void> {
   const state = await readState();
   emitJson({
@@ -292,12 +299,15 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   const label = options.label.trim();
   const credentialRef = options.credentialRef.trim();
   if (!provider || !label || !credentialRef) throw new Error('provider, label, and local credential reference are required');
+  const auth = requireAuthKind(options.auth);
+  const harness = localHarnessForProvider(provider);
+  if (harness && !harness.localAuth.includes(auth)) throw new Error(`${harness.displayName} does not support local ${auth} accounts`);
   const state = await readState();
   if (state.accounts.some((account) => account.label.toLowerCase() === label.toLowerCase())) {
     throw new Error(`a local AI account named "${label}" already exists`);
   }
   const account: AiHarnessAccount = {
-    id: randomUUID(), provider, label, authKind: requireAuthKind(options.auth), models: [...new Set(options.model ?? [])],
+    id: randomUUID(), provider, label, authKind: auth, models: [...new Set(options.model ?? [])],
     status: 'ready', credentialRef,
   };
   state.accounts.push(account);
@@ -344,11 +354,6 @@ export async function aiSessionShow(id: string): Promise<void> {
   emitJson({ session, resumed: true });
 }
 
-const HARNESS_SHORTCUTS: Record<string, string> = {
-  claude: 'anthropic', codex: 'openai', opencode: 'opencode', antigravity: 'antigravity',
-  grok: 'xai', hermes: 'nous', copilot: 'github-copilot', command: 'command-code',
-};
-
 /** Shared slash-command grammar for a future TTY client and the headless CLI. */
 export async function aiSessionCommand(id: string, input: string): Promise<void> {
   const state = await readState();
@@ -362,7 +367,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     const action = words.shift()?.toLowerCase();
     if (action === 'add') {
       const shortcut = words.shift()?.toLowerCase();
-      const provider = shortcut ? (HARNESS_SHORTCUTS[shortcut] ?? shortcut) : undefined;
+      const provider = shortcut ? (localHarnessForCommand(shortcut)?.provider ?? shortcut) : undefined;
       if (!provider) throw new Error('usage: /accounts add <harness>');
       return emitJson({ panel: 'add-account', provider, next: `clikdeploy ai accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
@@ -376,9 +381,29 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     }
     return emitJson({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['add', 'remove', 'failover auto|never'] });
   }
-  const provider = HARNESS_SHORTCUTS[head];
-  if (provider) return emitJson({ panel: 'provider-accounts', provider, session, accounts: state.accounts.filter((account) => account.provider === provider).map(accountView), controls: ['add', 'remove', 'select', 'failover'] });
+  const harness = localHarnessForCommand(head);
+  if (harness) return emitJson({ panel: 'provider-accounts', provider: harness.provider, harness, session, accounts: state.accounts.filter((account) => account.provider === harness.provider).map(accountView), controls: ['add', 'remove', 'select', 'failover'] });
   throw new Error(`unknown slash command: /${head}`);
+}
+
+/** Persistent terminal session using the same command and routing surface as automation. */
+export async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const rl = createInterface({ input, output, terminal: true });
+  emitJson({ status: 'ready', session, commands: ['/claude', '/codex', '/opencode', '/antigravity', '/accounts', '/settings', '/exit'] });
+  try {
+    while (true) {
+      const line = (await rl.question('› ')).trim();
+      if (!line) continue;
+      if (line === '/exit' || line === '/quit') break;
+      if (line.startsWith('/')) await aiSessionCommand(id, line);
+      else await aiGatewaySessionSend(config, id, line);
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 /**

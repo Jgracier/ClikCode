@@ -13,6 +13,37 @@ export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
 /** Automatic failover is deliberately limited to a known usage/quota exhaustion. */
 export type AiHarnessAccountFailover = 'never' | 'on-quota-exhausted';
 
+/**
+ * The stable names exposed by the local harness.  They intentionally describe
+ * an account surface rather than a vendor's implementation: direct API keys
+ * stay direct, and a vendor CLI profile stays on the user's device.
+ */
+export interface AiLocalHarnessDefinition {
+  command: string;
+  provider: string;
+  displayName: string;
+  localAuth: readonly AiHarnessAuthKind[];
+}
+
+export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
+  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
+  { command: 'codex', provider: 'openai', displayName: 'Codex', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
+  { command: 'opencode', provider: 'opencode', displayName: 'OpenCode', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
+  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
+  { command: 'grok', provider: 'xai', displayName: 'Grok', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
+  { command: 'hermes', provider: 'nous', displayName: 'Hermes', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
+  { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', localAuth: ['oauth', 'vendor-cli'] },
+  { command: 'command', provider: 'command-code', displayName: 'Command Code', localAuth: ['oauth', 'vendor-cli'] },
+];
+
+export function localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined {
+  return AI_LOCAL_HARNESSES.find((item) => item.command === command.trim().replace(/^\//, '').toLowerCase());
+}
+
+export function localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined {
+  return AI_LOCAL_HARNESSES.find((item) => item.provider === provider.trim().toLowerCase());
+}
+
 export interface AiHarnessAccount {
   /** Stable only on the owning device. Never use this as a gateway identity. */
   id: string;

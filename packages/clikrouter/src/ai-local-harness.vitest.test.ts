@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
+import { AI_LOCAL_HARNESSES, localHarnessForCommand, localHarnessForProvider, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
 
 const account: AiHarnessAccount = {
   id: 'local-codex',
@@ -37,5 +37,17 @@ describe('selectLocalHarnessRoute', () => {
     expect(selectLocalHarnessRoute([account], [candidate], { route: 'gateway', strategy: 'auto' })).toEqual({
       route: 'gateway', reason: 'gateway route explicitly selected',
     });
+  });
+});
+
+describe('local harness catalog', () => {
+  it('uses one reversible command/provider mapping for every supported local harness', () => {
+    expect(AI_LOCAL_HARNESSES.map((item) => item.command)).toEqual([
+      'claude', 'codex', 'opencode', 'antigravity', 'grok', 'hermes', 'copilot', 'command',
+    ]);
+    for (const harness of AI_LOCAL_HARNESSES) {
+      expect(localHarnessForCommand(harness.command)).toEqual(harness);
+      expect(localHarnessForProvider(harness.provider)).toEqual(harness);
+    }
   });
 });
