@@ -1,0 +1,169 @@
+/** Local ClikDeploy AI harness lifecycle, account aliases, and durable session settings. */
+
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import type Conf from 'conf';
+import type { AiHarnessAccount, AiHarnessAuthKind, AiHarnessRoute } from '@clikdeploy/clikrouter';
+import { emitJson } from '../utils/structured-output.js';
+
+const HARNESS_STATE_VERSION = 1;
+const DEFAULT_PORT = 43173;
+
+interface HarnessSession {
+  id: string;
+  route: AiHarnessRoute;
+  accountId: string | null;
+  provider: string | null;
+  model: string | null;
+  effort: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface HarnessState {
+  version: number;
+  installationId: string;
+  accounts: AiHarnessAccount[];
+  sessions: HarnessSession[];
+}
+
+function harnessStatePath(): string {
+  // The caller may relocate non-secret state for testing or portable installs.
+  // Provider tokens never live in this file; only opaque local credential refs do.
+  const base = process.env.CLIKDEPLOY_AI_HOME?.trim() || join(homedir(), '.clikdeploy', 'ai');
+  return join(base, 'harness-state.json');
+}
+
+async function readState(): Promise<HarnessState> {
+  const path = harnessStatePath();
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<HarnessState>;
+    if (parsed.version !== HARNESS_STATE_VERSION || !Array.isArray(parsed.accounts) || !Array.isArray(parsed.sessions)) {
+      throw new Error('unsupported local AI harness state');
+    }
+    return parsed as HarnessState;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return { version: HARNESS_STATE_VERSION, installationId: randomUUID(), accounts: [], sessions: [] };
+  }
+}
+
+async function writeState(state: HarnessState): Promise<void> {
+  const path = harnessStatePath();
+  await mkdir(join(path, '..'), { recursive: true, mode: 0o700 });
+  await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
+function accountView(account: AiHarnessAccount): Omit<AiHarnessAccount, 'credentialRef'> {
+  const { credentialRef: _credentialRef, ...safe } = account;
+  return safe;
+}
+
+function requireAuthKind(value: string): AiHarnessAuthKind {
+  if (value === 'oauth' || value === 'api-key' || value === 'vendor-cli') return value;
+  throw new Error('auth kind must be oauth, api-key, or vendor-cli');
+}
+
+function sendJson(response: ServerResponse, code: number, body: unknown): void {
+  response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  response.end(JSON.stringify(body));
+}
+
+function methodAndPath(request: IncomingMessage): `${string} ${string}` {
+  return `${request.method ?? 'GET'} ${new URL(request.url ?? '/', 'http://127.0.0.1').pathname}`;
+}
+
+/** Starts an intentionally loopback-only metadata service. It exposes no provider tokens and does not execute a model turn. */
+export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
+  const port = Number(options.port ?? DEFAULT_PORT);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('port must be an integer from 1024 to 65535');
+  const state = await readState();
+  const server = createServer(async (request, response) => {
+    try {
+      const route = methodAndPath(request);
+      if (route === 'GET /v1/health') {
+        sendJson(response, 200, { status: 'ok', installationId: state.installationId, credentialBoundary: 'local-only' });
+      } else if (route === 'GET /v1/accounts') {
+        sendJson(response, 200, { accounts: state.accounts.map(accountView) });
+      } else if (route === 'GET /v1/models') {
+        sendJson(response, 200, {
+          models: state.accounts.flatMap((account) => account.models.map((model) => ({ accountId: account.id, provider: account.provider, model }))),
+        });
+      } else if (route === 'GET /v1/sessions') {
+        sendJson(response, 200, { sessions: state.sessions });
+      } else {
+        sendJson(response, 404, { error: 'not_found' });
+      }
+    } catch {
+      sendJson(response, 500, { error: 'harness_error' });
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve());
+  });
+  emitJson({ status: 'running', url: `http://127.0.0.1:${port}`, installationId: state.installationId, credentialBoundary: 'local-only' });
+  await new Promise<void>((resolve) => {
+    const stop = () => server.close(() => resolve());
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  });
+}
+
+export async function aiAccountsList(): Promise<void> {
+  const state = await readState();
+  emitJson({ accounts: state.accounts.map(accountView) });
+}
+
+export async function aiAccountAdd(options: { provider: string; label: string; auth: string; model?: string[]; credentialRef: string }): Promise<void> {
+  const provider = options.provider.trim();
+  const label = options.label.trim();
+  const credentialRef = options.credentialRef.trim();
+  if (!provider || !label || !credentialRef) throw new Error('provider, label, and local credential reference are required');
+  const state = await readState();
+  if (state.accounts.some((account) => account.label.toLowerCase() === label.toLowerCase())) {
+    throw new Error(`a local AI account named "${label}" already exists`);
+  }
+  const account: AiHarnessAccount = {
+    id: randomUUID(), provider, label, authKind: requireAuthKind(options.auth), models: [...new Set(options.model ?? [])],
+    status: 'ready', credentialRef,
+  };
+  state.accounts.push(account);
+  await writeState(state);
+  emitJson({ account: accountView(account), credentialBoundary: 'local-only' });
+}
+
+export async function aiAccountRemove(labelOrId: string): Promise<void> {
+  const state = await readState();
+  const index = state.accounts.findIndex((account) => account.id === labelOrId || account.label === labelOrId);
+  if (index < 0) throw new Error(`local AI account "${labelOrId}" was not found`);
+  const [removed] = state.accounts.splice(index, 1);
+  state.sessions = state.sessions.map((session) => session.accountId === removed.id ? { ...session, accountId: null } : session);
+  await writeState(state);
+  emitJson({ removed: accountView(removed) });
+}
+
+export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string }): Promise<void> {
+  const state = await readState();
+  const account = options.account
+    ? state.accounts.find((item) => item.id === options.account || item.label === options.account)
+    : undefined;
+  if (options.route === 'local' && options.account && !account) throw new Error(`local AI account "${options.account}" was not found`);
+  const now = new Date().toISOString();
+  const session: HarnessSession = {
+    id: randomUUID(), route: options.route, accountId: account?.id ?? null,
+    provider: options.provider ?? account?.provider ?? null, model: options.model ?? null,
+    effort: options.effort ?? 'medium', createdAt: now, updatedAt: now,
+  };
+  state.sessions.push(session);
+  await writeState(state);
+  emitJson({ session });
+}
+
+export async function aiSessionsList(): Promise<void> {
+  const state = await readState();
+  emitJson({ sessions: state.sessions });
+}
