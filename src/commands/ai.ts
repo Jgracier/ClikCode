@@ -289,6 +289,47 @@ export async function aiSessionShow(id: string): Promise<void> {
   emitJson({ session, resumed: true });
 }
 
+/**
+ * Runs one durable session turn. Gateway sessions intentionally stop before any
+ * request is sent: a gateway device/job grant must exist before that route can
+ * be made executable. Local sessions resolve an env reference only in this
+ * process and record normalized, credential-free usage.
+ */
+export async function aiSessionSend(id: string, prompt: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.route !== 'local') throw new Error('gateway session execution requires a connected, authorized gateway device');
+  if (!session.accountId) throw new Error('local AI session has no account selected');
+  const account = state.accounts.find((item) => item.id === session.accountId);
+  if (!account) throw new Error('local AI session account was removed');
+  const model = session.model ?? account.models[0];
+  if (!model) throw new Error('local AI session has no model selected');
+  if (account.models.length > 0 && !account.models.includes(model)) {
+    throw new Error(`model "${model}" is not available through local account "${account.label}"`);
+  }
+  const text = prompt.trim();
+  if (!text) throw new Error('prompt is required');
+  const startedAt = Date.now();
+  const turn = await streamAiChatTurn({
+    provider: session.provider ?? account.provider,
+    model,
+    apiKey: localApiKey(account),
+    credentialSource: 'env',
+    messages: [{ role: 'user', content: text }],
+    reasoningEffort: session.effort as never,
+  });
+  const invocation = {
+    id: randomUUID(), accountId: account.id, provider: session.provider ?? account.provider, model,
+    at: new Date().toISOString(), inputTokens: turn.usage.inputTokens,
+    outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt,
+  };
+  state.invocations.push(invocation);
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
+  emitJson({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation });
+}
+
 export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string }): Promise<void> {
   const state = await readState();
   const index = state.sessions.findIndex((item) => item.id === id);
