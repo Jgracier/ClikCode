@@ -226,3 +226,33 @@ export async function aiSessionsList(): Promise<void> {
   const state = await readState();
   emitJson({ sessions: state.sessions });
 }
+
+export async function aiSessionShow(id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  emitJson({ session, resumed: true });
+}
+
+export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string }): Promise<void> {
+  const state = await readState();
+  const index = state.sessions.findIndex((item) => item.id === id);
+  if (index < 0) throw new Error(`AI session "${id}" was not found`);
+  const current = state.sessions[index];
+  const account = options.account === undefined
+    ? undefined
+    : state.accounts.find((item) => item.id === options.account || item.label === options.account);
+  if (options.account !== undefined && !account) throw new Error(`local AI account "${options.account}" was not found`);
+  const next: HarnessSession = {
+    ...current,
+    ...(options.route ? { route: options.route } : {}),
+    ...(account ? { accountId: account.id, provider: options.provider ?? account.provider } : {}),
+    ...(options.provider ? { provider: options.provider } : {}),
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.effort ? { effort: options.effort } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  state.sessions[index] = next;
+  await writeState(state);
+  emitJson({ session: next });
+}
