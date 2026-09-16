@@ -189,6 +189,33 @@ export async function aiAccountsList(): Promise<void> {
   emitJson({ accounts: state.accounts.map(accountView) });
 }
 
+export async function aiModelsList(): Promise<void> {
+  const state = await readState();
+  emitJson({
+    models: state.accounts.flatMap((account) => account.models.map((model) => ({
+      accountId: account.id,
+      account: account.label,
+      provider: account.provider,
+      model,
+      status: account.status,
+    }))),
+  });
+}
+
+export async function aiUsage(): Promise<void> {
+  const state = await readState();
+  const totals = state.invocations.reduce(
+    (sum, invocation) => ({
+      calls: sum.calls + 1,
+      inputTokens: sum.inputTokens + (invocation.inputTokens ?? 0),
+      outputTokens: sum.outputTokens + (invocation.outputTokens ?? 0),
+      latencyMs: sum.latencyMs + invocation.latencyMs,
+    }),
+    { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 },
+  );
+  emitJson({ ...totals, avgLatencyMs: totals.calls ? Math.round(totals.latencyMs / totals.calls) : 0, invocations: state.invocations });
+}
+
 export async function aiAccountAdd(options: { provider: string; label: string; auth: string; model?: string[]; credentialRef: string }): Promise<void> {
   const provider = options.provider.trim();
   const label = options.label.trim();
