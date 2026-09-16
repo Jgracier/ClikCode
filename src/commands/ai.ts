@@ -1,7 +1,7 @@
 /** Local ClikDeploy AI harness lifecycle, account aliases, and durable session settings. */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -30,9 +30,20 @@ interface HarnessState {
   installationId: string;
   /** Bearer secret for the loopback protocol; never rendered by CLI commands or HTTP responses. */
   localApiToken: string;
+  /** Device-authentication keypair, never a provider credential. Private half stays local. */
+  devicePrivateKeyPem: string;
+  devicePublicKey: Record<string, unknown>;
   accounts: AiHarnessAccount[];
   sessions: HarnessSession[];
   invocations: Array<{ id: string; accountId: string; provider: string; model: string; at: string; inputTokens?: number; outputTokens?: number; latencyMs: number }>;
+}
+
+function newDeviceSigningIdentity(): Pick<HarnessState, 'devicePrivateKeyPem' | 'devicePublicKey'> {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  return {
+    devicePrivateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    devicePublicKey: publicKey.export({ format: 'jwk' }) as Record<string, unknown>,
+  };
 }
 
 function harnessStatePath(): string {
@@ -52,8 +63,12 @@ async function readState(): Promise<HarnessState> {
     // State written by the metadata-only preview gets a secret lazily on its
     // first secure start, preserving account aliases without exposing a window
     // where they are served unauthenticated.
-    if (!parsed.localApiToken) {
-      const upgraded = { ...parsed, localApiToken: randomBytes(32).toString('base64url') } as HarnessState;
+    if (!parsed.localApiToken || !parsed.devicePrivateKeyPem || !parsed.devicePublicKey) {
+      const upgraded = {
+        ...parsed,
+        ...(parsed.localApiToken ? {} : { localApiToken: randomBytes(32).toString('base64url') }),
+        ...(!parsed.devicePrivateKeyPem || !parsed.devicePublicKey ? newDeviceSigningIdentity() : {}),
+      } as HarnessState;
       await writeState(upgraded);
       return upgraded;
     }
@@ -64,6 +79,7 @@ async function readState(): Promise<HarnessState> {
       version: HARNESS_STATE_VERSION,
       installationId: randomUUID(),
       localApiToken: randomBytes(32).toString('base64url'),
+      ...newDeviceSigningIdentity(),
       accounts: [],
       sessions: [],
       invocations: [],
@@ -91,6 +107,7 @@ function deviceManifest(state: HarnessState) {
   return {
     protocol: LOCAL_HARNESS_PROTOCOL,
     installationId: state.installationId,
+    devicePublicKey: state.devicePublicKey,
     credentialBoundary: 'local-only' as const,
     capabilities: { chat: true, usage: true, sessions: true, gatewayJobs: false },
     accounts: state.accounts.map(accountView),
