@@ -22,6 +22,7 @@ interface HarnessSession {
   provider: string | null;
   model: string | null;
   effort: string;
+  accountFailover: 'never' | 'on-quota-exhausted';
   createdAt: string;
   updatedAt: string;
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
@@ -161,6 +162,13 @@ function localApiKey(account: AiHarnessAccount): string {
   return value;
 }
 
+function isUsageExhaustion(error: unknown): boolean {
+  const status = (error as { statusCode?: unknown; response?: { status?: unknown } } | null)?.statusCode
+    ?? (error as { response?: { status?: unknown } } | null)?.response?.status;
+  if (status === 402 || status === 429) return true;
+  return /(?:quota|usage limit|rate limit|too many requests|billing|credit)/i.test(error instanceof Error ? error.message : String(error));
+}
+
 /** Starts an intentionally loopback-only harness service. It exposes no provider tokens. */
 export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
   const port = Number(options.port ?? DEFAULT_PORT);
@@ -292,7 +300,7 @@ export async function aiAccountRemove(labelOrId: string): Promise<void> {
   emitJson({ removed: accountView(removed) });
 }
 
-export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string }): Promise<void> {
+export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
   const state = await readState();
   const account = options.account
     ? state.accounts.find((item) => item.id === options.account || item.label === options.account)
@@ -302,7 +310,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const session: HarnessSession = {
     id: randomUUID(), route: options.route, accountId: account?.id ?? null,
     provider: options.provider ?? account?.provider ?? null, model: options.model ?? null,
-    effort: options.effort ?? 'medium', createdAt: now, updatedAt: now,
+    effort: options.effort ?? 'medium', accountFailover: options.accountFailover ?? 'on-quota-exhausted', createdAt: now, updatedAt: now,
   };
   state.sessions.push(session);
   await writeState(state);
@@ -322,10 +330,8 @@ export async function aiSessionShow(id: string): Promise<void> {
 }
 
 /**
- * Runs one durable session turn. Gateway sessions intentionally stop before any
- * request is sent: a gateway device/job grant must exist before that route can
- * be made executable. Local sessions resolve an env reference only in this
- * process and record normalized, credential-free usage.
+ * Runs one durable local session turn. Local sessions resolve an env reference
+ * only in this process and record normalized, credential-free usage.
  */
 export async function aiSessionSend(id: string, prompt: string): Promise<void> {
   const state = await readState();
@@ -333,7 +339,7 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (session.route === 'gateway') throw new Error('use aiGatewaySessionSend for gateway sessions');
   if (!session.accountId) throw new Error('local AI session has no account selected');
-  const account = state.accounts.find((item) => item.id === session.accountId);
+  let account = state.accounts.find((item) => item.id === session.accountId);
   if (!account) throw new Error('local AI session account was removed');
   const model = session.model ?? account.models[0];
   if (!model) throw new Error('local AI session has no model selected');
@@ -343,14 +349,30 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
   const startedAt = Date.now();
-  const turn = await streamAiChatTurn({
-    provider: session.provider ?? account.provider,
-    model,
-    apiKey: localApiKey(account),
-    credentialSource: 'env',
-    messages: [...(session.messages ?? []), { role: 'user', content: text }],
-    reasoningEffort: session.effort as never,
+  const invoke = (active: AiHarnessAccount) => streamAiChatTurn({
+    provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
+    messages: [...(session.messages ?? []), { role: 'user', content: text }], reasoningEffort: session.effort as never,
   });
+  let turn;
+  let switchedFrom: string | undefined;
+  try {
+    turn = await invoke(account);
+  } catch (error) {
+    if (session.accountFailover !== 'on-quota-exhausted' || !isUsageExhaustion(error)) throw error;
+    const exhaustedAccount = account;
+    if (!exhaustedAccount) throw error;
+    exhaustedAccount.quotaState = 'exhausted';
+    exhaustedAccount.quotaRetryAt = new Date(Date.now() + 60_000).toISOString();
+    const fallback = state.accounts.find((item) =>
+      item.id !== exhaustedAccount.id && item.provider === exhaustedAccount.provider && item.status === 'ready' && item.quotaState !== 'exhausted'
+      && item.authKind === 'api-key' && item.models.includes(model),
+    );
+    if (!fallback) throw error;
+    switchedFrom = exhaustedAccount.id;
+    account = fallback;
+    session.accountId = fallback.id;
+    turn = await invoke(fallback);
+  }
   const invocation = {
     id: randomUUID(), accountId: account.id, provider: session.provider ?? account.provider, model,
     at: new Date().toISOString(), inputTokens: turn.usage.inputTokens,
@@ -360,7 +382,7 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
   session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }].slice(-40);
   session.updatedAt = new Date().toISOString();
   await writeState(state);
-  emitJson({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation });
+  emitJson({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
 }
 
 /** Send a gateway session through the existing authenticated platform assistant stream. */
@@ -410,7 +432,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   emitJson({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
 }
 
-export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string }): Promise<void> {
+export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
   const state = await readState();
   const index = state.sessions.findIndex((item) => item.id === id);
   if (index < 0) throw new Error(`AI session "${id}" was not found`);
@@ -426,6 +448,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.provider ? { provider: options.provider } : {}),
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { effort: options.effort } : {}),
+    ...(options.accountFailover ? { accountFailover: options.accountFailover } : {}),
     updatedAt: new Date().toISOString(),
   };
   state.sessions[index] = next;
