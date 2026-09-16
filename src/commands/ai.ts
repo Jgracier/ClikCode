@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type Conf from 'conf';
 import { streamAiChatTurn } from '@clikdeploy/clikrouter/ai-provider-models';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiHarnessRoute } from '@clikdeploy/clikrouter/ai-local-harness';
+import { ApiClient } from '../api/client.js';
 import { emitJson } from '../utils/structured-output.js';
 
 const HARNESS_STATE_VERSION = 1;
@@ -247,6 +248,19 @@ export async function aiUsage(): Promise<void> {
     { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 },
   );
   emitJson({ ...totals, avgLatencyMs: totals.calls ? Math.round(totals.latencyMs / totals.calls) : 0, invocations: state.invocations });
+}
+
+/** Reports the separate ClikDeploy OAuth/API-key gateway identity, never a BYO provider login. */
+export async function aiGatewayStatus(config: Conf): Promise<void> {
+  const apiUrl = ApiClient.getApiUrl(config);
+  emitJson({
+    route: 'gateway',
+    connected: Boolean(ApiClient.getApiKeyForUrl(config, apiUrl)),
+    apiUrl,
+    authentication: 'clikdeploy-oauth-or-api-key',
+    credentialBoundary: 'gateway-auth-only',
+    hint: 'Run `clikdeploy ai gateway login` to connect ClikDeploy Gateway, or use `clikdeploy ai accounts add` for a provider login that stays local.',
+  });
 }
 
 export async function aiAccountAdd(options: { provider: string; label: string; auth: string; model?: string[]; credentialRef: string }): Promise<void> {
