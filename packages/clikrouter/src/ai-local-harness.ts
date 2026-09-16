@@ -10,6 +10,8 @@ import { selectRouterCandidate, type AiRouterCandidate, type AiRoutingStrategy }
 
 export type AiHarnessRoute = 'local' | 'gateway';
 export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
+/** Automatic failover is deliberately limited to a known usage/quota exhaustion. */
+export type AiHarnessAccountFailover = 'never' | 'on-quota-exhausted';
 
 export interface AiHarnessAccount {
   /** Stable only on the owning device. Never use this as a gateway identity. */
@@ -20,6 +22,9 @@ export interface AiHarnessAccount {
   /** Provider model ids the locally connected account can serve. */
   models: string[];
   status: 'ready' | 'needs_login' | 'offline';
+  /** Local adapter's latest quota signal; never inferred from a generic error. */
+  quotaState?: 'available' | 'exhausted';
+  quotaRetryAt?: string;
   /**
    * Opaque local keychain/CLI-profile reference. It MUST NOT contain a token,
    * OAuth refresh token, cookie, or password and is never included in a
