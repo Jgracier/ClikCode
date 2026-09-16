@@ -23,7 +23,7 @@ export interface AiHarnessDeviceRegistration {
   protocol: typeof AI_HARNESS_GATEWAY_PROTOCOL;
   installationId: string;
   /** Public verification key only; its private pair remains on the device. */
-  devicePublicKey: Record<string, string>;
+  devicePublicKey: Record<string, unknown>;
   manifest: AiHarnessGatewayDeviceManifest;
 }
 
