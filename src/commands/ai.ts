@@ -12,6 +12,7 @@ import { emitJson } from '../utils/structured-output.js';
 
 const HARNESS_STATE_VERSION = 1;
 const DEFAULT_PORT = 43173;
+const LOCAL_HARNESS_PROTOCOL = 1;
 
 interface HarnessSession {
   id: string;
@@ -86,6 +87,19 @@ function accountView(account: AiHarnessAccount): Omit<AiHarnessAccount, 'credent
   return safe;
 }
 
+function deviceManifest(state: HarnessState) {
+  return {
+    protocol: LOCAL_HARNESS_PROTOCOL,
+    installationId: state.installationId,
+    credentialBoundary: 'local-only' as const,
+    capabilities: { chat: true, usage: true, sessions: true, gatewayJobs: false },
+    accounts: state.accounts.map(accountView),
+    models: state.accounts.flatMap((account) => account.models.map((model) => ({
+      accountId: account.id, provider: account.provider, model, status: account.status,
+    }))),
+  };
+}
+
 function requireAuthKind(value: string): AiHarnessAuthKind {
   if (value === 'oauth' || value === 'api-key' || value === 'vendor-cli') return value;
   throw new Error('auth kind must be oauth, api-key, or vendor-cli');
@@ -128,7 +142,7 @@ function localApiKey(account: AiHarnessAccount): string {
   return value;
 }
 
-/** Starts an intentionally loopback-only metadata service. It exposes no provider tokens and does not execute a model turn. */
+/** Starts an intentionally loopback-only harness service. It exposes no provider tokens. */
 export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
   const port = Number(options.port ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('port must be an integer from 1024 to 65535');
@@ -142,6 +156,8 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
         sendJson(response, 401, { error: 'unauthorized' });
       } else if (route === 'GET /v1/accounts') {
         sendJson(response, 200, { accounts: state.accounts.map(accountView) });
+      } else if (route === 'GET /v1/device') {
+        sendJson(response, 200, { device: deviceManifest(state) });
       } else if (route === 'GET /v1/models') {
         sendJson(response, 200, {
           models: state.accounts.flatMap((account) => account.models.map((model) => ({ accountId: account.id, provider: account.provider, model }))),
