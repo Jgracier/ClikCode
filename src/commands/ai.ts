@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type Conf from 'conf';
-import type { AiHarnessAccount, AiHarnessAuthKind, AiHarnessRoute } from '@clikdeploy/clikrouter';
+import { streamAiChatTurn, type AiHarnessAccount, type AiHarnessAuthKind, type AiHarnessRoute } from '@clikdeploy/clikrouter';
 import { emitJson } from '../utils/structured-output.js';
 
 const HARNESS_STATE_VERSION = 1;
@@ -30,6 +30,7 @@ interface HarnessState {
   localApiToken: string;
   accounts: AiHarnessAccount[];
   sessions: HarnessSession[];
+  invocations: Array<{ id: string; accountId: string; provider: string; model: string; at: string; inputTokens?: number; outputTokens?: number; latencyMs: number }>;
 }
 
 function harnessStatePath(): string {
@@ -54,10 +55,10 @@ async function readState(): Promise<HarnessState> {
       await writeState(upgraded);
       return upgraded;
     }
-    return parsed as HarnessState;
+    return { ...(parsed as HarnessState), invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [] };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    return { version: HARNESS_STATE_VERSION, installationId: randomUUID(), localApiToken: randomBytes(32).toString('base64url'), accounts: [], sessions: [] };
+    return { version: HARNESS_STATE_VERSION, installationId: randomUUID(), localApiToken: randomBytes(32).toString('base64url'), accounts: [], sessions: [], invocations: [] };
   }
 }
 
@@ -94,6 +95,26 @@ function authorized(request: IncomingMessage, expected: string): boolean {
   return presented.length === secret.length && timingSafeEqual(presented, secret);
 }
 
+async function readJson(request: IncomingMessage): Promise<unknown> {
+  let body = '';
+  for await (const chunk of request) {
+    body += String(chunk);
+    if (body.length > 1_000_000) throw new Error('request body too large');
+  }
+  return JSON.parse(body);
+}
+
+function localApiKey(account: AiHarnessAccount): string {
+  if (account.authKind !== 'api-key' || !account.credentialRef.startsWith('env:')) {
+    throw new Error('this account needs a supported local API-key resolver (env:NAME)');
+  }
+  const name = account.credentialRef.slice(4);
+  if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error('invalid local environment credential reference');
+  const value = process.env[name];
+  if (!value) throw new Error(`local credential ${name} is not available in this harness process`);
+  return value;
+}
+
 /** Starts an intentionally loopback-only metadata service. It exposes no provider tokens and does not execute a model turn. */
 export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
   const port = Number(options.port ?? DEFAULT_PORT);
@@ -114,6 +135,23 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
         });
       } else if (route === 'GET /v1/sessions') {
         sendJson(response, 200, { sessions: state.sessions });
+      } else if (route === 'GET /v1/usage') {
+        sendJson(response, 200, { invocations: state.invocations });
+      } else if (route === 'POST /v1/chat') {
+        const body = await readJson(request) as { accountId?: unknown; messages?: unknown; effort?: unknown };
+        const account = state.accounts.find((item) => item.id === body.accountId);
+        if (!account) throw new Error('local account not found');
+        if (!Array.isArray(body.messages) || !body.messages.every((m) => typeof m === 'object' && m !== null && ((m as { role?: unknown }).role === 'user' || (m as { role?: unknown }).role === 'assistant') && typeof (m as { content?: unknown }).content === 'string')) {
+          throw new Error('messages must be user/assistant text messages');
+        }
+        const model = account.models[0];
+        if (!model) throw new Error('local account has no configured model');
+        const startedAt = Date.now();
+        const turn = await streamAiChatTurn({ provider: account.provider, model, apiKey: localApiKey(account), credentialSource: 'env', messages: body.messages as Array<{ role: 'user' | 'assistant'; content: string }>, ...(typeof body.effort === 'string' ? { reasoningEffort: body.effort as never } : {}) });
+        const invocation = { id: randomUUID(), accountId: account.id, provider: account.provider, model, at: new Date().toISOString(), inputTokens: turn.usage.inputTokens, outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt };
+        state.invocations.push(invocation);
+        await writeState(state);
+        sendJson(response, 200, { text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation });
       } else {
         sendJson(response, 404, { error: 'not_found' });
       }
