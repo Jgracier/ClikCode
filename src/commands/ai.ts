@@ -6,7 +6,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type Conf from 'conf';
-import { streamAiChatTurn, type AiHarnessAccount, type AiHarnessAuthKind, type AiHarnessRoute } from '@clikdeploy/clikrouter';
+import { streamAiChatTurn } from '@clikdeploy/clikrouter/ai-provider-models';
+import type { AiHarnessAccount, AiHarnessAuthKind, AiHarnessRoute } from '@clikdeploy/clikrouter/ai-local-harness';
 import { emitJson } from '../utils/structured-output.js';
 
 const HARNESS_STATE_VERSION = 1;
