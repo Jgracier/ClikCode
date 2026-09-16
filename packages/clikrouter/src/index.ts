@@ -13,3 +13,4 @@ export * from './ai-provider-http';
 export * from './ai-router-selection';
 export * from './ai-provider-models';
 export * from './ai-local-harness';
+export * from './ai-harness-gateway-protocol';
