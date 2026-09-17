@@ -7,15 +7,56 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { createRequire } from 'node:module';
 import type Conf from 'conf';
-import { streamAiChatTurn } from '@clikdeploy/clikrouter/ai-provider-models';
-import { AI_LOCAL_HARNESSES, localHarnessForCommand, localHarnessForProvider, type AiHarnessAccount, type AiHarnessAuthKind, type AiHarnessRoute } from '@clikdeploy/clikrouter/ai-local-harness';
 import { ApiClient } from '../api/client.js';
 import { emitJson } from '../utils/structured-output.js';
 
 const HARNESS_STATE_VERSION = 1;
 const DEFAULT_PORT = 43173;
 const LOCAL_HARNESS_PROTOCOL = 1;
+
+type AiHarnessRoute = 'local' | 'gateway';
+type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
+interface AiHarnessAccount {
+  id: string;
+  provider: string;
+  label: string;
+  authKind: AiHarnessAuthKind;
+  models: string[];
+  status: 'ready' | 'needs_login' | 'offline';
+  quotaState?: 'available' | 'exhausted';
+  quotaRetryAt?: string;
+  credentialRef: string;
+}
+interface AiLocalHarnessDefinition {
+  command: string;
+  provider: string;
+  displayName: string;
+  localAuth: readonly AiHarnessAuthKind[];
+}
+interface AiRouterRuntime {
+  streamAiChatTurn(input: Record<string, unknown>): Promise<any>;
+  AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[];
+  localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined;
+  localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined;
+}
+
+const require = createRequire(import.meta.url);
+let routerRuntime: AiRouterRuntime | undefined;
+function localRouter(): AiRouterRuntime {
+  routerRuntime ??= require('../ai-router-runtime.cjs') as AiRouterRuntime;
+  return routerRuntime;
+}
+function localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined {
+  return localRouter().localHarnessForCommand(command);
+}
+function localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined {
+  return localRouter().localHarnessForProvider(provider);
+}
+function streamLocalAiTurn(input: Record<string, unknown>): Promise<any> {
+  return localRouter().streamAiChatTurn(input);
+}
 
 interface HarnessSession {
   id: string;
@@ -220,7 +261,7 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
         const model = account.models[0];
         if (!model) throw new Error('local account has no configured model');
         const startedAt = Date.now();
-        const turn = await streamAiChatTurn({ provider: account.provider, model, apiKey: localApiKey(account), credentialSource: 'env', messages: body.messages as Array<{ role: 'user' | 'assistant'; content: string }>, ...(typeof body.effort === 'string' ? { reasoningEffort: body.effort as never } : {}) });
+        const turn = await streamLocalAiTurn({ provider: account.provider, model, apiKey: localApiKey(account), credentialSource: 'env', messages: body.messages as Array<{ role: 'user' | 'assistant'; content: string }>, ...(typeof body.effort === 'string' ? { reasoningEffort: body.effort as never } : {}) });
         const invocation = { id: randomUUID(), accountId: account.id, provider: account.provider, model, at: new Date().toISOString(), inputTokens: turn.usage.inputTokens, outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt };
         state.invocations.push(invocation);
         await writeState(state);
@@ -251,7 +292,7 @@ export async function aiAccountsList(): Promise<void> {
 
 /** Lists the normalized local account surfaces without probing provider credentials. */
 export async function aiAccountProviders(): Promise<void> {
-  emitJson({ harnesses: AI_LOCAL_HARNESSES });
+  emitJson({ harnesses: localRouter().AI_LOCAL_HARNESSES });
 }
 
 export async function aiModelsList(): Promise<void> {
@@ -426,7 +467,7 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
   const startedAt = Date.now();
-  const invoke = (active: AiHarnessAccount) => streamAiChatTurn({
+  const invoke = (active: AiHarnessAccount) => streamLocalAiTurn({
     provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
     messages: [...(session.messages ?? []), { role: 'user', content: text }], reasoningEffort: session.effort as never,
   });

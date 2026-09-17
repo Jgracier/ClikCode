@@ -71,7 +71,7 @@ import {
   subscriptionDispatchesDirect,
   type AiModality,
   type AiProviderSpec,
-} from "./ai-provider-registry";
+} from "./ai-provider-registry-public";
 import {
   buildAiChatRequest,
   readAiChatResponseBody,
