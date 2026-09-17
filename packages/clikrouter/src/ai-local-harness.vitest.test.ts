@@ -43,7 +43,9 @@ describe('selectLocalHarnessRoute', () => {
 describe('local harness catalog', () => {
   it('uses one reversible command/provider mapping for every supported local harness', () => {
     expect(AI_LOCAL_HARNESSES.map((item) => item.command)).toEqual([
-      'claude', 'codex', 'opencode', 'antigravity', 'grok', 'hermes', 'copilot', 'command',
+      'claude', 'codex', 'gemini', 'opencode', 'copilot', 'aider', 'goose', 'amp', 'pi',
+      'droid', 'kiro', 'qwen', 'cline', 'roo', 'kilo', 'cursor', 'windsurf', 'crush',
+      'hermes', 'command',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(localHarnessForCommand(harness.command)).toEqual(harness);

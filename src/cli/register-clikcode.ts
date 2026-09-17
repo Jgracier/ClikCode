@@ -2,7 +2,7 @@
 import type { Command } from 'commander';
 import type Conf from 'conf';
 import {
-  aiAccountAdd, aiAccountProviders, aiAccountRemove, aiAccountsList,
+  aiAccountAdd, aiAccountLogin, aiAccountProviders, aiAccountRemove, aiAccountsList,
   aiGatewaySessionSend, aiGatewayStatus, aiModelsList, aiSessionCommand,
   aiSessionCreate, aiSessionInteractive, aiSessionSet, aiSessionShow,
   aiSessionsList, aiStart, aiUsage,
@@ -16,6 +16,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   const accounts = program.command('accounts').alias('account').description('Manage local provider accounts');
   accounts.command('list').alias('ls').description('List local accounts without credential material').action(aiAccountsList);
   accounts.command('providers').description('List supported local harnesses and login kinds').action(aiAccountProviders);
+  accounts.command('login <harness>').description('Install if necessary, then run the harness’s official local login flow')
+    .option('--label <label>', 'Local account label')
+    .action((harness, options) => aiAccountLogin(harness, options.label));
   accounts.command('add').description('Register a local provider login reference; credentials remain on this device')
     .requiredOption('--provider <provider>', 'Provider id, e.g. openai or anthropic')
     .requiredOption('--label <label>', 'Local account alias')

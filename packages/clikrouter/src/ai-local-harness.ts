@@ -23,17 +23,35 @@ export interface AiLocalHarnessDefinition {
   provider: string;
   displayName: string;
   localAuth: readonly AiHarnessAuthKind[];
+  /** Official executable; ClikCode never guesses a binary from a provider id. */
+  binary: string;
+  /** Official package identity where the vendor publishes one. */
+  npmPackage?: string;
+  /** Native argv that begins the vendor-owned interactive login flow. */
+  loginArgv?: readonly string[];
 }
 
 export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
-  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
-  { command: 'codex', provider: 'openai', displayName: 'Codex', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
-  { command: 'opencode', provider: 'opencode', displayName: 'OpenCode', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
-  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
-  { command: 'grok', provider: 'xai', displayName: 'Grok', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
-  { command: 'hermes', provider: 'nous', displayName: 'Hermes', localAuth: ['api-key', 'oauth', 'vendor-cli'] },
-  { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', localAuth: ['oauth', 'vendor-cli'] },
-  { command: 'command', provider: 'command-code', displayName: 'Command Code', localAuth: ['oauth', 'vendor-cli'] },
+  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', npmPackage: '@anthropic-ai/claude-code' },
+  { command: 'codex', provider: 'openai', displayName: 'Codex', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'codex', npmPackage: '@openai/codex', loginArgv: ['login'] },
+  { command: 'gemini', provider: 'google', displayName: 'Gemini CLI', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'gemini', npmPackage: '@google/gemini-cli' },
+  { command: 'opencode', provider: 'opencode', displayName: 'OpenCode', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'opencode', loginArgv: ['auth', 'login'] },
+  { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot' },
+  { command: 'aider', provider: 'aider', displayName: 'Aider', localAuth: ['api-key', 'vendor-cli'], binary: 'aider' },
+  { command: 'goose', provider: 'goose', displayName: 'Goose', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose' },
+  { command: 'amp', provider: 'amp', displayName: 'Amp', localAuth: ['oauth', 'vendor-cli'], binary: 'amp' },
+  { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'pi', npmPackage: '@mariozechner/pi-coding-agent' },
+  { command: 'droid', provider: 'factory', displayName: 'Factory Droid', localAuth: ['oauth', 'vendor-cli'], binary: 'droid' },
+  { command: 'kiro', provider: 'kiro', displayName: 'Kiro CLI', localAuth: ['oauth', 'vendor-cli'], binary: 'kiro' },
+  { command: 'qwen', provider: 'qwen', displayName: 'Qwen Code', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'qwen' },
+  { command: 'cline', provider: 'cline', displayName: 'Cline CLI', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline' },
+  { command: 'roo', provider: 'roo', displayName: 'Roo Code CLI', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'roo' },
+  { command: 'kilo', provider: 'kilo', displayName: 'Kilo Code CLI', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'kilo' },
+  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', localAuth: ['oauth', 'vendor-cli'], binary: 'cursor' },
+  { command: 'windsurf', provider: 'windsurf', displayName: 'Windsurf', localAuth: ['oauth', 'vendor-cli'], binary: 'windsurf' },
+  { command: 'crush', provider: 'crush', displayName: 'Crush', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'crush' },
+  { command: 'hermes', provider: 'nous', displayName: 'Hermes', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes' },
+  { command: 'command', provider: 'command-code', displayName: 'Command Code', localAuth: ['oauth', 'vendor-cli'], binary: 'command' },
 ];
 
 export function localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined {

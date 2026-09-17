@@ -12,6 +12,7 @@ import type Conf from 'conf';
 import { ApiClient } from '../api/client.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
+import { launchNativeHarness, loginNativeHarness } from './native-harness.js';
 
 const HARNESS_STATE_VERSION = 1;
 const LOCAL_HARNESS_PROTOCOL = 1;
@@ -34,6 +35,9 @@ interface AiLocalHarnessDefinition {
   provider: string;
   displayName: string;
   localAuth: readonly AiHarnessAuthKind[];
+  binary: string;
+  npmPackage?: string;
+  loginArgv?: readonly string[];
 }
 interface AiRouterRuntime {
   streamAiChatTurn(input: Record<string, unknown>): Promise<any>;
@@ -71,6 +75,10 @@ interface HarnessSession {
   /** A closed chat is retained for history but is never reopened implicitly. */
   status: 'active' | 'closed';
   closedAt?: string;
+  /** Native agent identity, owned by the selected vendor CLI and never sent to Gateway. */
+  nativeHarness?: string;
+  nativeSessionId?: string;
+  workspace?: string;
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
@@ -335,6 +343,38 @@ export async function aiAccountProviders(): Promise<void> {
   emitJson({ harnesses: localRouter().AI_LOCAL_HARNESSES });
 }
 
+/** Starts the vendor-owned login flow and records only a local opaque profile reference. */
+export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<void> {
+  const harness = localHarnessForCommand(harnessCommandName);
+  if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
+  await loginNativeHarness(harness);
+  const state = await readState();
+  const accountLabel = (label ?? `${harness.displayName} local`).trim();
+  if (!state.accounts.some((account) => account.label.toLowerCase() === accountLabel.toLowerCase())) {
+    state.accounts.push({ id: randomUUID(), provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}` });
+    await writeState(state);
+  }
+  emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
+}
+
+/** Opens the real native agent TUI; no provider credential crosses the ClikCode boundary. */
+export async function aiHarnessLaunch(harnessCommandName: string, sessionId?: string): Promise<void> {
+  const harness = localHarnessForCommand(harnessCommandName);
+  if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
+  if (sessionId) {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === sessionId);
+    if (!session) throw new Error(`AI session "${sessionId}" was not found`);
+    session.nativeHarness = harness.command;
+    session.provider = harness.provider;
+    session.route = 'local';
+    session.workspace = process.cwd();
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+  }
+  await launchNativeHarness(harness);
+}
+
 export async function aiModelsList(): Promise<void> {
   const state = await readState();
   emitJson({
@@ -491,7 +531,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['add', 'remove', 'failover auto|never'] });
   }
   const harness = localHarnessForCommand(head);
-  if (harness) return emitHarnessOutput({ panel: 'provider-accounts', provider: harness.provider, harness, session, accounts: state.accounts.filter((account) => account.provider === harness.provider).map(accountView), controls: ['add', 'remove', 'select', 'failover'] });
+  if (harness) return aiHarnessLaunch(harness.command, id);
   throw new Error(`unknown slash command: /${head}`);
 }
 
