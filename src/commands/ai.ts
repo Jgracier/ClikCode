@@ -1,24 +1,27 @@
 /** Local ClikDeploy AI harness lifecycle, account aliases, and durable session settings. */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { spawn } from 'node:child_process';
 import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, open, readFile, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { createInterface } from 'node:readline/promises';
+import { extname, isAbsolute, join, resolve } from 'node:path';
+import { createInterface, type Interface as ReadlineInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { createRequire } from 'node:module';
 import type Conf from 'conf';
+import chalk from 'chalk';
 import { ApiClient } from '../api/client.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
-import { launchNativeHarness, loginNativeHarness } from './native-harness.js';
+import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
 
 const HARNESS_STATE_VERSION = 1;
 const LOCAL_HARNESS_PROTOCOL = 1;
 
 type AiHarnessRoute = 'local' | 'gateway';
 type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
+type AiHarnessPermissionMode = 'read-only' | 'workspace-write' | 'auto';
 interface AiHarnessAccount {
   id: string;
   provider: string;
@@ -29,21 +32,64 @@ interface AiHarnessAccount {
   quotaState?: 'available' | 'exhausted';
   quotaRetryAt?: string;
   credentialRef: string;
+  nativeProfile?: { env: string; path: string };
 }
 interface AiLocalHarnessDefinition {
   command: string;
   provider: string;
   displayName: string;
+  surface: 'terminal' | 'editor-extension';
   localAuth: readonly AiHarnessAuthKind[];
   binary: string;
   npmPackage?: string;
   loginArgv?: readonly string[];
+  statusArgv?: readonly string[];
+  logoutArgv?: readonly string[];
+  versionArgv?: readonly string[];
+  launchArgv?: readonly string[];
+  modelArgvPrefix?: readonly string[];
+  modelDiscoveryArgv?: readonly string[];
+  workspaceArgvPrefix?: readonly string[];
+  effortArgvPrefix?: readonly string[];
+  effortConfigKey?: string;
+  profileEnv?: string;
+  turn?: {
+    startArgv: readonly string[];
+    resumeArgv?: readonly string[];
+    resumeIdPrefix?: readonly string[];
+    resumeIdSuffix?: readonly string[];
+    createIdPrefix?: readonly string[];
+    createIdSuffix?: readonly string[];
+    promptArgvPrefix?: readonly string[];
+    promptInput?: 'argv' | 'stdin';
+    output: 'text' | 'json' | 'json-lines';
+    responseFields?: readonly string[];
+    resumeSupportsWorkspaceSelector?: boolean;
+  };
+  session?: {
+    continueArgv?: readonly string[];
+    resumeIdPrefix?: readonly string[];
+    resumeIdSuffix?: readonly string[];
+    createIdPrefix?: readonly string[];
+    createIdSuffix?: readonly string[];
+    createSessionArgv?: readonly string[];
+    idKind?: 'uuid' | 'history-file';
+    discoverArgv?: readonly string[];
+    discoverFormat?: 'json' | 'json-lines' | 'text';
+  };
 }
 interface AiRouterRuntime {
   streamAiChatTurn(input: Record<string, unknown>): Promise<any>;
+  AI_LOCAL_HARNESS_ADAPTER_VERSION: number;
   AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[];
   localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined;
   localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined;
+  nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: {
+    prompt: string; nativeSessionId?: string; createdHere?: boolean; launchedBefore?: boolean;
+    model?: string | null; workspace?: string | null; effort?: string | null;
+    permissionMode?: AiHarnessPermissionMode;
+    images?: readonly string[];
+  }): string[];
 }
 
 const require = createRequire(import.meta.url);
@@ -62,6 +108,356 @@ function streamLocalAiTurn(input: Record<string, unknown>): Promise<any> {
   return localRouter().streamAiChatTurn(input);
 }
 
+function nativeSessionIds(outputText: string, format: 'json' | 'json-lines' | 'text' = 'text'): Set<string> {
+  const ids = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) return value.forEach(visit);
+    if (!value || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (/^(?:id|session_?id|thread_?id|chat_?id|session)$/i.test(key) && typeof child === 'string' && child.trim()) ids.add(child.trim());
+      else visit(child);
+    }
+  };
+  try {
+    if (format === 'json') visit(JSON.parse(outputText));
+    else if (format === 'json-lines') {
+      for (const line of outputText.split(/\r?\n/).filter(Boolean)) visit(JSON.parse(line));
+    }
+  } catch {
+    // A vendor changing its documented JSON shape must not make us attach a
+    // guessed session. The stable textual identifiers below are still safe.
+  }
+  for (const match of outputText.matchAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi)) ids.add(match[0]);
+  return ids;
+}
+
+function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string): { text: string; nativeSessionId?: string; isError?: boolean; statusCode?: number } {
+  if (!harness.turn) throw new Error(`${harness.displayName} has no centralized turn adapter`);
+  if (harness.turn.output === 'text') {
+    const text = stdout.trim();
+    if (!text) throw new Error(`${harness.displayName} returned no assistant text`);
+    const nativeSessionId = /(?:session|thread|chat)(?:\s+id)?\s*[:=]\s*([\w-]{8,})/i.exec(stdout)?.[1];
+    return { text, ...(nativeSessionId ? { nativeSessionId } : {}) };
+  }
+  const values: unknown[] = [];
+  try {
+    if (harness.turn.output === 'json') values.push(JSON.parse(stdout));
+    else for (const line of stdout.split(/\r?\n/).filter((line) => line.trim())) values.push(JSON.parse(line));
+  } catch (error) {
+    throw new Error(`${harness.displayName} returned invalid ${harness.turn.output} output: ${(error as Error).message}`);
+  }
+  const fields = new Set(harness.turn.responseFields ?? ['result', 'response', 'text', 'content']);
+  const messages: string[] = [];
+  let isError = false;
+  let statusCode: number | undefined;
+  const visit = (value: unknown, parentType?: string): void => {
+    if (Array.isArray(value)) return value.forEach((item) => visit(item, parentType));
+    if (!value || typeof value !== 'object') return;
+    const record = value as Record<string, unknown>;
+    const type = typeof record.type === 'string' ? record.type : parentType;
+    if (record.is_error === true || record.error === true) isError = true;
+    if (typeof record.api_error_status === 'number') statusCode = record.api_error_status;
+    else if (typeof record.status === 'number' && record.status >= 400) statusCode = record.status;
+    for (const [key, child] of Object.entries(record)) {
+      if (fields.has(key) && typeof child === 'string' && child.trim()) {
+        // JSON event streams often contain tool input and user echoes. Only
+        // accept generic text/content from assistant/result-shaped events.
+        if (!['text', 'content'].includes(key) || !type || /assistant|agent|message|result|complete|text/i.test(type)) messages.push(child.trim());
+      } else visit(child, type);
+    }
+  };
+  values.forEach((value) => visit(value));
+  const text = messages[messages.length - 1]?.trim();
+  if (!text) throw new Error(`${harness.displayName} returned no assistant text in its structured output`);
+  const ids = nativeSessionIds(stdout, harness.turn.output);
+  return { text, nativeSessionId: [...ids][0], ...(isError ? { isError } : {}), ...(statusCode ? { statusCode } : {}) };
+}
+
+/** Render provider JSONL as a small provider-neutral activity stream. */
+function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string): string | undefined {
+  if (isJsonDefaultMode()) return undefined;
+  let value: Record<string, unknown>;
+  try { value = JSON.parse(lineText) as Record<string, unknown>; } catch { return undefined; }
+  const type = String(value.type ?? '');
+  const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
+  const itemType = String(item?.type ?? '');
+  const reasoningSummary = (candidate: unknown): string | undefined => {
+    if (typeof candidate === 'string') return candidate.trim() || undefined;
+    if (!Array.isArray(candidate)) return undefined;
+    const text = candidate.flatMap((part) => {
+      if (typeof part === 'string') return [part];
+      if (part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') return [String((part as Record<string, unknown>).text)];
+      return [];
+    }).join(' ').trim();
+    return text || undefined;
+  };
+  if (type === 'thread.started' || type === 'turn.started') return undefined;
+  if (/reasoning|thinking/.test(itemType) && /completed|done/.test(type)) {
+    const summary = reasoningSummary(item?.summary) ?? reasoningSummary(item?.text) ?? reasoningSummary(item?.content);
+    return summary ? `  ${chalk.cyan('thinking')} ${chalk.dim(visibleSlice(summary.replace(/\s+/g, ' '), 140))}` : undefined;
+  }
+  if (/command_execution/.test(itemType) && /started|completed/.test(type)) {
+    const command = String(item?.command ?? item?.command_line ?? '').trim();
+    const state = type.endsWith('completed') ? chalk.green('done') : chalk.yellow('run');
+    return command ? `  ${state} ${chalk.dim(command)}` : undefined;
+  }
+  if (/file_change/.test(itemType) && /completed/.test(type)) return `  ${chalk.green('edit')} ${chalk.dim('files updated')}`;
+  if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
+    const name = String(item?.name ?? item?.server ?? 'tool');
+    return `  ${type.endsWith('completed') ? chalk.green('done') : chalk.yellow('tool')} ${chalk.dim(name)}`;
+  }
+  if (harness.command === 'claude') {
+    if (type === 'system' && value.subtype === 'init') return undefined;
+    if (type === 'assistant') {
+      const message = value.message as { content?: Array<Record<string, unknown>> } | undefined;
+      const tool = message?.content?.find((part) => part.type === 'tool_use');
+      if (tool) return `  ${chalk.yellow('tool')} ${chalk.dim(String(tool.name ?? 'tool'))}`;
+    }
+  }
+  return undefined;
+}
+
+function nativeActivityPhase(lineText: string): 'generating response' | undefined {
+  let value: Record<string, unknown>;
+  try { value = JSON.parse(lineText) as Record<string, unknown>; } catch { return undefined; }
+  const type = String(value.type ?? '');
+  const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
+  const itemType = String(item?.type ?? '');
+  if (/assistant|agent_message/.test(itemType) && /started|delta|completed/.test(type)) return 'generating response';
+  if (type === 'assistant') return 'generating response';
+  return undefined;
+}
+
+async function nativeModelCatalog(
+  harness: AiLocalHarnessDefinition,
+  account?: AiHarnessAccount,
+): Promise<{ configured?: string; models: string[] }> {
+  const models = new Set(account?.models ?? []);
+  const addDiscoveredModels = (raw: string): void => {
+    const add = (value: unknown): void => {
+      if (typeof value !== 'string') return;
+      const model = value.trim();
+      if (/^[a-z0-9][a-z0-9._:/-]{1,127}$/i.test(model)) models.add(model);
+    };
+    try {
+      const visit = (value: unknown): void => {
+        if (Array.isArray(value)) return value.forEach(visit);
+        if (!value || typeof value !== 'object') return;
+        for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+          if (/^(?:id|model|modelId|slug)$/i.test(key)) add(child);
+          else visit(child);
+        }
+      };
+      visit(JSON.parse(raw));
+    } catch {
+      for (const line of raw.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/)) {
+        const clean = line.trim().replace(/^[•*✓✔❯>\-]+\s*/, '');
+        if (!clean) continue;
+        const token = clean.split(/\s+/, 1)[0]?.replace(/^['"`]|['"`,:]$/g, '');
+        if (token && (clean === token || /[\/.\d:_-]/.test(token))) add(token);
+      }
+    }
+  };
+  const profileRoot = account?.nativeProfile?.path
+    ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined)
+    ?? (harness.command === 'codex' ? join(homedir(), '.codex')
+      : harness.command === 'claude' ? join(homedir(), '.claude')
+        : harness.command === 'gemini' ? join(homedir(), '.gemini') : undefined);
+  let configured: string | undefined;
+  if (profileRoot && harness.command === 'codex') {
+    try {
+      const config = await readFile(join(profileRoot, 'config.toml'), 'utf8');
+      configured = /^\s*model\s*=\s*["']([^"']+)["']/m.exec(config)?.[1]?.trim();
+    } catch { /* Codex will choose its own default when no config exists. */ }
+    try {
+      const cache = JSON.parse(await readFile(join(profileRoot, 'models_cache.json'), 'utf8')) as { models?: Array<{ slug?: unknown; visibility?: unknown }> };
+      for (const model of cache.models ?? []) {
+        if (typeof model.slug === 'string' && model.slug.trim() && model.visibility !== 'hide') models.add(model.slug.trim());
+      }
+    } catch { /* The cache is optional and vendor-owned. */ }
+  } else if (profileRoot && harness.command === 'claude') {
+    try {
+      const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown };
+      if (typeof settings.model === 'string' && settings.model.trim()) configured = settings.model.trim();
+    } catch { /* Claude will choose its own default when no setting exists. */ }
+    ['sonnet', 'opus', 'haiku'].forEach((model) => models.add(model));
+  } else if (profileRoot && harness.command === 'gemini') {
+    try {
+      const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown; selectedModel?: unknown };
+      const value = typeof settings.model === 'string' ? settings.model : settings.selectedModel;
+      if (typeof value === 'string' && value.trim()) configured = value.trim();
+    } catch { /* Gemini will choose its own default when no setting exists. */ }
+    ['auto', 'pro', 'flash', 'flash-lite'].forEach((model) => models.add(model));
+  }
+  if (harness.command === 'copilot') {
+    ['auto', 'claude-sonnet-4.6', 'gpt-5.4', 'gpt-6-astra', 'claude-haiku-4.5', 'gpt-5.3-codex', 'gemini-3.1-pro-preview', 'gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.7-flash'].forEach((model) => models.add(model));
+  }
+  if (harness.modelDiscoveryArgv) {
+    const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+    try {
+      addDiscoveredModels(await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, 12_000));
+    } catch { /* Keep configured/account models and the custom-ID option available. */ }
+  }
+  if (configured) models.add(configured);
+  return { ...(configured ? { configured } : {}), models: [...models] };
+}
+
+const nativeUsageCache = new Map<string, { at: number; label?: string }>();
+
+/** Per-harness live usage probe. Each vendor CLI exposes quota/cost through a different
+ * surface (or none at all); adding a harness here is the only step needed to light up
+ * its usage footer, everything else (caching, dispatch, rendering) is shared. */
+type NativeUsageProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<string | undefined>;
+
+function formatTokenCount(total: number): string {
+  if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M`;
+  if (total >= 1_000) return `${Math.round(total / 1_000)}K`;
+  return String(total);
+}
+
+/** Parse just the `info` object out of `opencode export <id>` without waiting for (or
+ * buffering) the full transcript, which can be arbitrarily large and isn't needed here. */
+async function captureOpencodeSessionSummary(sessionId: string): Promise<{ cost: number; tokens: { input: number; output: number } } | undefined> {
+  return new Promise((resolveSummary) => {
+    const child = spawn('opencode', ['export', sessionId], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let buffer = '';
+    let settled = false;
+    const finish = (value?: { cost: number; tokens: { input: number; output: number } }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      resolveSummary(value);
+    };
+    child.stdout!.setEncoding('utf8');
+    child.stdout!.on('data', (chunk: string) => {
+      buffer += chunk;
+      // `info` is written first, but a single `data` event can already carry far more
+      // than that object (a pipe delivers whatever the child buffered before its first
+      // flush) — search what's arrived before giving up, don't discard it unread.
+      const infoStart = buffer.indexOf('"info"');
+      if (infoStart === -1) return buffer.length > 16 * 1024 ? finish() : undefined;
+      const braceStart = buffer.indexOf('{', infoStart);
+      if (braceStart === -1) return;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = braceStart; index < buffer.length; index++) {
+        const character = buffer[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (character === '\\') escaped = true;
+          else if (character === '"') inString = false;
+          continue;
+        }
+        if (character === '"') { inString = true; continue; }
+        if (character === '{') depth++;
+        else if (character === '}') {
+          depth--;
+          if (depth === 0) {
+            try {
+              const info = JSON.parse(buffer.slice(braceStart, index + 1)) as { cost?: number; tokens?: { input?: number; output?: number } };
+              return finish({ cost: typeof info.cost === 'number' ? info.cost : 0, tokens: { input: info.tokens?.input ?? 0, output: info.tokens?.output ?? 0 } });
+            } catch { return finish(); }
+          }
+        }
+      }
+    });
+    child.once('error', () => finish());
+    child.once('exit', () => finish());
+    const timer = setTimeout(() => finish(), 8_000);
+    timer.unref();
+  });
+}
+
+async function opencodeUsageProbe(session: HarnessSession): Promise<string | undefined> {
+  if (!session.nativeSessionId) return undefined;
+  const summary = await captureOpencodeSessionSummary(session.nativeSessionId);
+  if (!summary) return undefined;
+  const total = summary.tokens.input + summary.tokens.output;
+  if (!total) return undefined;
+  const tokenLabel = `${formatTokenCount(total)} tok`;
+  return summary.cost > 0 ? `${tokenLabel} · $${summary.cost.toFixed(2)}` : tokenLabel;
+}
+
+async function codexUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+  const response = await new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
+    const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
+      stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...environment },
+    });
+    let buffer = '';
+    let settled = false;
+    let initialized = false;
+    const finish = (value?: Record<string, unknown>): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      resolveUsage(value);
+    };
+    const send = (message: Record<string, unknown>): void => {
+      if (child.stdin?.writable) child.stdin.write(`${JSON.stringify(message)}\n`);
+    };
+    child.stdout!.setEncoding('utf8');
+    child.stdout!.on('data', (chunk: string) => {
+      buffer += chunk;
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        try {
+          const message = JSON.parse(line) as { id?: unknown; result?: unknown };
+          if (message.id === 1 && message.result && typeof message.result === 'object') {
+            if (initialized) return;
+            initialized = true;
+            // The rate-limits read answers only after the initialize handshake has
+            // settled; give the transport a moment before asking, and leave stdin
+            // open so the response can come back.
+            const ask = setTimeout(() => send({ id: 2, method: 'account/rateLimits/read', params: { excludeResetCreditDetails: true } }), 250);
+            ask.unref();
+          } else if (message.id === 2 && message.result && typeof message.result === 'object') {
+            return finish(message.result as Record<string, unknown>);
+          }
+        } catch { /* Ignore logs and unrelated notifications. */ }
+      }
+    });
+    child.once('error', () => finish());
+    child.once('exit', () => finish());
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'clikcode', version: '1.0.34' } } });
+    send({ method: 'initialized', params: {} });
+    const timer = setTimeout(() => finish(), 8_000);
+    timer.unref();
+  });
+  const snapshot = response?.rateLimits && typeof response.rateLimits === 'object'
+    ? response.rateLimits as Record<string, unknown> : undefined;
+  const windows = [snapshot?.primary, snapshot?.secondary].filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object'));
+  const parts = windows.flatMap((window) => {
+    const used = typeof window.usedPercent === 'number' ? window.usedPercent : undefined;
+    const minutes = typeof window.windowDurationMins === 'number' ? window.windowDurationMins : undefined;
+    if (used === undefined || minutes === undefined) return [];
+    const period = minutes === 300 ? '5h' : minutes === 10_080 ? 'week' : minutes < 1_440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1_440)}d`;
+    return [`${period} ${Math.max(0, Math.min(100, 100 - used))}% left`];
+  });
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
+const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
+  codex: codexUsageProbe,
+  opencode: opencodeUsageProbe,
+};
+
+async function nativeUsageLabel(session: HarnessSession, state: HarnessState): Promise<string | undefined> {
+  const probe = session.nativeHarness ? NATIVE_USAGE_PROBES[session.nativeHarness] : undefined;
+  if (!probe) return undefined;
+  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  const cacheKey = `${session.nativeHarness}:${account?.nativeProfile?.path ?? session.nativeSessionId ?? 'default'}`;
+  const cached = nativeUsageCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 30_000) return cached.label;
+  const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+  const label = await probe(session, environment).catch(() => undefined);
+  nativeUsageCache.set(cacheKey, { at: Date.now(), ...(label ? { label } : {}) });
+  return label;
+}
+
 interface HarnessSession {
   id: string;
   route: AiHarnessRoute;
@@ -69,17 +465,21 @@ interface HarnessSession {
   provider: string | null;
   model: string | null;
   effort: string;
+  permissionMode?: AiHarnessPermissionMode;
+  name?: string;
   accountFailover: 'never' | 'on-quota-exhausted';
   createdAt: string;
   updatedAt: string;
   /** A closed chat is retained for history but is never reopened implicitly. */
-  status: 'active' | 'closed';
+  status: 'active' | 'closed' | 'archived';
   closedAt?: string;
   /** Native agent identity, owned by the selected vendor CLI and never sent to Gateway. */
   nativeHarness?: string;
   nativeSessionId?: string;
+  nativeStartedAt?: string;
   workspace?: string;
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  attachments?: string[];
 }
 
 interface HarnessState {
@@ -119,13 +519,658 @@ function harnessCommand(): string {
     : 'clikdeploy ai';
 }
 
+function compactPath(path: string): string {
+  const home = homedir();
+  return path === home ? '~' : path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
+}
+
+function conversationTitle(prompt: string): string {
+  const title = prompt.replace(/\s+/g, ' ').trim();
+  return title.length > 64 ? `${title.slice(0, 63).trimEnd()}…` : title;
+}
+
+function sessionEngine(session: HarnessSession): string {
+  return session.nativeHarness ?? session.provider ?? (session.route === 'gateway' ? 'gateway' : 'none');
+}
+
+function sessionProviderLabel(session: HarnessSession): string {
+  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  return harness?.displayName ?? session.provider ?? (session.route === 'gateway' ? 'ClikDeploy Gateway' : 'Not selected');
+}
+
+interface HarnessPrompter {
+  question(prompt: string, commands?: readonly PickerOption<string>[]): Promise<string>;
+  select?<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined>;
+  render?(session: HarnessSession, account?: string, notice?: string): void;
+  close(): void;
+}
+
+function visibleSlice(value: string, width: number): string {
+  if (value.length <= width) return value;
+  return `${value.slice(0, Math.max(1, width - 1))}…`;
+}
+
+function terminalCellWidth(value: string): number {
+  const plain = value.replace(/\u001b\[[0-9;]*m/g, '');
+  let width = 0;
+  for (const character of plain) {
+    const code = character.codePointAt(0) ?? 0;
+    if (/\p{Mark}/u.test(character) || code === 0xfe0f) continue;
+    width += code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd)) ? 2 : 1;
+  }
+  return width;
+}
+
+function previousCharacterIndex(value: string, index: number): number {
+  if (index <= 0) return 0;
+  const code = value.charCodeAt(index - 1);
+  return code >= 0xdc00 && code <= 0xdfff && index > 1 ? index - 2 : index - 1;
+}
+
+function nextCharacterIndex(value: string, index: number): number {
+  if (index >= value.length) return value.length;
+  const code = value.charCodeAt(index);
+  return code >= 0xd800 && code <= 0xdbff && index + 1 < value.length ? index + 2 : index + 1;
+}
+
+function composerViewport(value: string, cursor: number, available: number): { text: string; cursorWidth: number } {
+  if (terminalCellWidth(value) <= available) return { text: value, cursorWidth: terminalCellWidth(value.slice(0, cursor)) };
+  let start = 0;
+  while (start < cursor && terminalCellWidth(value.slice(start, cursor)) > available - 2) start = nextCharacterIndex(value, start);
+  const prefix = start > 0 ? '…' : '';
+  let end = value.length;
+  while (end > cursor && terminalCellWidth(prefix + value.slice(start, end)) > available) end = previousCharacterIndex(value, end);
+  const suffix = end < value.length ? '…' : '';
+  while (end > cursor && terminalCellWidth(prefix + value.slice(start, end) + suffix) > available) end = previousCharacterIndex(value, end);
+  return { text: `${prefix}${value.slice(start, end)}${suffix}`, cursorWidth: terminalCellWidth(prefix + value.slice(start, cursor)) };
+}
+
+class FullScreenHarnessPrompter implements HarnessPrompter {
+  private closed = false;
+  private history: string[] = [];
+  private currentSession?: HarnessSession;
+  private currentAccount?: string;
+  private currentNotice?: string;
+  private draft = '';
+  private draftOptions: readonly PickerOption<string>[] = [];
+  private draftSelected = 0;
+  private draftPrompt = '› ';
+  private draftCursor = 0;
+  private waitingTimer?: NodeJS.Timeout;
+  private waitingFrame = 0;
+  private waitingLabel = '';
+  private activityLines: string[] = [];
+  private activityAnchor = 0;
+  private waitingScreenRow?: number;
+  private usageLabel?: string;
+  private selecting = false;
+  private cancelWaiting?: () => void;
+  private waitingCancelled = false;
+  private readonly onWaitingInput = (chunk: Buffer | string): void => {
+    const key = String(chunk);
+    if (this.waitingCancelled || (key !== '\u001b' && key !== '\u0003')) return;
+    this.waitingCancelled = true;
+    this.waitingLabel = 'stopping…';
+    this.updateWaiting();
+    this.cancelWaiting?.();
+  };
+  private readonly onResize = (): void => {
+    if (!this.closed) {
+      output.write('\u001b[2J');
+      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    }
+  };
+
+  constructor() {
+    output.write('\u001b[?1049h\u001b[?25h');
+    process.on('SIGWINCH', this.onResize);
+  }
+
+  render(session: HarnessSession, account?: string, notice?: string): void {
+    this.currentSession = session;
+    this.currentAccount = account;
+    this.currentNotice = notice;
+    this.paint('', [], 0, '❯ ', 0);
+  }
+
+  activity(message: string): void {
+    const normalized = message.trim();
+    if (!normalized || this.activityLines[this.activityLines.length - 1] === normalized) return;
+    this.activityLines = [...this.activityLines.slice(-5), normalized];
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+  }
+
+  startWaiting(message: string, onCancel?: () => void): void {
+    this.stopWaiting(false);
+    this.activityLines = [];
+    this.activityAnchor = this.currentSession?.messages?.length ?? 0;
+    this.waitingLabel = message;
+    this.cancelWaiting = onCancel;
+    this.waitingCancelled = false;
+    this.waitingFrame = 0;
+    if (input.isTTY) {
+      input.setRawMode(true);
+      input.resume();
+      input.on('data', this.onWaitingInput);
+    }
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    this.waitingTimer = setInterval(() => {
+      this.waitingFrame++;
+      this.updateWaiting();
+    }, 90);
+    this.waitingTimer.unref();
+  }
+
+  stopWaiting(refresh = true): void {
+    if (this.waitingTimer) clearInterval(this.waitingTimer);
+    this.waitingTimer = undefined;
+    input.off('data', this.onWaitingInput);
+    if (input.isTTY) input.setRawMode(false);
+    this.cancelWaiting = undefined;
+    this.waitingCancelled = false;
+    this.waitingLabel = '';
+    this.waitingScreenRow = undefined;
+    if (refresh && !this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+  }
+
+  phase(message: string): void {
+    if (!this.waitingLabel || this.waitingCancelled || this.waitingLabel === message) return;
+    this.waitingLabel = message;
+    this.updateWaiting();
+  }
+
+  usage(label?: string): void {
+    if (this.usageLabel === label) return;
+    this.usageLabel = label;
+    if (!this.selecting) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+  }
+
+  private statusText(): string {
+    const session = this.currentSession;
+    if (!session) return '';
+    const context = compactPath(session.workspace ?? process.cwd());
+    const provider = `${sessionProviderLabel(session)}${this.usageLabel ? `  ${this.usageLabel}` : ''}`;
+    return [provider, `${session.model ?? 'automatic'} ${session.effort}`, context].join('  •  ');
+  }
+
+  private waitingText(): string {
+    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    return `${frames[this.waitingFrame % frames.length]} ${this.waitingLabel}`;
+  }
+
+  private updateWaiting(): void {
+    if (!this.waitingLabel || !this.waitingScreenRow) return;
+    const width = Math.max(48, (output.columns || 100) - 1);
+    output.write(`\u001b7\u001b[${this.waitingScreenRow};1H\u001b[2K  ${chalk.cyan('●')} ${chalk.dim(visibleSlice(this.waitingText(), width - 6))}\u001b8`);
+  }
+
+  /** `palette` fixes the reserved footer band to `capacity` rows for the whole time a
+   * palette is open (instead of resizing per keystroke as matches narrow), and
+   * `footerOnly` skips repainting the conversation area above it. Together these turn
+   * "retype the whole screen on every keystroke" into "rewrite only what changed",
+   * which is what stopped the palette from visibly flickering/jumping as you type. */
+  private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; footerOnly?: boolean }): void {
+    const session = this.currentSession;
+    if (!session) return;
+    this.draft = composer;
+    this.draftOptions = options;
+    this.draftSelected = selected;
+    this.draftPrompt = prompt;
+    this.draftCursor = cursor;
+    const width = Math.max(48, (output.columns || 100) - 1);
+    const inner = width - 4;
+    const rule = chalk.dim('─'.repeat(width));
+    const allMessages = session.messages ?? [];
+    const messages = allMessages.slice(-6);
+    const messageStart = allMessages.length - messages.length;
+    const paletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
+    const footerOnly = palette?.footerOnly ?? false;
+    const paletteRows = paletteCapacity;
+    const noticeRows = this.currentNotice ? 1 : 0;
+    const targetHeight = Math.max(20, (output.rows || 30) - 1);
+    const rows = Math.max(4, targetHeight - 3 - paletteRows - noticeRows);
+    const conversation: Array<{ text: string; waiting?: boolean }> = [];
+    let activityAppended = false;
+    const appendActivity = (): void => {
+      if (activityAppended) return;
+      activityAppended = true;
+      for (const activity of this.activityLines) conversation.push({ text: `  ${chalk.dim('·')} ${activity}` });
+      if (this.waitingLabel) conversation.push({ text: `  ${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`, waiting: true });
+    };
+    for (const [messageIndex, message] of messages.entries()) {
+      const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
+      let firstLine = true;
+      for (const paragraph of message.content.split(/\r?\n/)) {
+        const clean = paragraph || ' ';
+        for (let offset = 0; offset < clean.length; offset += inner - 2) {
+          const prefix = firstLine ? `${marker} ` : '  ';
+          conversation.push({ text: `  ${prefix}${clean.slice(offset, offset + inner - 2)}` });
+          firstLine = false;
+        }
+      }
+      conversation.push({ text: '' });
+      if (messageStart + messageIndex + 1 === this.activityAnchor) appendActivity();
+    }
+    if (!activityAppended) appendActivity();
+    const shown = conversation.slice(-rows);
+    const meta = this.statusText();
+    const screenLine = (text = ''): void => { output.write(`\r\u001b[2K${text}\n`); };
+    if (footerOnly) {
+      output.write(`\u001b[${rows + noticeRows + 1};1H`);
+    } else {
+      output.write('\u001b[H');
+      this.waitingScreenRow = undefined;
+      if (shown.length) for (const [index, row] of shown.entries()) {
+        screenLine(row.text);
+        if (row.waiting) this.waitingScreenRow = index + 1;
+      }
+      else {
+        screenLine();
+        screenLine(`  ${chalk.dim('Start a conversation. Type / to open the command palette.')}`);
+        screenLine();
+      }
+      const renderedConversationRows = shown.length || 3;
+      const padding = Math.max(0, rows - renderedConversationRows);
+      for (let index = 0; index < padding; index++) screenLine();
+      if (this.currentNotice) screenLine(`  ${chalk.yellow(visibleSlice(this.currentNotice, inner))}`);
+    }
+    if (paletteCapacity) {
+      screenLine(rule);
+      const displayed = options.slice(0, paletteCapacity - 2);
+      displayed.forEach((option, index) => screenLine(`  ${index === selected ? chalk.cyan('❯') : ' '} ${index === selected ? chalk.bold(option.label) : option.label}${option.detail ? `  ${chalk.dim(option.detail)}` : ''}`));
+      for (let index = displayed.length; index < paletteCapacity - 2; index++) screenLine();
+      screenLine(`  ${chalk.dim('↑↓ select · Tab complete · Enter run')}`);
+    }
+    screenLine(rule);
+    const viewport = composerViewport(composer, cursor, Math.max(8, inner - terminalCellWidth(prompt)));
+    screenLine(`  ${chalk.bold.cyan(prompt)}${viewport.text}`);
+    output.write(`\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}\n`);
+    output.write(`\u001b[2A\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C`);
+  }
+
+  question(prompt: string, commands: readonly PickerOption<string>[] = []): Promise<string> {
+    if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
+    return new Promise((resolveQuestion) => {
+      let value = '';
+      let cursor = 0;
+      let selected = 0;
+      let historyIndex = this.history.length;
+      let showedPalette = false;
+      // Reserved once for the whole prompt, not recomputed per keystroke: keeping the
+      // footer band a fixed height is what stops the conversation area above it from
+      // reflowing (and the cursor from jumping) as the number of matches narrows.
+      const paletteCapacity = commands.length ? Math.min(commands.length, 8) + 2 : 0;
+      let paletteOpen = false;
+      const matches = () => value.startsWith('/') && !value.includes(' ')
+        ? commands.filter((option) => option.value.startsWith(value)).slice(0, 8)
+        : [];
+      const draw = (): void => {
+        const options = matches();
+        if (selected >= options.length) selected = 0;
+        if (options.length || showedPalette) {
+          this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, footerOnly: paletteOpen });
+          paletteOpen = true;
+        } else {
+          const available = Math.max(8, (output.columns || 100) - 5 - terminalCellWidth(prompt));
+          const viewport = composerViewport(value, cursor, available);
+          output.write(`\r\u001b[2K  ${chalk.bold.cyan(prompt)}${viewport.text}`);
+          output.write(`\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C`);
+          this.draft = value;
+          this.draftOptions = [];
+          this.draftSelected = selected;
+          this.draftPrompt = prompt;
+          this.draftCursor = cursor;
+          paletteOpen = false;
+        }
+        showedPalette = options.length > 0;
+      };
+      const finish = (answer: string): void => {
+        if (finished) return;
+        finished = true;
+        input.off('data', onData);
+        input.setRawMode(false);
+        output.write('\u001b[?25h');
+        if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
+        resolveQuestion(answer);
+      };
+      let finished = false;
+      const handleKey = (key: string): void => {
+        const options = matches();
+        if (key === '\u0003' || key === '\u0004') return finish('/exit');
+        if (key === '\r' || key === '\n') {
+          if (options.length && value.startsWith('/') && !value.includes(' ')) {
+            const command = options[selected].value;
+            this.paint('', [], 0, prompt, 0);
+            return finish(command);
+          }
+          return finish(value);
+        }
+        if (key === '\t' && options.length) {
+          value = options[selected].value;
+          cursor = value.length;
+          return draw();
+        }
+        if (key === '\u001b[A') {
+          if (options.length) selected = (selected - 1 + options.length) % options.length;
+          else if (historyIndex > 0) { historyIndex--; value = this.history[historyIndex] ?? ''; cursor = value.length; }
+          return draw();
+        }
+        if (key === '\u001b[B') {
+          if (options.length) selected = (selected + 1) % options.length;
+          else { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; }
+          return draw();
+        }
+        if (key === '\u001b[D') { cursor = previousCharacterIndex(value, cursor); return draw(); }
+        if (key === '\u001b[C') { cursor = nextCharacterIndex(value, cursor); return draw(); }
+        if (key === '\u007f' || key === '\b') {
+          if (cursor > 0) { const previous = previousCharacterIndex(value, cursor); value = value.slice(0, previous) + value.slice(cursor); cursor = previous; }
+          return draw();
+        }
+        if (key === '\u0015') { value = ''; cursor = 0; return draw(); }
+        if (key === '\u0001') { cursor = 0; return draw(); }
+        if (key === '\u0005') { cursor = value.length; return draw(); }
+        if (!key.startsWith('\u001b') && !/[\u0000-\u001f]/.test(key)) {
+          value = value.slice(0, cursor) + key + value.slice(cursor);
+          cursor += key.length;
+          selected = 0;
+          draw();
+        }
+      };
+      const onData = (chunk: Buffer | string): void => {
+        const keys = String(chunk).match(/\u001b\[[ABCD]|[\s\S]/g) ?? [];
+        for (const key of keys) {
+          if (finished) break;
+          handleKey(key);
+        }
+      };
+      input.setRawMode(true);
+      input.resume();
+      input.on('data', onData);
+      draw();
+    });
+  }
+
+  select<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined> {
+    if (!options.length) return Promise.resolve(undefined);
+    return new Promise((resolveSelection) => {
+      this.selecting = true;
+      let selected = 0;
+      const draw = (): void => {
+        const width = Math.max(48, (output.columns || 100) - 1);
+        const inner = width - 4;
+        const rule = chalk.dim('─'.repeat(width));
+        const terminalRows = Math.max(10, output.rows || 30);
+        const maxVisible = Math.max(1, terminalRows - 5);
+        const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), options.length - maxVisible));
+        const shown = options.slice(start, start + maxVisible);
+        const padding = Math.max(0, terminalRows - 5 - shown.length);
+        const screenLine = (text = ''): void => { output.write(`\r\u001b[2K${text}\n`); };
+        output.write('\u001b[H');
+        screenLine(`  ${chalk.bold(visibleSlice(title, inner))}`);
+        screenLine(rule);
+        shown.forEach((option, index) => {
+          const absoluteIndex = start + index;
+          const marker = absoluteIndex === selected ? chalk.cyan('❯') : ' ';
+          const label = absoluteIndex === selected ? chalk.bold.cyan(option.label) : option.label;
+          screenLine(`  ${marker} ${label}${option.detail ? `  ${chalk.dim(option.detail)}` : ''}`);
+        });
+        for (let index = 0; index < padding; index++) screenLine();
+        screenLine();
+        screenLine(rule);
+        output.write(`\r\u001b[2K  ${chalk.dim('↑↓ move   ↵ choose   esc cancel')}`);
+      };
+      let finished = false;
+      const finish = (value: T | undefined): void => {
+        if (finished) return;
+        finished = true;
+        this.selecting = false;
+        input.off('data', onData);
+        input.setRawMode(false);
+        output.write('\u001b[?25h');
+        this.paint('', [], 0, '❯ ', 0);
+        resolveSelection(value);
+      };
+      const handleKey = (key: string): void => {
+        if (key === '\u001b[A' || key === 'k') selected = (selected - 1 + options.length) % options.length;
+        else if (key === '\u001b[B' || key === 'j') selected = (selected + 1) % options.length;
+        else if (key === '\r' || key === '\n') return finish(options[selected].value);
+        else if (key === '\u001b' || key === '\u0003' || key === 'q') return finish(undefined);
+        else return;
+        draw();
+      };
+      const onData = (chunk: Buffer | string): void => {
+        const keys = String(chunk).match(/\u001b\[[ABCD]|[\s\S]/g) ?? [];
+        for (const key of keys) {
+          if (finished) break;
+          handleKey(key);
+        }
+      };
+      input.setRawMode(true);
+      input.resume();
+      input.on('data', onData);
+      output.write('\u001b[?25l');
+      draw();
+    });
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.stopWaiting(false);
+    process.off('SIGWINCH', this.onResize);
+    if (input.isTTY) input.setRawMode(false);
+    input.pause();
+    output.write('\u001b[?25h\u001b[?1049l');
+  }
+}
+
+let activeFullScreenHarness: FullScreenHarnessPrompter | undefined;
+
+function line(label: string, value: unknown): string {
+  return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
+}
+
+function captureProcess(command: string, args: readonly string[], cwd?: string, stdinText?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], { cwd, stdio: [stdinText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout!.setEncoding('utf8');
+    child.stderr!.setEncoding('utf8');
+    child.stdout!.on('data', (chunk: string) => { if (stdout.length < 1024 * 1024) stdout += chunk; });
+    child.stderr!.on('data', (chunk: string) => { if (stderr.length < 16 * 1024) stderr += chunk; });
+    if (stdinText !== undefined) child.stdin!.end(stdinText);
+    child.once('error', reject);
+    child.once('exit', (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `${command} exited ${code ?? 1}`)));
+  });
+}
+
+async function copyToClipboard(text: string): Promise<void> {
+  const candidates: Array<[string, string[]]> = process.platform === 'darwin'
+    ? [['pbcopy', []]]
+    : process.platform === 'win32'
+      ? [['clip', []]]
+      : [['wl-copy', []], ['xclip', ['-selection', 'clipboard']], ['xsel', ['--clipboard', '--input']]];
+  let lastError: unknown;
+  for (const [command, args] of candidates) {
+    try { await captureProcess(command, args, undefined, text); return; } catch (error) { lastError = error; }
+  }
+  throw new Error(`No supported clipboard command is available${lastError instanceof Error && lastError.message ? `: ${lastError.message}` : '.'}`);
+}
+
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+
+async function prepareAttachments(paths: readonly string[]): Promise<{ textContext: string; images: string[] }> {
+  const blocks: string[] = [];
+  const images: string[] = [];
+  let total = 0;
+  for (const path of paths) {
+    if (IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) { images.push(path); continue; }
+    const info = await stat(path);
+    if (info.size > 256 * 1024 || total + info.size > 512 * 1024) throw new Error('Text attachments are limited to 256 KiB each and 512 KiB per request.');
+    const content = await readFile(path, 'utf8');
+    total += Buffer.byteLength(content);
+    blocks.push(`\n<clikcode_attachment path="${path.replace(/"/g, '&quot;')}">\n${content}\n</clikcode_attachment>`);
+  }
+  return { textContext: blocks.join('\n'), images };
+}
+
+function renderSessionCard(session: HarnessSession, account?: string): string {
+  return [
+    chalk.bold.cyan('ClikCode'),
+    ...(session.name ? [line('chat', session.name)] : []),
+    line('project', compactPath(session.workspace ?? process.cwd())),
+    line('provider', sessionProviderLabel(session)),
+    line('account', account ?? 'default'),
+    line('model', session.model ?? 'provider default'),
+    line('effort', session.effort),
+    line('access', session.permissionMode ?? 'workspace-write'),
+    line('session', session.id.slice(0, 8)),
+  ].join('\n');
+}
+
+async function acquireRuntimeLock(lockPath: string, runtimePath: string): Promise<FileHandle> {
+  const attempt = () => open(lockPath, 'wx', 0o600);
+  try {
+    return await attempt();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    try {
+      const runtime = JSON.parse(await readFile(runtimePath, 'utf8')) as { pid?: unknown };
+      if (typeof runtime.pid === 'number') {
+        process.kill(runtime.pid, 0);
+        throw new Error(`a ${harnessCommand()} control API is already running (pid ${runtime.pid})`);
+      }
+    } catch (runtimeError) {
+      if (runtimeError instanceof Error && runtimeError.message.includes('control API is already running')) throw runtimeError;
+      if ((runtimeError as NodeJS.ErrnoException).code === 'EPERM') {
+        throw new Error(`a ${harnessCommand()} control API appears to be running but its process cannot be inspected`);
+      }
+      // Missing/corrupt runtime metadata or ESRCH means the lock is stale.
+    }
+    await unlink(lockPath).catch((unlinkError: NodeJS.ErrnoException) => {
+      if (unlinkError.code !== 'ENOENT') throw unlinkError;
+    });
+    return attempt();
+  }
+}
+
 /** Keep automation structured while making the foreground harness feel like a CLI, not an API dump. */
 function emitHarnessOutput(payload: Record<string, unknown>): void {
   if (isJsonDefaultMode()) return emitJson(payload);
+  if (activeFullScreenHarness) {
+    // State-changing commands are reflected by the persistent status line. Raw
+    // panels here would be written into the composer and corrupt the TUI.
+    if (payload.panel === 'settings' && payload.session) {
+      activeFullScreenHarness.render(
+        payload.session as HarnessSession,
+        typeof payload.account === 'string' ? payload.account : undefined,
+      );
+      return;
+    }
+    if (payload.panel === 'provider-selected' || (payload.panel === 'accounts' && payload.selected) || payload.status === 'connected') return;
+  }
   if (payload.status === 'ready') {
     const session = payload.session as HarnessSession;
-    const agent = [session.provider, session.model].filter(Boolean).join(' · ') || 'agent not selected';
-    output.write(`\nClikCode · ${agent}\nType a prompt, or use /claude, /codex, /accounts, /settings, or /exit.\n\n`);
+    const account = typeof payload.account === 'string' ? payload.account : undefined;
+    output.write(`\n${renderSessionCard(session, account)}\n\n${chalk.dim('Type your request, /provider to choose a provider, or /help for commands.')}\n\n`);
+    return;
+  }
+  if (payload.panel === 'provider-selected' && typeof payload.harness === 'string') {
+    const account = typeof payload.account === 'string' ? ` · ${payload.account}` : '';
+    output.write(`\n${chalk.green('✓')} ${chalk.bold(payload.harness)} selected${chalk.dim(account)}\n\n`);
+    return;
+  }
+  if (payload.panel === 'error' && typeof payload.message === 'string') {
+    output.write(`\n${chalk.red('Error:')} ${payload.message}\n\n`);
+    return;
+  }
+  if (payload.panel === 'help') {
+    output.write(`\n${chalk.bold('Commands')}\n\n` + [
+      ['/<provider> [request]', 'switch providers, optionally send immediately'],
+      ['/provider', 'choose from installed providers'],
+      ['/new', 'start a clean conversation'],
+      ['/resume', 'choose a saved session'],
+      ['/status', 'show the current workspace and settings'],
+      ['/account', 'choose an account'],
+      ['/accounts', 'list and manage accounts'],
+      ['/model <name>', 'select a model'],
+      ['/effort <level>', 'set reasoning effort'],
+      ['/permissions', 'choose filesystem access'],
+      ['/sessions', 'list saved sessions'],
+      ['/history', 'show this conversation'],
+      ['/diff', 'show uncommitted project changes'],
+      ['/review', 'ask the selected provider to review changes'],
+      ['/init', 'create or improve repository agent instructions'],
+      ['/copy', 'copy the last answer'],
+      ['/mention', 'attach a file to the next request'],
+      ['/rename', 'name this conversation'],
+      ['/fork', 'branch this conversation'],
+      ['/archive', 'archive this conversation'],
+      ['/delete', 'delete this conversation'],
+      ['/clear', 'clear the screen'],
+      ['/exit', 'close ClikCode'],
+    ].map(([command, description]) => `  ${chalk.cyan(command.padEnd(24))}${description}`).join('\n') + '\n\n');
+    return;
+  }
+  if (payload.panel === 'settings' && payload.session) {
+    const session = payload.session as HarnessSession;
+    const account = typeof payload.account === 'string' ? payload.account : undefined;
+    output.write(`\n${chalk.bold('Current setup')}\n${renderSessionCard(session, account)}\n\n${chalk.dim('Change with /model, /effort, /account, or /switch.')}\n\n`);
+    return;
+  }
+  if (payload.panel === 'accounts' && Array.isArray(payload.accounts)) {
+    const accounts = payload.accounts as Array<Record<string, unknown>>;
+    output.write(`\n${chalk.bold('Accounts')}\n` + (accounts.length ? accounts.map((account) => {
+      const selected = (payload.session as HarnessSession | undefined)?.accountId === account.id;
+      return `  ${selected ? chalk.green('●') : chalk.dim('○')} ${account.label} ${chalk.dim(`(${account.provider} · ${account.status})`)}`;
+    }).join('\n') : `  ${chalk.dim('No accounts yet.')}`) + `\n\n${chalk.dim('Use /account to choose, or /accounts login <provider> <label>.')}\n\n`);
+    return;
+  }
+  if (payload.panel === 'accounts' && payload.selected && typeof payload.selected === 'object') {
+    const selected = payload.selected as Record<string, unknown>;
+    output.write(`\n${chalk.green('✓')} Account selected: ${chalk.bold(String(selected.label))} ${chalk.dim(`(${selected.provider})`)}\n\n`);
+    return;
+  }
+  if (payload.panel === 'models' && Array.isArray(payload.models)) {
+    const models = payload.models as Array<Record<string, unknown>>;
+    output.write(`\n${chalk.bold('Models')}\n` + (models.length ? models.map((model) => `  ${model.model} ${chalk.dim(`(${model.provider ?? model.account})`)}`).join('\n') : `  ${chalk.dim('Using the provider default. Set one with /model <name>.')}`) + '\n\n');
+    return;
+  }
+  if (payload.panel === 'sessions' && Array.isArray(payload.sessions)) {
+    const sessions = payload.sessions as Array<Record<string, unknown>>;
+    output.write(`\n${chalk.bold('Sessions')}\n` + (sessions.length ? sessions.map((item) => `  ${String(item.id).slice(0, 8)}  ${item.harness ?? item.provider ?? 'unselected'}  ${chalk.dim(String(item.status))}`).join('\n') : `  ${chalk.dim('No saved sessions.')}`) + '\n\n');
+    return;
+  }
+  if (payload.panel === 'conversation-reset') {
+    output.write(`\n${chalk.green('✓')} New conversation started\n\n`);
+    return;
+  }
+  if (payload.panel === 'history' && Array.isArray(payload.messages)) {
+    const messages = payload.messages as Array<{ role: string; content: string }>;
+    output.write(`\n${chalk.bold('Conversation')}\n\n` + (messages.length
+      ? messages.map((message) => `${message.role === 'assistant' ? chalk.cyan('assistant') : chalk.green('you')}\n${message.content}`).join('\n\n')
+      : chalk.dim('No messages yet.')) + '\n\n');
+    return;
+  }
+  if (payload.panel === 'diff' && typeof payload.diff === 'string') {
+    output.write(`\n${chalk.bold('Project changes')}\n\n${payload.diff || chalk.dim('Working tree is clean.')}\n\n`);
+    return;
+  }
+  if (payload.panel === 'attachments' && Array.isArray(payload.attachments)) {
+    const attachments = payload.attachments as string[];
+    output.write(`\n${chalk.bold('Next-request attachments')}\n` + (attachments.length
+      ? attachments.map((path) => `  ${chalk.cyan('•')} ${compactPath(path)}`).join('\n')
+      : `  ${chalk.dim('None queued.')}`) + '\n\n');
+    return;
+  }
+  if (payload.panel === 'usage' && payload.totals && typeof payload.totals === 'object') {
+    const totals = payload.totals as Record<string, unknown>;
+    output.write(`\n${chalk.bold('Usage')}\n${line('calls', totals.calls)}\n${line('input', `${totals.inputTokens ?? 0} tokens`)}\n${line('output', `${totals.outputTokens ?? 0} tokens`)}\n\n`);
+    return;
+  }
+  if (payload.panel === 'session-closed') {
+    output.write(`\n${chalk.dim('Session saved. See you next time.')}\n\n`);
     return;
   }
   if (typeof payload.text === 'string') {
@@ -133,8 +1178,9 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
     return;
   }
   if (typeof payload.panel === 'string') {
-    const controls = Array.isArray(payload.controls) ? payload.controls.join(', ') : '';
-    output.write(`\n${payload.panel}${controls ? `: ${controls}` : ''}\n\n`);
+    const controls = Array.isArray(payload.controls) ? payload.controls.join(' · ') : '';
+    const title = payload.panel.replace(/-/g, ' ').replace(/^./, (value) => value.toUpperCase());
+    output.write(`\n${chalk.bold(title)}${controls ? `\n  ${chalk.dim(controls)}` : ''}\n\n`);
     return;
   }
   emitJson(payload);
@@ -167,7 +1213,8 @@ async function readState(): Promise<HarnessState> {
       accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
       // Sessions created before lifecycle state existed were still open at the
       // time of upgrade, so preserve their resumability once.
-      status: session.status === 'closed' ? 'closed' : 'active',
+      status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
+      permissionMode: session.permissionMode ?? 'workspace-write',
     }));
     const now = Date.now();
     const accounts = (parsed.accounts as AiHarnessAccount[]).map((account) => (
@@ -179,7 +1226,21 @@ async function readState(): Promise<HarnessState> {
     if (JSON.stringify(normalized) !== JSON.stringify(parsed)) await writeState(normalized);
     return normalized;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      // Atomic replacement prevents partial writes; the private backup also
+      // recovers valid state if the primary was edited or damaged externally.
+      try {
+        const backup = JSON.parse(await readFile(`${path}.bak`, 'utf8')) as Partial<HarnessState>;
+        if (backup.version !== HARNESS_STATE_VERSION || !Array.isArray(backup.accounts) || !Array.isArray(backup.sessions)) throw error;
+        const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.recovery`;
+        await writeFile(temporary, `${JSON.stringify(backup, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+        await rename(temporary, path);
+        return readState();
+      } catch (backupError) {
+        if ((backupError as NodeJS.ErrnoException).code !== 'ENOENT' && backupError !== error) throw backupError;
+        throw error;
+      }
+    }
     const fresh: HarnessState = {
       version: HARNESS_STATE_VERSION,
       installationId: randomUUID(),
@@ -200,7 +1261,12 @@ async function readState(): Promise<HarnessState> {
 async function writeState(state: HarnessState): Promise<void> {
   const path = harnessStatePath();
   await mkdir(join(path, '..'), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  // An interrupted write must leave the last complete account/session registry
+  // available rather than corrupting every centralized session on next launch.
+  const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await rename(temporary, path);
+  await copyFile(path, `${path}.bak`).catch(() => undefined);
 }
 
 function accountView(account: AiHarnessAccount): Omit<AiHarnessAccount, 'credentialRef'> {
@@ -268,7 +1334,7 @@ function isUsageExhaustion(error: unknown): boolean {
   const status = (error as { statusCode?: unknown; response?: { status?: unknown } } | null)?.statusCode
     ?? (error as { response?: { status?: unknown } } | null)?.response?.status;
   if (status === 402 || status === 429) return true;
-  return /(?:quota exceeded|quota exhausted|usage limit|rate limit|too many requests|credits? exhausted)/i.test(error instanceof Error ? error.message : String(error));
+  return /(?:quota exceeded|quota exhausted|usage limit|session limit|rate limit|too many requests|credits? exhausted)/i.test(error instanceof Error ? error.message : String(error));
 }
 
 /** Starts an intentionally loopback-only harness service. It exposes no provider tokens. */
@@ -277,27 +1343,36 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
   // the OS so ClikCode never competes with ClikDeploy or another local tool.
   const port = options.port === undefined ? 0 : Number(options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be an integer from 0 to 65535');
-  const state = await readState();
+  const runtimeDirectory = join(harnessStatePath(), '..');
+  await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
+  const runtimePath = join(runtimeDirectory, 'runtime.json');
+  const lockPath = join(runtimeDirectory, 'runtime.lock');
+  const runtimeLock = await acquireRuntimeLock(lockPath, runtimePath);
+  const startupState = await readState();
   const server = createServer(async (request, response) => {
     try {
       const route = methodAndPath(request);
       if (route === 'GET /v1/health') {
-        sendJson(response, 200, { status: 'ok', installationId: state.installationId, runtime: harnessCommand(), credentialBoundary: 'local-only' });
-      } else if (!authorized(request, state.localApiToken)) {
+        sendJson(response, 200, { status: 'ok', installationId: startupState.installationId, runtime: harnessCommand(), credentialBoundary: 'local-only' });
+      } else if (!authorized(request, startupState.localApiToken)) {
         sendJson(response, 401, { error: 'unauthorized' });
-      } else if (route === 'GET /v1/accounts') {
+      } else {
+        // Commands and native harnesses may update state while the optional
+        // control API is running. Always serve the latest atomic snapshot.
+        const state = await readState();
+        if (route === 'GET /v1/accounts') {
         sendJson(response, 200, { accounts: state.accounts.map(accountView) });
-      } else if (route === 'GET /v1/device') {
+        } else if (route === 'GET /v1/device') {
         sendJson(response, 200, { device: deviceManifest(state) });
-      } else if (route === 'GET /v1/models') {
+        } else if (route === 'GET /v1/models') {
         sendJson(response, 200, {
           models: state.accounts.flatMap((account) => account.models.map((model) => ({ accountId: account.id, provider: account.provider, model }))),
         });
-      } else if (route === 'GET /v1/sessions') {
+        } else if (route === 'GET /v1/sessions') {
         sendJson(response, 200, { sessions: state.sessions });
-      } else if (route === 'GET /v1/usage') {
+        } else if (route === 'GET /v1/usage') {
         sendJson(response, 200, { invocations: state.invocations });
-      } else if (route === 'POST /v1/chat') {
+        } else if (route === 'POST /v1/chat') {
         const body = await readJson(request) as { accountId?: unknown; messages?: unknown; effort?: unknown };
         const account = state.accounts.find((item) => item.id === body.accountId);
         if (!account) throw new Error('local account not found');
@@ -312,25 +1387,67 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
         state.invocations.push(invocation);
         await writeState(state);
         sendJson(response, 200, { text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation });
-      } else {
-        sendJson(response, 404, { error: 'not_found' });
+        } else {
+          sendJson(response, 404, { error: 'not_found' });
+        }
       }
     } catch {
       sendJson(response, 500, { error: 'harness_error' });
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolve());
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('local control API did not expose a TCP address');
-  emitJson({ status: 'running', url: `http://127.0.0.1:${address.port}`, installationId: state.installationId, credentialBoundary: 'local-only' });
-  await new Promise<void>((resolve) => {
-    const stop = () => server.close(() => resolve());
-    process.once('SIGINT', stop);
-    process.once('SIGTERM', stop);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, '127.0.0.1', () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('local control API did not expose a TCP address');
+    await writeFile(runtimePath, `${JSON.stringify({ pid: process.pid, port: address.port, host: '127.0.0.1', installationId: startupState.installationId, startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    emitJson({ status: 'running', url: `http://127.0.0.1:${address.port}`, installationId: startupState.installationId, credentialBoundary: 'local-only' });
+    await new Promise<void>((resolve) => {
+      const stop = () => server.close(() => resolve());
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    });
+  } finally {
+    await runtimeLock.close().catch(() => undefined);
+    await unlink(runtimePath).catch(() => undefined);
+    await unlink(lockPath).catch(() => undefined);
+  }
+}
+
+export async function aiStatus(): Promise<void> {
+  const runtimePath = join(harnessStatePath(), '..', 'runtime.json');
+  try {
+    const runtime = JSON.parse(await readFile(runtimePath, 'utf8')) as { pid?: unknown; port?: unknown; host?: unknown; installationId?: unknown; startedAt?: unknown };
+    let running = false;
+    if (typeof runtime.pid === 'number') {
+      try { process.kill(runtime.pid, 0); running = true; } catch (error) { running = (error as NodeJS.ErrnoException).code === 'EPERM'; }
+    }
+    emitJson({ status: running ? 'running' : 'stale', ...runtime, credentialBoundary: 'local-only' });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    emitJson({ status: 'stopped' });
+  }
+}
+
+export async function aiStop(): Promise<void> {
+  const runtimePath = join(harnessStatePath(), '..', 'runtime.json');
+  const state = await readState();
+  let runtime: { pid?: unknown; installationId?: unknown };
+  try {
+    runtime = JSON.parse(await readFile(runtimePath, 'utf8')) as typeof runtime;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emitJson({ status: 'stopped' });
+    throw error;
+  }
+  if (runtime.installationId !== state.installationId || typeof runtime.pid !== 'number') {
+    throw new Error('refusing to stop a runtime record that does not belong to this ClikCode installation');
+  }
+  try { process.kill(runtime.pid, 'SIGTERM'); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+  emitJson({ status: 'stopping', pid: runtime.pid });
 }
 
 export async function aiAccountsList(): Promise<void> {
@@ -343,36 +1460,138 @@ export async function aiAccountProviders(): Promise<void> {
   emitJson({ harnesses: localRouter().AI_LOCAL_HARNESSES });
 }
 
+/** Read-only compatibility report for every catalog entry. */
+export async function aiDoctor(): Promise<void> {
+  const harnesses = await Promise.all(localRouter().AI_LOCAL_HARNESSES.map(async (harness) => {
+    const inspection = await inspectNativeHarness(harness);
+    return {
+      command: harness.command,
+      displayName: harness.displayName,
+      provider: harness.provider,
+      surface: harness.surface,
+      binary: harness.binary,
+      install: harness.npmPackage ? `npm:${harness.npmPackage}` : 'vendor-managed',
+      ...inspection,
+      capabilities: {
+        centralizedTurns: Boolean(harness.turn),
+        login: Boolean(harness.loginArgv),
+        accountStatus: Boolean(harness.statusArgv),
+        logout: Boolean(harness.logoutArgv),
+        isolatedProfiles: Boolean(harness.profileEnv),
+        modelSelection: Boolean(harness.modelArgvPrefix),
+        workspaceSelection: Boolean(harness.workspaceArgvPrefix),
+        effortSelection: Boolean(harness.effortArgvPrefix),
+        exactResume: Boolean(harness.session?.resumeIdPrefix),
+        automaticSessionIdentity: Boolean(harness.session?.createIdPrefix || harness.session?.createSessionArgv || harness.session?.discoverArgv),
+        continueLatest: Boolean(harness.session?.continueArgv),
+      },
+    };
+  }));
+  emitJson({ adapterVersion: localRouter().AI_LOCAL_HARNESS_ADAPTER_VERSION, harnesses });
+}
+
 /** Starts the vendor-owned login flow and records only a local opaque profile reference. */
 export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<void> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
-  await loginNativeHarness(harness);
   const state = await readState();
   const accountLabel = (label ?? `${harness.displayName} local`).trim();
+  if (!accountLabel) throw new Error('account label cannot be empty');
+  const existing = state.accounts.find((account) => account.label.toLowerCase() === accountLabel.toLowerCase());
+  if (existing) throw new Error(`a local AI account named "${accountLabel}" already exists`);
+  if (!harness.profileEnv && state.accounts.some((account) => account.provider === harness.provider && account.authKind === 'vendor-cli')) {
+    throw new Error(`${harness.displayName} does not publish an isolated configuration-root contract; only its default native profile can be registered safely`);
+  }
+  const accountId = randomUUID();
+  const profilePath = harness.profileEnv
+    ? join(harnessStatePath(), '..', 'profiles', harness.command, accountId)
+    : undefined;
+  if (profilePath) await mkdir(profilePath, { recursive: true, mode: 0o700 });
+  const nativeProfile = profilePath && harness.profileEnv ? { env: harness.profileEnv, path: profilePath } : undefined;
+  await loginNativeHarness(harness, nativeProfile ? { [nativeProfile.env]: nativeProfile.path } : {});
   if (!state.accounts.some((account) => account.label.toLowerCase() === accountLabel.toLowerCase())) {
-    state.accounts.push({ id: randomUUID(), provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}` });
+    state.accounts.push({ id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) });
     await writeState(state);
   }
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
 }
 
-/** Opens the real native agent TUI; no provider credential crosses the ClikCode boundary. */
-export async function aiHarnessLaunch(harnessCommandName: string, sessionId?: string): Promise<void> {
+function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {
+  const account = state.accounts.find((item) => item.id === labelOrId || item.label.toLowerCase() === labelOrId.toLowerCase());
+  if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
+  if (account.authKind !== 'vendor-cli') throw new Error(`account "${account.label}" is not owned by a vendor CLI`);
+  const harness = localHarnessForProvider(account.provider);
+  if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
+  const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+  return { account, harness, environment };
+}
+
+export async function aiAccountStatus(labelOrId: string): Promise<void> {
+  const state = await readState();
+  const { account, harness, environment } = nativeAccountContext(state, labelOrId);
+  if (!harness.statusArgv) throw new Error(`${harness.displayName} does not publish a non-destructive account-status command`);
+  const nativeStatus = (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim();
+  emitJson({ account: accountView(account), nativeStatus, credentialBoundary: 'local-only' });
+}
+
+export async function aiAccountLogout(labelOrId: string): Promise<void> {
+  const state = await readState();
+  const { account, harness, environment } = nativeAccountContext(state, labelOrId);
+  if (!harness.logoutArgv) throw new Error(`${harness.displayName} does not publish a non-interactive logout command`);
+  await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
+  account.status = 'needs_login';
+  await writeState(state);
+  emitJson({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
+}
+
+/** Select a provider while retaining ClikCode as the foreground UI. */
+export async function aiHarnessSelect(harnessCommandName: string, sessionId: string): Promise<void> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
-  if (sessionId) {
-    const state = await readState();
-    const session = state.sessions.find((item) => item.id === sessionId);
-    if (!session) throw new Error(`AI session "${sessionId}" was not found`);
-    session.nativeHarness = harness.command;
-    session.provider = harness.provider;
-    session.route = 'local';
-    session.workspace = process.cwd();
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
+  if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
+  if (!harness.turn) throw new Error(`${harness.displayName} does not publish a non-interactive CLI contract required by the centralized ClikCode UI.`);
+  const inspection = await inspectNativeHarness(harness);
+  if (!inspection.installed) throw new Error(`${harness.displayName} is not installed; run \`${harnessCommand()} harnesses install ${harness.command}\` first`);
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) throw new Error(`AI session "${sessionId}" was not found`);
+  const sameHarness = session.nativeHarness === harness.command;
+  if (!sameHarness) {
+    session.nativeSessionId = undefined;
+    session.nativeStartedAt = undefined;
+    session.model = null;
   }
-  await launchNativeHarness(harness);
+  session.nativeHarness = harness.command;
+  session.provider = harness.provider;
+  session.route = 'local';
+  session.workspace ??= process.cwd();
+  const selected = session.accountId ? state.accounts.find((account) => account.id === session.accountId) : undefined;
+  if (!selected || selected.provider !== harness.provider || selected.status !== 'ready') {
+    const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli' && account.status === 'ready');
+    if (accounts.length === 1) session.accountId = accounts[0].id;
+    else if (accounts.length === 0) {
+      const account: AiHarnessAccount = {
+        id: randomUUID(), provider: harness.provider, label: `${harness.displayName} default`, authKind: 'vendor-cli',
+        models: [], status: 'ready', credentialRef: `native:${harness.binary}:default`,
+      };
+      state.accounts.push(account);
+      session.accountId = account.id;
+    } else session.accountId = null;
+  }
+  if (!session.model) {
+    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+    const catalog = await nativeModelCatalog(harness, account);
+    if (catalog.configured) session.model = catalog.configured;
+  }
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
+  const compatible = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
+  emitHarnessOutput({
+    panel: 'provider-selected', harness: harness.command, displayName: harness.displayName, provider: harness.provider,
+    account: state.accounts.find((account) => account.id === session.accountId)?.label ?? null,
+    model: session.model ?? 'provider default', centralized: true,
+    ...(session.accountId ? {} : { actionRequired: `Choose one with /accounts use <label>`, accounts: compatible.map(accountView) }),
+  });
 }
 
 export async function aiModelsList(): Promise<void> {
@@ -421,6 +1640,12 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   const credentialRef = options.credentialRef.trim();
   if (!provider || !label || !credentialRef) throw new Error('provider, label, and local credential reference are required');
   const auth = requireAuthKind(options.auth);
+  if (auth === 'api-key' && !/^env:[A-Z][A-Z0-9_]*$/.test(credentialRef)) {
+    throw new Error('API-key accounts require an env:VARIABLE credential reference; raw provider keys are never stored');
+  }
+  if (auth !== 'api-key' && !/^(?:keychain|native):[^\s]+$/.test(credentialRef)) {
+    throw new Error(`${auth} accounts require a keychain: or native: credential reference; raw credentials are never stored`);
+  }
   const harness = localHarnessForProvider(provider);
   if (harness && !harness.localAuth.includes(auth)) throw new Error(`${harness.displayName} does not support local ${auth} accounts`);
   const state = await readState();
@@ -443,10 +1668,12 @@ export async function aiAccountRemove(labelOrId: string): Promise<void> {
   const [removed] = state.accounts.splice(index, 1);
   state.sessions = state.sessions.map((session) => session.accountId === removed.id ? { ...session, accountId: null } : session);
   await writeState(state);
-  emitJson({ removed: accountView(removed) });
+  emitHarnessOutput({ panel: 'account-removed', account: removed.label });
 }
 
 export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
+  if (options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
+  if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   const state = await readState();
   const account = options.account
     ? state.accounts.find((item) => item.id === options.account || item.label === options.account)
@@ -456,7 +1683,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const session: HarnessSession = {
     id: randomUUID(), route: options.route, accountId: account?.id ?? null,
     provider: options.provider ?? account?.provider ?? null, model: options.model ?? null,
-    effort: options.effort ?? 'medium', accountFailover: options.accountFailover ?? 'on-quota-exhausted', createdAt: now, updatedAt: now, status: 'active',
+    effort: options.effort ?? 'medium', permissionMode: 'workspace-write', accountFailover: options.accountFailover ?? 'on-quota-exhausted', createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
   await writeState(state);
@@ -476,7 +1703,7 @@ export async function aiSessionsList(): Promise<void> {
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();
   let session = [...state.sessions]
-    .filter((item) => item.status !== 'closed')
+    .filter((item) => item.status === 'active')
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
   if (!session) {
     // A closed chat must never reopen without an explicit `sessions open`.
@@ -488,6 +1715,7 @@ export async function aiSessionOpenDefault(config: Conf): Promise<void> {
       id: randomUUID(), route: previous?.route ?? 'local', accountId: previous?.accountId ?? null,
       provider: previous?.provider ?? null, model: previous?.model ?? null,
       effort: previous?.effort ?? 'medium', accountFailover: previous?.accountFailover ?? 'on-quota-exhausted',
+      permissionMode: previous?.permissionMode ?? 'workspace-write',
       createdAt: now, updatedAt: now, status: 'active',
     };
     state.sessions.push(session);
@@ -500,7 +1728,34 @@ export async function aiSessionShow(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  emitJson({ session, resumed: true });
+  emitJson({ session });
+}
+
+export async function aiSessionResume(config: Conf, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.status !== 'active') {
+    session.status = 'active';
+    session.closedAt = undefined;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+  }
+  await aiSessionInteractive(config, session.id);
+}
+
+/** Close is centralized even when the selected native agent has already exited. */
+export async function aiSessionClose(id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.status !== 'closed') {
+    session.status = 'closed';
+    session.closedAt = new Date().toISOString();
+    session.updatedAt = session.closedAt;
+    await writeState(state);
+  }
+  emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
 }
 
 /** Shared slash-command grammar for a future TTY client and the headless CLI. */
@@ -511,13 +1766,242 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   const words = input.trim().replace(/^\//, '').split(/\s+/).filter(Boolean);
   const head = words.shift()?.toLowerCase();
   if (!head) throw new Error('slash command is required');
-  if (head === 'settings') return emitHarnessOutput({ panel: 'settings', session, controls: ['route', 'account', 'model', 'effort', 'accountFailover'] });
+  if (head === 'help') {
+    return emitHarnessOutput({
+      panel: 'help',
+      controls: ['/settings', '/settings route|account|model|effort <value>', '/accounts', '/sessions', '/models', '/usage', '/<harness>', '/exit'],
+    });
+  }
+  if (head === 'status') {
+    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
+    return emitHarnessOutput({ panel: 'settings', session, account });
+  }
+  if (head === 'new' || head === 'reset') {
+    session.messages = [];
+    session.nativeSessionId = undefined;
+    session.nativeStartedAt = undefined;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'conversation-reset', session });
+  }
+  if (head === 'permissions') {
+    const value = words.shift()?.toLowerCase();
+    if (!value) return emitHarnessOutput({ panel: 'permissions', session, controls: ['read-only', 'workspace-write', 'auto'] });
+    if (value !== 'read-only' && value !== 'workspace-write' && value !== 'auto') throw new Error('Choose read-only, workspace-write, or auto.');
+    session.permissionMode = value;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+  }
+  if (head === 'history') return emitHarnessOutput({ panel: 'history', messages: session.messages ?? [] });
+  if (head === 'copy') {
+    const last = [...(session.messages ?? [])].reverse().find((message) => message.role === 'assistant');
+    if (!last) throw new Error('There is no assistant response to copy yet.');
+    await copyToClipboard(last.content);
+    return emitHarnessOutput({ panel: 'copied', text: 'Last response copied to the clipboard.' });
+  }
+  if (head === 'mention' || head === 'attachments') {
+    const action = words.join(' ').trim();
+    if (!action) return emitHarnessOutput({ panel: 'attachments', attachments: session.attachments ?? [] });
+    if (action === 'clear') {
+      session.attachments = [];
+    } else {
+      const unquoted = action.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, '$1$2');
+      const workspace = session.workspace ?? process.cwd();
+      const path = isAbsolute(unquoted) ? resolve(unquoted) : resolve(workspace, unquoted);
+      const info = await stat(path);
+      if (!info.isFile()) throw new Error('Attachments must be files.');
+      if (info.size > 1024 * 1024) throw new Error('Attachments are limited to 1 MiB each.');
+      session.attachments = [...new Set([...(session.attachments ?? []), path])].slice(-10);
+    }
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'attachments', attachments: session.attachments ?? [] });
+  }
+  if (head === 'diff') {
+    const workspace = session.workspace ?? process.cwd();
+    const diff = await captureProcess('git', ['diff', '--no-ext-diff', '--stat', '--', '.'], workspace);
+    const details = await captureProcess('git', ['diff', '--no-ext-diff', '--', '.'], workspace);
+    const combined = `${diff.trim()}${diff.trim() && details.trim() ? '\n\n' : ''}${details.trim()}`;
+    return emitHarnessOutput({ panel: 'diff', diff: combined.slice(0, 512 * 1024) });
+  }
+  if (head === 'review' || head === 'init') {
+    if (session.route === 'gateway') throw new Error(`/${head} is available in the interactive ClikCode session for Gateway routes.`);
+    const extra = words.join(' ').trim();
+    const prompt = head === 'review'
+      ? `Review the uncommitted changes in this workspace. Identify concrete bugs, regressions, security issues, and missing tests. Prioritize findings and cite file paths.${extra ? ` Additional focus: ${extra}` : ''}`
+      : 'Inspect this repository and create or improve AGENTS.md with concise, accurate build, test, architecture, and contribution instructions for coding agents. Verify every command you include.';
+    return aiSessionSend(id, prompt);
+  }
+  if (head === 'rename') {
+    const name = words.join(' ').trim();
+    if (!name) throw new Error('Enter a name after /rename.');
+    session.name = name.slice(0, 120);
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'session-renamed', text: `Conversation renamed to “${session.name}”.` });
+  }
+  if (head === 'archive') {
+    session.status = 'archived';
+    session.closedAt = new Date().toISOString();
+    session.updatedAt = session.closedAt;
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'session-archived', text: 'Conversation archived.' });
+  }
+  if (head === 'delete') {
+    if (words[0]?.toLowerCase() !== 'confirm') throw new Error('Use /delete confirm to permanently delete this ClikCode conversation. Provider-owned history is not deleted.');
+    state.sessions = state.sessions.filter((item) => item.id !== id);
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'session-deleted', text: 'Conversation deleted from ClikCode.' });
+  }
+  if (head === 'fork') {
+    const now = new Date().toISOString();
+    const fork: HarnessSession = {
+      ...session, id: randomUUID(), name: words.join(' ').trim() || (session.name ? `${session.name} (fork)` : undefined),
+      nativeSessionId: undefined, nativeStartedAt: undefined, createdAt: now, updatedAt: now, status: 'active', closedAt: undefined,
+    };
+    state.sessions.push(fork);
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'session-forked', text: `Conversation forked as ${fork.id.slice(0, 8)}. Use /resume to open it.`, session: fork });
+  }
+  if (head === 'model') {
+    const value = words.join(' ').trim();
+    if (!value) throw new Error('Choose a model from /model or use /model <name>.');
+    session.model = value === 'default' || value === 'auto' ? null : value;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+  }
+  if (head === 'effort') {
+    const value = words.join(' ').trim().toLowerCase();
+    if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)) throw new Error('Choose low, medium, high, xhigh, max, or ultra.');
+    session.effort = value;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+  }
+  if (head === 'account' && words.length) {
+    return aiSessionCommand(id, `/accounts use ${words.join(' ')}`);
+  }
+  if (head === 'sessions') {
+    const action = words.shift()?.toLowerCase();
+    const targetId = words.shift();
+    if (action === 'close') {
+      if (!targetId) throw new Error('usage: /sessions close <id>');
+      return aiSessionClose(targetId);
+    }
+    if (action === 'show' || action === 'open' || action === 'resume') {
+      if (!targetId) throw new Error(`usage: /sessions ${action} <id>`);
+      const target = state.sessions.find((item) => item.id === targetId);
+      if (!target) throw new Error(`AI session "${targetId}" was not found`);
+      return emitHarnessOutput({ panel: 'session', session: target, next: `${harnessCommand()} sessions open ${target.id}` });
+    }
+    if (action && action !== 'list' && action !== 'ls') throw new Error('usage: /sessions [list|show <id>|open <id>|close <id>]');
+    return emitHarnessOutput({
+      panel: 'sessions',
+      sessions: state.sessions.map((item) => ({
+        id: item.id, status: item.status, harness: item.nativeHarness, nativeSessionId: item.nativeSessionId,
+        provider: item.provider, model: item.model, workspace: item.workspace, updatedAt: item.updatedAt,
+      })),
+      controls: ['sessions list', 'sessions open <id>', 'sessions close <id>'],
+    });
+  }
+  if (head === 'models') {
+    return emitHarnessOutput({
+      panel: 'models',
+      models: state.accounts.flatMap((account) => account.models.map((model) => ({ account: account.label, provider: account.provider, model }))),
+      selected: session.model,
+    });
+  }
+  if (head === 'usage') {
+    const invocations = state.invocations.filter((invocation) => invocation.accountId === session.accountId || (session.route === 'gateway' && invocation.accountId === 'gateway'));
+    return emitHarnessOutput({
+      panel: 'usage', invocations,
+      totals: invocations.reduce((total, invocation) => ({ calls: total.calls + 1, inputTokens: total.inputTokens + (invocation.inputTokens ?? 0), outputTokens: total.outputTokens + (invocation.outputTokens ?? 0) }), { calls: 0, inputTokens: 0, outputTokens: 0 }),
+    });
+  }
+  if (head === 'settings') {
+    const setting = words.shift()?.toLowerCase();
+    const value = words.join(' ').trim();
+    if (!setting) return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+    if (!value) throw new Error(`usage: /settings ${setting} <value>`);
+    if (setting === 'route') {
+      if (value !== 'local' && value !== 'gateway') throw new Error('route must be local or gateway');
+      session.route = value;
+    } else if (setting === 'account') {
+      const account = state.accounts.find((item) => item.id === value || item.label.toLowerCase() === value.toLowerCase());
+      if (!account) throw new Error(`local AI account "${value}" was not found`);
+      const accountHarness = localHarnessForProvider(account.provider);
+      if (accountHarness?.turn && session.nativeHarness !== accountHarness.command) {
+        session.nativeHarness = accountHarness.command;
+        session.nativeSessionId = undefined;
+        session.nativeStartedAt = undefined;
+      }
+      session.accountId = account.id;
+      session.provider = account.provider;
+    } else if (setting === 'model') {
+      session.model = value;
+    } else if (setting === 'effort') {
+      if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)) throw new Error('effort must be low, medium, high, xhigh, max, or ultra');
+      session.effort = value;
+    } else if (setting === 'permissions' || setting === 'permission') {
+      if (value !== 'read-only' && value !== 'workspace-write' && value !== 'auto') throw new Error('permissions must be read-only, workspace-write, or auto');
+      session.permissionMode = value;
+    } else if (setting === 'accountfailover' || setting === 'account-failover') {
+      if (value !== 'never' && value !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
+      session.accountFailover = value;
+    } else if (setting === 'native-session') {
+      if (!session.nativeHarness) throw new Error('select a native harness before attaching its session id');
+      const selectedHarness = localHarnessForCommand(session.nativeHarness);
+      if (!selectedHarness?.session?.resumeIdPrefix) throw new Error(`${selectedHarness?.displayName ?? session.nativeHarness} does not support exact session resume`);
+      session.nativeSessionId = value;
+    } else {
+      throw new Error(`unknown setting: ${setting}`);
+    }
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+  }
   if (head === 'accounts') {
     const action = words.shift()?.toLowerCase();
+    if (action === 'use' || action === 'select') {
+      const labelOrId = words.join(' ').trim();
+      if (!labelOrId) throw new Error('usage: /accounts use <label-or-id>');
+      const account = state.accounts.find((item) => item.id === labelOrId || item.label.toLowerCase() === labelOrId.toLowerCase());
+      if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
+      if (session.nativeHarness) {
+        const selectedHarness = localHarnessForCommand(session.nativeHarness);
+        if (selectedHarness && selectedHarness.provider !== account.provider) throw new Error(`account "${account.label}" belongs to ${account.provider}; select /${localHarnessForProvider(account.provider)?.command ?? account.provider} first`);
+      }
+      const accountHarness = localHarnessForProvider(account.provider);
+      if (accountHarness?.turn && session.nativeHarness !== accountHarness.command) {
+        session.nativeHarness = accountHarness.command;
+        session.nativeSessionId = undefined;
+        session.nativeStartedAt = undefined;
+      }
+      session.accountId = account.id;
+      session.provider = account.provider;
+      session.route = 'local';
+      session.updatedAt = new Date().toISOString();
+      await writeState(state);
+      return emitHarnessOutput({ panel: 'accounts', selected: accountView(account), session });
+    }
+    if (action === 'login') {
+      const harnessName = words.shift()?.toLowerCase();
+      if (!harnessName) throw new Error('usage: /accounts login <harness> [label]');
+      return aiAccountLogin(harnessName, words.join(' ') || undefined);
+    }
+    if (action === 'remove' || action === 'rm') {
+      const labelOrId = words.join(' ').trim();
+      if (!labelOrId) throw new Error('usage: /accounts remove <label-or-id>');
+      return aiAccountRemove(labelOrId);
+    }
     if (action === 'add') {
       const shortcut = words.shift()?.toLowerCase();
       const provider = shortcut ? (localHarnessForCommand(shortcut)?.provider ?? shortcut) : undefined;
       if (!provider) throw new Error('usage: /accounts add <harness>');
+      const knownHarness = shortcut ? localHarnessForCommand(shortcut) : undefined;
+      if (knownHarness?.surface === 'terminal') return aiAccountLogin(knownHarness.command, words.join(' ') || undefined);
       return emitHarnessOutput({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
     if (action === 'failover') {
@@ -528,31 +2012,353 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       await writeState(state);
       return emitHarnessOutput({ panel: 'accounts', session, accountFailover: session.accountFailover });
     }
-    return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['add', 'remove', 'failover auto|never'] });
+    return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['use <label-or-id>', 'login <harness> [label]', 'add <harness> [label]', 'remove <label-or-id>', 'failover auto|never'] });
   }
   const harness = localHarnessForCommand(head);
-  if (harness) return aiHarnessLaunch(harness.command, id);
+  if (harness) {
+    await aiHarnessSelect(harness.command, id);
+    const firstPrompt = words.join(' ').trim();
+    if (firstPrompt) await aiSessionSend(id, firstPrompt);
+    return;
+  }
   throw new Error(`unknown slash command: /${head}`);
+}
+
+interface PickerOption<T> { label: string; detail?: string; value: T }
+
+async function chooseOption<T>(rl: HarnessPrompter, title: string, options: readonly PickerOption<T>[]): Promise<T | undefined> {
+  if (options.length === 0) return undefined;
+  if (rl.select) return rl.select(title, options);
+  output.write(`\n${chalk.bold(title)}\n`);
+  options.forEach((option, index) => {
+    output.write(`  ${chalk.cyan(String(index + 1).padStart(2))}  ${option.label}${option.detail ? ` ${chalk.dim(option.detail)}` : ''}\n`);
+  });
+  output.write(`  ${chalk.dim('0   Cancel')}\n\n`);
+  const answer = (await rl.question(chalk.bold('Choose › '))).trim();
+  if (!answer || answer === '0') return undefined;
+  const index = Number(answer) - 1;
+  if (!Number.isInteger(index) || index < 0 || index >= options.length) {
+    emitHarnessOutput({ panel: 'error', message: `Choose a number from 1 to ${options.length}.` });
+    return undefined;
+  }
+  return options[index].value;
+}
+
+async function newProviderConversation(currentId: string, harnessCommandName: string): Promise<string> {
+  const state = await readState();
+  const current = state.sessions.find((item) => item.id === currentId);
+  if (!current) throw new Error(`AI session "${currentId}" was not found`);
+  const harness = localHarnessForCommand(harnessCommandName);
+  if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
+  const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
+  const now = new Date().toISOString();
+  const session: HarnessSession = {
+    id: randomUUID(), route: 'local', accountId: accounts.length === 1 ? accounts[0].id : null,
+    provider: harness.provider, model: null, effort: current.effort,
+    permissionMode: current.permissionMode ?? 'workspace-write', accountFailover: current.accountFailover,
+    workspace: current.workspace ?? process.cwd(), nativeHarness: harness.command, createdAt: now, updatedAt: now, status: 'active',
+  };
+  state.sessions.push(session);
+  await writeState(state);
+  await aiHarnessSelect(harnessCommandName, session.id);
+  return session.id;
+}
+
+async function interactiveEnginePicker(rl: HarnessPrompter, id: string): Promise<string | undefined> {
+  const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
+    .filter((harness) => harness.surface === 'terminal' && harness.turn)
+    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
+    .filter((item) => item.inspection.installed);
+  if (installed.length === 0) {
+    emitHarnessOutput({ panel: 'error', message: 'No supported coding-agent CLI is installed. Run clikcode doctor to see installation options.' });
+    return undefined;
+  }
+  const selected = await chooseOption(rl, 'Choose a provider', installed.map(({ harness, inspection }) => ({
+    label: harness.displayName, detail: inspection.version ? `· ${inspection.version}` : undefined, value: harness.command,
+  })));
+  if (!selected) return undefined;
+  const state = await readState();
+  const current = state.sessions.find((item) => item.id === id);
+  if (!current) throw new Error(`AI session "${id}" was not found`);
+  if (!current.nativeHarness) {
+    await aiHarnessSelect(selected, id);
+    return id;
+  }
+  return newProviderConversation(id, selected);
+}
+
+function harnessAutoPreference(command: string): number {
+  if (command === 'codex') return 0;
+  if (command === 'claude') return 1;
+  return 2;
+}
+
+/**
+ * Bind a session to its native agent without asking. A session that already
+ * names a provider or account is matched to that agent; a session with no
+ * signal picks the first installed terminal harness (Codex, then Claude Code,
+ * then the rest of the catalog). Returns false only when nothing useful is
+ * installed, so the caller can surface one line of guidance instead of a picker.
+ */
+async function autoSelectSessionHarness(id: string): Promise<boolean> {
+  const installedCache = new Map<string, boolean>();
+  const isInstalled = async (harness?: AiLocalHarnessDefinition): Promise<boolean> => {
+    if (!harness) return false;
+    const known = installedCache.get(harness.command);
+    if (known !== undefined) return known;
+    const inspection = await inspectNativeHarness(harness, 1_500);
+    installedCache.set(harness.command, inspection.installed);
+    return inspection.installed;
+  };
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) return false;
+  if (session.nativeHarness) return true;
+  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  const preferred = localHarnessForProvider(session.provider ?? account?.provider ?? '');
+  if (preferred && await isInstalled(preferred)) {
+    await aiHarnessSelect(preferred.command, id);
+    return true;
+  }
+  const candidates = localRouter().AI_LOCAL_HARNESSES
+    .filter((harness) => harness.surface === 'terminal' && harness.turn)
+    .sort((left, right) => harnessAutoPreference(left.command) - harnessAutoPreference(right.command));
+  for (const harness of candidates) {
+    if (await isInstalled(harness)) {
+      await aiHarnessSelect(harness.command, id);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const accounts = state.accounts.filter((account) => account.status === 'ready');
+  const selected = await chooseOption(rl, 'Choose an account', [
+    ...accounts.map((account) => ({
+    label: account.label, detail: `· ${account.provider}${account.id === session.accountId ? ' · current' : ''}`, value: account.label,
+    })),
+    { label: 'Add another account…', detail: 'vendor login', value: '__add__' },
+  ]);
+  if (!selected) return;
+  if (selected !== '__add__') {
+    await aiSessionCommand(id, `/settings account ${selected}`);
+    return;
+  }
+  const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
+    .filter((harness) => harness.surface === 'terminal' && harness.turn)
+    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
+    .filter((item) => item.inspection.installed);
+  const harnessCommand = await chooseOption(rl, 'Add an account for', installed.map(({ harness }) => ({
+    label: harness.displayName, value: harness.command,
+  })));
+  if (!harnessCommand) return;
+  const harness = localHarnessForCommand(harnessCommand)!;
+  const suggested = `${harness.displayName} ${accounts.filter((account) => account.provider === harness.provider).length + 1}`;
+  const entered = (await rl.question(`Account name ${chalk.dim(`[${suggested}]`)} › `)).trim();
+  const label = entered || suggested;
+  await aiAccountLogin(harness.command, label);
+  await aiSessionCommand(id, `/settings account ${label}`);
+}
+
+async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<string | undefined> {
+  const state = await readState();
+  const sessions = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return chooseOption(rl, 'Resume a session', sessions.map((session) => ({
+    label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
+    detail: `· ${session.id === currentId ? 'current · ' : ''}${session.model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
+    value: session.id,
+  })));
+}
+
+async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
+    : session.provider ? localHarnessForProvider(session.provider) : undefined;
+  const catalog = harness ? await nativeModelCatalog(harness, account) : { models: account?.models ?? [] };
+  const effective = session.model ?? catalog.configured;
+  const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
+  const options: PickerOption<string>[] = [
+    ...discoveredModels.map((model) => ({
+      label: model,
+      detail: model === effective ? `· current${!session.model && model === catalog.configured ? ' · provider configured' : ''}` : undefined,
+      value: model,
+    })),
+    { label: 'Automatic provider default', detail: effective ? undefined : '· current', value: 'default' },
+    { label: 'Enter a model ID…', value: '__custom__' },
+  ];
+  const selected = await chooseOption(rl, 'Choose a model', options);
+  if (!selected) return;
+  const value = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : selected;
+  if (value) await aiSessionCommand(id, `/model ${value}`);
+}
+
+async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const levels = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+  const selected = await chooseOption(rl, 'Choose reasoning effort', levels.map((value) => ({
+    label: value, detail: value === session.effort ? '· current' : undefined, value,
+  })));
+  if (selected) await aiSessionCommand(id, `/effort ${selected}`);
+}
+
+async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const current = session.permissionMode ?? 'workspace-write';
+  const modes: Array<{ value: AiHarnessPermissionMode; detail: string }> = [
+    { value: 'read-only', detail: 'inspect and plan; deny writes' },
+    { value: 'workspace-write', detail: 'allow edits inside this project' },
+    { value: 'auto', detail: 'provider reviews approval requests automatically' },
+  ];
+  const selected = await chooseOption(rl, 'Choose filesystem access', modes.map(({ value, detail }) => ({
+    label: value, detail: `· ${detail}${value === current ? ' · current' : ''}`, value,
+  })));
+  if (selected) await aiSessionCommand(id, `/permissions ${selected}`);
+}
+
+async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promise<'resume' | 'exit' | undefined> {
+  const action = await chooseOption(rl, 'Conversations', [
+    { label: 'Resume another…', value: 'resume' },
+    { label: 'Start clean', detail: 'reset provider context', value: 'new' },
+    { label: 'Rename', value: 'rename' },
+    { label: 'Fork', detail: 'copy transcript into a new conversation', value: 'fork' },
+    { label: 'Archive', value: 'archive' },
+    { label: 'Delete', detail: 'remove local ClikCode history', value: 'delete' },
+  ] as const);
+  if (!action) return undefined;
+  if (action === 'resume') return 'resume';
+  if (action === 'new') { await aiSessionCommand(id, '/new'); return undefined; }
+  if (action === 'rename') {
+    const name = (await rl.question('Conversation name › ')).trim();
+    if (name) await aiSessionCommand(id, `/rename ${name}`);
+    return undefined;
+  }
+  if (action === 'fork') { await aiSessionCommand(id, '/fork'); return undefined; }
+  if (action === 'archive') {
+    const answer = (await rl.question('Archive this conversation? [y/N] › ')).trim().toLowerCase();
+    if (answer === 'y' || answer === 'yes') { await aiSessionCommand(id, '/archive'); return 'exit'; }
+    return undefined;
+  }
+  const answer = (await rl.question('Delete this conversation from ClikCode? Type delete › ')).trim().toLowerCase();
+  if (answer === 'delete') { await aiSessionCommand(id, '/delete confirm'); return 'exit'; }
+  return undefined;
+}
+
+async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promise<string | undefined> {
+  const selected = await chooseOption(rl, 'Settings', [
+    { label: 'Provider', detail: 'choose a coding harness', value: 'provider' },
+    { label: 'Account', detail: 'switch login/profile', value: 'account' },
+    { label: 'Model', detail: 'provider default or model ID', value: 'model' },
+    { label: 'Reasoning effort', detail: 'low through ultra', value: 'effort' },
+    { label: 'Filesystem access', detail: 'read-only, workspace-write, or auto', value: 'permissions' },
+    { label: 'Show current setup', value: 'status' },
+  ] as const);
+  if (selected === 'provider') return interactiveEnginePicker(rl, id);
+  else if (selected === 'account') await interactiveAccountPicker(rl, id);
+  else if (selected === 'model') await interactiveModelPicker(rl, id);
+  else if (selected === 'effort') await interactiveEffortPicker(rl, id);
+  else if (selected === 'permissions') await interactivePermissionPicker(rl, id);
+  else if (selected === 'status') await aiSessionCommand(id, '/status');
+  return undefined;
 }
 
 /** Persistent terminal session using the same command and routing surface as automation. */
 export async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
   const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
+  let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.status === 'closed') {
+  if (!session.nativeHarness) {
+    const auto = await autoSelectSessionHarness(id);
+    if (!auto) {
+      emitHarnessOutput({ panel: 'error', message: 'No supported coding-agent CLI is installed. Run clikcode doctor to see installation options.' });
+      return;
+    }
+    const refreshed = await readState();
+    const next = refreshed.sessions.find((item) => item.id === id);
+    if (!next) return;
+    session = next;
+  }
+  let stateChanged = false;
+  if (session.status !== 'active') {
     session.status = 'active';
     session.closedAt = undefined;
     session.updatedAt = new Date().toISOString();
-    await writeState(state);
+    stateChanged = true;
   }
-  const rl = createInterface({ input, output, terminal: true });
-  emitHarnessOutput({ status: 'ready', session, commands: ['/claude', '/codex', '/opencode', '/antigravity', '/accounts', '/settings', '/exit'] });
+  if (!session.model) {
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
+      : session.provider ? localHarnessForProvider(session.provider) : undefined;
+    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+    if (harness) {
+      const catalog = await nativeModelCatalog(harness, account);
+      if (catalog.configured) {
+        session.model = catalog.configured;
+        session.updatedAt = new Date().toISOString();
+        stateChanged = true;
+      }
+    }
+  }
+  if (stateChanged) await writeState(state);
+  const commandDetails: Record<string, string> = {
+    '/provider': 'choose a provider', '/settings': 'configure this workspace', '/account': 'switch account', '/accounts': 'manage accounts',
+    '/model': 'choose a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
+    '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
+    '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
+    '/init': 'create agent instructions', '/mention': 'attach a file', '/attachments': 'queued files', '/copy': 'copy last response',
+    '/rename': 'rename conversation', '/fork': 'fork conversation', '/archive': 'archive conversation', '/delete': 'delete conversation',
+    '/models': 'available models', '/status': 'current configuration', '/usage': 'token usage', '/clear': 'refresh screen',
+    '/help': 'all commands', '/exit': 'save and leave',
+  };
+  const slashCommands: PickerOption<string>[] = [
+    ...Object.keys(commandDetails).map((value) => ({ label: value, detail: commandDetails[value], value })),
+    ...localRouter().AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal').map((item) => ({
+      label: `/${item.command}`, detail: `switch to ${item.displayName}`, value: `/${item.command}`,
+    })),
+  ];
+  const fallbackCommands = slashCommands.map((item) => item.value);
+  const rl: HarnessPrompter = input.isTTY && output.isTTY
+    ? new FullScreenHarnessPrompter()
+    : createInterface({
+      input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,
+      completer: (value: string) => {
+        const matches = fallbackCommands.filter((command) => command.startsWith(value));
+        return [matches.length ? matches : fallbackCommands, value] as [string[], string];
+      },
+    });
+  if (rl instanceof FullScreenHarnessPrompter) activeFullScreenHarness = rl;
+  const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
+  if (rl.render) rl.render(session, initialAccount);
+  else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
+  const refreshUsage = (target: HarnessSession, targetState: HarnessState): void => {
+    if (!(rl instanceof FullScreenHarnessPrompter)) return;
+    void nativeUsageLabel(target, targetState).then((label) => {
+      if (activeFullScreenHarness === rl) rl.usage(label);
+    }).catch(() => { /* Usage is optional provider metadata. */ });
+  };
+  refreshUsage(session, state);
+  let notice: string | undefined;
   try {
     while (true) {
       let line: string;
       try {
-        line = (await rl.question('› ')).trim();
+        const latestState = await readState();
+        const latest = latestState.sessions.find((item) => item.id === id);
+        if (!latest) break;
+        const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
+        rl.render?.(latest, account, notice);
+        refreshUsage(latest, latestState);
+        notice = undefined;
+        line = (await rl.question('❯ ', slashCommands)).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.
@@ -561,16 +2367,109 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
       }
       if (!line) continue;
       if (line === '/exit' || line === '/quit') {
-        session.status = 'closed';
-        session.closedAt = new Date().toISOString();
-        session.updatedAt = session.closedAt;
-        await writeState(state);
+        await aiSessionClose(id);
         break;
       }
-      if (line.startsWith('/')) await aiSessionCommand(id, line);
-      else await aiGatewaySessionSend(config, id, line);
+      try {
+        const command = line.toLowerCase();
+        if (command === '/switch' || command === '/engine' || command === '/provider') {
+          const selected = await interactiveEnginePicker(rl, id);
+          if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+        }
+        else if (command === '/account') await interactiveAccountPicker(rl, id);
+        else if (command === '/model') await interactiveModelPicker(rl, id);
+        else if (command === '/effort') await interactiveEffortPicker(rl, id);
+        else if (command === '/permissions') await interactivePermissionPicker(rl, id);
+        else if (command === '/settings') {
+          const selected = await interactiveSettingsPicker(rl, id);
+          if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+        }
+        else if (command === '/accounts') await interactiveAccountPicker(rl, id);
+        else if (command === '/sessions') {
+          const action = await interactiveSessionManager(rl, id);
+          if (action === 'exit') break;
+          if (action === 'resume') {
+            const selected = await interactiveSessionPicker(rl, id);
+            if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+          }
+        }
+        else if (command === '/rename') {
+          const name = (await rl.question('Conversation name › ')).trim();
+          if (name) await aiSessionCommand(id, `/rename ${name}`);
+        }
+        else if (command === '/archive' || command === '/delete') {
+          const action = command === '/archive' ? 'archive' : 'delete';
+          const answer = (await rl.question(`${action === 'archive' ? 'Archive' : 'Delete'} this conversation? ${action === 'delete' ? 'Type delete' : '[y/N]'} › `)).trim().toLowerCase();
+          if ((action === 'archive' && ['y', 'yes'].includes(answer)) || (action === 'delete' && answer === 'delete')) {
+            await aiSessionCommand(id, action === 'archive' ? '/archive' : '/delete confirm');
+            break;
+          }
+        }
+        else if (command === '/resume') {
+          const selected = await interactiveSessionPicker(rl, id);
+          if (selected && selected !== id) {
+            rl.close();
+            await aiSessionResume(config, selected);
+            return;
+          }
+        }
+        else if (command === '/clear') output.write('\u001b[2J\u001b[H');
+        else if (command === '/mention') {
+          const path = (await rl.question('File to attach › ')).trim();
+          if (path) await aiSessionCommand(id, `/mention ${path}`);
+        }
+        else if (command === '/review' || command.startsWith('/review ') || command === '/init') {
+          const extra = command.startsWith('/review ') ? line.slice('/review '.length).trim() : '';
+          const task = command === '/init'
+            ? 'Inspect this repository and create or improve AGENTS.md with concise, accurate build, test, architecture, and contribution instructions for coding agents. Verify every command you include.'
+            : `Review the uncommitted changes in this workspace. Identify concrete bugs, regressions, security issues, and missing tests. Prioritize findings and cite file paths.${extra ? ` Additional focus: ${extra}` : ''}`;
+          const turnController = new AbortController();
+          activeFullScreenHarness?.startWaiting('thinking', () => turnController.abort());
+          try { await aiGatewaySessionSend(config, id, task, turnController.signal); }
+          finally { activeFullScreenHarness?.stopWaiting(); }
+        }
+        else if (line.startsWith('/') && !line.includes(' ') && localHarnessForCommand(command.slice(1))) {
+          const selected = await newProviderConversation(id, command.slice(1));
+          rl.close();
+          await aiSessionResume(config, selected);
+          return;
+        }
+        else if (line.startsWith('/')) {
+          await aiSessionCommand(id, line);
+          const head = command.split(/\s+/, 1)[0];
+          if (rl.render && ['/help', '/status', '/models', '/usage', '/history', '/diff', '/attachments', '/copy', '/fork'].includes(head)) {
+            await rl.question('Press Enter to return › ');
+          }
+        }
+        else {
+          const activeState = await readState();
+          const active = activeState.sessions.find((item) => item.id === id);
+          const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
+          if (active && rl.render) {
+            const pending: HarnessSession = {
+              ...active,
+              messages: [...(active.messages ?? []), { role: 'user' as const, content: line }].slice(-40),
+            };
+            rl.render(pending, activeAccount);
+            const turnController = new AbortController();
+            activeFullScreenHarness?.startWaiting('thinking', () => turnController.abort());
+            try { await aiGatewaySessionSend(config, id, line, turnController.signal); }
+            finally { activeFullScreenHarness?.stopWaiting(); }
+            continue;
+          }
+          else output.write(`${chalk.dim(`${active ? sessionProviderLabel(active) : 'Provider'} · working…`)}\n`);
+          try { await aiGatewaySessionSend(config, id, line); }
+          finally { activeFullScreenHarness?.stopWaiting(); }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
+        if (rl.render) notice = cancelled ? 'Stopped' : `Error: ${message}`;
+        else emitHarnessOutput({ panel: 'error', message });
+      }
     }
   } finally {
+    if (activeFullScreenHarness === rl) activeFullScreenHarness = undefined;
     rl.close();
   }
 }
@@ -579,7 +2478,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
  * Runs one durable local session turn. Local sessions resolve an env reference
  * only in this process and record normalized, credential-free usage.
  */
-export async function aiSessionSend(id: string, prompt: string): Promise<void> {
+export async function aiSessionSend(id: string, prompt: string, signal?: AbortSignal): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -587,17 +2486,100 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
   if (!session.accountId) throw new Error('local AI session has no account selected');
   let account = state.accounts.find((item) => item.id === session.accountId);
   if (!account) throw new Error('local AI session account was removed');
-  const model = session.model ?? account.models[0];
-  if (!model) throw new Error('local AI session has no model selected');
-  if (account.models.length > 0 && !account.models.includes(model)) {
+  const model = session.model ?? account.models[0] ?? null;
+  if (model && account.models.length > 0 && !account.models.includes(model)) {
     throw new Error(`model "${model}" is not available through local account "${account.label}"`);
   }
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
+  const prepared = await prepareAttachments(session.attachments ?? []);
+  let turnText = `${text}${prepared.textContext}`;
   const startedAt = Date.now();
+
+  if (account.authKind === 'vendor-cli') {
+    const harness = session.nativeHarness
+      ? localHarnessForCommand(session.nativeHarness)
+      : localHarnessForProvider(account.provider);
+    if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
+    if (!harness.turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
+    if (harness.provider !== account.provider) throw new Error(`session provider ${harness.displayName} does not match account "${account.label}"`);
+    const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+    const images = harness.command === 'codex' ? prepared.images : [];
+    if (prepared.images.length && harness.command !== 'codex') {
+      turnText += `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`;
+    }
+    let createdHere = false;
+    if (!session.nativeSessionId && harness.session?.idKind === 'uuid' && harness.turn.createIdPrefix) {
+      session.nativeSessionId = randomUUID();
+      createdHere = true;
+    } else if (!session.nativeSessionId && harness.session?.idKind === 'history-file' && harness.turn.createIdPrefix) {
+      const nativeDirectory = join(harnessStatePath(), '..', 'native', harness.command);
+      await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
+      session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
+      createdHere = true;
+    } else if (!session.nativeSessionId && harness.session?.createSessionArgv) {
+      session.nativeSessionId = await captureNativeHarness(harness, harness.session.createSessionArgv, environment);
+      createdHere = true;
+    }
+    session.nativeHarness = harness.command;
+    session.provider = harness.provider;
+    session.workspace ??= process.cwd();
+    const argv = localRouter().nativeHarnessTurnArgv(harness, {
+      prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
+      launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
+      permissionMode: session.permissionMode ?? 'workspace-write', images,
+    });
+    // Persist an allocated native identity before the provider starts so an
+    // interrupted turn cannot accidentally fork the centralized conversation.
+    if (createdHere) await writeState(state);
+    const turnOutput = await captureNativeHarnessTurn(
+      harness, argv, environment, {
+        cwd: session.workspace,
+        signal,
+        stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
+        onStdoutLine: (lineText) => {
+          const phase = nativeActivityPhase(lineText);
+          if (phase) activeFullScreenHarness?.phase(phase);
+          const activity = nativeActivityLine(harness, lineText);
+          if (activity && activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
+          else if (activity) output.write(`${activity}\n`);
+        },
+      },
+    );
+    if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+    const result = nativeTurnResult(harness, turnOutput.stdout);
+    if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
+    if (turnOutput.exitCode !== 0 || result.isError) {
+      const failure = Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
+      if (isUsageExhaustion(failure)) {
+        account.quotaState = 'exhausted';
+        account.quotaRetryAt = new Date(Date.now() + 60_000).toISOString();
+        await writeState(state);
+        throw new Error(`${harness.displayName}: ${result.text}. Switch providers with /provider or choose another ${harness.command} account with /accounts use <label>.`);
+      }
+      throw failure;
+    }
+    session.nativeStartedAt ??= new Date().toISOString();
+    const invocation = {
+      id: randomUUID(), accountId: account.id, provider: harness.provider, model: model ?? 'provider-default',
+      at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
+    };
+    state.invocations.push(invocation);
+    session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: result.text }].slice(-40);
+    session.name ??= conversationTitle(text);
+    session.attachments = [];
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    if (!activeFullScreenHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation });
+    return;
+  }
+
+  if (prepared.images.length) throw new Error('Image attachments currently require a vendor-CLI Codex account. Switch with /codex or clear them with /attachments clear.');
+  if (!model) throw new Error('local AI session has no model selected');
   const invoke = (active: AiHarnessAccount) => streamLocalAiTurn({
     provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
-    messages: [...(session.messages ?? []), { role: 'user', content: text }], reasoningEffort: session.effort as never,
+    messages: [...(session.messages ?? []), { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
+    ...(signal ? { abortSignal: signal } : {}),
   });
   let turn;
   let switchedFrom: string | undefined;
@@ -627,35 +2609,49 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
     at: new Date().toISOString(), inputTokens: turn.usage.inputTokens,
     outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt,
   };
+  if (activeFullScreenHarness && Array.isArray(turn.toolCalls)) {
+    for (const call of turn.toolCalls) {
+      const name = call && typeof call.name === 'string' ? call.name : 'tool';
+      activeFullScreenHarness.activity(`${chalk.green('done')} ${chalk.dim(name)}`);
+    }
+  }
   state.invocations.push(invocation);
   session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }].slice(-40);
+  session.name ??= conversationTitle(text);
+  session.attachments = [];
   session.updatedAt = new Date().toISOString();
   await writeState(state);
-  emitHarnessOutput({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+  if (!activeFullScreenHarness) emitHarnessOutput({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
 }
 
 /** Send a gateway session through the existing authenticated platform assistant stream. */
-export async function aiGatewaySessionSend(config: Conf, id: string, prompt: string): Promise<void> {
+export async function aiGatewaySessionSend(config: Conf, id: string, prompt: string, signal?: AbortSignal): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route !== 'gateway') return aiSessionSend(id, prompt);
+  if (session.route !== 'gateway') return aiSessionSend(id, prompt, signal);
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
+  const prepared = await prepareAttachments(session.attachments ?? []);
+  if (prepared.images.length) throw new Error('Image attachments currently require the local Codex provider. Switch with /codex or clear them with /attachments clear.');
+  const turnText = `${text}${prepared.textContext}`;
   const baseUrl = ApiClient.getApiUrl(config).replace(/\/$/, '');
   const apiKey = ApiClient.getApiKeyForUrl(config, baseUrl);
   if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
   const startedAt = Date.now();
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
+    signal,
     headers: { authorization: `Bearer ${apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json' },
-    body: JSON.stringify({ message: text, messages: session.messages ?? [], mode: 'plan' }),
+    body: JSON.stringify({ message: turnText, messages: session.messages ?? [], mode: 'plan' }),
   });
   if (!response.ok || !response.body) throw new Error(`gateway AI request failed (${response.status})`);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let reply = '';
+  const streamToTerminal = !isJsonDefaultMode() && !activeFullScreenHarness;
+  let wroteDelta = false;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -665,8 +2661,18 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
       const frame = buffer.slice(0, boundary).trim();
       buffer = buffer.slice(boundary + 2);
       if (frame.startsWith('data:')) {
-        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string };
-        if (event.type === 'delta' && typeof event.text === 'string') reply += event.text;
+        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; name?: string; tool?: string };
+        if (event.type === 'delta' && typeof event.text === 'string') {
+          activeFullScreenHarness?.phase('generating response');
+          reply += event.text;
+          if (streamToTerminal) { output.write(event.text); wroteDelta = true; }
+        }
+        if (activeFullScreenHarness && /reasoning|thinking/.test(event.type ?? '') && event.text?.trim()) {
+          activeFullScreenHarness.activity(`${chalk.cyan('thinking')} ${chalk.dim(visibleSlice(event.text.trim().replace(/\s+/g, ' '), 140))}`);
+        }
+        if (activeFullScreenHarness && /tool/.test(event.type ?? '')) {
+          activeFullScreenHarness.activity(`${chalk.yellow('tool')} ${chalk.dim(event.name ?? event.tool ?? 'tool')}`);
+        }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
       }
       boundary = buffer.indexOf('\n\n');
@@ -676,12 +2682,17 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   const invocation = { id: randomUUID(), accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform', at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
   session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: reply }].slice(-40);
+  session.name ??= conversationTitle(text);
+  session.attachments = [];
   session.updatedAt = new Date().toISOString();
   await writeState(state);
-  emitHarnessOutput({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
+  if (wroteDelta) output.write('\n\n');
+  else if (!activeFullScreenHarness) emitHarnessOutput({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
 }
 
-export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
+export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted'; nativeSession?: string }): Promise<void> {
+  if (options.route !== undefined && options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
+  if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   const state = await readState();
   const index = state.sessions.findIndex((item) => item.id === id);
   if (index < 0) throw new Error(`AI session "${id}" was not found`);
@@ -690,6 +2701,12 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ? undefined
     : state.accounts.find((item) => item.id === options.account || item.label === options.account);
   if (options.account !== undefined && !account) throw new Error(`local AI account "${options.account}" was not found`);
+  if (options.nativeSession !== undefined) {
+    if (!current.nativeHarness) throw new Error('launch a native harness for this ClikCode session before attaching its native session id');
+    const harness = localHarnessForCommand(current.nativeHarness);
+    if (!harness?.session?.resumeIdPrefix) throw new Error(`${harness?.displayName ?? current.nativeHarness} does not declare exact native-session resume support`);
+    if (!options.nativeSession.trim()) throw new Error('native session id cannot be empty');
+  }
   const next: HarnessSession = {
     ...current,
     ...(options.route ? { route: options.route } : {}),
@@ -698,6 +2715,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { effort: options.effort } : {}),
     ...(options.accountFailover ? { accountFailover: options.accountFailover } : {}),
+    ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),
   };
   state.sessions[index] = next;
