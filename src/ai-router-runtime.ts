@@ -7,10 +7,12 @@ export { streamAiChatTurn } from '@clikdeploy/clikrouter/ai-provider-models';
 export {
   AI_LOCAL_HARNESS_ADAPTER_VERSION,
   AI_LOCAL_HARNESSES,
+  AI_LOCAL_HARNESS_CAPABILITIES,
   harnessSupportsEffort,
   harnessSupportsImages,
   harnessSupportsPermissionMode,
   localHarnessForCommand,
+  localHarnessCapabilityManifest,
   localHarnessForProvider,
   nativeHarnessLaunchArgv,
   nativeHarnessTurnArgv,
