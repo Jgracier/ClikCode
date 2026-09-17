@@ -6,9 +6,9 @@
   "bin": { "clikcode": "./dist/index.js" },
   "files": ["dist", "README.md"],
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --packages=external --platform=node --format=esm --target=node22 --banner:js='#!/usr/bin/env node' --outfile=dist/index.js",
+    "build": "esbuild src/index.ts --bundle --packages=external --platform=node --format=esm --target=node22 --banner:js='#!/usr/bin/env node' --outfile=dist/index.js && esbuild ../cli/src/ai-router-runtime.ts --bundle --platform=node --format=cjs --target=node22 --external:@basetenlabs/performance-client --outfile=dist/ai-router-runtime.cjs",
     "type-check": "esbuild src/index.ts --bundle --packages=external --platform=node --format=esm --target=node22 --log-level=warning --outfile=/tmp/clikcode-typecheck.js",
-    "test": "pnpm run build && node dist/index.js --help"
+    "test": "pnpm run build && node dist/index.js --help && node dist/index.js --human doctor"
   },
   "dependencies": {
     "@clikdeploy/clikrouter": "file:../../packages/clikrouter",
