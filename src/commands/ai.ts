@@ -789,7 +789,11 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const footerOnly = palette?.footerOnly ?? false;
     const paletteRows = paletteCapacity;
     const noticeRows = this.currentNotice ? 1 : 0;
-    const targetHeight = Math.max(20, (output.rows || 30) - 1);
+    // -2, not -1: leaves one real blank row at the bottom so the status line
+    // isn't pinned flush against the terminal's last row, and keeps total
+    // frame height strictly under the terminal height as a margin against
+    // the exact-height scroll class of bug (see the meta-line write below).
+    const targetHeight = Math.max(20, (output.rows || 30) - 2);
     const rows = Math.max(4, targetHeight - 3 - paletteRows - noticeRows);
     const conversation: Array<{ text: string; waiting?: boolean }> = [];
     let activityAppended = false;
@@ -1175,9 +1179,8 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
       ['/new', 'start a clean conversation'],
       ['/resume', 'choose a saved session'],
       ['/status', 'show the current workspace and settings'],
-      ['/account', 'choose an account'],
-      ['/accounts', 'list and manage accounts'],
-      ['/model <name>', 'select a model'],
+      ['/account', 'choose, view, or add an account'],
+      ['/model <name>', 'choose or view a model'],
       ['/effort <level>', 'set reasoning effort'],
       ['/permissions', 'choose filesystem access'],
       ['/sessions', 'list saved sessions'],
@@ -1994,7 +1997,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       controls: [
         '/settings', '/settings route|account|model|effort <value>',
         '/settings global effort|permissions|failover <value>', '/settings provider <id> model|effort|permissions|failover <value>|clear',
-        '/accounts', '/sessions', '/models', '/usage', '/<harness>', '/exit',
+        '/account', '/model', '/sessions', '/usage', '/<harness>', '/exit',
       ],
     });
   }
@@ -2550,13 +2553,13 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider', '/settings': 'configure this workspace', '/account': 'switch account', '/accounts': 'manage accounts',
-    '/model': 'choose a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
+    '/provider': 'choose a provider', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
+    '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
     '/init': 'create agent instructions', '/mention': 'attach a file', '/attachments': 'queued files', '/copy': 'copy last response',
     '/rename': 'rename conversation', '/fork': 'fork conversation', '/archive': 'archive conversation', '/delete': 'delete conversation',
-    '/models': 'available models', '/status': 'current configuration', '/usage': 'token usage', '/clear': 'refresh screen',
+    '/status': 'current configuration', '/usage': 'token usage', '/clear': 'refresh screen',
     '/help': 'all commands', '/exit': 'save and leave',
   };
   const slashCommands: PickerOption<string>[] = [
@@ -2655,7 +2658,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
           const selected = await interactiveEnginePicker(rl, id);
           if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
         }
-        else if (command === '/account') await interactiveAccountPicker(rl, id);
+        else if (command === '/account' || command === '/accounts') await interactiveAccountPicker(rl, id);
         else if (command === '/model') await interactiveModelPicker(rl, id);
         else if (command === '/effort') await interactiveEffortPicker(rl, id);
         else if (command === '/permissions') await interactivePermissionPicker(rl, id);
@@ -2681,7 +2684,6 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
             notice = `${providerId} default updated: ${key} = ${rest.join(' ')}`;
           }
         }
-        else if (command === '/accounts') await interactiveAccountPicker(rl, id);
         else if (command === '/sessions') {
           const action = await interactiveSessionManager(rl, id);
           if (action === 'exit') break;
