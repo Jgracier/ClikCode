@@ -2971,6 +2971,25 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         else if (command === '/resume') {
           const selected = await interactiveSessionPicker(rl, id);
           if (selected && selected !== id) {
+            // Resuming picks up a conversation's content, not necessarily its
+            // original vendor: staying on whatever you're already running is
+            // the point of switching providers in the first place — reopening
+            // an old chat shouldn't silently pull you back to a different one.
+            const resumeState = await readState();
+            const current = resumeState.sessions.find((item) => item.id === id);
+            const target = resumeState.sessions.find((item) => item.id === selected);
+            if (current?.nativeHarness && target && target.nativeHarness !== current.nativeHarness) {
+              const originalLabel = sessionProviderLabel(target);
+              target.nativeHarness = current.nativeHarness;
+              target.provider = current.provider;
+              target.accountId = current.accountId;
+              target.model = null;
+              target.nativeSessionId = undefined;
+              target.nativeStartedAt = undefined;
+              target.updatedAt = new Date().toISOString();
+              await writeState(resumeState);
+              notice = `Continuing this ${originalLabel} chat under ${sessionProviderLabel(current)}.`;
+            }
             id = selected;
             continue;
           }
