@@ -68,6 +68,9 @@ interface HarnessSession {
   accountFailover: 'never' | 'on-quota-exhausted';
   createdAt: string;
   updatedAt: string;
+  /** A closed chat is retained for history but is never reopened implicitly. */
+  status: 'active' | 'closed';
+  closedAt?: string;
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
@@ -133,6 +136,9 @@ async function readState(): Promise<HarnessState> {
     const sessions: HarnessSession[] = (parsed.sessions as HarnessSession[]).map((session) => ({
       ...session,
       accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
+      // Sessions created before lifecycle state existed were still open at the
+      // time of upgrade, so preserve their resumability once.
+      status: session.status === 'closed' ? 'closed' : 'active',
     }));
     const now = Date.now();
     const accounts = (parsed.accounts as AiHarnessAccount[]).map((account) => (
@@ -385,7 +391,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const session: HarnessSession = {
     id: randomUUID(), route: options.route, accountId: account?.id ?? null,
     provider: options.provider ?? account?.provider ?? null, model: options.model ?? null,
-    effort: options.effort ?? 'medium', accountFailover: options.accountFailover ?? 'on-quota-exhausted', createdAt: now, updatedAt: now,
+    effort: options.effort ?? 'medium', accountFailover: options.accountFailover ?? 'on-quota-exhausted', createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
   await writeState(state);
@@ -404,12 +410,20 @@ export async function aiSessionsList(): Promise<void> {
  */
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();
-  let session = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  let session = [...state.sessions]
+    .filter((item) => item.status !== 'closed')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
   if (!session) {
+    // A closed chat must never reopen without an explicit `sessions open`.
+    // Its configuration is still the user's last agent choice, so carry that
+    // forward into a clean chat rather than guessing a provider or model.
+    const previous = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
     const now = new Date().toISOString();
     session = {
-      id: randomUUID(), route: 'local', accountId: null, provider: null, model: null,
-      effort: 'medium', accountFailover: 'on-quota-exhausted', createdAt: now, updatedAt: now,
+      id: randomUUID(), route: previous?.route ?? 'local', accountId: previous?.accountId ?? null,
+      provider: previous?.provider ?? null, model: previous?.model ?? null,
+      effort: previous?.effort ?? 'medium', accountFailover: previous?.accountFailover ?? 'on-quota-exhausted',
+      createdAt: now, updatedAt: now, status: 'active',
     };
     state.sessions.push(session);
     await writeState(state);
@@ -461,13 +475,25 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.status === 'closed') {
+    session.status = 'active';
+    session.closedAt = undefined;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+  }
   const rl = createInterface({ input, output, terminal: true });
   emitJson({ status: 'ready', session, commands: ['/claude', '/codex', '/opencode', '/antigravity', '/accounts', '/settings', '/exit'] });
   try {
     while (true) {
       const line = (await rl.question('› ')).trim();
       if (!line) continue;
-      if (line === '/exit' || line === '/quit') break;
+      if (line === '/exit' || line === '/quit') {
+        session.status = 'closed';
+        session.closedAt = new Date().toISOString();
+        session.updatedAt = session.closedAt;
+        await writeState(state);
+        break;
+      }
       if (line.startsWith('/')) await aiSessionCommand(id, line);
       else await aiGatewaySessionSend(config, id, line);
     }
