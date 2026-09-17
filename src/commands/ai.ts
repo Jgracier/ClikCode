@@ -647,8 +647,14 @@ interface HarnessPrompter {
 }
 
 function visibleSlice(value: string, width: number): string {
-  if (value.length <= width) return value;
-  return `${value.slice(0, Math.max(1, width - 1))}…`;
+  if (terminalCellWidth(value) <= width) return value;
+  const available = Math.max(0, width - 1);
+  let rendered = '';
+  for (const character of value) {
+    if (terminalCellWidth(rendered + character) > available) break;
+    rendered += character;
+  }
+  return `${rendered}…`;
 }
 
 function terminalCellWidth(value: string): number {
@@ -890,7 +896,11 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     if (!activityAppended) appendActivity();
     const shown = conversation.slice(-rows);
     const meta = this.statusText();
-    let frame = '\u001b[?25l';
+    // DEC autowrap must stay off while an absolute-positioned frame is written.
+    // A provider-supplied label can otherwise occupy two physical terminal rows
+    // while the renderer still counts one, shifting every subsequent footer-only
+    // repaint and leaving stale option rows above the composer.
+    let frame = '\u001b[?25l\u001b[?7l';
     const screenLine = (text = ''): void => { frame += `\r\u001b[2K${text}\n`; };
     if (footerOnly) {
       frame += `\u001b[${rows + noticeRows + 1};1H`;
@@ -918,10 +928,15 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       const windowed = options.slice(start, start + visibleRows);
       windowed.forEach((option, index) => {
         const absoluteIndex = start + index;
-        screenLine(`  ${absoluteIndex === selected ? chalk.cyan('❯') : ' '} ${absoluteIndex === selected ? chalk.bold(option.label) : option.label}${option.detail ? `  ${chalk.dim(option.detail)}` : ''}`);
+        const selectedOption = absoluteIndex === selected;
+        const available = Math.max(1, width - 4);
+        const label = visibleSlice(option.label, available);
+        const remaining = available - terminalCellWidth(label);
+        const detail = option.detail && remaining > 3 ? visibleSlice(option.detail, remaining - 2) : '';
+        screenLine(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
       });
       for (let index = windowed.length; index < visibleRows; index++) screenLine();
-      screenLine(`  ${chalk.dim(palette?.hint ?? '↑↓ select · Tab complete · Enter run')}`);
+      screenLine(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
     screenLine(rule);
     const viewport = composerViewport(composer, cursor, Math.max(8, inner - terminalCellWidth(prompt)));
@@ -934,7 +949,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     // repaints, which jump back to a fixed absolute row: every such scroll left that
     // target one row stale, so the old line was never overwritten, only added to --
     // the "adds a line every time you scroll" reports in the palette and pickers.
-    frame += `\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}`;
+    frame += `\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}\u001b[?7h`;
     if (!palette?.hideCursor) frame += `\u001b[2A\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\u001b[?25h`;
     output.write(frame);
   }
