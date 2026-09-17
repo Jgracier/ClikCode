@@ -30,6 +30,8 @@ export interface AiHarnessOptionDefinition {
   /** Explicit argv mapping. `repeat` emits the prefix once per list value. */
   argv?: readonly string[];
   argvStyle?: 'value' | 'flag' | 'repeat' | 'config';
+  /** Some CLIs only accept a flag before their turn subcommand. */
+  argvPlacement?: 'root' | 'turn';
   configKey?: string;
   appliesTo?: 'start' | 'resume' | 'both';
   dangerous?: boolean;
@@ -200,7 +202,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('output-schema', 'Output schema', 'JSON Schema for the final response', 'output', ['--output-schema'], 'path'),
       value('local-provider', 'Local provider', 'Local OSS runtime used with OSS mode', 'model', ['--local-provider'], 'enum', { values: ['lmstudio', 'ollama'] }),
       flag('oss', 'Open-source model', 'Use a configured local open-source provider', 'model', ['--oss']),
-      flag('search', 'Web search', 'Enable the native web-search tool', 'tools', ['--search']),
+      flag('search', 'Web search', 'Enable the native web-search tool', 'tools', ['--search'], { argvPlacement: 'root' }),
       flag('worktree', 'Managed worktree', 'Run in a new managed Git worktree', 'session', ['--worktree'], { requiresNewSession: true }),
       flag('ephemeral', 'Ephemeral session', 'Do not persist native session files', 'session', ['--ephemeral'], { requiresNewSession: true }),
       flag('ignore-user-config', 'Ignore user config', 'Do not load CODEX_HOME/config.toml', 'safety', ['--ignore-user-config']),
@@ -380,8 +382,12 @@ function appendDeclaredHarnessOptions(
     if (!option.argv || id === 'model' || id === 'workspace' || id === 'effort' || id === 'permissions') continue;
     if (option.appliesTo === 'start' && resumed) continue;
     if (option.appliesTo === 'resume' && !resumed) continue;
+    const append = (...parts: string[]): void => {
+      if (option.argvPlacement === 'root') argv.unshift(...parts);
+      else argv.push(...parts);
+    };
     if (option.kind === 'boolean') {
-      if (raw === true) argv.push(...option.argv);
+      if (raw === true) append(...option.argv);
       else if (raw !== false && raw !== undefined) throw new Error(`${option.label} must be true or false`);
       continue;
     }
@@ -390,8 +396,8 @@ function appendDeclaredHarnessOptions(
       const rendered = String(item).trim();
       if (!rendered) continue;
       if (option.values?.length && !option.values.includes(rendered)) throw new Error(`${option.label} must be one of ${option.values.join(', ')}`);
-      if (option.argvStyle === 'config') argv.push(...option.argv, `${option.configKey}=${JSON.stringify(rendered)}`);
-      else argv.push(...option.argv, rendered);
+      if (option.argvStyle === 'config') append(...option.argv, `${option.configKey}=${JSON.stringify(rendered)}`);
+      else append(...option.argv, rendered);
     }
   }
 }

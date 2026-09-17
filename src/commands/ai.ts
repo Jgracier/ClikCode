@@ -12,9 +12,11 @@ import { createRequire } from 'node:module';
 import type Conf from 'conf';
 import chalk from 'chalk';
 import { ApiClient } from '../api/client.js';
+import { login } from './auth.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
+import { classifyAccountFailure, failoverPrompt } from './ai-failover.js';
 
 const HARNESS_STATE_VERSION = 1;
 const LOCAL_HARNESS_PROTOCOL = 1;
@@ -604,18 +606,20 @@ function conversationTitle(prompt: string): string {
 }
 
 function sessionEngine(session: HarnessSession): string {
-  return session.nativeHarness ?? session.provider ?? (session.route === 'gateway' ? 'gateway' : 'none');
+  return session.route === 'gateway' ? 'gateway' : session.nativeHarness ?? session.provider ?? 'none';
 }
 
 function sessionProviderLabel(session: HarnessSession): string {
+  if (session.route === 'gateway') return 'ClikDeploy Gateway';
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-  return harness?.displayName ?? session.provider ?? (session.route === 'gateway' ? 'ClikDeploy Gateway' : 'Not selected');
+  return harness?.displayName ?? session.provider ?? 'Not selected';
 }
 
 interface HarnessPrompter {
   question(prompt: string, commands?: readonly PickerOption<string>[]): Promise<string>;
   select?<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
+  panel?(title: string, body: string): void;
   close(): void;
 }
 
@@ -670,6 +674,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   private draftSelected = 0;
   private draftPrompt = '› ';
   private draftCursor = 0;
+  private draftPalette?: { capacity?: number; hint?: string; hideCursor?: boolean };
   private waitingTimer?: NodeJS.Timeout;
   private waitingFrame = 0;
   private waitingLabel = '';
@@ -700,7 +705,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   private readonly onResize = (): void => {
     if (!this.closed) {
       output.write('\u001b[2J');
-      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
   };
 
@@ -721,6 +726,13 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     if (!normalized || this.activityLines[this.activityLines.length - 1] === normalized) return;
     this.activityLines = [...this.activityLines.slice(-5), normalized];
     if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+  }
+
+  panel(title: string, body: string): void {
+    const lines = body.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    this.activityLines = [chalk.bold(title), ...lines].slice(-6);
+    this.activityAnchor = this.currentSession?.messages?.length ?? 0;
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
   startWaiting(message: string, onCancel?: () => void): void {
@@ -773,7 +785,10 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     if (!session) return '';
     const context = compactPath(session.workspace ?? process.cwd());
     const provider = `${sessionProviderLabel(session)}${this.usageLabel ? `  ${this.usageLabel}` : ''}`;
-    return [provider, `${session.model ?? 'automatic'} ${session.effort}`, context].join('  •  ');
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    const model = harness?.modelArgvPrefix ? session.model ?? 'automatic' : undefined;
+    const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
+    return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
   }
 
   private waitingText(): string {
@@ -783,7 +798,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
 
   private updateWaiting(): void {
     if (!this.waitingLabel || !this.waitingScreenRow) return;
-    const width = Math.max(48, (output.columns || 100) - 1);
+    const width = Math.max(12, (output.columns || 100) - 1);
     // Hiding the cursor for this one write keeps it from visibly jumping to the
     // activity row and back every ~90ms while the spinner ticks.
     output.write(`\u001b[?25l\u001b7\u001b[${this.waitingScreenRow};1H\u001b[2K  ${chalk.cyan('●')} ${chalk.dim(visibleSlice(this.waitingText(), width - 6))}\u001b8\u001b[?25h`);
@@ -809,13 +824,16 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     this.draftSelected = selected;
     this.draftPrompt = prompt;
     this.draftCursor = cursor;
-    const width = Math.max(48, (output.columns || 100) - 1);
+    this.draftPalette = palette ? { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } : undefined;
+    const width = Math.max(12, (output.columns || 100) - 1);
     const inner = width - 4;
     const rule = chalk.dim('─'.repeat(width));
     const allMessages = session.messages ?? [];
     const messages = allMessages.slice(-6);
     const messageStart = allMessages.length - messages.length;
-    const paletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
+    const targetHeight = Math.max(4, (output.rows || 30) - 1);
+    const requestedPaletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
+    const paletteCapacity = Math.min(requestedPaletteCapacity, Math.max(0, targetHeight - 5));
     const footerOnly = palette?.footerOnly ?? false;
     const paletteRows = paletteCapacity;
     const noticeRows = this.currentNotice ? 1 : 0;
@@ -823,8 +841,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     // isn't pinned flush against the terminal's last row, and keeps total
     // frame height strictly under the terminal height as a margin against
     // the exact-height scroll class of bug (see the meta-line write below).
-    const targetHeight = Math.max(20, (output.rows || 30) - 2);
-    const rows = Math.max(4, targetHeight - 3 - paletteRows - noticeRows);
+    const rows = Math.max(1, targetHeight - 3 - paletteRows - noticeRows);
     const conversation: Array<{ text: string; waiting?: boolean }> = [];
     let activityAppended = false;
     const appendActivity = (): void => {
@@ -1337,12 +1354,10 @@ async function readState(): Promise<HarnessState> {
       status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
       permissionMode: session.permissionMode ?? 'workspace-write',
     }));
-    const now = Date.now();
-    const accounts = (parsed.accounts as AiHarnessAccount[]).map((account) => (
-      account.quotaState === 'exhausted' && account.quotaRetryAt && Date.parse(account.quotaRetryAt) <= now
-        ? { ...account, quotaState: 'available' as const, quotaRetryAt: undefined }
-        : account
-    ));
+    // Older builds invented a 60-second quota reset. A real limit remains
+    // exhausted until the user explicitly retries that account or the provider
+    // publishes a trustworthy reset signal.
+    const accounts = (parsed.accounts as AiHarnessAccount[]).map(({ quotaRetryAt: _obsoleteRetryAt, ...account }) => account);
     const normalized = {
       ...(parsed as HarnessState), accounts, sessions, invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [],
       globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings },
@@ -1457,12 +1472,6 @@ function localApiKey(account: AiHarnessAccount): string {
   return value;
 }
 
-function isUsageExhaustion(error: unknown): boolean {
-  const status = (error as { statusCode?: unknown; response?: { status?: unknown } } | null)?.statusCode
-    ?? (error as { response?: { status?: unknown } } | null)?.response?.status;
-  if (status === 402 || status === 429) return true;
-  return /(?:quota exceeded|quota exhausted|usage limit|session limit|rate limit|too many requests|credits? exhausted)/i.test(error instanceof Error ? error.message : String(error));
-}
 
 /** Starts an intentionally loopback-only harness service. It exposes no provider tokens. */
 export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
@@ -1852,6 +1861,47 @@ export async function aiAccountRemove(labelOrId: string): Promise<void> {
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['read-only', 'workspace-write', 'auto'];
 
+function optionForHarness(harness: AiLocalHarnessDefinition, id: string): AiHarnessOptionDefinition | undefined {
+  return localHarnessCapabilityManifest(harness).options.find((option) => option.id === id);
+}
+
+function parseHarnessOption(option: AiHarnessOptionDefinition, raw: string): unknown {
+  const value = raw.trim();
+  if (option.kind === 'boolean') {
+    if (['true', 'on', 'yes', '1', 'enabled'].includes(value.toLowerCase())) return true;
+    if (['false', 'off', 'no', '0', 'disabled'].includes(value.toLowerCase())) return false;
+    throw new Error(`${option.label} must be on or off`);
+  }
+  if (option.kind === 'number') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${option.label} must be a non-negative number`);
+    return parsed;
+  }
+  if (option.kind === 'string-list' || option.kind === 'path-list') {
+    const values = value.split(',').map((item) => item.trim()).filter(Boolean);
+    if (!values.length) throw new Error(`${option.label} requires at least one value`);
+    return values;
+  }
+  if (option.values?.length && !option.values.includes(value)) throw new Error(`${option.label} must be one of ${option.values.join(', ')}`);
+  if (!value) throw new Error(`${option.label} cannot be empty`);
+  return value;
+}
+
+function setSessionHarnessOption(session: HarnessSession, harness: AiLocalHarnessDefinition, id: string, raw: string): void {
+  const option = optionForHarness(harness, id);
+  if (!option) throw new Error(`${harness.displayName} does not support option "${id}"`);
+  const parsed = parseHarnessOption(option, raw);
+  if (id === 'model') session.model = String(parsed);
+  else if (id === 'effort') session.effort = String(parsed);
+  else if (id === 'workspace') session.workspace = String(parsed);
+  else if (id === 'permissions') session.permissionMode = String(parsed) as AiHarnessPermissionMode;
+  else session.harnessOptions = { ...(session.harnessOptions ?? {}), [id]: parsed };
+  if (option.requiresNewSession) {
+    session.nativeSessionId = undefined;
+    session.nativeStartedAt = undefined;
+  }
+}
+
 function normalizeFailoverWord(value: string): 'never' | 'on-quota-exhausted' {
   if (value === 'auto') return 'on-quota-exhausted';
   if (value === 'never') return 'never';
@@ -1933,6 +1983,14 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     : undefined;
   if (options.route === 'local' && options.account && !account) throw new Error(`local AI account "${options.account}" was not found`);
   const provider = options.provider ?? account?.provider ?? null;
+  const harness = provider ? localHarnessForProvider(provider) : undefined;
+  if (provider && !harness && options.route === 'local') throw new Error(`unknown local provider "${provider}"`);
+  if (options.model && harness && !harness.modelArgvPrefix) throw new Error(`${harness.displayName} does not publish a model selector.`);
+  if (options.effort && harness) {
+    const effortOption = optionForHarness(harness, 'effort');
+    if (!effortOption) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
+    parseHarnessOption(effortOption, options.effort);
+  }
   const defaults = resolveDefaultSettings(state, provider);
   const now = new Date().toISOString();
   const session: HarnessSession = {
@@ -1971,9 +2029,9 @@ export async function aiSessionOpenDefault(config: Conf): Promise<void> {
     const now = new Date().toISOString();
     session = {
       id: randomUUID(), route: previous?.route ?? 'local', accountId: previous?.accountId ?? null,
-      provider, model: previous?.model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
-      effort: previous?.effort ?? defaults.effort, accountFailover: previous?.accountFailover ?? defaults.accountFailover,
-      permissionMode: previous?.permissionMode ?? defaults.permissionMode,
+      provider, model: (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
+      effort: defaults.effort, accountFailover: defaults.accountFailover,
+      permissionMode: defaults.permissionMode,
       createdAt: now, updatedAt: now, status: 'active',
     };
     state.sessions.push(session);
@@ -2049,8 +2107,9 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   if (head === 'permissions') {
     const value = words.shift()?.toLowerCase();
     if (!value) return emitHarnessOutput({ panel: 'permissions', session, controls: ['read-only', 'workspace-write', 'auto'] });
-    if (value !== 'read-only' && value !== 'workspace-write' && value !== 'auto') throw new Error('Choose read-only, workspace-write, or auto.');
-    session.permissionMode = value;
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!harness) throw new Error('Choose a provider before setting permissions.');
+    setSessionHarnessOption(session, harness, 'permissions', value);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
@@ -2129,6 +2188,8 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   if (head === 'model') {
     const value = words.join(' ').trim();
     if (!value) throw new Error('Choose a model from /model or use /model <name>.');
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
     session.model = value === 'default' || value === 'auto' ? null : value;
     session.updatedAt = new Date().toISOString();
     await writeState(state);
@@ -2136,8 +2197,9 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   }
   if (head === 'effort') {
     const value = words.join(' ').trim().toLowerCase();
-    if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)) throw new Error('Choose low, medium, high, xhigh, max, or ultra.');
-    session.effort = value;
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!harness) throw new Error('Choose a provider before setting effort.');
+    setSessionHarnessOption(session, harness, 'effort', value);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
@@ -2201,14 +2263,26 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       }
       session.accountId = account.id;
       session.provider = account.provider;
+      session.route = 'local';
+      account.quotaState = 'available';
+      account.quotaRetryAt = undefined;
     } else if (setting === 'model') {
-      session.model = value;
+      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+      if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
+      session.model = value === 'default' || value === 'auto' ? null : value;
     } else if (setting === 'effort') {
-      if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)) throw new Error('effort must be low, medium, high, xhigh, max, or ultra');
-      session.effort = value;
+      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+      if (!harness) throw new Error('Choose a provider before setting effort.');
+      setSessionHarnessOption(session, harness, 'effort', value);
     } else if (setting === 'permissions' || setting === 'permission') {
-      if (value !== 'read-only' && value !== 'workspace-write' && value !== 'auto') throw new Error('permissions must be read-only, workspace-write, or auto');
-      session.permissionMode = value;
+      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+      if (!harness) throw new Error('Choose a provider before setting permissions.');
+      setSessionHarnessOption(session, harness, 'permissions', value);
+    } else if (setting === 'option') {
+      const [optionId, ...optionValue] = value.split(/\s+/);
+      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+      if (!harness || !optionId || !optionValue.length) throw new Error('usage: /settings option <id> <value>');
+      setSessionHarnessOption(session, harness, optionId, optionValue.join(' '));
     } else if (setting === 'accountfailover' || setting === 'account-failover') {
       if (value !== 'never' && value !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
       session.accountFailover = value;
@@ -2242,6 +2316,10 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
         session.nativeStartedAt = undefined;
       }
       session.accountId = account.id;
+      // Explicit selection is the user's retry signal for an account previously
+      // marked exhausted. Automatic routing never guesses a reset time.
+      account.quotaState = 'available';
+      account.quotaRetryAt = undefined;
       session.provider = account.provider;
       session.route = 'local';
       session.updatedAt = new Date().toISOString();
@@ -2275,6 +2353,17 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       return emitHarnessOutput({ panel: 'accounts', session, accountFailover: session.accountFailover });
     }
     return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['use <label-or-id>', 'login <harness> [label]', 'add <harness> [label]', 'remove <label-or-id>', 'failover auto|never'] });
+  }
+  if (head === 'gateway') {
+    session.route = 'gateway';
+    session.accountId = null;
+    session.provider = 'clikdeploy-gateway';
+    session.nativeHarness = undefined;
+    session.nativeSessionId = undefined;
+    session.nativeStartedAt = undefined;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'provider-selected', harness: 'gateway', displayName: 'ClikDeploy Gateway', provider: 'clikdeploy-gateway', account: null, model: 'platform', centralized: true });
   }
   const harness = localHarnessForCommand(head);
   if (harness) {
@@ -2313,11 +2402,12 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
+  const defaults = resolveDefaultSettings(state, harness.provider);
   const now = new Date().toISOString();
   const session: HarnessSession = {
     id: randomUUID(), route: 'local', accountId: accounts.length === 1 ? accounts[0].id : null,
-    provider: harness.provider, model: null, effort: current.effort,
-    permissionMode: current.permissionMode ?? 'workspace-write', accountFailover: current.accountFailover,
+    provider: harness.provider, model: state.providerSettings[harness.provider]?.model ?? null, effort: defaults.effort,
+    permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
     workspace: current.workspace ?? process.cwd(), nativeHarness: harness.command, createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
@@ -2326,19 +2416,56 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
   return session.id;
 }
 
-async function interactiveEnginePicker(rl: HarnessPrompter, id: string): Promise<string | undefined> {
-  const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
-    .filter((harness) => harness.surface === 'terminal' && harness.turn)
-    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
-    .filter((item) => item.inspection.installed);
-  if (installed.length === 0) {
-    emitHarnessOutput({ panel: 'error', message: 'No supported coding-agent CLI is installed. Run clikcode doctor to see installation options.' });
-    return undefined;
+async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<void> {
+  const apiUrl = ApiClient.getApiUrl(config);
+  if (ApiClient.getApiKeyForUrl(config, apiUrl)) return;
+  const provider = await chooseOption(rl, 'Sign in to ClikDeploy Gateway', [
+    { label: 'Continue with Google', value: 'google' as const },
+    { label: 'Continue with GitHub', value: 'github' as const },
+  ]);
+  if (!provider) throw new Error('ClikDeploy Gateway sign-in was cancelled.');
+  if (rl instanceof FullScreenHarnessPrompter) rl.suspend();
+  try {
+    await login(config, { google: provider === 'google', github: provider === 'github', embedded: true });
+  } finally {
+    if (rl instanceof FullScreenHarnessPrompter) rl.resume();
   }
-  const selected = await chooseOption(rl, 'Choose a provider', installed.map(({ harness, inspection }) => ({
-    label: harness.displayName, detail: inspection.version ? `· ${inspection.version}` : undefined, value: harness.command,
-  })));
+  if (!ApiClient.getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a Gateway credential.');
+}
+
+async function newGatewayConversation(config: Conf, rl: HarnessPrompter, currentId: string): Promise<string> {
+  await ensureGatewayLogin(config, rl);
+  const state = await readState();
+  const current = state.sessions.find((item) => item.id === currentId);
+  if (!current) throw new Error(`AI session "${currentId}" was not found`);
+  const now = new Date().toISOString();
+  const session: HarnessSession = {
+    id: randomUUID(), route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null,
+    effort: current.effort, permissionMode: current.permissionMode, accountFailover: 'never',
+    workspace: current.workspace ?? process.cwd(), createdAt: now, updatedAt: now, status: 'active',
+  };
+  state.sessions.push(session);
+  await writeState(state);
+  return session.id;
+}
+
+async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
+  const available = await Promise.all(localRouter().AI_LOCAL_HARNESSES
+    .filter((harness) => harness.surface === 'terminal' && harness.turn)
+    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) })));
+  const gatewayConnected = Boolean(ApiClient.getApiKeyForUrl(config, ApiClient.getApiUrl(config)));
+  const selected = await chooseOption(rl, 'Choose a provider', [
+    { label: 'ClikDeploy Gateway', detail: gatewayConnected ? '· connected' : '· sign in with OAuth', value: '__gateway__' },
+    ...available.map(({ harness, inspection }) => ({
+      label: harness.displayName,
+      detail: inspection.installed
+        ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
+        : harness.npmPackage ? '· install on selection' : '· vendor install required',
+      value: harness.command,
+    })),
+  ]);
   if (!selected) return undefined;
+  if (selected === '__gateway__') return newGatewayConversation(config, rl, id);
   const state = await readState();
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
@@ -2524,10 +2651,44 @@ async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   if (harness && !harnessSupportsEffort(harness)) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
-  const selected = await chooseOption(rl, 'Choose reasoning effort', VALID_EFFORTS.map((value) => ({
+  const effortOption = harness ? optionForHarness(harness, 'effort') : undefined;
+  const efforts = effortOption?.values?.length ? effortOption.values : VALID_EFFORTS;
+  const selected = await chooseOption(rl, 'Choose reasoning effort', efforts.map((value) => ({
     label: value, detail: value === session.effort ? '· current' : undefined, value,
   })));
   if (selected) await applySettingScope(rl, id, 'effort', selected);
+}
+
+async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  if (!harness) throw new Error('Choose a provider first.');
+  const manifest = localHarnessCapabilityManifest(harness);
+  const option = await chooseOption(rl, `${harness.displayName} options`, manifest.options.map((item) => ({
+    label: item.label,
+    detail: `· ${item.description}${item.dangerous ? ` · ${chalk.yellow('dangerous')}` : ''}`,
+    value: item,
+  })));
+  if (!option) return;
+  let raw: string | undefined;
+  if (option.kind === 'boolean') {
+    raw = await chooseOption(rl, option.label, [
+      { label: 'On', value: 'on' }, { label: 'Off', value: 'off' },
+    ]);
+  } else if (option.values?.length) {
+    raw = await chooseOption(rl, option.label, option.values.map((entry) => ({ label: entry, value: entry })));
+  } else {
+    raw = (await rl.question(`${option.label} › `)).trim();
+  }
+  if (raw === undefined || raw === '') return;
+  const fresh = await readState();
+  const target = fresh.sessions.find((item) => item.id === id);
+  if (!target) return;
+  setSessionHarnessOption(target, harness, option.id, raw);
+  target.updatedAt = new Date().toISOString();
+  await writeState(fresh);
 }
 
 async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Promise<void> {
@@ -2561,21 +2722,27 @@ async function interactiveFailoverPicker(rl: HarnessPrompter, id: string): Promi
   if (selected) await applySettingScope(rl, id, 'failover', selected);
 }
 
-async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promise<string | undefined> {
+async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const selected = await chooseOption(rl, 'Settings', [
     { label: 'Provider', detail: 'choose a coding harness', value: 'provider' },
     { label: 'Account', detail: 'switch login/profile', value: 'account' },
-    { label: 'Model', detail: 'provider default or model ID', value: 'model' },
-    { label: 'Reasoning effort', detail: 'low through ultra', value: 'effort' },
-    { label: 'Filesystem access', detail: 'read-only, workspace-write, or auto', value: 'permissions' },
+    ...(harness?.modelArgvPrefix ? [{ label: 'Model', detail: 'provider default or model ID', value: 'model' }] : []),
+    ...(harness && harnessSupportsEffort(harness) ? [{ label: 'Reasoning effort', detail: 'provider-supported levels', value: 'effort' }] : []),
+    ...(harness?.permissionModes?.length ? [{ label: 'Filesystem access', detail: 'provider-supported access policy', value: 'permissions' }] : []),
+    ...(harness && localHarnessCapabilityManifest(harness).options.some((option) => !['model', 'effort', 'workspace', 'permissions'].includes(option.id))
+      ? [{ label: `${harness.displayName} options`, detail: 'modes, tools, safety, and context', value: 'options' }] : []),
     { label: 'Quota failover', detail: 'switch accounts automatically, or not', value: 'failover' },
     { label: 'Show current setup', value: 'status' },
   ] as const);
-  if (selected === 'provider') return interactiveEnginePicker(rl, id);
+  if (selected === 'provider') return interactiveEnginePicker(config, rl, id);
   else if (selected === 'account') await interactiveAccountPicker(rl, id);
   else if (selected === 'model') await interactiveModelPicker(rl, id);
   else if (selected === 'effort') await interactiveEffortPicker(rl, id);
   else if (selected === 'permissions') await interactivePermissionPicker(rl, id);
+  else if (selected === 'options') await interactiveHarnessOptionPicker(rl, id);
   else if (selected === 'failover') await interactiveFailoverPicker(rl, id);
   else if (selected === 'status') await aiSessionCommand(id, '/status');
   return undefined;
@@ -2587,22 +2754,27 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
+    '/provider': 'choose a provider', '/gateway': 'switch to ClikDeploy Gateway', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
     '/init': 'create agent instructions', '/mention': 'attach a file', '/attachments': 'queued files', '/copy': 'copy last response',
     '/rename': 'rename conversation', '/fork': 'fork conversation', '/archive': 'archive conversation', '/delete': 'delete conversation',
+    '/options': 'provider-specific modes and controls', '/capabilities': 'selected provider capabilities',
     '/status': 'current configuration', '/usage': 'token usage', '/clear': 'refresh screen',
     '/help': 'all commands', '/exit': 'save and leave',
   };
-  const slashCommands: PickerOption<string>[] = [
-    ...Object.keys(commandDetails).map((value) => ({ label: value, detail: commandDetails[value], value })),
-    ...localRouter().AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal').map((item) => ({
-      label: `/${item.command}`, detail: `switch to ${item.displayName}`, value: `/${item.command}`,
-    })),
-  ];
-  const fallbackCommands = slashCommands.map((item) => item.value);
+  const slashCommandsFor = (target: HarnessSession): PickerOption<string>[] => {
+    const harness = target.nativeHarness ? localHarnessForCommand(target.nativeHarness) : undefined;
+    const managers = harness ? localHarnessCapabilityManifest(harness).managers ?? {} : {};
+    return [
+      ...Object.keys(commandDetails).map((value) => ({ label: value, detail: commandDetails[value], value })),
+      ...Object.entries(managers).map(([name, manager]) => ({ label: `/${name}`, detail: manager?.label ?? name, value: `/${name}` })),
+      ...localRouter().AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal').map((item) => ({
+        label: `/${item.command}`, detail: `switch to ${item.displayName}`, value: `/${item.command}`,
+      })),
+    ];
+  };
   // Created before auto-select so a first-ever install/sign-in — the most
   // common time either is actually needed — has somewhere to show its
   // "installing…" spinner and a real terminal to suspend into for a vendor
@@ -2612,19 +2784,19 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
     : createInterface({
       input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,
       completer: (value: string) => {
+        const fallbackCommands = slashCommandsFor(session!).map((item) => item.value);
         const matches = fallbackCommands.filter((command) => command.startsWith(value));
         return [matches.length ? matches : fallbackCommands, value] as [string[], string];
       },
     });
   if (rl instanceof FullScreenHarnessPrompter) activeFullScreenHarness = rl;
   rl.render?.(session);
-  if (!session.nativeHarness) {
+  if (!session.nativeHarness && session.route !== 'gateway') {
     const auto = await autoSelectSessionHarness(id);
     if (!auto) {
-      rl.close();
-      if (activeFullScreenHarness === rl) activeFullScreenHarness = undefined;
-      emitHarnessOutput({ panel: 'error', message: 'No supported coding-agent CLI is installed. Run clikcode doctor to see installation options.' });
-      return;
+      const selected = await interactiveEnginePicker(config, rl, id);
+      if (!selected) return;
+      if (selected !== id) id = selected;
     }
     const refreshed = await readState();
     const next = refreshed.sessions.find((item) => item.id === id);
@@ -2674,7 +2846,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         rl.render?.(latest, account, notice);
         refreshUsage(latest, latestState);
         notice = undefined;
-        line = (await rl.question('› ', slashCommands)).trim();
+        line = (await rl.question('› ', slashCommandsFor(latest))).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.
@@ -2689,16 +2861,35 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
       try {
         const command = line.toLowerCase();
         if (command === '/switch' || command === '/engine' || command === '/provider') {
-          const selected = await interactiveEnginePicker(rl, id);
-          if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+          const selected = await interactiveEnginePicker(config, rl, id);
+          if (selected && selected !== id) { id = selected; continue; }
+        }
+        else if (command === '/gateway') {
+          id = await newGatewayConversation(config, rl, id);
+          continue;
         }
         else if (command === '/account' || command === '/accounts') await interactiveAccountPicker(rl, id);
         else if (command === '/model') await interactiveModelPicker(rl, id);
         else if (command === '/effort') await interactiveEffortPicker(rl, id);
         else if (command === '/permissions') await interactivePermissionPicker(rl, id);
+        else if (command === '/options') await interactiveHarnessOptionPicker(rl, id);
+        else if (command === '/capabilities') {
+          const commandState = await readState();
+          const commandSession = commandState.sessions.find((item) => item.id === id);
+          const selectedHarness = commandSession?.nativeHarness ? localHarnessForCommand(commandSession.nativeHarness) : undefined;
+          if (!selectedHarness) throw new Error('Choose a provider first.');
+          const manifest = localHarnessCapabilityManifest(selectedHarness);
+          const lines = [
+            ...manifest.options.map((option) => `${option.label}: ${option.description}`),
+            ...Object.entries(manifest.managers ?? {}).map(([name, manager]) => `${manager?.label ?? name}: available`),
+            ...(manifest.features ?? []).map((feature) => `${feature}: native`),
+          ];
+          rl.panel?.(`${selectedHarness.displayName} capabilities`, lines.join('\n'));
+          if (rl.render) await rl.question('Press Enter to return › ');
+        }
         else if (command === '/settings') {
-          const selected = await interactiveSettingsPicker(rl, id);
-          if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+          const selected = await interactiveSettingsPicker(config, rl, id);
+          if (selected && selected !== id) { id = selected; continue; }
         }
         else if (command.startsWith('/settings global ')) {
           const [, , key, ...rest] = line.trim().split(/\s+/);
@@ -2723,7 +2914,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
           if (action === 'exit') break;
           if (action === 'resume') {
             const selected = await interactiveSessionPicker(rl, id);
-            if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+            if (selected && selected !== id) { id = selected; continue; }
           }
         }
         else if (command === '/rename') {
@@ -2741,12 +2932,31 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         else if (command === '/resume') {
           const selected = await interactiveSessionPicker(rl, id);
           if (selected && selected !== id) {
-            rl.close();
-            await aiSessionResume(config, selected);
-            return;
+            id = selected;
+            continue;
           }
         }
-        else if (command === '/clear') output.write('\u001b[2J\u001b[H');
+        else if (command === '/clear') rl.render?.(session);
+        else if (['/mcp', '/skills', '/plugins', '/agents', '/hooks', '/tools'].includes(command)) {
+          const managerName = command.slice(1) as 'mcp' | 'skills' | 'plugins' | 'agents' | 'hooks' | 'tools';
+          const commandState = await readState();
+          const commandSession = commandState.sessions.find((item) => item.id === id);
+          const selectedHarness = commandSession?.nativeHarness ? localHarnessForCommand(commandSession.nativeHarness) : undefined;
+          if (!selectedHarness) throw new Error('Choose a provider first.');
+          const manager = localHarnessCapabilityManifest(selectedHarness).managers?.[managerName];
+          if (!manager) throw new Error(`${selectedHarness.displayName} does not publish a ${managerName} manager.`);
+          const selectedAccount = commandSession?.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
+          const environment = selectedAccount?.nativeProfile ? { [selectedAccount.nativeProfile.env]: selectedAccount.nativeProfile.path } : {};
+          if (manager.listArgv) {
+            const result = await captureNativeHarnessOutput(selectedHarness, manager.listArgv, environment);
+            rl.panel?.(manager.label, result || 'No entries.');
+            if (rl.render) await rl.question('Press Enter to return › ');
+          } else if (manager.manageArgv && rl instanceof FullScreenHarnessPrompter) {
+            rl.suspend();
+            try { await runNativeHarnessCommand(selectedHarness, manager.manageArgv, environment); }
+            finally { rl.resume(); }
+          } else throw new Error(`${selectedHarness.displayName} requires an interactive terminal for ${manager.label}.`);
+        }
         else if (command === '/mention') {
           const path = (await rl.question('File to attach › ')).trim();
           if (path) await aiSessionCommand(id, `/mention ${path}`);
@@ -2763,14 +2973,13 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         }
         else if (line.startsWith('/') && !line.includes(' ') && localHarnessForCommand(command.slice(1))) {
           const selected = await newProviderConversation(id, command.slice(1));
-          rl.close();
-          await aiSessionResume(config, selected);
-          return;
+          id = selected;
+          continue;
         }
         else if (line.startsWith('/')) {
           await aiSessionCommand(id, line);
           const head = command.split(/\s+/, 1)[0];
-          if (rl.render && ['/help', '/status', '/models', '/usage', '/history', '/diff', '/attachments', '/copy', '/fork'].includes(head)) {
+          if (rl.render && ['/help', '/status', '/models', '/usage', '/history', '/diff', '/attachments', '/copy', '/fork', '/capabilities', '/mcp', '/skills', '/plugins', '/agents', '/hooks', '/tools'].includes(head)) {
             await rl.question('Press Enter to return › ');
           }
         }
@@ -2863,7 +3072,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       const argv = localRouter().nativeHarnessTurnArgv(harness, {
         prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
         launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
-        permissionMode: session.permissionMode ?? 'workspace-write', images,
+        permissionMode: session.permissionMode ?? 'workspace-write', images, options: session.harnessOptions,
       });
       // Persist an allocated native identity before the provider starts so an
       // interrupted turn cannot accidentally fork the centralized conversation.
@@ -2887,9 +3096,14 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
       if (turnOutput.exitCode !== 0 || result.isError) {
         const failure = Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
-        if (!isUsageExhaustion(failure)) throw failure;
+        const failureKind = classifyAccountFailure(failure);
+        if (failureKind === 'authentication-required') {
+          account.status = 'needs_login';
+          await writeState(state);
+        }
+        if (failureKind !== 'quota-exhausted') throw failure;
         account.quotaState = 'exhausted';
-        account.quotaRetryAt = new Date(Date.now() + 60_000).toISOString();
+        account.quotaRetryAt = undefined;
         await writeState(state);
         // Same-provider failover for the native-CLI path: switching accounts means
         // switching vendor config roots, so the in-flight native conversation can't
@@ -2912,6 +3126,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
+        turnText = failoverPrompt(session.messages ?? [], `${text}${prepared.textContext}`);
         continue;
       }
       session.nativeStartedAt ??= new Date().toISOString();
@@ -2920,7 +3135,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
       };
       state.invocations.push(invocation);
-      session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: result.text }].slice(-40);
+      session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: result.text }];
       session.name ??= conversationTitle(text);
       session.attachments = [];
       session.updatedAt = new Date().toISOString();
@@ -2942,11 +3157,16 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
   try {
     turn = await invoke(account);
   } catch (error) {
-    if (session.accountFailover !== 'on-quota-exhausted' || !isUsageExhaustion(error)) throw error;
+    const failureKind = classifyAccountFailure(error);
+    if (failureKind === 'authentication-required') {
+      account.status = 'needs_login';
+      await writeState(state);
+    }
+    if (session.accountFailover !== 'on-quota-exhausted' || failureKind !== 'quota-exhausted') throw error;
     const exhaustedAccount = account;
     if (!exhaustedAccount) throw error;
     exhaustedAccount.quotaState = 'exhausted';
-    exhaustedAccount.quotaRetryAt = new Date(Date.now() + 60_000).toISOString();
+    exhaustedAccount.quotaRetryAt = undefined;
     // Preserve the quota signal even if there is no alternate account or its
     // retry fails. It is a local scheduling fact, never a provider secret.
     await writeState(state);
@@ -2974,7 +3194,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     }
   }
   state.invocations.push(invocation);
-  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }].slice(-40);
+  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }];
   session.name ??= conversationTitle(text);
   session.attachments = [];
   session.updatedAt = new Date().toISOString();
@@ -3039,7 +3259,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   if (!reply) throw new Error('gateway AI response contained no text');
   const invocation = { id: randomUUID(), accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform', at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
-  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: reply }].slice(-40);
+  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: reply }];
   session.name ??= conversationTitle(text);
   session.attachments = [];
   session.updatedAt = new Date().toISOString();
