@@ -14,7 +14,7 @@ import {
   type AiProviderId,
   type AiProviderSpec,
   type AiReasoningEffort,
-} from "./ai-provider-registry";
+} from "./ai-provider-registry-public";
 
 /**
  * The `reasoning.effort` body fragment for a Responses-shaped request, or `{}`

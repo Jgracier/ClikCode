@@ -8,7 +8,7 @@
 // data into the functions here, never read from a database or Redis client
 // this package owns).
 
-export * from './ai-provider-registry';
+export * from './ai-provider-registry-public';
 export * from './ai-provider-http';
 export * from './ai-router-selection';
 export * from './ai-provider-models';

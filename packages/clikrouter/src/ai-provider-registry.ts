@@ -1,13 +1,8 @@
-// ============================================
-// AI PROVIDER REGISTRY (pure data — client-safe)
-// ============================================
-// The single source of truth for every AI provider this router knows about.
-// Implementation lives in ./ai-provider-registry/*; this file is a stable barrel
-// so existing imports of ./ai-provider-registry keep working without churn.
+// Public provider-registry facade.
 //
-// CRITICAL: this module is exported from the CLIENT-SAFE root barrel and is
-// imported by 'use client' components. It must stay pure data + pure helpers —
-// no db/redis/env access, no server-only imports.
+// Keep this as a FILE rather than relying on TypeScript's directory-index
+// resolution. ClikDeploy CLI is published as native ESM, where Node refuses a
+// directory import before it can discover `ai-provider-registry/index`.
 
 export * from './ai-provider-registry/types';
 export * from './ai-provider-registry/providers';
