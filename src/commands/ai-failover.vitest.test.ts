@@ -22,4 +22,17 @@ describe('ClikCode account failover', () => {
     expect(prompt).toContain('renamed it and updated tests');
     expect(prompt).toContain('now run the focused test');
   });
+
+  it('caps replay to the most recent messages instead of growing unbounded with conversation length', () => {
+    const messages = Array.from({ length: 60 }, (_, index) => ({
+      role: (index % 2 === 0 ? 'user' : 'assistant') as const,
+      content: `message-${index}`,
+    }));
+    const prompt = failoverPrompt(messages, 'continue');
+    expect(prompt).not.toContain('message-0\n');
+    expect(prompt).not.toContain('message-19\n');
+    expect(prompt).toContain('message-20\n');
+    expect(prompt).toContain('message-59');
+    expect(prompt).toContain('20 earlier messages omitted for brevity');
+  });
 });
