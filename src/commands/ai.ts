@@ -9,6 +9,7 @@ import { extname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import type Conf from 'conf';
 import chalk from 'chalk';
 import { ApiClient } from '../api/client.js';
@@ -113,7 +114,16 @@ interface AiRouterRuntime {
 const require = createRequire(import.meta.url);
 let routerRuntime: AiRouterRuntime | undefined;
 function localRouter(): AiRouterRuntime {
-  routerRuntime ??= require('../ai-router-runtime.cjs') as AiRouterRuntime;
+  if (!routerRuntime) {
+    try {
+      // Normal clikdeploy-cli layout: dist/commands/ai.js → dist runtime.
+      routerRuntime = require('../ai-router-runtime.cjs') as AiRouterRuntime;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
+      // Standalone ClikCode bundle: dist/index.js → sibling runtime.
+      routerRuntime = require(fileURLToPath(new URL('./ai-router-runtime.cjs', import.meta.url))) as AiRouterRuntime;
+    }
+  }
   return routerRuntime;
 }
 function localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined {
@@ -207,7 +217,12 @@ function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string): { 
 function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string): string | undefined {
   if (isJsonDefaultMode()) return undefined;
   let value: Record<string, unknown>;
-  try { value = JSON.parse(lineText) as Record<string, unknown>; } catch { return undefined; }
+  try {
+    value = JSON.parse(lineText) as Record<string, unknown>;
+  } catch {
+    // fail-open-ok: plain-text harness output has no structured activity metadata to render.
+    return undefined;
+  }
   const type = String(value.type ?? '');
   const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
   const itemType = String(item?.type ?? '');
@@ -249,7 +264,12 @@ function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string)
 
 function nativeActivityPhase(lineText: string): 'generating response' | undefined {
   let value: Record<string, unknown>;
-  try { value = JSON.parse(lineText) as Record<string, unknown>; } catch { return undefined; }
+  try {
+    value = JSON.parse(lineText) as Record<string, unknown>;
+  } catch {
+    // fail-open-ok: non-JSON output is ordinary assistant text, not a structured result envelope.
+    return undefined;
+  }
   const type = String(value.type ?? '');
   const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
   const itemType = String(item?.type ?? '');
@@ -388,7 +408,10 @@ async function captureOpencodeSessionSummary(sessionId: string): Promise<{ cost:
             try {
               const info = JSON.parse(buffer.slice(braceStart, index + 1)) as { cost?: number; tokens?: { input?: number; output?: number } };
               return finish({ cost: typeof info.cost === 'number' ? info.cost : 0, tokens: { input: info.tokens?.input ?? 0, output: info.tokens?.output ?? 0 } });
-            } catch { return finish(); }
+            } catch {
+              // fail-open-ok: an incomplete stream fragment carries no usable response payload.
+              return finish();
+            }
           }
         }
       }
@@ -1699,6 +1722,7 @@ async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, environment:
   try {
     stdout = await captureNativeHarnessOutput(harness, harness.statusArgv, environment, 8_000);
   } catch {
+    // fail-open-ok: an unverified account must authenticate before it can be selected safely.
     return true;
   }
   try {
