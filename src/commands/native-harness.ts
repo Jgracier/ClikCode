@@ -96,7 +96,9 @@ export async function ensureNativeHarness(spec: NativeHarnessSpec): Promise<void
     throw new Error(`${spec.displayName} is an editor extension, not a standalone terminal harness; ClikCode cannot broker it as a native TUI.`);
   }
   if (await binaryOnPath(spec.binary)) return;
-  if (!spec.npmPackage) throw new Error(`${spec.displayName} is not installed. Install its official CLI, then retry /${spec.command}.`);
+  if (!spec.npmPackage) {
+    throw new Error(`${spec.displayName} does not publish an npm package ClikCode can install automatically. Install ${spec.displayName}'s official CLI yourself (it must put a \`${spec.binary}\` binary on PATH), then retry /${spec.command}.`);
+  }
   await run('npm', ['install', '--global', spec.npmPackage]);
   if (!await binaryOnPath(spec.binary)) throw new Error(`${spec.displayName} installed but its binary is not on PATH; open a new terminal and retry.`);
 }

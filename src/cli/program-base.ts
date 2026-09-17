@@ -44,6 +44,16 @@ ${chalk.cyan('║')}  ${chalk.gray('Deploy First, Configure Later')}      ${chal
 ${chalk.cyan('╚═══════════════════════════════════════╝')}
 `;
 
+/** ClikCode is a free-standing product bundled in the same package for
+ * distribution only; its first-run banner must say so, not show ClikDeploy's
+ * deployment-platform branding. */
+export const CLIKCODE_BANNER = `
+${chalk.cyan('╔═══════════════════════════════════════╗')}
+${chalk.cyan('║')}  ${chalk.bold.white('⚡ ClikCode')}                      ${chalk.cyan('║')}
+${chalk.cyan('║')}  ${chalk.gray('Local-first AI coding runtime')}      ${chalk.cyan('║')}
+${chalk.cyan('╚═══════════════════════════════════════╝')}
+`;
+
 /**
  * Render a command failure. JSON mode gets a machine-readable object; human mode
  * gets a friendly line, plus stack/HTTP status/response body under --debug.
@@ -89,8 +99,9 @@ function isMutatingLifecycleCommand(commandPath: string): boolean {
  * the banner + --local resolution preAction, the lifecycle-lock hooks, and the
  * process-level error safety net.
  */
-export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolean } = {}): Command {
+export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolean; banner?: string } = {}): Command {
   const program = new Command();
+  const banner = options.banner ?? BANNER;
   let activeLifecycleLock: LifecycleLock | null = null;
 
   process.on('unhandledRejection', (err) => {
@@ -124,7 +135,7 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
 
       // Show banner on first use for human mode only.
       if (!config.get('seenBanner') && !isJsonDefaultMode()) {
-        console.log(BANNER);
+        console.log(banner);
         config.set('seenBanner', true);
       }
 
@@ -167,26 +178,27 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
  * Install the unknown-command handler, print help when invoked bare, and parse.
  * Call last, after every command is registered.
  */
-export function runProgram(program: Command, options: { showHelpWhenBare?: boolean } = {}): void {
+export function runProgram(program: Command, options: { showHelpWhenBare?: boolean; banner?: string } = {}): void {
+  const name = program.name();
   program.on('command:*', () => {
     if (isJsonDefaultMode()) {
       emitJson({
         status: 'clarification_required',
-        command: 'clikdeploy',
+        command: name,
         reason: 'unknown_command',
         message: `Unknown command: ${program.args.join(' ')}`,
-        options: { usage: 'clikdeploy --help' },
+        options: { usage: `${name} --help` },
       });
     } else {
       console.error(chalk.red(`Unknown command: ${program.args.join(' ')}`));
       console.log();
-      console.log('Run', chalk.cyan('clikdeploy --help'), 'for available commands');
+      console.log('Run', chalk.cyan(`${name} --help`), 'for available commands');
     }
     process.exit(1);
   });
 
   if (!process.argv.slice(2).length && options.showHelpWhenBare !== false) {
-    console.log(BANNER);
+    console.log(options.banner ?? BANNER);
     program.outputHelp();
   }
 
