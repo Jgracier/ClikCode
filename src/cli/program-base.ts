@@ -164,7 +164,7 @@ export function buildBaseProgram(config: Conf): Command {
  * Install the unknown-command handler, print help when invoked bare, and parse.
  * Call last, after every command is registered.
  */
-export function runProgram(program: Command): void {
+export function runProgram(program: Command, options: { showHelpWhenBare?: boolean } = {}): void {
   program.on('command:*', () => {
     if (isJsonDefaultMode()) {
       emitJson({
@@ -182,7 +182,7 @@ export function runProgram(program: Command): void {
     process.exit(1);
   });
 
-  if (!process.argv.slice(2).length) {
+  if (!process.argv.slice(2).length && options.showHelpWhenBare !== false) {
     console.log(BANNER);
     program.outputHelp();
   }
