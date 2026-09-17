@@ -95,8 +95,17 @@ function newDeviceSigningIdentity(): Pick<HarnessState, 'devicePrivateKeyPem' | 
 function harnessStatePath(): string {
   // The caller may relocate non-secret state for testing or portable installs.
   // Provider tokens never live in this file; only opaque local credential refs do.
-  const base = process.env.CLIKDEPLOY_AI_HOME?.trim() || join(homedir(), '.clikdeploy', 'ai');
+  const clikCode = process.argv[1]?.includes('clikcode') || process.argv[1]?.includes('index-clikcode');
+  const base = process.env.CLIKCODE_HOME?.trim()
+    || process.env.CLIKDEPLOY_AI_HOME?.trim()
+    || (clikCode ? join(homedir(), '.clikcode') : join(homedir(), '.clikdeploy', 'ai'));
   return join(base, 'harness-state.json');
+}
+
+function harnessCommand(): string {
+  return process.argv[1]?.includes('clikcode') || process.argv[1]?.includes('index-clikcode')
+    ? 'clikcode'
+    : 'clikdeploy ai';
 }
 
 async function readState(): Promise<HarnessState> {
@@ -331,7 +340,7 @@ export async function aiGatewayStatus(config: Conf): Promise<void> {
     apiUrl,
     authentication: 'clikdeploy-oauth-or-api-key',
     credentialBoundary: 'gateway-auth-only',
-    hint: 'Run `clikdeploy ai gateway login` to connect ClikDeploy Gateway, or use `clikdeploy ai accounts add` for a provider login that stays local.',
+    hint: `Run \`${harnessCommand()} gateway login\` to connect ClikDeploy Gateway, or use \`${harnessCommand()} accounts add\` for a provider login that stays local.`,
   });
 }
 
@@ -410,7 +419,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       const shortcut = words.shift()?.toLowerCase();
       const provider = shortcut ? (localHarnessForCommand(shortcut)?.provider ?? shortcut) : undefined;
       if (!provider) throw new Error('usage: /accounts add <harness>');
-      return emitJson({ panel: 'add-account', provider, next: `clikdeploy ai accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
+      return emitJson({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
     if (action === 'failover') {
       const setting = words.shift();
@@ -516,7 +525,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   if (!text) throw new Error('prompt is required');
   const baseUrl = ApiClient.getApiUrl(config).replace(/\/$/, '');
   const apiKey = ApiClient.getApiKeyForUrl(config, baseUrl);
-  if (!apiKey) throw new Error('ClikDeploy Gateway is not connected; run `clikdeploy ai gateway login` first');
+  if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
   const startedAt = Date.now();
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
