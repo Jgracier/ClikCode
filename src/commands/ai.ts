@@ -278,10 +278,25 @@ function nativeActivityPhase(lineText: string): 'generating response' | undefine
   return undefined;
 }
 
+/**
+ * Claude Code's `--model` aliases are deliberately version-less — they always
+ * track whatever Anthropic currently ships for that tier, so passing the bare
+ * alias (not a dated id) is the correct, future-proof argv value. That leaves
+ * the alias alone unreadable in a picker ("sonnet" looks stale next to
+ * "Sonnet 5"), so this is display-only: which concrete generation each alias
+ * currently resolves to, verified against a real `claude --model <alias>
+ * --output-format stream-json` run's `system.init.model` field. Update when
+ * Anthropic ships a new tier — same manual-maintenance shape as the Copilot
+ * model list a few lines below.
+ */
+const CLAUDE_ALIAS_LABELS: Readonly<Record<string, string>> = {
+  fable: 'Fable 5.1', opus: 'Opus 5', sonnet: 'Sonnet 5', haiku: 'Haiku 4.5',
+};
+
 async function nativeModelCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
-): Promise<{ configured?: string; models: string[] }> {
+): Promise<{ configured?: string; models: string[]; labels?: Readonly<Record<string, string>> }> {
   const models = new Set(account?.models ?? []);
   const addDiscoveredModels = (raw: string): void => {
     const add = (value: unknown): void => {
@@ -330,7 +345,7 @@ async function nativeModelCatalog(
       const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown };
       if (typeof settings.model === 'string' && settings.model.trim()) configured = settings.model.trim();
     } catch { /* Claude will choose its own default when no setting exists. */ }
-    ['sonnet', 'opus', 'haiku'].forEach((model) => models.add(model));
+    ['fable', 'opus', 'sonnet', 'haiku'].forEach((model) => models.add(model));
   } else if (profileRoot && harness.command === 'gemini') {
     try {
       const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown; selectedModel?: unknown };
@@ -349,7 +364,11 @@ async function nativeModelCatalog(
     } catch { /* Keep configured/account models and the custom-ID option available. */ }
   }
   if (configured) models.add(configured);
-  return { ...(configured ? { configured } : {}), models: [...models] };
+  return {
+    ...(configured ? { configured } : {}),
+    models: [...models],
+    ...(harness.command === 'claude' ? { labels: CLAUDE_ALIAS_LABELS } : {}),
+  };
 }
 
 const nativeUsageCache = new Map<string, { at: number; label?: string }>();
@@ -815,7 +834,8 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const context = compactPath(session.workspace ?? process.cwd());
     const provider = `${sessionProviderLabel(session)}${this.usageLabel ? `  ${this.usageLabel}` : ''}`;
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-    const model = harness?.modelArgvPrefix ? session.model ?? 'automatic' : undefined;
+    const rawModel = harness?.modelArgvPrefix ? session.model ?? 'automatic' : undefined;
+    const model = rawModel && harness?.command === 'claude' ? CLAUDE_ALIAS_LABELS[rawModel] ?? rawModel : rawModel;
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
   }
@@ -1191,13 +1211,16 @@ async function prepareAttachments(paths: readonly string[]): Promise<{ textConte
 }
 
 function renderSessionCard(session: HarnessSession, account?: string): string {
+  const modelLabel = session.model && session.nativeHarness === 'claude'
+    ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
+    : session.model;
   return [
     chalk.bold.cyan('ClikCode'),
     ...(session.name ? [line('chat', session.name)] : []),
     line('project', compactPath(session.workspace ?? process.cwd())),
     line('provider', sessionProviderLabel(session)),
     line('account', account ?? 'default'),
-    line('model', session.model ?? 'provider default'),
+    line('model', modelLabel ?? 'provider default'),
     line('effort', session.effort),
     line('access', session.permissionMode ?? 'workspace-write'),
     line('session', session.id.slice(0, 8)),
@@ -2598,11 +2621,16 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
 async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<string | undefined> {
   const state = await readState();
   const sessions = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  return chooseOption(rl, 'Resume a session', sessions.map((session) => ({
-    label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
-    detail: `· ${session.id === currentId ? 'current · ' : ''}${session.model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
-    value: session.id,
-  })));
+  return chooseOption(rl, 'Resume a session', sessions.map((session) => {
+    const model = session.model && session.nativeHarness === 'claude'
+      ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
+      : session.model;
+    return {
+      label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
+      detail: `· ${session.id === currentId ? 'current · ' : ''}${model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
+      value: session.id,
+    };
+  }));
 }
 
 async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<void> {
@@ -2616,11 +2644,14 @@ async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<
   const effective = session.model ?? catalog.configured;
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
-    ...discoveredModels.map((model) => ({
-      label: model,
-      detail: model === effective ? `· current${!session.model && model === catalog.configured ? ' · provider configured' : ''}` : undefined,
-      value: model,
-    })),
+    ...discoveredModels.map((model) => {
+      const parts = [
+        catalog.labels?.[model],
+        model === effective ? 'current' : undefined,
+        model === effective && !session.model && model === catalog.configured ? 'provider configured' : undefined,
+      ].filter((part): part is string => Boolean(part));
+      return { label: model, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
+    }),
     { label: 'Automatic provider default', detail: effective ? undefined : '· current', value: 'default' },
     { label: 'Enter a model ID…', value: '__custom__' },
   ];
