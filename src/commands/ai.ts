@@ -397,6 +397,26 @@ export async function aiSessionsList(): Promise<void> {
   emitJson({ sessions: state.sessions });
 }
 
+/**
+ * The standalone `clikcode` command is a coding-session entrypoint, not a
+ * command browser. Resume the most recently used session, creating the first
+ * local session on demand so a fresh install lands directly in the TTY.
+ */
+export async function aiSessionOpenDefault(config: Conf): Promise<void> {
+  const state = await readState();
+  let session = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  if (!session) {
+    const now = new Date().toISOString();
+    session = {
+      id: randomUUID(), route: 'local', accountId: null, provider: null, model: null,
+      effort: 'medium', accountFailover: 'on-quota-exhausted', createdAt: now, updatedAt: now,
+    };
+    state.sessions.push(session);
+    await writeState(state);
+  }
+  await aiSessionInteractive(config, session.id);
+}
+
 export async function aiSessionShow(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
