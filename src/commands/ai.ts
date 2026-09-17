@@ -630,7 +630,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     this.currentSession = session;
     this.currentAccount = account;
     this.currentNotice = notice;
-    this.paint('', [], 0, '❯ ', 0);
+    this.paint('', [], 0, '› ', 0);
   }
 
   activity(message: string): void {
@@ -701,15 +701,24 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   private updateWaiting(): void {
     if (!this.waitingLabel || !this.waitingScreenRow) return;
     const width = Math.max(48, (output.columns || 100) - 1);
-    output.write(`\u001b7\u001b[${this.waitingScreenRow};1H\u001b[2K  ${chalk.cyan('●')} ${chalk.dim(visibleSlice(this.waitingText(), width - 6))}\u001b8`);
+    // Hiding the cursor for this one write keeps it from visibly jumping to the
+    // activity row and back every ~90ms while the spinner ticks.
+    output.write(`\u001b[?25l\u001b7\u001b[${this.waitingScreenRow};1H\u001b[2K  ${chalk.cyan('●')} ${chalk.dim(visibleSlice(this.waitingText(), width - 6))}\u001b8\u001b[?25h`);
   }
 
   /** `palette` fixes the reserved footer band to `capacity` rows for the whole time a
    * palette is open (instead of resizing per keystroke as matches narrow), and
    * `footerOnly` skips repainting the conversation area above it. Together these turn
    * "retype the whole screen on every keystroke" into "rewrite only what changed",
-   * which is what stopped the palette from visibly flickering/jumping as you type. */
-  private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; footerOnly?: boolean }): void {
+   * which is what stopped the palette from visibly flickering/jumping as you type.
+   * The whole frame is assembled into one string and written with a single syscall,
+   * with the terminal cursor hidden for the duration: the previous per-line writes
+   * let the terminal actually render the cursor mid-hop between rows on every paint,
+   * which is what "cursor glitches all over the place" was — not a logic bug, a
+   * rendering-granularity one. `select()` reuses this same path (see below) so a
+   * provider/model/effort picker is a windowed slice of this palette block, anchored
+   * next to the composer, instead of a separate full-screen takeover. */
+  private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; footerOnly?: boolean; hint?: string; hideCursor?: boolean }): void {
     const session = this.currentSession;
     if (!session) return;
     this.draft = composer;
@@ -754,11 +763,12 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     if (!activityAppended) appendActivity();
     const shown = conversation.slice(-rows);
     const meta = this.statusText();
-    const screenLine = (text = ''): void => { output.write(`\r\u001b[2K${text}\n`); };
+    let frame = '\u001b[?25l';
+    const screenLine = (text = ''): void => { frame += `\r\u001b[2K${text}\n`; };
     if (footerOnly) {
-      output.write(`\u001b[${rows + noticeRows + 1};1H`);
+      frame += `\u001b[${rows + noticeRows + 1};1H`;
     } else {
-      output.write('\u001b[H');
+      frame += '\u001b[H';
       this.waitingScreenRow = undefined;
       if (shown.length) for (const [index, row] of shown.entries()) {
         screenLine(row.text);
@@ -776,16 +786,25 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     }
     if (paletteCapacity) {
       screenLine(rule);
-      const displayed = options.slice(0, paletteCapacity - 2);
-      displayed.forEach((option, index) => screenLine(`  ${index === selected ? chalk.cyan('❯') : ' '} ${index === selected ? chalk.bold(option.label) : option.label}${option.detail ? `  ${chalk.dim(option.detail)}` : ''}`));
-      for (let index = displayed.length; index < paletteCapacity - 2; index++) screenLine();
-      screenLine(`  ${chalk.dim('↑↓ select · Tab complete · Enter run')}`);
+      const visibleRows = paletteCapacity - 2;
+      const start = Math.max(0, Math.min(selected - Math.floor(visibleRows / 2), options.length - visibleRows));
+      const windowed = options.slice(start, start + visibleRows);
+      windowed.forEach((option, index) => {
+        const absoluteIndex = start + index;
+        screenLine(`  ${absoluteIndex === selected ? chalk.cyan('❯') : ' '} ${absoluteIndex === selected ? chalk.bold(option.label) : option.label}${option.detail ? `  ${chalk.dim(option.detail)}` : ''}`);
+      });
+      for (let index = windowed.length; index < visibleRows; index++) screenLine();
+      screenLine(`  ${chalk.dim(palette?.hint ?? '↑↓ select · Tab complete · Enter run')}`);
     }
     screenLine(rule);
     const viewport = composerViewport(composer, cursor, Math.max(8, inner - terminalCellWidth(prompt)));
-    screenLine(`  ${chalk.bold.cyan(prompt)}${viewport.text}`);
-    output.write(`\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}\n`);
-    output.write(`\u001b[2A\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C`);
+    screenLine(`  ${chalk.white(prompt)}${viewport.text}`);
+    screenLine();
+    frame += `\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}\n`;
+    // Cursor stays hidden for a non-editable view (select()); nothing to reposition
+    // it at, since there's no typed insertion point on screen to show it resting on.
+    if (!palette?.hideCursor) frame += `\u001b[3A\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\u001b[?25h`;
+    output.write(frame);
   }
 
   question(prompt: string, commands: readonly PickerOption<string>[] = []): Promise<string> {
@@ -813,8 +832,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         } else {
           const available = Math.max(8, (output.columns || 100) - 5 - terminalCellWidth(prompt));
           const viewport = composerViewport(value, cursor, available);
-          output.write(`\r\u001b[2K  ${chalk.bold.cyan(prompt)}${viewport.text}`);
-          output.write(`\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C`);
+          output.write(`\u001b[?25l\r\u001b[2K  ${chalk.white(prompt)}${viewport.text}\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\u001b[?25h`);
           this.draft = value;
           this.draftOptions = [];
           this.draftSelected = selected;
@@ -890,34 +908,27 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     });
   }
 
+  /** Provider/model/effort pickers used to be a separate full-screen takeover with
+   * their own from-scratch repaint-everything draw loop — the conversation and
+   * composer vanished while picking, and every arrow key redrew the whole list from
+   * `\u001b[H`. This now renders as a windowed slice of the same palette band `paint()`
+   * already draws for slash commands: the picker sits right where the composer is,
+   * the conversation stays visible above it, and after the first frame every arrow
+   * key is a footer-only repaint instead of a full-screen one. */
   select<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined> {
     if (!options.length) return Promise.resolve(undefined);
     return new Promise((resolveSelection) => {
       this.selecting = true;
       let selected = 0;
+      let painted = false;
+      const capacity = Math.min(options.length, 8) + 2;
+      const renderOptions = options.map((option) => ({ label: option.label, detail: option.detail, value: '' }));
       const draw = (): void => {
-        const width = Math.max(48, (output.columns || 100) - 1);
-        const inner = width - 4;
-        const rule = chalk.dim('─'.repeat(width));
-        const terminalRows = Math.max(10, output.rows || 30);
-        const maxVisible = Math.max(1, terminalRows - 5);
-        const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), options.length - maxVisible));
-        const shown = options.slice(start, start + maxVisible);
-        const padding = Math.max(0, terminalRows - 5 - shown.length);
-        const screenLine = (text = ''): void => { output.write(`\r\u001b[2K${text}\n`); };
-        output.write('\u001b[H');
-        screenLine(`  ${chalk.bold(visibleSlice(title, inner))}`);
-        screenLine(rule);
-        shown.forEach((option, index) => {
-          const absoluteIndex = start + index;
-          const marker = absoluteIndex === selected ? chalk.cyan('❯') : ' ';
-          const label = absoluteIndex === selected ? chalk.bold.cyan(option.label) : option.label;
-          screenLine(`  ${marker} ${label}${option.detail ? `  ${chalk.dim(option.detail)}` : ''}`);
+        this.paint(title, renderOptions, selected, '', 0, {
+          capacity, footerOnly: painted, hideCursor: true,
+          hint: '↑↓ move · Enter choose · Esc cancel',
         });
-        for (let index = 0; index < padding; index++) screenLine();
-        screenLine();
-        screenLine(rule);
-        output.write(`\r\u001b[2K  ${chalk.dim('↑↓ move   ↵ choose   esc cancel')}`);
+        painted = true;
       };
       let finished = false;
       const finish = (value: T | undefined): void => {
@@ -926,8 +937,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         this.selecting = false;
         input.off('data', onData);
         input.setRawMode(false);
-        output.write('\u001b[?25h');
-        this.paint('', [], 0, '❯ ', 0);
+        this.paint('', [], 0, '› ', 0);
         resolveSelection(value);
       };
       const handleKey = (key: string): void => {
@@ -948,7 +958,6 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       input.setRawMode(true);
       input.resume();
       input.on('data', onData);
-      output.write('\u001b[?25l');
       draw();
     });
   }
@@ -2358,7 +2367,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         rl.render?.(latest, account, notice);
         refreshUsage(latest, latestState);
         notice = undefined;
-        line = (await rl.question('❯ ', slashCommands)).trim();
+        line = (await rl.question('› ', slashCommands)).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.
