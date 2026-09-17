@@ -87,6 +87,7 @@ interface AiRouterRuntime {
   localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined;
   harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean;
   harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean;
+  harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean;
   nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: {
     prompt: string; nativeSessionId?: string; createdHere?: boolean; launchedBefore?: boolean;
     model?: string | null; workspace?: string | null; effort?: string | null;
@@ -112,6 +113,9 @@ function harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean {
 }
 function harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean {
   return localRouter().harnessSupportsPermissionMode(harness, mode);
+}
+function harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean {
+  return localRouter().harnessSupportsImages(harness);
 }
 function streamLocalAiTurn(input: Record<string, unknown>): Promise<any> {
   return localRouter().streamAiChatTurn(input);
@@ -657,6 +661,15 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingScreenRow?: number;
   private usageLabel?: string;
   private selecting = false;
+  /** True while the slash palette (inside question()) has its own fixed-capacity
+   * footer band open. usage()/activity() are called from fire-and-forget async
+   * work (a background usage refresh, a turn's tool-call log) that has no idea
+   * the palette owns a specific row layout right now; an unguarded repaint from
+   * either recomputes capacity from whatever draftOptions happens to be, which
+   * doesn't match the palette's own fixed capacity — the two disagree on where
+   * the footer starts, and the status line gets drawn at both rows. Guarded the
+   * same way `selecting` already guards this for select() pickers. */
+  private paletteActive = false;
   private cancelWaiting?: () => void;
   private waitingCancelled = false;
   private readonly onWaitingInput = (chunk: Buffer | string): void => {
@@ -690,7 +703,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const normalized = message.trim();
     if (!normalized || this.activityLines[this.activityLines.length - 1] === normalized) return;
     this.activityLines = [...this.activityLines.slice(-5), normalized];
-    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
   startWaiting(message: string, onCancel?: () => void): void {
@@ -735,7 +748,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   usage(label?: string): void {
     if (this.usageLabel === label) return;
     this.usageLabel = label;
-    if (!this.selecting) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
   private statusText(): string {
@@ -891,6 +904,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         if (options.length || showedPalette) {
           this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, footerOnly: paletteOpen });
           paletteOpen = true;
+          this.paletteActive = true;
         } else {
           const available = Math.max(8, (output.columns || 100) - 5 - terminalCellWidth(prompt));
           const viewport = composerViewport(value, cursor, available);
@@ -901,12 +915,14 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
           this.draftPrompt = prompt;
           this.draftCursor = cursor;
           paletteOpen = false;
+          this.paletteActive = false;
         }
         showedPalette = options.length > 0;
       };
       const finish = (answer: string): void => {
         if (finished) return;
         finished = true;
+        this.paletteActive = false;
         input.off('data', onData);
         input.setRawMode(false);
         output.write('\u001b[?25h');
@@ -2428,34 +2444,7 @@ async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<
   const selected = await chooseOption(rl, 'Choose a model', options);
   if (!selected) return;
   const value = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : selected;
-  if (value) await aiSessionCommand(id, `/model ${value}`);
-}
-
-async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise<void> {
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session) throw new Error(`AI session "${id}" was not found`);
-  const levels = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-  const selected = await chooseOption(rl, 'Choose reasoning effort', levels.map((value) => ({
-    label: value, detail: value === session.effort ? '· current' : undefined, value,
-  })));
-  if (selected) await aiSessionCommand(id, `/effort ${selected}`);
-}
-
-async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Promise<void> {
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session) throw new Error(`AI session "${id}" was not found`);
-  const current = session.permissionMode ?? 'workspace-write';
-  const modes: Array<{ value: AiHarnessPermissionMode; detail: string }> = [
-    { value: 'read-only', detail: 'inspect and plan; deny writes' },
-    { value: 'workspace-write', detail: 'allow edits inside this project' },
-    { value: 'auto', detail: 'provider reviews approval requests automatically' },
-  ];
-  const selected = await chooseOption(rl, 'Choose filesystem access', modes.map(({ value, detail }) => ({
-    label: value, detail: `· ${detail}${value === current ? ' · current' : ''}`, value,
-  })));
-  if (selected) await aiSessionCommand(id, `/permissions ${selected}`);
+  if (value) await applySettingScope(rl, id, 'model', value);
 }
 
 async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promise<'resume' | 'exit' | undefined> {
@@ -2486,45 +2475,73 @@ async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promi
   return undefined;
 }
 
-/** Edits `globalSettings` or one entry of `providerSettings` — the defaults every
- * *new* chat is built from, distinct from the picker above which edits the
- * *current* chat only. */
-async function interactiveDefaultsPicker(rl: HarnessPrompter): Promise<void> {
-  const scope = await chooseOption(rl, 'Defaults for new chats', [
-    { label: 'Global', detail: 'applies to every provider unless overridden', value: 'global' as const },
-    { label: 'Provider…', detail: 'override one provider only', value: 'provider' as const },
+/** After picking a new value, ask what it applies to instead of making that a
+ * separate "Defaults for new chats" menu that asks the same question about the
+ * same settings a second time. One flow per setting: choose the value, then
+ * choose the scope. */
+async function applySettingScope(
+  rl: HarnessPrompter, id: string, key: 'effort' | 'permissions' | 'failover' | 'model', value: string,
+): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  const scope = await chooseOption(rl, 'Apply to', [
+    { label: 'This chat only', value: 'session' as const },
+    { label: 'Global default', detail: 'every provider, unless overridden', value: 'global' as const },
+    ...(harness ? [{ label: `${harness.displayName} default`, detail: 'this provider only', value: 'provider' as const }] : []),
   ]);
   if (!scope) return;
-  let providerId: string | undefined;
-  let providerLabel = 'Global';
-  if (scope === 'provider') {
-    const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
-      .filter((harness) => harness.surface === 'terminal' && harness.turn)
-      .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
-      .filter((item) => item.inspection.installed);
-    const chosen = await chooseOption(rl, 'Provider to override', installed.map(({ harness }) => ({ label: harness.displayName, value: harness.command })));
-    if (!chosen) return;
-    const harness = localHarnessForCommand(chosen)!;
-    providerId = harness.command;
-    providerLabel = harness.displayName;
+  if (scope === 'session') {
+    if (key === 'failover') await aiSessionCommand(id, `/accounts failover ${value}`);
+    else await aiSessionCommand(id, `/${key} ${value}`);
+  } else if (scope === 'global') {
+    await aiSettingsSetGlobal(key, value);
+  } else if (harness) {
+    await aiSettingsSetProvider(harness.command, key, value);
   }
-  const harness = providerId ? localHarnessForCommand(providerId) : undefined;
-  const keyOptions: PickerOption<string>[] = [
-    ...(harness && !harnessSupportsEffort(harness) ? [] : [{ label: 'Reasoning effort', value: 'effort' }]),
-    ...(harness ? VALID_PERMISSION_MODES.some((mode) => harnessSupportsPermissionMode(harness, mode)) ? [{ label: 'Filesystem access', value: 'permissions' }] : [] : [{ label: 'Filesystem access', value: 'permissions' }]),
-    { label: 'Quota failover', value: 'failover' },
-    ...(providerId ? [{ label: 'Model', value: 'model' }] : []),
-  ];
-  const key = await chooseOption(rl, `${providerLabel} default to change`, keyOptions);
-  if (!key) return;
-  let value: string | undefined;
-  if (key === 'effort') value = await chooseOption(rl, 'Reasoning effort', VALID_EFFORTS.map((item) => ({ label: item, value: item })));
-  else if (key === 'permissions') value = await chooseOption(rl, 'Filesystem access', VALID_PERMISSION_MODES.map((item) => ({ label: item, value: item })));
-  else if (key === 'failover') value = await chooseOption(rl, 'Quota failover', [{ label: 'Auto-switch accounts', value: 'auto' }, { label: 'Never', value: 'never' }]);
-  else if (key === 'model') value = (await rl.question(`Model for ${providerLabel} [auto] › `)).trim() || 'auto';
-  if (!value) return;
-  if (providerId) await aiSettingsSetProvider(providerId, key, value);
-  else await aiSettingsSetGlobal(key, value);
+}
+
+async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  if (harness && !harnessSupportsEffort(harness)) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
+  const selected = await chooseOption(rl, 'Choose reasoning effort', VALID_EFFORTS.map((value) => ({
+    label: value, detail: value === session.effort ? '· current' : undefined, value,
+  })));
+  if (selected) await applySettingScope(rl, id, 'effort', selected);
+}
+
+async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  const current = session.permissionMode ?? 'workspace-write';
+  const descriptions: Record<AiHarnessPermissionMode, string> = {
+    'read-only': 'inspect and plan; deny writes',
+    'workspace-write': 'allow edits inside this project',
+    auto: 'provider reviews approval requests automatically',
+  };
+  const supported = harness ? VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode)) : VALID_PERMISSION_MODES;
+  if (!supported.length) throw new Error(`${harness?.displayName ?? 'This provider'} does not map ClikCode's permission modes to a real flag.`);
+  const selected = await chooseOption(rl, 'Choose filesystem access', supported.map((value) => ({
+    label: value, detail: `· ${descriptions[value]}${value === current ? ' · current' : ''}`, value,
+  })));
+  if (selected) await applySettingScope(rl, id, 'permissions', selected);
+}
+
+async function interactiveFailoverPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const current = session.accountFailover ?? 'on-quota-exhausted';
+  const selected = await chooseOption(rl, 'Quota failover', [
+    { label: 'Auto-switch accounts', detail: `· switch to another ready account of the same provider when quota runs out${current === 'on-quota-exhausted' ? ' · current' : ''}`, value: 'auto' },
+    { label: 'Never', detail: `· stop and ask instead of switching${current === 'never' ? ' · current' : ''}`, value: 'never' },
+  ]);
+  if (selected) await applySettingScope(rl, id, 'failover', selected);
 }
 
 async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promise<string | undefined> {
@@ -2534,7 +2551,7 @@ async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promi
     { label: 'Model', detail: 'provider default or model ID', value: 'model' },
     { label: 'Reasoning effort', detail: 'low through ultra', value: 'effort' },
     { label: 'Filesystem access', detail: 'read-only, workspace-write, or auto', value: 'permissions' },
-    { label: 'Defaults for new chats', detail: 'global or per-provider', value: 'defaults' },
+    { label: 'Quota failover', detail: 'switch accounts automatically, or not', value: 'failover' },
     { label: 'Show current setup', value: 'status' },
   ] as const);
   if (selected === 'provider') return interactiveEnginePicker(rl, id);
@@ -2542,7 +2559,7 @@ async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promi
   else if (selected === 'model') await interactiveModelPicker(rl, id);
   else if (selected === 'effort') await interactiveEffortPicker(rl, id);
   else if (selected === 'permissions') await interactivePermissionPicker(rl, id);
-  else if (selected === 'defaults') await interactiveDefaultsPicker(rl);
+  else if (selected === 'failover') await interactiveFailoverPicker(rl, id);
   else if (selected === 'status') await aiSessionCommand(id, '/status');
   return undefined;
 }
@@ -2802,8 +2819,9 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
     if (!harness.turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
     if (harness.provider !== account.provider) throw new Error(`session provider ${harness.displayName} does not match account "${account.label}"`);
-    const images = harness.command === 'codex' ? prepared.images : [];
-    if (prepared.images.length && harness.command !== 'codex') {
+    const supportsImages = harnessSupportsImages(harness);
+    const images = supportsImages ? prepared.images : [];
+    if (prepared.images.length && !supportsImages) {
       turnText += `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`;
     }
     session.nativeHarness = harness.command;
@@ -2867,6 +2885,12 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
           throw new Error(`${harness.displayName}: ${result.text}. Switch providers with /provider or choose another ${harness.command} account with /accounts use <label>.`);
         }
         switchedFrom = account.label;
+        // Announced before the retry, not after it returns: switching accounts
+        // happens inside one continuous await chain, so without this the whole
+        // thing looks instantaneous and the reply just silently comes from a
+        // different account with nothing to explain the (brief) extra wait.
+        activeFullScreenHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
+        activeFullScreenHarness?.phase(`retrying on ${fallback.label}`);
         account = fallback;
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
@@ -2884,7 +2908,6 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       session.attachments = [];
       session.updatedAt = new Date().toISOString();
       await writeState(state);
-      if (switchedFrom) activeFullScreenHarness?.activity(`${chalk.yellow('switched account')} ${chalk.dim(`${switchedFrom} → ${account.label} (quota)`)}`);
       if (!activeFullScreenHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
       return;
     }
@@ -2916,8 +2939,9 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     );
     if (!fallback) throw error;
     switchedFrom = exhaustedAccount.id;
+    activeFullScreenHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
+    activeFullScreenHarness?.phase(`retrying on ${fallback.label}`);
     turn = await invoke(fallback);
-    activeFullScreenHarness?.activity(`${chalk.yellow('switched account')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label} (quota)`)}`);
     account = fallback;
     session.accountId = fallback.id;
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
+import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
 
 const account: AiHarnessAccount = {
   id: 'local-codex',
@@ -122,6 +122,13 @@ describe('local harness catalog', () => {
       const expected = harness.command === 'codex' || harness.command === 'claude';
       expect(harnessSupportsPermissionMode(harness, 'workspace-write')).toBe(expected);
     }
+  });
+
+  it('declares image-attachment support only where a real flag exists, and drops images silently otherwise', () => {
+    expect(harnessSupportsImages(localHarnessForCommand('codex')!)).toBe(true);
+    expect(harnessSupportsImages(localHarnessForCommand('claude')!)).toBe(false);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('claude')!, { prompt: 'inspect', nativeSessionId: 'new-id', createdHere: true, images: ['/tmp/screen.png'] }))
+      .not.toContain('/tmp/screen.png');
   });
 
   it('builds exact create, resume, continuation, and selector argv from adapter declarations', () => {
