@@ -853,10 +853,15 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const viewport = composerViewport(composer, cursor, Math.max(8, inner - terminalCellWidth(prompt)));
     screenLine(`  ${chalk.white(prompt)}${viewport.text}`);
     screenLine();
-    frame += `\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}\n`;
-    // Cursor stays hidden for a non-editable view (select()); nothing to reposition
-    // it at, since there's no typed insertion point on screen to show it resting on.
-    if (!palette?.hideCursor) frame += `\u001b[3A\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\u001b[?25h`;
+    // No trailing "\n" here: total frame height is exactly the terminal height, so a
+    // newline after this, its last line, would land the cursor on the last row and
+    // scroll the whole screen by one -- invisible in a one-off full repaint (which
+    // starts over from \u001b[H next time), but fatal for footerOnly/select()
+    // repaints, which jump back to a fixed absolute row: every such scroll left that
+    // target one row stale, so the old line was never overwritten, only added to --
+    // the "adds a line every time you scroll" reports in the palette and pickers.
+    frame += `\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}`;
+    if (!palette?.hideCursor) frame += `\u001b[2A\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\u001b[?25h`;
     output.write(frame);
   }
 
@@ -1023,6 +1028,22 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     if (input.isTTY) input.setRawMode(false);
     input.pause();
     output.write('\u001b[?25h\u001b[?1049l');
+  }
+
+  /** Hands the real terminal to a vendor CLI's own interactive flow (typically
+   * login) without tearing the session down, so ClikCode's UI can resume in
+   * place once that process exits. */
+  suspend(): void {
+    if (input.isTTY) input.setRawMode(false);
+    input.pause();
+    output.write('\u001b[?25h\u001b[?1049l');
+  }
+
+  resume(): void {
+    if (this.closed) return;
+    output.write('\u001b[?1049h');
+    if (input.isTTY) input.resume();
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 }
 
@@ -1621,16 +1642,46 @@ export async function aiAccountLogout(labelOrId: string): Promise<void> {
   emitJson({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
 }
 
-/** Select a provider while retaining ClikCode as the foreground UI. */
+/** No status command published: there is no reliable signal, so assume logged
+ * in rather than force a prompt on a user who already authenticated outside
+ * ClikCode. A non-zero exit is treated as logged-out unconditionally (true for
+ * every status command checked against real output: Codex, Claude Code); an
+ * explicit `loggedIn`/`isAuthenticated: false` in a JSON body catches the ones
+ * that report failure with exit 0 instead (Cursor Agent). */
+async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>): Promise<boolean> {
+  if (!harness.statusArgv) return false;
+  let stdout: string;
+  try {
+    stdout = await captureNativeHarnessOutput(harness, harness.statusArgv, environment, 8_000);
+  } catch {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(stdout) as { loggedIn?: unknown; isAuthenticated?: unknown };
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.loggedIn === false || parsed.isAuthenticated === false) return true;
+    }
+  } catch { /* not JSON; exit 0 with no verified false-signal means treat as logged in */ }
+  return false;
+}
+
+/** Select a provider while retaining ClikCode as the foreground UI. Installs
+ * it first if needed, and — only inside the interactive full-screen session,
+ * where suspending the alt-screen for a vendor login prompt makes sense —
+ * signs in if the vendor CLI reports (or a fresh install implies) that it
+ * isn't authenticated yet. The goal: every harness either works immediately
+ * or ClikCode gets you to "working" itself, instead of erroring and telling
+ * you to go run something separately. */
 export async function aiHarnessSelect(harnessCommandName: string, sessionId: string): Promise<void> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
   if (!harness.turn) throw new Error(`${harness.displayName} does not publish a non-interactive CLI contract required by the centralized ClikCode UI.`);
-  // Installs it if a package is declared and it isn't already on PATH; throws a
-  // clear, actionable error otherwise. There is no separate "install" command
-  // to run first — selecting a provider is the install step.
-  await ensureNativeHarness(harness);
+  const freshInstall = !(await inspectNativeHarness(harness)).installed;
+  if (freshInstall) {
+    activeFullScreenHarness?.startWaiting(`installing ${harness.displayName}…`);
+    try { await ensureNativeHarness(harness); } finally { activeFullScreenHarness?.stopWaiting(); }
+  }
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
@@ -1657,8 +1708,20 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       session.accountId = account.id;
     } else session.accountId = null;
   }
+  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  if (activeFullScreenHarness && harness.loginArgv) {
+    const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+    if (freshInstall || await harnessNeedsLogin(harness, environment)) {
+      activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+      activeFullScreenHarness.suspend();
+      try {
+        await loginNativeHarness(harness, environment);
+      } finally {
+        activeFullScreenHarness.resume();
+      }
+    }
+  }
   if (!session.model) {
-    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
     const catalog = await nativeModelCatalog(harness, account);
     if (catalog.configured) session.model = catalog.configured;
   }
@@ -2486,9 +2549,43 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   const state = await readState();
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  const commandDetails: Record<string, string> = {
+    '/provider': 'choose a provider', '/settings': 'configure this workspace', '/account': 'switch account', '/accounts': 'manage accounts',
+    '/model': 'choose a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
+    '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
+    '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
+    '/init': 'create agent instructions', '/mention': 'attach a file', '/attachments': 'queued files', '/copy': 'copy last response',
+    '/rename': 'rename conversation', '/fork': 'fork conversation', '/archive': 'archive conversation', '/delete': 'delete conversation',
+    '/models': 'available models', '/status': 'current configuration', '/usage': 'token usage', '/clear': 'refresh screen',
+    '/help': 'all commands', '/exit': 'save and leave',
+  };
+  const slashCommands: PickerOption<string>[] = [
+    ...Object.keys(commandDetails).map((value) => ({ label: value, detail: commandDetails[value], value })),
+    ...localRouter().AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal').map((item) => ({
+      label: `/${item.command}`, detail: `switch to ${item.displayName}`, value: `/${item.command}`,
+    })),
+  ];
+  const fallbackCommands = slashCommands.map((item) => item.value);
+  // Created before auto-select so a first-ever install/sign-in — the most
+  // common time either is actually needed — has somewhere to show its
+  // "installing…" spinner and a real terminal to suspend into for a vendor
+  // login prompt, instead of running headless before the UI exists.
+  const rl: HarnessPrompter = input.isTTY && output.isTTY
+    ? new FullScreenHarnessPrompter()
+    : createInterface({
+      input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,
+      completer: (value: string) => {
+        const matches = fallbackCommands.filter((command) => command.startsWith(value));
+        return [matches.length ? matches : fallbackCommands, value] as [string[], string];
+      },
+    });
+  if (rl instanceof FullScreenHarnessPrompter) activeFullScreenHarness = rl;
+  rl.render?.(session);
   if (!session.nativeHarness) {
     const auto = await autoSelectSessionHarness(id);
     if (!auto) {
+      rl.close();
+      if (activeFullScreenHarness === rl) activeFullScreenHarness = undefined;
       emitHarnessOutput({ panel: 'error', message: 'No supported coding-agent CLI is installed. Run clikcode doctor to see installation options.' });
       return;
     }
@@ -2518,33 +2615,6 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
     }
   }
   if (stateChanged) await writeState(state);
-  const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider', '/settings': 'configure this workspace', '/account': 'switch account', '/accounts': 'manage accounts',
-    '/model': 'choose a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
-    '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
-    '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
-    '/init': 'create agent instructions', '/mention': 'attach a file', '/attachments': 'queued files', '/copy': 'copy last response',
-    '/rename': 'rename conversation', '/fork': 'fork conversation', '/archive': 'archive conversation', '/delete': 'delete conversation',
-    '/models': 'available models', '/status': 'current configuration', '/usage': 'token usage', '/clear': 'refresh screen',
-    '/help': 'all commands', '/exit': 'save and leave',
-  };
-  const slashCommands: PickerOption<string>[] = [
-    ...Object.keys(commandDetails).map((value) => ({ label: value, detail: commandDetails[value], value })),
-    ...localRouter().AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal').map((item) => ({
-      label: `/${item.command}`, detail: `switch to ${item.displayName}`, value: `/${item.command}`,
-    })),
-  ];
-  const fallbackCommands = slashCommands.map((item) => item.value);
-  const rl: HarnessPrompter = input.isTTY && output.isTTY
-    ? new FullScreenHarnessPrompter()
-    : createInterface({
-      input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,
-      completer: (value: string) => {
-        const matches = fallbackCommands.filter((command) => command.startsWith(value));
-        return [matches.length ? matches : fallbackCommands, value] as [string[], string];
-      },
-    });
-  if (rl instanceof FullScreenHarnessPrompter) activeFullScreenHarness = rl;
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
   if (rl.render) rl.render(session, initialAccount);
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
