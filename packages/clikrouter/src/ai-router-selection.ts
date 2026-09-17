@@ -1549,6 +1549,50 @@ export function selectRouterCandidate(
   };
 }
 
+/** Async, pluggable decision-maker variant. When `ROUTER_DECISION_MAKER=typesafe` this
+ *  will consult the TypeSafe Jev System One endpoint; otherwise falls back to the
+ *  synchronous `selectRouterCandidate` behaviour. Use this where router latency and
+ *  external decisioning is acceptable. */
+export async function selectRouterCandidateDynamic(
+  candidates: AiRouterCandidate[],
+  mode: AiRoutingStrategy,
+  preferredModel?: string,
+  estimatedPromptTokens?: number,
+  // Optional per-agent capability set; when provided, the router will only
+  // consult an external decision-maker (like TypeSafe) if the agent has the
+  // `jev` capability enabled. This keeps routing behavior controllable per
+  // agent without requiring global env changes.
+  agentCapabilities?: readonly string[] | Set<string>,
+): Promise<AiRouterSelection | null> {
+  const maker = process.env.ROUTER_DECISION_MAKER || '';
+  // Global router-level opt-out: operators can set ROUTER_DECISION_MAKER_ENABLED=false
+  // to force local deterministic routing even when a decision-maker is configured.
+  const makerEnabled = (process.env.ROUTER_DECISION_MAKER_ENABLED ?? 'true') !== 'false';
+
+  if (maker && makerEnabled) {
+    // If agent capabilities were supplied, require the per-agent `jev`
+    // capability to be present before consulting the external decision-maker.
+    if (agentCapabilities) {
+      const hasJeV = Array.isArray(agentCapabilities)
+        ? agentCapabilities.includes('jev')
+        : (agentCapabilities as Set<string>).has('jev');
+      if (!hasJeV) {
+        return selectRouterCandidate(candidates, mode, preferredModel, estimatedPromptTokens);
+      }
+    }
+    if (maker === 'typesafe') {
+      try {
+        const { decideWithTypesafe } = await import('./ai-decision-maker');
+        const decision = await decideWithTypesafe({ candidates, mode, preferredModel, estimatedPromptTokens });
+        if (decision && decision.provider && decision.model) return decision as AiRouterSelection;
+      } catch (err) {
+        // fall through to local deterministic pick
+      }
+    }
+  }
+  return selectRouterCandidate(candidates, mode, preferredModel, estimatedPromptTokens);
+}
+
 /**
  * Floor on the fraction of 'auto'-mode resolutions that deliberately pick an
  * under-sampled candidate instead of the top-ranked one. WHY THIS EXISTS:
