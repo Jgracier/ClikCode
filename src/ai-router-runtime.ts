@@ -8,6 +8,7 @@ export {
   AI_LOCAL_HARNESS_ADAPTER_VERSION,
   AI_LOCAL_HARNESSES,
   harnessSupportsEffort,
+  harnessSupportsImages,
   harnessSupportsPermissionMode,
   localHarnessForCommand,
   localHarnessForProvider,
