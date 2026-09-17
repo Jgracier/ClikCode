@@ -85,6 +85,28 @@ export const AI_PROVIDERS = [
     subscriptionTransport: "harness",
   },
   {
+    id: "typesafe",
+    contextWindow: 200_000,
+    maxOutput: 32_000,
+    modelWindows: {
+      "jev-latest": { contextWindow: 200_000 },
+    },
+    keyUrl: "https://console.typesafe.ai/",
+    defaultModel: "jev-latest",
+    label: "TypeSafe (Jev)",
+    envKey: "TYPESAFE_API_KEY",
+    modalities: ["text", "decision"],
+    chatBaseUrl: "https://api.typesafe.ai/v1",
+    chatDialect: "system-one",
+    authHeader: "bearer",
+    probe: {
+      kind: "typesafe-models",
+      url: "https://api.typesafe.ai/v1/models",
+    },
+    oauth: false,
+    openAiCompatible: false,
+  },
+  {
     id: "anthropic",
     // Caches NOTHING unless the request carries a cache_control breakpoint, and
     // charges 1.25x to write one — so it pays off only when the marked prefix is
