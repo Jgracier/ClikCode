@@ -3111,6 +3111,19 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     session.nativeHarness = harness.command;
     session.provider = harness.provider;
     session.workspace ??= process.cwd();
+    // A fresh native thread (no nativeSessionId yet) with prior ClikCode
+    // messages already on the session means this conversation is continuing
+    // under a different native identity than whatever produced those messages
+    // — a cross-provider /resume, most commonly. ClikCode's own transcript
+    // shows continuity either way, but the vendor process about to start has
+    // no memory of any of it unless it's carried in the prompt itself; without
+    // this, "continuing under Claude Code" is cosmetic in the UI only. The
+    // quota-failover retry below does its own version of this for the
+    // mid-conversation case; this covers every other route into a fresh
+    // native thread with history already behind it.
+    if (!session.nativeSessionId && (session.messages ?? []).length > 0) {
+      turnText = failoverPrompt(session.messages ?? [], turnText);
+    }
     let switchedFrom: string | undefined;
     for (;;) {
       const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
