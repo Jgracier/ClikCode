@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
+import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
 
 const account: AiHarnessAccount = {
   id: 'local-codex',
@@ -102,6 +102,26 @@ describe('local harness catalog', () => {
       .toEqual(['exec', '--sandbox', 'workspace-write', 'resume', 'thread-id', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', images: ['/tmp/screen.png'] }))
       .toEqual(['exec', '--json', '--skip-git-repo-check', '--image', '/tmp/screen.png', '-']);
+  });
+
+  it('leaves permission mode as a no-op for a harness that does not declare support for it', () => {
+    const gemini = localHarnessForCommand('gemini')!;
+    expect(harnessSupportsPermissionMode(gemini, 'read-only')).toBe(false);
+    expect(nativeHarnessTurnArgv(gemini, { prompt: 'inspect', permissionMode: 'read-only' }))
+      .toEqual(['--output-format', 'json', '-p', 'inspect']);
+  });
+
+  it('declares effort support only where a real flag exists', () => {
+    expect(harnessSupportsEffort(localHarnessForCommand('codex')!)).toBe(true);
+    expect(harnessSupportsEffort(localHarnessForCommand('claude')!)).toBe(true);
+    expect(harnessSupportsEffort(localHarnessForCommand('gemini')!)).toBe(false);
+  });
+
+  it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
+    for (const harness of AI_LOCAL_HARNESSES) {
+      const expected = harness.command === 'codex' || harness.command === 'claude';
+      expect(harnessSupportsPermissionMode(harness, 'workspace-write')).toBe(expected);
+    }
   });
 
   it('builds exact create, resume, continuation, and selector argv from adapter declarations', () => {

@@ -84,6 +84,8 @@ interface AiRouterRuntime {
   AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[];
   localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined;
   localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined;
+  harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean;
+  harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean;
   nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: {
     prompt: string; nativeSessionId?: string; createdHere?: boolean; launchedBefore?: boolean;
     model?: string | null; workspace?: string | null; effort?: string | null;
@@ -103,6 +105,12 @@ function localHarnessForCommand(command: string): AiLocalHarnessDefinition | und
 }
 function localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined {
   return localRouter().localHarnessForProvider(provider);
+}
+function harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean {
+  return localRouter().harnessSupportsEffort(harness);
+}
+function harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean {
+  return localRouter().harnessSupportsPermissionMode(harness, mode);
 }
 function streamLocalAiTurn(input: Record<string, unknown>): Promise<any> {
   return localRouter().streamAiChatTurn(input);
@@ -458,6 +466,24 @@ async function nativeUsageLabel(session: HarnessSession, state: HarnessState): P
   return label;
 }
 
+/** Usage is probed per-session above (it needs a native session id for OpenCode);
+ * an account has no session of its own, so borrow one of its sessions if it has
+ * any, or a bare stand-in otherwise — codexUsageProbe ignores the session
+ * argument entirely, and a stand-in with no nativeSessionId simply yields no
+ * OpenCode label rather than a wrong one. */
+async function accountUsageLabel(account: AiHarnessAccount, state: HarnessState): Promise<string | undefined> {
+  if (account.authKind !== 'vendor-cli') return undefined;
+  const harness = localHarnessForProvider(account.provider);
+  if (!harness || !NATIVE_USAGE_PROBES[harness.command]) return undefined;
+  const related = state.sessions.find((item) => item.accountId === account.id && item.nativeSessionId);
+  const pseudoSession: HarnessSession = related ?? {
+    id: `account:${account.id}`, route: 'local', accountId: account.id, provider: account.provider,
+    model: null, effort: 'medium', accountFailover: 'never', createdAt: '', updatedAt: '', status: 'active',
+    nativeHarness: harness.command,
+  };
+  return nativeUsageLabel(pseudoSession, state);
+}
+
 interface HarnessSession {
   id: string;
   route: AiHarnessRoute;
@@ -482,6 +508,19 @@ interface HarnessSession {
   attachments?: string[];
 }
 
+/** Defaults a brand-new session is built from. Provider-specific overrides win
+ * over the global defaults, which win over the hardcoded fallback — replacing
+ * the old behavior of silently copying whatever the previous session happened
+ * to have (a one-off read-only session would otherwise make the *next* new
+ * chat read-only too, with no setting anywhere explaining why). */
+interface HarnessDefaultSettings {
+  effort: string;
+  permissionMode: AiHarnessPermissionMode;
+  accountFailover: 'never' | 'on-quota-exhausted';
+}
+
+const HARNESS_DEFAULT_SETTINGS: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'workspace-write', accountFailover: 'on-quota-exhausted' };
+
 interface HarnessState {
   version: number;
   installationId: string;
@@ -493,6 +532,19 @@ interface HarnessState {
   accounts: AiHarnessAccount[];
   sessions: HarnessSession[];
   invocations: Array<{ id: string; accountId: string; provider: string; model: string; at: string; inputTokens?: number; outputTokens?: number; latencyMs: number }>;
+  /** Applies to every provider unless a providerSettings entry overrides it. */
+  globalSettings: HarnessDefaultSettings;
+  /** Keyed by AiLocalHarnessDefinition.provider; only the fields a user has set. */
+  providerSettings: Record<string, Partial<HarnessDefaultSettings & { model: string }>>;
+}
+
+function resolveDefaultSettings(state: HarnessState, provider?: string | null): HarnessDefaultSettings {
+  const overrides = provider ? state.providerSettings[provider] : undefined;
+  return {
+    effort: overrides?.effort ?? state.globalSettings.effort,
+    permissionMode: overrides?.permissionMode ?? state.globalSettings.permissionMode,
+    accountFailover: overrides?.accountFailover ?? state.globalSettings.accountFailover,
+  };
 }
 
 function newDeviceSigningIdentity(): Pick<HarnessState, 'devicePrivateKeyPem' | 'devicePublicKey'> {
@@ -1210,6 +1262,8 @@ async function readState(): Promise<HarnessState> {
         ...parsed,
         ...(parsed.localApiToken ? {} : { localApiToken: randomBytes(32).toString('base64url') }),
         ...(!parsed.devicePrivateKeyPem || !parsed.devicePublicKey ? newDeviceSigningIdentity() : {}),
+        globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings },
+        providerSettings: parsed.providerSettings && typeof parsed.providerSettings === 'object' ? parsed.providerSettings : {},
       } as HarnessState;
       await writeState(upgraded);
       return upgraded;
@@ -1231,7 +1285,11 @@ async function readState(): Promise<HarnessState> {
         ? { ...account, quotaState: 'available' as const, quotaRetryAt: undefined }
         : account
     ));
-    const normalized = { ...(parsed as HarnessState), accounts, sessions, invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [] };
+    const normalized = {
+      ...(parsed as HarnessState), accounts, sessions, invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [],
+      globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings },
+      providerSettings: parsed.providerSettings && typeof parsed.providerSettings === 'object' ? parsed.providerSettings : {},
+    };
     if (JSON.stringify(normalized) !== JSON.stringify(parsed)) await writeState(normalized);
     return normalized;
   } catch (error) {
@@ -1258,6 +1316,8 @@ async function readState(): Promise<HarnessState> {
       accounts: [],
       sessions: [],
       invocations: [],
+      globalSettings: { ...HARNESS_DEFAULT_SETTINGS },
+      providerSettings: {},
     };
     // The device identity and its loopback bearer must survive the first
     // process exit; otherwise a gateway registration could be valid only for
@@ -1461,7 +1521,10 @@ export async function aiStop(): Promise<void> {
 
 export async function aiAccountsList(): Promise<void> {
   const state = await readState();
-  emitJson({ accounts: state.accounts.map(accountView) });
+  const accounts = await Promise.all(state.accounts.map(async (account) => ({
+    ...accountView(account), usage: await accountUsageLabel(account, state),
+  })));
+  emitJson({ accounts });
 }
 
 /** Lists the normalized local account surfaces without probing provider credentials. */
@@ -1540,7 +1603,8 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
   if (!harness.statusArgv) throw new Error(`${harness.displayName} does not publish a non-destructive account-status command`);
   const nativeStatus = (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim();
-  emitJson({ account: accountView(account), nativeStatus, credentialBoundary: 'local-only' });
+  const usage = await accountUsageLabel(account, state);
+  emitJson({ account: { ...accountView(account), usage }, nativeStatus, credentialBoundary: 'local-only' });
 }
 
 export async function aiAccountLogout(labelOrId: string): Promise<void> {
@@ -1680,6 +1744,81 @@ export async function aiAccountRemove(labelOrId: string): Promise<void> {
   emitHarnessOutput({ panel: 'account-removed', account: removed.label });
 }
 
+const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['read-only', 'workspace-write', 'auto'];
+
+function normalizeFailoverWord(value: string): 'never' | 'on-quota-exhausted' {
+  if (value === 'auto') return 'on-quota-exhausted';
+  if (value === 'never') return 'never';
+  throw new Error('failover must be auto or never');
+}
+
+/** Both `/settings global <key> <value>` and `/settings provider <id> <key> <value>`
+ * write into the same three fields; this is the one place that validates a value
+ * for a given key so the two entry points can't drift out of sync.
+ *
+ * `harness`, when given (the provider-scoped path only — a global default has
+ * no single harness to check against), gates effort and permission mode on
+ * what the catalog actually declares that vendor CLI supports. Without this,
+ * a provider override could be accepted and then silently do nothing: the
+ * turn-argv builder already only applies effort when `effortArgvPrefix` is
+ * declared, and only applies permission mode when the harness's declared
+ * `permissionModes` includes it (today: Codex and Claude Code only). */
+function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { model: string }>, key: string, value: string, harness?: AiLocalHarnessDefinition): void {
+  const normalizedKey = key.toLowerCase();
+  if (normalizedKey === 'effort') {
+    if (harness && !harnessSupportsEffort(harness)) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag; setting one here would silently do nothing.`);
+    if (!VALID_EFFORTS.includes(value as (typeof VALID_EFFORTS)[number])) throw new Error(`effort must be one of ${VALID_EFFORTS.join(', ')}`);
+    target.effort = value;
+  } else if (normalizedKey === 'permissions' || normalizedKey === 'permissionmode') {
+    if (!VALID_PERMISSION_MODES.includes(value as AiHarnessPermissionMode)) throw new Error('permissions must be read-only, workspace-write, or auto');
+    if (harness && !harnessSupportsPermissionMode(harness, value as AiHarnessPermissionMode)) throw new Error(`${harness.displayName} does not map ClikCode's permission modes to a real flag; setting one here would silently do nothing.`);
+    target.permissionMode = value as AiHarnessPermissionMode;
+  } else if (normalizedKey === 'failover') {
+    target.accountFailover = normalizeFailoverWord(value);
+  } else if (normalizedKey === 'model' && 'model' in target) {
+    target.model = value === 'auto' || value === 'default' ? undefined : value;
+  } else {
+    throw new Error(`unknown setting "${key}"; choose ${'model' in target ? 'model, ' : ''}effort, permissions, or failover`);
+  }
+}
+
+/** Read-only view of the defaults every new chat is built from. */
+export async function aiSettingsShow(): Promise<void> {
+  const state = await readState();
+  emitJson({ globalSettings: state.globalSettings, providerSettings: state.providerSettings });
+}
+
+/** Applies to every provider that doesn't have its own override. */
+export async function aiSettingsSetGlobal(key: string, value: string): Promise<void> {
+  const state = await readState();
+  applyDefaultSetting(state.globalSettings, key, value);
+  await writeState(state);
+  emitJson({ globalSettings: state.globalSettings });
+}
+
+/** Overrides the global default for one provider only; existing sessions are untouched. */
+export async function aiSettingsSetProvider(providerOrHarness: string, key: string, value: string): Promise<void> {
+  const state = await readState();
+  const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
+  if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
+  const entry: Partial<HarnessDefaultSettings & { model: string }> = { ...state.providerSettings[harness.provider] };
+  applyDefaultSetting(entry, key, value, harness);
+  state.providerSettings[harness.provider] = entry;
+  await writeState(state);
+  emitJson({ provider: harness.provider, settings: entry });
+}
+
+/** Removes every override for one provider, falling back to the global defaults. */
+export async function aiSettingsClearProvider(providerOrHarness: string): Promise<void> {
+  const state = await readState();
+  const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
+  if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
+  delete state.providerSettings[harness.provider];
+  await writeState(state);
+  emitJson({ provider: harness.provider, settings: {} });
+}
+
 export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
   if (options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
@@ -1688,11 +1827,14 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     ? state.accounts.find((item) => item.id === options.account || item.label === options.account)
     : undefined;
   if (options.route === 'local' && options.account && !account) throw new Error(`local AI account "${options.account}" was not found`);
+  const provider = options.provider ?? account?.provider ?? null;
+  const defaults = resolveDefaultSettings(state, provider);
   const now = new Date().toISOString();
   const session: HarnessSession = {
     id: randomUUID(), route: options.route, accountId: account?.id ?? null,
-    provider: options.provider ?? account?.provider ?? null, model: options.model ?? null,
-    effort: options.effort ?? 'medium', permissionMode: 'workspace-write', accountFailover: options.accountFailover ?? 'on-quota-exhausted', createdAt: now, updatedAt: now, status: 'active',
+    provider, model: options.model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
+    effort: options.effort ?? defaults.effort, permissionMode: defaults.permissionMode,
+    accountFailover: options.accountFailover ?? defaults.accountFailover, createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
   await writeState(state);
@@ -1719,12 +1861,14 @@ export async function aiSessionOpenDefault(config: Conf): Promise<void> {
     // Its configuration is still the user's last agent choice, so carry that
     // forward into a clean chat rather than guessing a provider or model.
     const previous = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    const provider = previous?.provider ?? null;
+    const defaults = resolveDefaultSettings(state, provider);
     const now = new Date().toISOString();
     session = {
       id: randomUUID(), route: previous?.route ?? 'local', accountId: previous?.accountId ?? null,
-      provider: previous?.provider ?? null, model: previous?.model ?? null,
-      effort: previous?.effort ?? 'medium', accountFailover: previous?.accountFailover ?? 'on-quota-exhausted',
-      permissionMode: previous?.permissionMode ?? 'workspace-write',
+      provider, model: previous?.model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
+      effort: previous?.effort ?? defaults.effort, accountFailover: previous?.accountFailover ?? defaults.accountFailover,
+      permissionMode: previous?.permissionMode ?? defaults.permissionMode,
       createdAt: now, updatedAt: now, status: 'active',
     };
     state.sessions.push(session);
@@ -1778,7 +1922,11 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   if (head === 'help') {
     return emitHarnessOutput({
       panel: 'help',
-      controls: ['/settings', '/settings route|account|model|effort <value>', '/accounts', '/sessions', '/models', '/usage', '/<harness>', '/exit'],
+      controls: [
+        '/settings', '/settings route|account|model|effort <value>',
+        '/settings global effort|permissions|failover <value>', '/settings provider <id> model|effort|permissions|failover <value>|clear',
+        '/accounts', '/sessions', '/models', '/usage', '/<harness>', '/exit',
+      ],
     });
   }
   if (head === 'status') {
@@ -2146,9 +2294,12 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const accounts = state.accounts.filter((account) => account.status === 'ready');
+  const usages = await Promise.all(accounts.map((account) => accountUsageLabel(account, state)));
   const selected = await chooseOption(rl, 'Choose an account', [
-    ...accounts.map((account) => ({
-    label: account.label, detail: `· ${account.provider}${account.id === session.accountId ? ' · current' : ''}`, value: account.label,
+    ...accounts.map((account, index) => ({
+      label: account.label,
+      detail: `· ${account.provider}${usages[index] ? ` · ${usages[index]}` : ''}${account.quotaState === 'exhausted' ? ` · ${chalk.yellow('quota exhausted')}` : ''}${account.id === session.accountId ? ' · current' : ''}`,
+      value: account.label,
     })),
     { label: 'Add another account…', detail: 'vendor login', value: '__add__' },
   ]);
@@ -2263,6 +2414,47 @@ async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promi
   return undefined;
 }
 
+/** Edits `globalSettings` or one entry of `providerSettings` — the defaults every
+ * *new* chat is built from, distinct from the picker above which edits the
+ * *current* chat only. */
+async function interactiveDefaultsPicker(rl: HarnessPrompter): Promise<void> {
+  const scope = await chooseOption(rl, 'Defaults for new chats', [
+    { label: 'Global', detail: 'applies to every provider unless overridden', value: 'global' as const },
+    { label: 'Provider…', detail: 'override one provider only', value: 'provider' as const },
+  ]);
+  if (!scope) return;
+  let providerId: string | undefined;
+  let providerLabel = 'Global';
+  if (scope === 'provider') {
+    const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
+      .filter((harness) => harness.surface === 'terminal' && harness.turn)
+      .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
+      .filter((item) => item.inspection.installed);
+    const chosen = await chooseOption(rl, 'Provider to override', installed.map(({ harness }) => ({ label: harness.displayName, value: harness.command })));
+    if (!chosen) return;
+    const harness = localHarnessForCommand(chosen)!;
+    providerId = harness.command;
+    providerLabel = harness.displayName;
+  }
+  const harness = providerId ? localHarnessForCommand(providerId) : undefined;
+  const keyOptions: PickerOption<string>[] = [
+    ...(harness && !harnessSupportsEffort(harness) ? [] : [{ label: 'Reasoning effort', value: 'effort' }]),
+    ...(harness ? VALID_PERMISSION_MODES.some((mode) => harnessSupportsPermissionMode(harness, mode)) ? [{ label: 'Filesystem access', value: 'permissions' }] : [] : [{ label: 'Filesystem access', value: 'permissions' }]),
+    { label: 'Quota failover', value: 'failover' },
+    ...(providerId ? [{ label: 'Model', value: 'model' }] : []),
+  ];
+  const key = await chooseOption(rl, `${providerLabel} default to change`, keyOptions);
+  if (!key) return;
+  let value: string | undefined;
+  if (key === 'effort') value = await chooseOption(rl, 'Reasoning effort', VALID_EFFORTS.map((item) => ({ label: item, value: item })));
+  else if (key === 'permissions') value = await chooseOption(rl, 'Filesystem access', VALID_PERMISSION_MODES.map((item) => ({ label: item, value: item })));
+  else if (key === 'failover') value = await chooseOption(rl, 'Quota failover', [{ label: 'Auto-switch accounts', value: 'auto' }, { label: 'Never', value: 'never' }]);
+  else if (key === 'model') value = (await rl.question(`Model for ${providerLabel} [auto] › `)).trim() || 'auto';
+  if (!value) return;
+  if (providerId) await aiSettingsSetProvider(providerId, key, value);
+  else await aiSettingsSetGlobal(key, value);
+}
+
 async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promise<string | undefined> {
   const selected = await chooseOption(rl, 'Settings', [
     { label: 'Provider', detail: 'choose a coding harness', value: 'provider' },
@@ -2270,6 +2462,7 @@ async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promi
     { label: 'Model', detail: 'provider default or model ID', value: 'model' },
     { label: 'Reasoning effort', detail: 'low through ultra', value: 'effort' },
     { label: 'Filesystem access', detail: 'read-only, workspace-write, or auto', value: 'permissions' },
+    { label: 'Defaults for new chats', detail: 'global or per-provider', value: 'defaults' },
     { label: 'Show current setup', value: 'status' },
   ] as const);
   if (selected === 'provider') return interactiveEnginePicker(rl, id);
@@ -2277,6 +2470,7 @@ async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promi
   else if (selected === 'model') await interactiveModelPicker(rl, id);
   else if (selected === 'effort') await interactiveEffortPicker(rl, id);
   else if (selected === 'permissions') await interactivePermissionPicker(rl, id);
+  else if (selected === 'defaults') await interactiveDefaultsPicker(rl);
   else if (selected === 'status') await aiSessionCommand(id, '/status');
   return undefined;
 }
@@ -2392,6 +2586,24 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         else if (command === '/settings') {
           const selected = await interactiveSettingsPicker(rl, id);
           if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+        }
+        else if (command.startsWith('/settings global ')) {
+          const [, , key, ...rest] = line.trim().split(/\s+/);
+          if (!key || !rest.length) throw new Error('usage: /settings global <effort|permissions|failover> <value>');
+          await aiSettingsSetGlobal(key, rest.join(' '));
+          notice = `Global default updated: ${key} = ${rest.join(' ')}`;
+        }
+        else if (command.startsWith('/settings provider ')) {
+          const [, , providerId, key, ...rest] = line.trim().split(/\s+/);
+          if (!providerId || !key) throw new Error('usage: /settings provider <id> <model|effort|permissions|failover> <value>, or /settings provider <id> clear');
+          if (key.toLowerCase() === 'clear') {
+            await aiSettingsClearProvider(providerId);
+            notice = `Provider defaults cleared for ${providerId}`;
+          } else {
+            if (!rest.length) throw new Error('usage: /settings provider <id> <key> <value>');
+            await aiSettingsSetProvider(providerId, key, rest.join(' '));
+            notice = `${providerId} default updated: ${key} = ${rest.join(' ')}`;
+          }
         }
         else if (command === '/accounts') await interactiveAccountPicker(rl, id);
         else if (command === '/sessions') {
@@ -2512,75 +2724,92 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
     if (!harness.turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
     if (harness.provider !== account.provider) throw new Error(`session provider ${harness.displayName} does not match account "${account.label}"`);
-    const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
     const images = harness.command === 'codex' ? prepared.images : [];
     if (prepared.images.length && harness.command !== 'codex') {
       turnText += `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`;
     }
-    let createdHere = false;
-    if (!session.nativeSessionId && harness.session?.idKind === 'uuid' && harness.turn.createIdPrefix) {
-      session.nativeSessionId = randomUUID();
-      createdHere = true;
-    } else if (!session.nativeSessionId && harness.session?.idKind === 'history-file' && harness.turn.createIdPrefix) {
-      const nativeDirectory = join(harnessStatePath(), '..', 'native', harness.command);
-      await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
-      session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
-      createdHere = true;
-    } else if (!session.nativeSessionId && harness.session?.createSessionArgv) {
-      session.nativeSessionId = await captureNativeHarness(harness, harness.session.createSessionArgv, environment);
-      createdHere = true;
-    }
     session.nativeHarness = harness.command;
     session.provider = harness.provider;
     session.workspace ??= process.cwd();
-    const argv = localRouter().nativeHarnessTurnArgv(harness, {
-      prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
-      launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
-      permissionMode: session.permissionMode ?? 'workspace-write', images,
-    });
-    // Persist an allocated native identity before the provider starts so an
-    // interrupted turn cannot accidentally fork the centralized conversation.
-    if (createdHere) await writeState(state);
-    const turnOutput = await captureNativeHarnessTurn(
-      harness, argv, environment, {
-        cwd: session.workspace,
-        signal,
-        stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
-        onStdoutLine: (lineText) => {
-          const phase = nativeActivityPhase(lineText);
-          if (phase) activeFullScreenHarness?.phase(phase);
-          const activity = nativeActivityLine(harness, lineText);
-          if (activity && activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
-          else if (activity) output.write(`${activity}\n`);
+    let switchedFrom: string | undefined;
+    for (;;) {
+      const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+      let createdHere = false;
+      if (!session.nativeSessionId && harness.session?.idKind === 'uuid' && harness.turn.createIdPrefix) {
+        session.nativeSessionId = randomUUID();
+        createdHere = true;
+      } else if (!session.nativeSessionId && harness.session?.idKind === 'history-file' && harness.turn.createIdPrefix) {
+        const nativeDirectory = join(harnessStatePath(), '..', 'native', harness.command);
+        await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
+        session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
+        createdHere = true;
+      } else if (!session.nativeSessionId && harness.session?.createSessionArgv) {
+        session.nativeSessionId = await captureNativeHarness(harness, harness.session.createSessionArgv, environment);
+        createdHere = true;
+      }
+      const argv = localRouter().nativeHarnessTurnArgv(harness, {
+        prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
+        launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
+        permissionMode: session.permissionMode ?? 'workspace-write', images,
+      });
+      // Persist an allocated native identity before the provider starts so an
+      // interrupted turn cannot accidentally fork the centralized conversation.
+      if (createdHere) await writeState(state);
+      const turnOutput = await captureNativeHarnessTurn(
+        harness, argv, environment, {
+          cwd: session.workspace,
+          signal,
+          stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
+          onStdoutLine: (lineText) => {
+            const phase = nativeActivityPhase(lineText);
+            if (phase) activeFullScreenHarness?.phase(phase);
+            const activity = nativeActivityLine(harness, lineText);
+            if (activity && activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
+            else if (activity) output.write(`${activity}\n`);
+          },
         },
-      },
-    );
-    if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-    const result = nativeTurnResult(harness, turnOutput.stdout);
-    if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
-    if (turnOutput.exitCode !== 0 || result.isError) {
-      const failure = Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
-      if (isUsageExhaustion(failure)) {
+      );
+      if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+      const result = nativeTurnResult(harness, turnOutput.stdout);
+      if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
+      if (turnOutput.exitCode !== 0 || result.isError) {
+        const failure = Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
+        if (!isUsageExhaustion(failure)) throw failure;
         account.quotaState = 'exhausted';
         account.quotaRetryAt = new Date(Date.now() + 60_000).toISOString();
         await writeState(state);
-        throw new Error(`${harness.displayName}: ${result.text}. Switch providers with /provider or choose another ${harness.command} account with /accounts use <label>.`);
+        // Same-provider failover for the native-CLI path: switching accounts means
+        // switching vendor config roots, so the in-flight native conversation can't
+        // continue under the old identity — start a fresh one under the fallback.
+        const fallback = session.accountFailover === 'on-quota-exhausted'
+          ? state.accounts.find((item) => item.id !== account!.id && item.provider === account!.provider
+              && item.authKind === 'vendor-cli' && item.status === 'ready' && item.quotaState !== 'exhausted')
+          : undefined;
+        if (!fallback) {
+          throw new Error(`${harness.displayName}: ${result.text}. Switch providers with /provider or choose another ${harness.command} account with /accounts use <label>.`);
+        }
+        switchedFrom = account.label;
+        account = fallback;
+        session.accountId = fallback.id;
+        session.nativeSessionId = undefined;
+        session.nativeStartedAt = undefined;
+        continue;
       }
-      throw failure;
+      session.nativeStartedAt ??= new Date().toISOString();
+      const invocation = {
+        id: randomUUID(), accountId: account.id, provider: harness.provider, model: model ?? 'provider-default',
+        at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
+      };
+      state.invocations.push(invocation);
+      session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: result.text }].slice(-40);
+      session.name ??= conversationTitle(text);
+      session.attachments = [];
+      session.updatedAt = new Date().toISOString();
+      await writeState(state);
+      if (switchedFrom) activeFullScreenHarness?.activity(`${chalk.yellow('switched account')} ${chalk.dim(`${switchedFrom} → ${account.label} (quota)`)}`);
+      if (!activeFullScreenHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+      return;
     }
-    session.nativeStartedAt ??= new Date().toISOString();
-    const invocation = {
-      id: randomUUID(), accountId: account.id, provider: harness.provider, model: model ?? 'provider-default',
-      at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
-    };
-    state.invocations.push(invocation);
-    session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: result.text }].slice(-40);
-    session.name ??= conversationTitle(text);
-    session.attachments = [];
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
-    if (!activeFullScreenHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation });
-    return;
   }
 
   if (prepared.images.length) throw new Error('Image attachments currently require a vendor-CLI Codex account. Switch with /codex or clear them with /attachments clear.');
@@ -2610,6 +2839,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     if (!fallback) throw error;
     switchedFrom = exhaustedAccount.id;
     turn = await invoke(fallback);
+    activeFullScreenHarness?.activity(`${chalk.yellow('switched account')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label} (quota)`)}`);
     account = fallback;
     session.accountId = fallback.id;
   }
