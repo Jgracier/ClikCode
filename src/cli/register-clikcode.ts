@@ -10,8 +10,8 @@ import {
 import { login } from '../commands/auth.js';
 
 export function registerClikCodeCommands(program: Command, config: Conf): void {
-  program.command('start').description('Start the loopback-only local ClikCode runtime')
-    .option('--port <port>', 'Loopback port', '43173')
+  program.command('start').description('Start the optional loopback-only control API')
+    .option('--port <port>', 'Optional explicit loopback port; default is OS-assigned')
     .action((options) => aiStart(config, options));
   const accounts = program.command('accounts').alias('account').description('Manage local provider accounts');
   accounts.command('list').alias('ls').description('List local accounts without credential material').action(aiAccountsList);

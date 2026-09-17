@@ -89,7 +89,7 @@ function isMutatingLifecycleCommand(commandPath: string): boolean {
  * the banner + --local resolution preAction, the lifecycle-lock hooks, and the
  * process-level error safety net.
  */
-export function buildBaseProgram(config: Conf): Command {
+export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolean } = {}): Command {
   const program = new Command();
   let activeLifecycleLock: LifecycleLock | null = null;
 
@@ -142,18 +142,21 @@ export function buildBaseProgram(config: Conf): Command {
     });
 
   program.hook('preAction', (_thisCommand, actionCommand) => {
+    if (options.lifecycleLock === false) return;
     if (!isMutatingLifecycleCommand(getCommandPath(actionCommand))) return;
     if (activeLifecycleLock) return;
     activeLifecycleLock = acquireLifecycleLock('lifecycle');
   });
 
   program.hook('postAction', () => {
+    if (options.lifecycleLock === false) return;
     if (!activeLifecycleLock) return;
     activeLifecycleLock.release();
     activeLifecycleLock = null;
   });
 
   process.on('exit', () => {
+    if (options.lifecycleLock === false) return;
     if (activeLifecycleLock) activeLifecycleLock.release();
   });
 

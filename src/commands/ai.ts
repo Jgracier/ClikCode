@@ -11,9 +11,9 @@ import { createRequire } from 'node:module';
 import type Conf from 'conf';
 import { ApiClient } from '../api/client.js';
 import { emitJson } from '../utils/structured-output.js';
+import { isJsonDefaultMode } from '../utils/output-mode.js';
 
 const HARNESS_STATE_VERSION = 1;
-const DEFAULT_PORT = 43173;
 const LOCAL_HARNESS_PROTOCOL = 1;
 
 type AiHarnessRoute = 'local' | 'gateway';
@@ -109,6 +109,27 @@ function harnessCommand(): string {
   return process.argv[1]?.includes('clikcode') || process.argv[1]?.includes('index-clikcode')
     ? 'clikcode'
     : 'clikdeploy ai';
+}
+
+/** Keep automation structured while making the foreground harness feel like a CLI, not an API dump. */
+function emitHarnessOutput(payload: Record<string, unknown>): void {
+  if (isJsonDefaultMode()) return emitJson(payload);
+  if (payload.status === 'ready') {
+    const session = payload.session as HarnessSession;
+    const agent = [session.provider, session.model].filter(Boolean).join(' · ') || 'agent not selected';
+    output.write(`\nClikCode · ${agent}\nType a prompt, or use /claude, /codex, /accounts, /settings, or /exit.\n\n`);
+    return;
+  }
+  if (typeof payload.text === 'string') {
+    output.write(`\n${payload.text}\n\n`);
+    return;
+  }
+  if (typeof payload.panel === 'string') {
+    const controls = Array.isArray(payload.controls) ? payload.controls.join(', ') : '';
+    output.write(`\n${payload.panel}${controls ? `: ${controls}` : ''}\n\n`);
+    return;
+  }
+  emitJson(payload);
 }
 
 async function readState(): Promise<HarnessState> {
@@ -244,14 +265,16 @@ function isUsageExhaustion(error: unknown): boolean {
 
 /** Starts an intentionally loopback-only harness service. It exposes no provider tokens. */
 export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
-  const port = Number(options.port ?? DEFAULT_PORT);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('port must be an integer from 1024 to 65535');
+  // The control API is optional. When no port is requested, defer entirely to
+  // the OS so ClikCode never competes with ClikDeploy or another local tool.
+  const port = options.port === undefined ? 0 : Number(options.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be an integer from 0 to 65535');
   const state = await readState();
   const server = createServer(async (request, response) => {
     try {
       const route = methodAndPath(request);
       if (route === 'GET /v1/health') {
-        sendJson(response, 200, { status: 'ok', installationId: state.installationId, credentialBoundary: 'local-only' });
+        sendJson(response, 200, { status: 'ok', installationId: state.installationId, runtime: harnessCommand(), credentialBoundary: 'local-only' });
       } else if (!authorized(request, state.localApiToken)) {
         sendJson(response, 401, { error: 'unauthorized' });
       } else if (route === 'GET /v1/accounts') {
@@ -292,7 +315,9 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => resolve());
   });
-  emitJson({ status: 'running', url: `http://127.0.0.1:${port}`, installationId: state.installationId, credentialBoundary: 'local-only' });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('local control API did not expose a TCP address');
+  emitJson({ status: 'running', url: `http://127.0.0.1:${address.port}`, installationId: state.installationId, credentialBoundary: 'local-only' });
   await new Promise<void>((resolve) => {
     const stop = () => server.close(() => resolve());
     process.once('SIGINT', stop);
@@ -446,14 +471,14 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   const words = input.trim().replace(/^\//, '').split(/\s+/).filter(Boolean);
   const head = words.shift()?.toLowerCase();
   if (!head) throw new Error('slash command is required');
-  if (head === 'settings') return emitJson({ panel: 'settings', session, controls: ['route', 'account', 'model', 'effort', 'accountFailover'] });
+  if (head === 'settings') return emitHarnessOutput({ panel: 'settings', session, controls: ['route', 'account', 'model', 'effort', 'accountFailover'] });
   if (head === 'accounts') {
     const action = words.shift()?.toLowerCase();
     if (action === 'add') {
       const shortcut = words.shift()?.toLowerCase();
       const provider = shortcut ? (localHarnessForCommand(shortcut)?.provider ?? shortcut) : undefined;
       if (!provider) throw new Error('usage: /accounts add <harness>');
-      return emitJson({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
+      return emitHarnessOutput({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
     if (action === 'failover') {
       const setting = words.shift();
@@ -461,12 +486,12 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       session.accountFailover = setting === 'auto' ? 'on-quota-exhausted' : 'never';
       session.updatedAt = new Date().toISOString();
       await writeState(state);
-      return emitJson({ panel: 'accounts', session, accountFailover: session.accountFailover });
+      return emitHarnessOutput({ panel: 'accounts', session, accountFailover: session.accountFailover });
     }
-    return emitJson({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['add', 'remove', 'failover auto|never'] });
+    return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['add', 'remove', 'failover auto|never'] });
   }
   const harness = localHarnessForCommand(head);
-  if (harness) return emitJson({ panel: 'provider-accounts', provider: harness.provider, harness, session, accounts: state.accounts.filter((account) => account.provider === harness.provider).map(accountView), controls: ['add', 'remove', 'select', 'failover'] });
+  if (harness) return emitHarnessOutput({ panel: 'provider-accounts', provider: harness.provider, harness, session, accounts: state.accounts.filter((account) => account.provider === harness.provider).map(accountView), controls: ['add', 'remove', 'select', 'failover'] });
   throw new Error(`unknown slash command: /${head}`);
 }
 
@@ -482,10 +507,18 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
     await writeState(state);
   }
   const rl = createInterface({ input, output, terminal: true });
-  emitJson({ status: 'ready', session, commands: ['/claude', '/codex', '/opencode', '/antigravity', '/accounts', '/settings', '/exit'] });
+  emitHarnessOutput({ status: 'ready', session, commands: ['/claude', '/codex', '/opencode', '/antigravity', '/accounts', '/settings', '/exit'] });
   try {
     while (true) {
-      const line = (await rl.question('› ')).trim();
+      let line: string;
+      try {
+        line = (await rl.question('› ')).trim();
+      } catch (error) {
+        // A non-interactive caller may close stdin after its final command.
+        // Treat that exactly like leaving the foreground harness, not a crash.
+        if ((error as NodeJS.ErrnoException).code === 'ERR_USE_AFTER_CLOSE') break;
+        throw error;
+      }
       if (!line) continue;
       if (line === '/exit' || line === '/quit') {
         session.status = 'closed';
@@ -558,7 +591,7 @@ export async function aiSessionSend(id: string, prompt: string): Promise<void> {
   session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }].slice(-40);
   session.updatedAt = new Date().toISOString();
   await writeState(state);
-  emitJson({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+  emitHarnessOutput({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
 }
 
 /** Send a gateway session through the existing authenticated platform assistant stream. */
@@ -605,7 +638,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: reply }].slice(-40);
   session.updatedAt = new Date().toISOString();
   await writeState(state);
-  emitJson({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
+  emitHarnessOutput({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
 }
 
 export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
