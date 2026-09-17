@@ -14,7 +14,7 @@ import chalk from 'chalk';
 import { ApiClient } from '../api/client.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
-import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
+import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
 
 const HARNESS_STATE_VERSION = 1;
 const LOCAL_HARNESS_PROTOCOL = 1;
@@ -52,6 +52,7 @@ interface AiLocalHarnessDefinition {
   workspaceArgvPrefix?: readonly string[];
   effortArgvPrefix?: readonly string[];
   effortConfigKey?: string;
+  permissionModes?: readonly AiHarnessPermissionMode[];
   profileEnv?: string;
   turn?: {
     startArgv: readonly string[];
@@ -1542,7 +1543,9 @@ export async function aiDoctor(): Promise<void> {
       provider: harness.provider,
       surface: harness.surface,
       binary: harness.binary,
-      install: harness.npmPackage ? `npm:${harness.npmPackage}` : 'vendor-managed',
+      install: harness.npmPackage
+        ? { kind: 'npm' as const, package: harness.npmPackage, automatic: true }
+        : { kind: 'vendor-managed' as const, automatic: false, note: `ClikCode has no publisher to install from; put a \`${harness.binary}\` binary on PATH using ${harness.displayName}'s own installer.` },
       ...inspection,
       capabilities: {
         centralizedTurns: Boolean(harness.turn),
@@ -1553,6 +1556,7 @@ export async function aiDoctor(): Promise<void> {
         modelSelection: Boolean(harness.modelArgvPrefix),
         workspaceSelection: Boolean(harness.workspaceArgvPrefix),
         effortSelection: Boolean(harness.effortArgvPrefix),
+        permissionModeSelection: (harness.permissionModes?.length ?? 0) > 0,
         exactResume: Boolean(harness.session?.resumeIdPrefix),
         automaticSessionIdentity: Boolean(harness.session?.createIdPrefix || harness.session?.createSessionArgv || harness.session?.discoverArgv),
         continueLatest: Boolean(harness.session?.continueArgv),
@@ -1623,8 +1627,10 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
   if (!harness.turn) throw new Error(`${harness.displayName} does not publish a non-interactive CLI contract required by the centralized ClikCode UI.`);
-  const inspection = await inspectNativeHarness(harness);
-  if (!inspection.installed) throw new Error(`${harness.displayName} is not installed; run \`${harnessCommand()} harnesses install ${harness.command}\` first`);
+  // Installs it if a package is declared and it isn't already on PATH; throws a
+  // clear, actionable error otherwise. There is no separate "install" command
+  // to run first — selecting a provider is the install step.
+  await ensureNativeHarness(harness);
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
