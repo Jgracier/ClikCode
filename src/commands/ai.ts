@@ -22,6 +22,16 @@ const LOCAL_HARNESS_PROTOCOL = 1;
 type AiHarnessRoute = 'local' | 'gateway';
 type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
 type AiHarnessPermissionMode = 'read-only' | 'workspace-write' | 'auto';
+type AiHarnessOptionKind = 'boolean' | 'string' | 'enum' | 'string-list' | 'path' | 'path-list' | 'number';
+interface AiHarnessOptionDefinition {
+  id: string; label: string; description: string; category: string; kind: AiHarnessOptionKind;
+  values?: readonly string[]; dangerous?: boolean; requiresNewSession?: boolean;
+}
+interface AiHarnessCapabilityManifest {
+  options: readonly AiHarnessOptionDefinition[];
+  managers?: Readonly<Partial<Record<'mcp' | 'skills' | 'plugins' | 'agents' | 'hooks' | 'tools', { label: string; listArgv?: readonly string[]; manageArgv?: readonly string[] }>>>;
+  features?: readonly string[];
+}
 interface AiHarnessAccount {
   id: string;
   provider: string;
@@ -85,6 +95,7 @@ interface AiRouterRuntime {
   AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[];
   localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined;
   localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined;
+  localHarnessCapabilityManifest(harness: AiLocalHarnessDefinition): AiHarnessCapabilityManifest;
   harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean;
   harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean;
   harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean;
@@ -93,6 +104,7 @@ interface AiRouterRuntime {
     model?: string | null; workspace?: string | null; effort?: string | null;
     permissionMode?: AiHarnessPermissionMode;
     images?: readonly string[];
+    options?: Readonly<Record<string, unknown>>;
   }): string[];
 }
 
@@ -107,6 +119,9 @@ function localHarnessForCommand(command: string): AiLocalHarnessDefinition | und
 }
 function localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined {
   return localRouter().localHarnessForProvider(provider);
+}
+function localHarnessCapabilityManifest(harness: AiLocalHarnessDefinition): AiHarnessCapabilityManifest {
+  return localRouter().localHarnessCapabilityManifest(harness);
 }
 function harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean {
   return localRouter().harnessSupportsEffort(harness);
@@ -511,6 +526,8 @@ interface HarnessSession {
   workspace?: string;
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   attachments?: string[];
+  /** Provider-native values validated against the selected harness manifest. */
+  harnessOptions?: Record<string, unknown>;
 }
 
 /** Defaults a brand-new session is built from. Provider-specific overrides win
