@@ -89,7 +89,7 @@ interface AiLocalHarnessDefinition {
     createSessionArgv?: readonly string[];
     idKind?: 'uuid' | 'history-file';
     discoverArgv?: readonly string[];
-    discoverFormat?: 'json' | 'json-lines' | 'text';
+    discoverFormat?: 'json' | 'json-lines' | 'text' | 'numbered-list';
   };
 }
 interface AiRouterRuntime {
@@ -2778,6 +2778,40 @@ async function discoverCursorFsSessions(workspace: string): Promise<DiscoveredNa
   return sessions.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')).slice(0, 15);
 }
 
+/** Pi has no listing command at all (`-r`/`/resume` open an interactive
+ * picker only) but its own docs describe one JSONL file per session under
+ * `~/.pi/agent/sessions/`, organized by working directory, with a custom name
+ * settable via `/name`/`--name`. Unlike Claude/Codex/Cursor above, this is
+ * sourced from documentation only — Pi isn't installed on any machine this
+ * was verified against — so the exact per-directory naming scheme and the
+ * field a custom name is stored under are both unconfirmed. Filtering by a
+ * `cwd`-like field when one is present (rather than assuming a specific
+ * escaping scheme for the directory itself) and duck-typing the name field
+ * keeps a wrong guess a silent no-op instead of a wrong result. */
+async function discoverPiFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
+  const root = join(homedir(), '.pi', 'agent', 'sessions');
+  const files = await walkFilesRecursive(root, 3, '.jsonl');
+  const recent = await newestFiles(files, 15);
+  const sessions: DiscoveredNativeSession[] = [];
+  for (const file of recent) {
+    const nativeId = file.path.split('/').pop()!.replace(/\.jsonl$/, '');
+    const prefix = await readFilePrefix(file.path, 8_000).catch(() => '');
+    let title: string | undefined;
+    let cwd: string | undefined;
+    for (const line of prefix.split('\n')) {
+      if (!line.trim()) continue;
+      let record: Record<string, unknown>;
+      try { record = JSON.parse(line); } catch { continue; }
+      if (typeof record.cwd === 'string') cwd = record.cwd;
+      if (!title && typeof record.name === 'string') title = record.name;
+      else if (!title && typeof record.title === 'string') title = record.title;
+    }
+    if (workspace && cwd && cwd !== workspace) continue;
+    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString() });
+  }
+  return sessions;
+}
+
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
  * not a declarative catalog field like discoverArgv, because unlike a shell
@@ -2787,6 +2821,7 @@ const FS_SESSION_DISCOVERY: Readonly<Record<string, (workspace: string) => Promi
   claude: discoverClaudeFsSessions,
   codex: discoverCodexFsSessions,
   cursor: discoverCursorFsSessions,
+  pi: discoverPiFsSessions,
 };
 
 function splitTableColumns(line: string): string[] {
@@ -2819,12 +2854,14 @@ function parseDiscoveredSessionsText(raw: string): DiscoveredNativeSession[] {
   return sessions;
 }
 
-/** Structured vendor listings are unverified for any harness not actually
- * installed here (only opencode and Hermes were confirmed live; qwen and
- * goose declare a JSON discovery command this build has never observed
- * running). Duck-typing common field names and returning nothing on a shape
- * that doesn't match is a deliberate fail-soft: a guess is fine as a lookup
- * that quietly turns up empty, never as one that throws or fabricates ids. */
+/** Field names come from two sources of different confidence: Qwen Code's own
+ * docs give an exact schema (`sessionId`, `customTitle`, `mtime`/`startTime`)
+ * confirmed against its README, and Crush's real Go source gives another
+ * (`uuid` as the full resumable id, `id` as a 7-char display hash, `title`,
+ * `modified`) confirmed against its repo — both are wired in by name.
+ * Everything else here (goose, kilo) is an educated duck-type against common
+ * conventions, never confirmed against a live install: a shape that doesn't
+ * match one of these names contributes nothing rather than a guessed field. */
 function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-lines'): DiscoveredNativeSession[] {
   const records: unknown[] = [];
   try {
@@ -2843,11 +2880,35 @@ function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-l
   for (const record of records) {
     if (!record || typeof record !== 'object') continue;
     const item = record as Record<string, unknown>;
-    const nativeId = item.id ?? item.sessionId ?? item.session_id ?? item.sessionID;
+    // Crush's own `uuid` (the full resumable id) must win over its `id` (a
+    // 7-char display-only hash) when both are present on the same record.
+    const nativeId = item.uuid ?? item.id ?? item.sessionId ?? item.session_id ?? item.sessionID;
     if (typeof nativeId !== 'string' || !nativeId) continue;
-    const title = item.title ?? item.name ?? item.summary;
-    const updatedAt = item.updatedAt ?? item.updated_at ?? item.lastActive ?? item.modified;
-    sessions.push({ nativeId, title: typeof title === 'string' ? title : undefined, updatedAt: typeof updatedAt === 'string' ? updatedAt : undefined });
+    const title = item.customTitle ?? item.title ?? item.name ?? item.summary
+      ?? (typeof item.prompt === 'string' ? item.prompt : undefined);
+    const updatedAt = item.updatedAt ?? item.updated_at ?? item.modified ?? item.mtime ?? item.lastActive ?? item.startTime;
+    sessions.push({
+      nativeId,
+      title: typeof title === 'string' ? title : undefined,
+      updatedAt: typeof updatedAt === 'string' ? updatedAt : typeof updatedAt === 'number' ? new Date(updatedAt).toISOString() : undefined,
+    });
+  }
+  return sessions;
+}
+
+/** Gemini CLI's `--list-sessions` has no JSON mode — real output is a numbered
+ * list, one session per line: "N. Title (relative-time) [uuid-prefix]". The
+ * bracketed id is only a shortened prefix (confirmed against Gemini's own
+ * docs), not guaranteed to be the full uuid its `--resume` flag can also
+ * accept verbatim — the safest resumable value is still whatever the CLI
+ * itself printed, so it's used as-is rather than guessed at in full. */
+function parseDiscoveredSessionsNumberedList(raw: string): DiscoveredNativeSession[] {
+  const sessions: DiscoveredNativeSession[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const match = /^\s*\d+\.\s+(.*?)\s+\(([^)]+)\)\s+\[([a-f0-9-]+)\]\s*$/i.exec(line);
+    if (!match) continue;
+    const [, title, relativeTime, idFragment] = match;
+    sessions.push({ nativeId: idFragment, title: title.trim() || undefined, updatedAt: relativeTime.trim() || undefined });
   }
   return sessions;
 }
@@ -2864,8 +2925,10 @@ async function discoverNativeSessions(
   if (!inspection.installed) return [];
   try {
     const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
-    return harness.session.discoverFormat === 'text' ? parseDiscoveredSessionsText(raw)
-      : parseDiscoveredSessionsStructured(raw, harness.session.discoverFormat ?? 'json');
+    const format = harness.session.discoverFormat ?? 'json';
+    if (format === 'text') return parseDiscoveredSessionsText(raw);
+    if (format === 'numbered-list') return parseDiscoveredSessionsNumberedList(raw);
+    return parseDiscoveredSessionsStructured(raw, format);
   } catch { return []; }
 }
 
@@ -2889,10 +2952,20 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   // through ClikCode — are otherwise invisible here entirely: /resume only ever
   // looked at ClikCode's own tracked sessions. Two independent mechanisms feed
   // this, because vendors expose their own history in genuinely different
-  // ways: a machine-readable CLI listing (opencode, Hermes; qwen and goose
-  // declare one too but aren't installed here to verify) via discoverArgv, or
-  // — for the harnesses that publish no such command at all — reading their
-  // own on-disk session files directly (Claude Code, Codex, Cursor Agent).
+  // ways: a machine-readable CLI listing via discoverArgv (confirmed live:
+  // opencode, Hermes; confirmed only against docs/source, not installed here:
+  // Qwen Code, Crush; declared but with an unconfirmed JSON shape: Goose,
+  // Kilo Code; a real command with no JSON mode at all, needing its own
+  // numbered-list parser: Gemini CLI) — or, for harnesses that publish no
+  // listing command whatsoever, reading their own on-disk session files
+  // directly (confirmed live: Claude Code, Codex, Cursor Agent; docs-only,
+  // unverified against a real install: Pi). GitHub Copilot CLI, Aider, Amp,
+  // Factory Droid, Kiro CLI, Cline CLI, and Command Code are deliberately not
+  // wired in at all: each either has no local listing mechanism (Aider, Amp's
+  // canonical store is server-side), an undocumented on-disk format (Copilot
+  // CLI, Factory Droid, Kiro CLI, Cline CLI), or an unresolved identity
+  // mismatch between this catalog's entry and the only public docs found for
+  // its name (Command Code) — none of these are guessed at.
   const workspace = current?.workspace ?? process.cwd();
   const discoverable = localRouter().AI_LOCAL_HARNESSES.filter((harness) => harness.session?.discoverArgv);
   const shellDiscovered = (await Promise.all(discoverable.map(async (harness) => {
