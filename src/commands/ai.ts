@@ -753,6 +753,52 @@ function terminalCellWidth(value: string): number {
   return width;
 }
 
+/** Greedy word-wrap that never splits a word across lines, measuring by
+ * terminal cell width (so wide/CJK characters count correctly) rather than
+ * raw string length. A single word longer than `width` on its own still has
+ * to be hard-broken -- there's no other way to fit it -- but that's the
+ * fallback, not the common case the plain character-slice loop this
+ * replaced used unconditionally. */
+function wrapWords(text: string, width: number): string[] {
+  const safeWidth = Math.max(1, width);
+  const lines: string[] = [];
+  let current = '';
+  let currentWidth = 0;
+  for (const word of text.split(/(\s+)/)) {
+    if (!word) continue;
+    if (/^\s+$/.test(word)) {
+      if (currentWidth > 0) { current += word; currentWidth += terminalCellWidth(word); }
+      continue;
+    }
+    const wordWidth = terminalCellWidth(word);
+    if (currentWidth > 0 && currentWidth + wordWidth > safeWidth) {
+      lines.push(current.replace(/\s+$/, ''));
+      current = '';
+      currentWidth = 0;
+    }
+    if (wordWidth > safeWidth) {
+      let remaining = word;
+      while (terminalCellWidth(remaining) > safeWidth) {
+        let cut = 0;
+        for (const character of remaining) {
+          if (terminalCellWidth(remaining.slice(0, cut + character.length)) > safeWidth) break;
+          cut += character.length;
+        }
+        cut = Math.max(cut, 1);
+        lines.push(remaining.slice(0, cut));
+        remaining = remaining.slice(cut);
+      }
+      current = remaining;
+      currentWidth = terminalCellWidth(remaining);
+      continue;
+    }
+    current += word;
+    currentWidth += wordWidth;
+  }
+  if (current || lines.length === 0) lines.push(current.replace(/\s+$/, ''));
+  return lines;
+}
+
 function previousCharacterIndex(value: string, index: number): number {
   if (index <= 0) return 0;
   const code = value.charCodeAt(index - 1);
@@ -941,7 +987,10 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
 
   private updateWaiting(): void {
     if (!this.waitingLabel || !this.waitingScreenRow) return;
-    const width = Math.max(12, (output.columns || 100) - 1);
+    // No -1 margin here: DEC autowrap is disabled for the whole frame this
+    // row belongs to, so writing all the way to the terminal's real last
+    // column is safe and doesn't trigger a wrap.
+    const width = Math.max(12, output.columns || 100);
     // Hiding the cursor for this one write keeps it from visibly jumping to the
     // activity row and back every ~90ms while the spinner ticks.
     output.write(`\u001b[?25l\u001b7\u001b[${this.waitingScreenRow};1H\u001b[2K  ${chalk.cyan('●')} ${chalk.dim(visibleSlice(this.waitingText(), width - 6))}\u001b8\u001b[?25h`);
@@ -968,7 +1017,10 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     this.draftPrompt = prompt;
     this.draftCursor = cursor;
     this.draftPalette = palette ? { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } : undefined;
-    const width = Math.max(12, (output.columns || 100) - 1);
+    // No -1 margin: DEC autowrap is off for this whole frame (see the
+    // `[?7l` at the top of it), so the real last column is safe to
+    // use, not just columns-1.
+    const width = Math.max(12, output.columns || 100);
     const inner = width - 4;
     // The conversation transcript gets its own, tighter margin: a bare
     // marker-and-space (2 columns) instead of inner's extra 2-space wrapper
@@ -1012,9 +1064,14 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       let firstLine = true;
       for (const paragraph of stripMarkdown(message.content).split(/\r?\n/)) {
         const clean = paragraph || ' ';
-        for (let offset = 0; offset < clean.length; offset += conversationInner - 2) {
+        // conversationInner is already the full per-line budget after the
+        // 2-column marker/indent prefix; wrapWords breaks at spaces (falling
+        // back to a hard break only for a single word wider than the whole
+        // line) instead of the flat character-count slice this replaced,
+        // which split words wherever the count happened to land.
+        for (const line of wrapWords(clean, conversationInner)) {
           const prefix = firstLine ? `${marker} ` : '  ';
-          conversation.push({ text: `${prefix}${clean.slice(offset, offset + conversationInner - 2)}` });
+          conversation.push({ text: `${prefix}${line}` });
           firstLine = false;
         }
       }
