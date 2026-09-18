@@ -1,4 +1,4 @@
-export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'other';
+export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'other';
 
 /** Classify only signals strong enough to justify changing credentials. */
 export function classifyAccountFailure(error: unknown): AccountFailureKind {
@@ -8,6 +8,17 @@ export function classifyAccountFailure(error: unknown): AccountFailureKind {
   if (status === 401 || status === 403 || /(?:not authenticated|authentication required|login required|unauthorized)/i.test(message)) return 'authentication-required';
   if (status === 402 || /(?:quota (?:exceeded|exhausted)|(?:usage|session|plan|weekly|monthly|daily) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted)/i.test(message)) return 'quota-exhausted';
   if (status === 429 || /(?:rate limit|too many requests|temporar(?:y|ily) throttled)/i.test(message)) return 'temporarily-throttled';
+  // Confirmed verbatim from a real, reproduced Codex error: "thread/resume:
+  // thread/resume failed: no rollout found for thread id ...". A stale
+  // nativeSessionId (the account it was created under no longer matches the
+  // session's current account -- switching accounts within the same
+  // provider used to leave it untouched) is recoverable, not fatal: clear
+  // it and let the existing failoverPrompt rehydration path start a fresh
+  // thread from the real stored transcript instead of surfacing this raw
+  // vendor error. Only Codex's exact confirmed wording is matched here --
+  // no other vendor's equivalent phrasing has been verified, so none is
+  // guessed at.
+  if (/no rollout found/i.test(message)) return 'native-thread-invalid';
   return 'other';
 }
 
