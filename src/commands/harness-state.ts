@@ -19,7 +19,15 @@ export const LOCAL_HARNESS_PROTOCOL = 1;
  * to have (a one-off read-only session would otherwise make the *next* new
  * chat read-only too, with no setting anywhere explaining why). */
 
-export const HARNESS_DEFAULT_SETTINGS: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'workspace-write', accountFailover: 'on-quota-exhausted' };
+export const HARNESS_DEFAULT_SETTINGS: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' };
+
+function normalizedPermissionMode(value: unknown): HarnessDefaultSettings['permissionMode'] {
+  if (value === 'auto' || value === 'bypass' || value === 'ask') return value;
+  // Legacy ClikCode releases described sandbox width instead of approval
+  // behavior. Both interactive legacy modes become the new explicit Ask.
+  if (value === 'read-only' || value === 'workspace-write') return 'ask';
+  return HARNESS_DEFAULT_SETTINGS.permissionMode;
+}
 
 
 export function resolveDefaultSettings(state: HarnessState, provider?: string | null): HarnessDefaultSettings {
@@ -70,8 +78,12 @@ export async function readState(): Promise<HarnessState> {
         ...parsed,
         ...(parsed.localApiToken ? {} : { localApiToken: randomBytes(32).toString('base64url') }),
         ...(!parsed.devicePrivateKeyPem || !parsed.devicePublicKey ? newDeviceSigningIdentity() : {}),
-        globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings },
-        providerSettings: parsed.providerSettings && typeof parsed.providerSettings === 'object' ? parsed.providerSettings : {},
+        globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings, permissionMode: normalizedPermissionMode(parsed.globalSettings?.permissionMode) },
+        providerSettings: Object.fromEntries(Object.entries(parsed.providerSettings && typeof parsed.providerSettings === 'object' ? parsed.providerSettings : {}).map(([provider, settings]) => [
+          provider,
+          { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
+        ])),
+        sessions: (parsed.sessions as HarnessSession[]).map((session) => ({ ...session, permissionMode: normalizedPermissionMode(session.permissionMode) })),
       } as HarnessState;
       await writeState(upgraded);
       return upgraded;
@@ -85,7 +97,7 @@ export async function readState(): Promise<HarnessState> {
       // Sessions created before lifecycle state existed were still open at the
       // time of upgrade, so preserve their resumability once.
       status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
-      permissionMode: session.permissionMode ?? 'workspace-write',
+      permissionMode: normalizedPermissionMode(session.permissionMode),
     }));
     // Older builds invented a 60-second quota reset. A real limit remains
     // exhausted until the user explicitly retries that account or the provider
@@ -93,8 +105,11 @@ export async function readState(): Promise<HarnessState> {
     const accounts = (parsed.accounts as AiHarnessAccount[]).map(({ quotaRetryAt: _obsoleteRetryAt, ...account }) => account);
     const normalized = {
       ...(parsed as HarnessState), accounts, sessions, invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [],
-      globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings },
-      providerSettings: parsed.providerSettings && typeof parsed.providerSettings === 'object' ? parsed.providerSettings : {},
+      globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings, permissionMode: normalizedPermissionMode(parsed.globalSettings?.permissionMode) },
+      providerSettings: Object.fromEntries(Object.entries(parsed.providerSettings && typeof parsed.providerSettings === 'object' ? parsed.providerSettings : {}).map(([provider, settings]) => [
+        provider,
+        { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
+      ])),
     };
     if (JSON.stringify(normalized) !== JSON.stringify(parsed)) await writeState(normalized);
     return normalized;
