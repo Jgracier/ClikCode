@@ -127,16 +127,16 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'continue', nativeSessionId: 'thread-id', permissionMode: 'bypass' }))
       .toEqual(['--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'exec', 'resume', 'thread-id', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', permissionMode: 'auto' }))
-      .toEqual(['--approve-for-me', 'exec', '--json', '--skip-git-repo-check', '-']);
+      .toEqual(['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request', '--config', 'approvals_reviewer=auto_review', 'exec', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', images: ['/tmp/screen.png'] }))
       .toEqual(['exec', '--json', '--skip-git-repo-check', '--image', '/tmp/screen.png', '-']);
   });
 
   it('leaves permission mode as a no-op for a harness that does not declare support for it', () => {
-    const gemini = localHarnessForCommand('gemini')!;
-    expect(harnessSupportsPermissionMode(gemini, 'ask')).toBe(false);
-    expect(nativeHarnessTurnArgv(gemini, { prompt: 'inspect', permissionMode: 'ask' }))
-      .toEqual(['--output-format', 'json', '-p', 'inspect']);
+    const goose = localHarnessForCommand('goose')!;
+    expect(harnessSupportsPermissionMode(goose, 'ask')).toBe(false);
+    expect(nativeHarnessTurnArgv(goose, { prompt: 'inspect', permissionMode: 'ask' }))
+      .toEqual(['run', '--text', 'inspect']);
   });
 
   it('declares effort support only where a real flag exists', () => {
@@ -147,7 +147,10 @@ describe('local harness catalog', () => {
 
   it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
     const fullThreeTier = new Set(['codex', 'claude', 'cursor']);
-    const askAndBypass = new Set(['opencode', 'hermes', 'antigravity']);
+    const askAndBypass = new Set([
+      'gemini', 'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'qwen', 'cline',
+      'kilo', 'hermes', 'command',
+    ]);
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(harnessSupportsPermissionMode(harness, 'ask')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command));
       expect(harnessSupportsPermissionMode(harness, 'bypass')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command));
@@ -173,6 +176,46 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'ask' })).toEqual(expect.arrayContaining(['--mode', 'accept-edits']));
     const antigravityBypass = nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'bypass' });
     expect(antigravityBypass).toEqual(expect.arrayContaining(['--mode', 'accept-edits', '--dangerously-skip-permissions']));
+
+    const cases: Array<[string, string[], string[]]> = [
+      ['gemini', ['--approval-mode', 'default'], ['--approval-mode', 'yolo']],
+      ['qwen', ['--approval-mode', 'default'], ['--approval-mode', 'yolo']],
+      ['copilot', [], ['--allow-all']],
+      ['aider', [], ['--yes-always']],
+      ['kiro', [], ['--trust-all-tools']],
+      ['cline', ['--auto-approve', 'false'], ['--auto-approve', 'true']],
+      ['kilo', [], ['--auto']],
+      ['command', [], ['--yolo']],
+    ];
+    for (const [command, askArgs, bypassArgs] of cases) {
+      const harness = localHarnessForCommand(command)!;
+      const ask = nativeHarnessTurnArgv(harness, { prompt: 'hi', permissionMode: 'ask' });
+      const bypass = nativeHarnessTurnArgv(harness, { prompt: 'hi', permissionMode: 'bypass' });
+      for (const arg of askArgs) expect(ask, `${command}:ask`).toContain(arg);
+      for (const arg of bypassArgs) expect(bypass, `${command}:bypass`).toContain(arg);
+      if (bypassArgs.length) expect(bypass, command).not.toEqual(ask);
+    }
+  });
+
+  it('shows the exact normalized permission choices every mapped harness accepts', () => {
+    for (const harness of AI_LOCAL_HARNESSES) {
+      const option = localHarnessCapabilityManifest(harness).options.find((item) => item.id === 'permissions');
+      if (harness.permissionModes?.length) expect(option?.values, harness.command).toEqual(harness.permissionModes);
+      else expect(option, harness.command).toBeUndefined();
+    }
+  });
+
+  it('hides native aliases that could contradict the normalized permission setting', () => {
+    const aliases: Record<string, string[]> = {
+      gemini: ['approval-mode'], opencode: ['auto-approve'], copilot: ['allow-all'],
+      qwen: ['approval-mode'], cline: ['auto-approve'], cursor: ['auto-review', 'force'], hermes: ['yolo'],
+    };
+    for (const [command, ids] of Object.entries(aliases)) {
+      const harness = localHarnessForCommand(command)!;
+      const visible = localHarnessCapabilityManifest(harness).options.map((option) => option.id);
+      for (const id of ids) expect(visible, `${command}:${id}`).not.toContain(id);
+      expect(() => nativeHarnessTurnArgv(harness, { prompt: 'hi', permissionMode: 'ask', options: Object.fromEntries(ids.map((id) => [id, true])) })).not.toThrow();
+    }
   });
 
   it('declares image-attachment support only where a real flag exists, and drops images silently otherwise', () => {
