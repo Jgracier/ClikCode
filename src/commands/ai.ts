@@ -1633,7 +1633,19 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
 
   resume(): void {
     if (this.closed) return;
-    output.write('\u001b[?1049h');
+    // \x1b[2J explicitly clears the whole alt-screen buffer before painting
+    // -- suspend() hands control to the real terminal for a login prompt,
+    // and the terminal's actual dimensions can genuinely change in that
+    // window (most plausibly a mobile SSH client's on-screen keyboard
+    // appearing/disappearing). Every other repaint in this file only clears
+    // the exact lines it's about to rewrite (screenLine's \x1b[2K on each
+    // line as the cursor advances), which is fine when the frame height is
+    // stable between paints, but would leave old content below a shorter
+    // new frame -- e.g. an old meta/status line -- never revisited. That's
+    // the concrete "meta line duplicates after switching providers" report
+    // this fixes: switching to a provider needing login is exactly the
+    // path that goes through suspend/resume.
+    output.write('\u001b[?1049h\u001b[2J');
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
@@ -3775,6 +3787,13 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       turnText = failoverPrompt(session.messages ?? [], turnText);
     }
     let switchedFrom: string | undefined;
+    // Bounded to one attempt: this is a reactive fallback for exactly the
+    // case aiHarnessSelect's own proactive check can't catch -- a harness
+    // with no statusArgv (nothing to scriptably ask "am I logged in?"
+    // before the turn even starts), where the *first* real signal is the
+    // turn itself failing. Retrying more than once would risk a loop if
+    // login genuinely doesn't fix it (wrong account, network issue, etc.).
+    let authRetried = false;
     for (;;) {
       const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
       let createdHere = false;
@@ -3831,6 +3850,27 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         if (failureKind === 'authentication-required') {
           account.status = 'needs_login';
           await writeState(state);
+          // Reactive counterpart to aiHarnessSelect's proactive login check:
+          // a harness with no statusArgv gets no pre-turn "are you logged
+          // in?" probe at all (harnessNeedsLogin returns false without
+          // one), so its first real failure signal is the turn itself
+          // erroring out -- previously surfaced as a raw, unhelpful "exited
+          // N: {...}" message with no attempt to actually fix it. Same
+          // suspend/login/resume mechanism aiHarnessSelect uses, triggered
+          // here instead of only at provider-switch time.
+          if (!authRetried && activeFullScreenHarness && harness.loginArgv) {
+            authRetried = true;
+            activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+            activeFullScreenHarness.suspend();
+            try {
+              await loginNativeHarness(harness, environment);
+            } finally {
+              activeFullScreenHarness.resume();
+            }
+            account.status = 'ready';
+            await writeState(state);
+            continue;
+          }
         }
         if (failureKind !== 'quota-exhausted') throw failure;
         account.quotaState = 'exhausted';
