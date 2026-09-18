@@ -217,13 +217,29 @@ function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string): { 
 }
 
 /** Render provider JSONL as a small provider-neutral activity stream. */
-function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string): string | undefined {
-  if (isJsonDefaultMode()) return undefined;
+/**
+ * Every harness's own JSON envelope is a different shape (Codex's generic
+ * `item.type` + `started`/`completed` states, Claude's `stream-json` content
+ * array, opencode's top-level `type` with a `part` object) -- but what a user
+ * actually needs to see collapses into the same handful of things happening:
+ * the model is thinking, a tool started, a tool finished, or it's generating
+ * the reply text. This is that common shape: each vendor's parser below maps
+ * its own real, verified envelope into one of these, and exactly one
+ * renderer (below) turns any of them into the same glyph/color/wording
+ * regardless of which harness produced it -- a Codex tool call and a Claude
+ * Code tool call read identically once they reach here.
+ */
+interface HarnessActivityEvent {
+  kind: 'thinking' | 'tool-start' | 'tool-done';
+  label: string;
+}
+
+function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: string): HarnessActivityEvent | undefined {
   let value: Record<string, unknown>;
   try {
     value = JSON.parse(lineText) as Record<string, unknown>;
   } catch {
-    // fail-open-ok: plain-text harness output has no structured activity metadata to render.
+    // fail-open-ok: plain-text harness output has no structured activity metadata to parse.
     return undefined;
   }
   const type = String(value.type ?? '');
@@ -242,24 +258,23 @@ function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string)
   if (type === 'thread.started' || type === 'turn.started') return undefined;
   if (/reasoning|thinking/.test(itemType) && /completed|done/.test(type)) {
     const summary = reasoningSummary(item?.summary) ?? reasoningSummary(item?.text) ?? reasoningSummary(item?.content);
-    return summary ? `  ${chalk.cyan('thinking')} ${chalk.dim(visibleSlice(summary.replace(/\s+/g, ' '), 140))}` : undefined;
+    return summary ? { kind: 'thinking', label: visibleSlice(summary.replace(/\s+/g, ' '), 140) } : undefined;
   }
   if (/command_execution/.test(itemType) && /started|completed/.test(type)) {
     const command = String(item?.command ?? item?.command_line ?? '').trim();
-    const state = type.endsWith('completed') ? chalk.green('done') : chalk.yellow('run');
-    return command ? `  ${state} ${chalk.dim(command)}` : undefined;
+    return command ? { kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: command } : undefined;
   }
-  if (/file_change/.test(itemType) && /completed/.test(type)) return `  ${chalk.green('edit')} ${chalk.dim('files updated')}`;
+  if (/file_change/.test(itemType) && /completed/.test(type)) return { kind: 'tool-done', label: 'files updated' };
   if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
     const name = String(item?.name ?? item?.server ?? 'tool');
-    return `  ${type.endsWith('completed') ? chalk.green('done') : chalk.yellow('tool')} ${chalk.dim(name)}`;
+    return { kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: name };
   }
   if (harness.command === 'claude') {
     if (type === 'system' && value.subtype === 'init') return undefined;
     if (type === 'assistant') {
       const message = value.message as { content?: Array<Record<string, unknown>> } | undefined;
       const tool = message?.content?.find((part) => part.type === 'tool_use');
-      if (tool) return `  ${chalk.yellow('tool')} ${chalk.dim(String(tool.name ?? 'tool'))}`;
+      if (tool) return { kind: 'tool-start', label: String(tool.name ?? 'tool') };
     }
   }
   // opencode's own envelope is a different shape entirely: a top-level `type`
@@ -271,10 +286,26 @@ function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string)
     const part = value.part && typeof value.part === 'object' ? value.part as Record<string, unknown> : undefined;
     const state = part?.state && typeof part.state === 'object' ? part.state as Record<string, unknown> : undefined;
     const name = String(part?.tool ?? 'tool');
-    const done = state?.status === 'completed';
-    return `  ${done ? chalk.green('done') : chalk.yellow('tool')} ${chalk.dim(name)}`;
+    return { kind: state?.status === 'completed' ? 'tool-done' : 'tool-start', label: name };
   }
   return undefined;
+}
+
+/** The one place that decides what a completed/in-progress tool call or a
+ * thinking summary looks like in the persistent activity log -- every
+ * harness's parser above feeds this same renderer, so the visual language
+ * (glyph, color, wording) never drifts per-vendor. */
+function renderActivityLine(event: HarnessActivityEvent): string {
+  if (event.kind === 'thinking') return `  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`;
+  return `  ${event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool')} ${chalk.dim(event.label)}`;
+}
+
+/** Same idea for the spinner's own label: while a tool is actively running,
+ * show what it's doing instead of a static "thinking" the whole time. */
+function renderActivityPhase(event: HarnessActivityEvent): string {
+  if (event.kind === 'tool-start') return `running ${event.label}`;
+  if (event.kind === 'thinking') return 'thinking';
+  return 'generating response';
 }
 
 function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText: string): 'generating response' | undefined {
@@ -3562,11 +3593,19 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
           signal,
           stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
           onStdoutLine: (lineText) => {
-            const phase = nativeActivityPhase(harness, lineText);
-            if (phase) activeFullScreenHarness?.phase(phase);
-            const activity = nativeActivityLine(harness, lineText);
-            if (activity && activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
-            else if (activity) output.write(`${activity}\n`);
+            const textPhase = nativeActivityPhase(harness, lineText);
+            if (textPhase) activeFullScreenHarness?.phase(textPhase);
+            // isJsonDefaultMode() guard lives here now (not inside the parser)
+            // since the parser is also used for phase updates, which apply
+            // in every mode -- only the persistent activity *log line* is
+            // JSON-mode's business to suppress.
+            const event = parseNativeActivityEvent(harness, lineText);
+            if (!event) return;
+            activeFullScreenHarness?.phase(renderActivityPhase(event));
+            if (isJsonDefaultMode()) return;
+            const activity = renderActivityLine(event);
+            if (activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
+            else output.write(`${activity}\n`);
           },
         },
       );
@@ -3718,26 +3757,35 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
       const frame = buffer.slice(0, boundary).trim();
       buffer = buffer.slice(boundary + 2);
       if (frame.startsWith('data:')) {
-        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; label?: string };
+        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; label?: string; kind?: 'thinking' | 'tool-start'; tool?: string };
         if (event.type === 'delta' && typeof event.text === 'string') {
           activeFullScreenHarness?.phase('generating response');
           reply += event.text;
           if (streamToTerminal) { output.write(event.text); wroteDelta = true; }
         }
-        // The real event here is `{ type: 'status', label: '...' }` — the
-        // Gateway backend (apps/web's assistant/chat route) already turns its
-        // own `{ status: 'thinking' }` / `{ status: 'tool_call', tool }`
-        // internals into a ready-made human label ("Thinking", "Running
-        // deploy_app…") before this ever reaches ClikCode, so there's no
-        // per-tool wording to invent here the way native harnesses need. This
-        // used to check for `reasoning`/`thinking`/`tool` substrings in
-        // `event.type` — none of which the real backend ever sends (it only
-        // ever sends `delta`, `status`, `speak`, `result`, `error`) — so every
-        // status update from the Gateway path was silently dropped; the
-        // spinner just said "thinking" for the whole turn regardless of what
-        // was actually happening.
-        if (activeFullScreenHarness && event.type === 'status' && typeof event.label === 'string') {
-          activeFullScreenHarness.phase(event.label);
+        // `kind`/`tool` are real, additive fields on the wire protocol
+        // (apps/web's chat-stream.ts / assistant/chat route) mapping the
+        // backend's own `{ status: 'thinking' }` / `{ status: 'tool_call',
+        // tool }` into the same canonical shape native harnesses' own
+        // parsers produce, so a Gateway tool call's *activity log line*
+        // renders identically to a Codex or Claude Code one — same glyph,
+        // same color, same bare-subject wording (renderActivityLine adds its
+        // own verb, so the canonical label here is the bare tool name via
+        // `tool`, not the backend's already-verbed `label`). The phase
+        // (spinner text) uses `label` directly instead, since the backend's
+        // phrasing ("Restarting the app…") is already the ideal spinner
+        // text and renderActivityPhase's own "running X" wording is for
+        // bare native-harness tool names, not a pre-verbed phrase. There's
+        // no 'tool-done' here because AssistantChatEvent has no completion
+        // signal to report (verified: 'tool_call' fires once, nothing after
+        // it) — a real gap in what the agent loop reports, not something to
+        // fake here.
+        if (event.type === 'status' && typeof event.label === 'string') {
+          activeFullScreenHarness?.phase(event.label);
+          if (!isJsonDefaultMode()) {
+            const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
+            activeFullScreenHarness?.activity(renderActivityLine(activityEvent).trim());
+          }
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
       }
