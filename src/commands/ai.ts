@@ -2371,6 +2371,21 @@ async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath
       return typeof claims.email === 'string' && claims.email ? claims.email : undefined;
     } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
   }
+  if (harness.command === 'cursor') {
+    // Simplest of the three so far: no token to decode, no API call --
+    // ~/.cursor/cli-config.json carries a real, plain-text authInfo.email
+    // field directly. No profileEnv exists for Cursor (confirmed against
+    // its own catalog entry), so this file is always at the one fixed path
+    // regardless of account -- meaning, same as Gemini/OpenCode/Amp, only
+    // one real Cursor identity can be tracked at a time today; this just
+    // means that one identity shows correctly instead of as "Cursor Agent
+    // default".
+    try {
+      const parsed = JSON.parse(await readFile(join(homedir(), '.cursor', 'cli-config.json'), 'utf8')) as { authInfo?: { email?: string } };
+      const email = parsed.authInfo?.email;
+      return typeof email === 'string' && email ? email : undefined;
+    } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
+  }
   return undefined;
 }
 
@@ -2525,8 +2540,25 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli' && account.status === 'ready');
     if (accounts.length === 1) session.accountId = accounts[0].id;
     else if (accounts.length === 0) {
+      // Same derivation addAccountForHarness uses after an explicit login,
+      // applied here too so a session's very first auto-created account
+      // shows a real identity from the start instead of the generic "X
+      // default" placeholder this used unconditionally before -- which is
+      // exactly what was confusing about accounts named "Claude Code
+      // default"/"Codex default" etc. undefined profilePath is correct
+      // here: this is always the harness's one default, unisolated profile,
+      // never one under an isolated CLAUDE_CONFIG_DIR-style directory.
+      // Falls back to the placeholder if derivation finds nothing (most
+      // harnesses currently), AND if the derived label would collide with
+      // an account that already exists under a different provider (the
+      // same real person's email showing up on two harnesses is entirely
+      // possible and not a bug) -- labels must stay globally unique, and
+      // the safe "X default" naming always is, by construction.
+      const derived = await deriveAccountLabel(harness, undefined);
+      const label = derived && !state.accounts.some((item) => item.label.toLowerCase() === derived.toLowerCase())
+        ? derived : `${harness.displayName} default`;
       const account: AiHarnessAccount = {
-        id: randomUUID(), provider: harness.provider, label: `${harness.displayName} default`, authKind: 'vendor-cli',
+        id: randomUUID(), provider: harness.provider, label, authKind: 'vendor-cli',
         models: [], status: 'ready', credentialRef: `native:${harness.binary}:default`,
       };
       state.accounts.push(account);
@@ -2543,6 +2575,21 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
         await loginNativeHarness(harness, environment);
       } finally {
         activeFullScreenHarness.resume();
+      }
+      // Only rename if it's still the generic placeholder -- a user who's
+      // already renamed this account to something of their own gets to
+      // keep it; this only fixes the case this whole thing is about: a
+      // first-ever /provider login (not /add-account, which already
+      // derives this before the account exists at all) leaving "X default"
+      // in place forever afterward, since this account already existed
+      // before login and the auto-creation branch above never runs again
+      // for it.
+      if (account && account.label === `${harness.displayName} default`) {
+        const derived = await deriveAccountLabel(harness, account.nativeProfile?.path);
+        if (derived && !state.accounts.some((item) => item.id !== account.id && item.label.toLowerCase() === derived.toLowerCase())) {
+          account.label = derived;
+          await writeState(state);
+        }
       }
     }
   }
