@@ -1015,6 +1015,19 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
         session.nativeHarness = accountHarness.command;
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
+      } else if (session.accountId !== account.id) {
+        // A native thread id is only valid within the specific account's
+        // own isolated profile it was created under -- switching to a
+        // DIFFERENT account of the SAME provider left it untouched here,
+        // even though it's now meaningless (points at a rollout file that
+        // exists only under the old account's profile, not this one).
+        // Confirmed live: this produced exactly "no rollout found for
+        // thread id ..." on the next resume. Clearing it here means the
+        // existing failoverPrompt rehydration path (which already handles
+        // "no native thread yet, but real prior messages exist") takes
+        // over on the next turn instead of failing outright.
+        session.nativeSessionId = undefined;
+        session.nativeStartedAt = undefined;
       }
       session.accountId = account.id;
       session.provider = account.provider;
@@ -1067,6 +1080,19 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       const accountHarness = localHarnessForProvider(account.provider);
       if (accountHarness?.turn && session.nativeHarness !== accountHarness.command) {
         session.nativeHarness = accountHarness.command;
+        session.nativeSessionId = undefined;
+        session.nativeStartedAt = undefined;
+      } else if (session.accountId !== account.id) {
+        // A native thread id is only valid within the specific account's
+        // own isolated profile it was created under -- switching to a
+        // DIFFERENT account of the SAME provider left it untouched here,
+        // even though it's now meaningless (points at a rollout file that
+        // exists only under the old account's profile, not this one).
+        // Confirmed live: this produced exactly "no rollout found for
+        // thread id ..." on the next resume. Clearing it here means the
+        // existing failoverPrompt rehydration path (which already handles
+        // "no native thread yet, but real prior messages exist") takes
+        // over on the next turn instead of failing outright.
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
       }
@@ -2334,6 +2360,22 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
             session.accountId = account.id;
             continue;
           }
+        }
+        if (failureKind === 'native-thread-invalid') {
+          // Confirmed live: switching this session to a different account of
+          // the same provider used to leave a stale nativeSessionId in
+          // place, and resuming it failed with exactly this vendor error.
+          // That specific write path is now fixed separately, but recovering
+          // here too means any OTHER way a thread id ends up invalid degrades
+          // to "start fresh with real context replayed" instead of a hard
+          // failure -- the actual answer to "how do conversations resume
+          // regardless of provider or account": session.messages is the
+          // durable, vendor-agnostic source of truth, and nativeSessionId is
+          // a disposable optimization, never a requirement.
+          session.nativeSessionId = undefined;
+          session.nativeStartedAt = undefined;
+          turnText = failoverPrompt(session.messages ?? [], `${text}${prepared.textContext}`);
+          continue;
         }
         if (failureKind !== 'quota-exhausted') throw failure;
         account.quotaState = 'exhausted';
