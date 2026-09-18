@@ -45,7 +45,7 @@ import {
 } from './native-account-data.js';
 import {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
-  aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin,
+  aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin, syncAccountIdentityAfterLogin,
   nativeAccountContext, setEmitHarnessOutput,
 } from './account-management.js';
 import { FullScreenHarnessPrompter } from './terminal-ui.js';
@@ -189,8 +189,7 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
       ['/new', 'start a clean conversation'],
       ['/resume', 'choose a saved session'],
       ['/status', 'show the current workspace and settings'],
-      ['/account', 'choose or view an account'],
-      ['/add-account', 'log in and add another account for this provider'],
+      ['/account', 'choose, view, or add an account'],
       ['/model <name>', 'choose or view a model'],
       ['/effort <level>', 'set reasoning effort'],
       ['/permissions', 'choose filesystem access'],
@@ -509,7 +508,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       session.accountId = account.id;
     } else session.accountId = null;
   }
-  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  let account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   if (activeFullScreenHarness && harness.loginArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
@@ -526,20 +525,14 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
           activeFullScreenHarness.resume();
         }
       }
-      // Only rename if it's still the generic placeholder -- a user who's
-      // already renamed this account to something of their own gets to
-      // keep it; this only fixes the case this whole thing is about: a
-      // first-ever /provider login (not /add-account, which already
-      // derives this before the account exists at all) leaving "X default"
-      // in place forever afterward, since this account already existed
-      // before login and the auto-creation branch above never runs again
-      // for it.
-      if (account && account.label === `${harness.displayName} default`) {
-        const derived = await deriveAccountLabel(harness, account.nativeProfile?.path);
-        if (derived && !state.accounts.some((item) => item.id !== account.id && item.label.toLowerCase() === derived.toLowerCase())) {
-          account.label = derived;
-          await writeState(state);
-        }
+      // Same identity check /account's "add another account" flow uses --
+      // a plain /provider login deserves the real dedup-by-identity logic,
+      // not a weaker "only rename if it still looks like a placeholder"
+      // check that misses re-authenticating as a genuinely different real
+      // account entirely.
+      if (account) {
+        account = await syncAccountIdentityAfterLogin(harness, account, state);
+        session.accountId = account.id;
       }
     }
   }
@@ -1523,8 +1516,7 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
         } else {
           await loginNativeHarness(harness, environment);
         }
-        account.status = 'ready';
-        await writeState(state);
+        await syncAccountIdentityAfterLogin(harness, account, state);
       }
     });
     if (actionPerformed) continue;
@@ -1851,8 +1843,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider (including ClikDeploy Gateway)', '/settings': 'configure this workspace', '/account': 'choose or view an account',
-    '/add-account': 'log in and add another account for this provider',
+    '/provider': 'choose a provider (including ClikDeploy Gateway)', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
@@ -1975,7 +1966,6 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
           if (selected && selected !== id) { id = selected; continue; }
         }
         else if (command === '/account' || command === '/accounts') await interactiveAccountPicker(rl, id);
-        else if (command === '/add-account' || command === '/addaccount') await interactiveAddAccount(rl, id);
         else if (command === '/model') await interactiveModelPicker(rl, id);
         else if (command === '/effort') await interactiveEffortPicker(rl, id);
         else if (command === '/permissions') await interactivePermissionPicker(rl, id);
@@ -2298,8 +2288,8 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
                 activeFullScreenHarness.resume();
               }
             }
-            account.status = 'ready';
-            await writeState(state);
+            account = await syncAccountIdentityAfterLogin(harness, account, state);
+            session.accountId = account.id;
             continue;
           }
         }
