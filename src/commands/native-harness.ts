@@ -26,9 +26,29 @@ export interface NativeHarnessInspection {
   error?: string;
 }
 
+// Installation status barely ever changes mid-session -- a user isn't
+// installing/uninstalling a CLI between one /provider open and the next --
+// but every call here spawns a real subprocess per harness with its own
+// timeout, and every /provider open queries all ~20 of them at once. With
+// no cache, that meant however long the single slowest one took (up to its
+// timeout) on *every single open* -- the concrete "a slash option takes a
+// few seconds to render" report, since /provider is one of the most common
+// commands. 60s is long enough to make repeated opens near-instant without
+// meaningfully delaying noticing a harness someone actually just installed.
+const inspectionCache = new Map<string, { at: number; result: NativeHarnessInspection }>();
+const INSPECTION_CACHE_TTL_MS = 60_000;
+
 /** Inspect availability without installing, logging in, or entering a vendor TUI. */
 export async function inspectNativeHarness(spec: NativeHarnessSpec, timeoutMs = 5_000): Promise<NativeHarnessInspection> {
   if (spec.surface === 'editor-extension') return { installed: false, error: 'editor-extension-only' };
+  const cached = inspectionCache.get(spec.command);
+  if (cached && Date.now() - cached.at < INSPECTION_CACHE_TTL_MS) return cached.result;
+  const result = await inspectNativeHarnessUncached(spec, timeoutMs);
+  inspectionCache.set(spec.command, { at: Date.now(), result });
+  return result;
+}
+
+async function inspectNativeHarnessUncached(spec: NativeHarnessSpec, timeoutMs: number): Promise<NativeHarnessInspection> {
   if (!await binaryOnPath(spec.binary)) return { installed: false };
   return new Promise((resolve) => {
     const child = spawn(spec.binary, [...(spec.versionArgv ?? ['--version'])], {

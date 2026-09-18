@@ -820,7 +820,7 @@ function sessionProviderLabel(session: HarnessSession): string {
 }
 
 interface HarnessPrompter {
-  question(prompt: string, commands?: readonly PickerOption<string>[]): Promise<string>;
+  question(prompt: string, commands?: readonly PickerOption<string>[], settings?: { cancellable?: boolean }): Promise<string>;
   select?<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
   panel?(title: string, body: string): void;
@@ -1408,9 +1408,9 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     output.write(frame);
   }
 
-  question(prompt: string, commands: readonly PickerOption<string>[] = []): Promise<string> {
+  question(prompt: string, commands: readonly PickerOption<string>[] = [], settings?: { cancellable?: boolean }): Promise<string> {
     if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
-    return new Promise((resolveQuestion) => {
+    return new Promise((resolveQuestion, rejectQuestion) => {
       let value = '';
       let cursor = 0;
       let selected = 0;
@@ -1421,8 +1421,16 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       // reflowing (and the cursor from jumping) as the number of matches narrows.
       const paletteCapacity = commands.length ? Math.min(commands.length, 8) + 2 : 0;
       let paletteOpen = false;
+      // No .slice(0, 8) here: that used to cap the real match list itself,
+      // not just what's visible at once, so typing "/" (matching every
+      // command) could never scroll to anything past the 8th regardless of
+      // how far down you pressed -- selected's own wraparound never saw
+      // past index 7 because options.length itself was capped there. The
+      // windowed scroll in paint() below already exists specifically to
+      // show a scrollable slice of a longer list; capping the list before
+      // it ever got there defeated that.
       const matches = () => value.startsWith('/') && !value.includes(' ')
-        ? commands.filter((option) => option.value.startsWith(value)).slice(0, 8)
+        ? commands.filter((option) => option.value.startsWith(value))
         : [];
       // Scrolling the conversation needs the full paint() path — the normal
       // (no-palette) branch below only ever touches the composer's own line
@@ -1468,9 +1476,27 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         resolveQuestion(answer);
       };
       let finished = false;
+      // Opt-in, not a default: this same question() drives the persistent
+      // chat composer too, where Esc doing nothing is the existing,
+      // intentional behavior (there's nothing to "cancel" mid-draft the way
+      // there is for a one-off prompt). Callers that need real cancel
+      // semantics -- like the API-key env-var-name prompt, previously
+      // "esc doesn't cancel" with no way out short of Ctrl+C -- pass
+      // { cancellable: true } and get a real rejection to catch, instead of
+      // an empty string indistinguishable from "accepted the default".
+      const cancel = (): void => {
+        if (finished) return;
+        finished = true;
+        this.paletteActive = false;
+        input.off('data', onData);
+        input.setRawMode(false);
+        output.write('\u001b[?25h');
+        rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
+      };
       const handleKey = (key: string): void => {
         const options = matches();
         if (key === '\u0003' || key === '\u0004') return finish('/exit');
+        if (key === '\u001b' && settings?.cancellable) return cancel();
         if (key === '\r' || key === '\n') {
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
             const command = options[selected].value;
@@ -1632,10 +1658,19 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
    * login) without tearing the session down, so ClikCode's UI can resume in
    * place once that process exits. */
-  suspend(): void {
+  async suspend(): Promise<void> {
     if (input.isTTY) input.setRawMode(false);
     input.pause();
     output.write('\u001b[?25h\u001b[?1049l');
+    // Best-effort mitigation, not a confirmed root cause: a vendor login's
+    // own paste handling erroring right after handoff is plausibly a race
+    // between the terminal actually finishing its mode switch (raw -> cooked,
+    // alt-screen -> main buffer) and the child process starting to read --
+    // both writes above are fire-and-forget from Node's side, with no way to
+    // know when the terminal itself has caught up. A short settle window
+    // before the caller spawns anything costs nothing on the success path
+    // and closes the gap if that race is real.
+    await new Promise((resolveSettle) => setTimeout(resolveSettle, 50));
   }
 
   resume(): void {
@@ -2264,7 +2299,30 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   await loginNativeHarness(harness, nativeProfile ? { [nativeProfile.env]: nativeProfile.path } : {});
   if (!explicit) {
     const derived = await deriveAccountLabel(harness, profilePath);
-    if (derived && !state.accounts.some((account) => account.label.toLowerCase() === derived.toLowerCase())) accountLabel = derived;
+    if (derived) {
+      // A derived identity matching an account that already exists means
+      // this is the SAME real account signing in again -- not a new one --
+      // even though the login flow just created a brand-new isolated
+      // profile directory to get here (there's no way to know who's behind
+      // a login before actually completing it). Previously this only
+      // skipped renaming to the derived label in that case and fell
+      // through to pushing a duplicate anyway under the numbered
+      // placeholder -- the exact "logged in with the same email, it
+      // created a new one and left the old one" bug. Now it reuses the
+      // existing account outright: repoints its nativeProfile at the fresh
+      // login (the old profile directory may be stale/expired) instead of
+      // creating anything new, and the just-created directory above is
+      // simply orphaned rather than referenced by two accounts.
+      const existingMatch = state.accounts.find((account) => account.provider === harness.provider && account.label.toLowerCase() === derived.toLowerCase());
+      if (existingMatch) {
+        existingMatch.status = 'ready';
+        if (nativeProfile) existingMatch.nativeProfile = nativeProfile;
+        await writeState(state);
+        emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });
+        return existingMatch.label;
+      }
+      accountLabel = derived;
+    }
   }
   if (!state.accounts.some((account) => account.label.toLowerCase() === accountLabel.toLowerCase())) {
     state.accounts.push({ id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) });
@@ -2375,7 +2433,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
     if (freshInstall || await harnessNeedsLogin(harness, environment)) {
       activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-      activeFullScreenHarness.suspend();
+      await activeFullScreenHarness.suspend();
       try {
         await loginNativeHarness(harness, environment);
       } finally {
@@ -3055,7 +3113,7 @@ async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<vo
     { label: 'Continue with GitHub', value: 'github' as const },
   ]);
   if (!provider) throw new Error('ClikDeploy Gateway sign-in was cancelled.');
-  if (rl instanceof FullScreenHarnessPrompter) rl.suspend();
+  if (rl instanceof FullScreenHarnessPrompter) await rl.suspend();
   try {
     await login(config, { google: provider === 'google', github: provider === 'github', embedded: true });
   } finally {
@@ -3167,7 +3225,13 @@ const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
 
 async function addApiKeyAccount(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
   const suggested = PROVIDER_API_KEY_ENV[harness.provider] ?? `${harness.provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
-  const entered = (await rl.question(`Environment variable holding the key ${chalk.dim(`[${suggested}]`)} › `)).trim();
+  let entered: string;
+  try {
+    entered = (await rl.question(`Environment variable holding the key ${chalk.dim(`[${suggested}]`)} › `, [], { cancellable: true })).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_CANCELLED') return;
+    throw error;
+  }
   const envName = (entered || suggested).toUpperCase();
   if (!/^[A-Z][A-Z0-9_]*$/.test(envName)) throw new Error('environment variable name must be letters, numbers, and underscores only');
   if (!process.env[envName]) throw new Error(`${envName} is not set in this shell -- export it first, then try again. ClikCode never asks for or stores the raw key itself, only this reference.`);
@@ -3580,7 +3644,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider', '/gateway': 'switch to ClikDeploy Gateway', '/settings': 'configure this workspace', '/account': 'choose or view an account',
+    '/provider': 'choose a provider (including ClikDeploy Gateway)', '/settings': 'configure this workspace', '/account': 'choose or view an account',
     '/add-account': 'log in and add another account for this provider',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
@@ -3702,10 +3766,6 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         if (command === '/switch' || command === '/engine' || command === '/provider') {
           const selected = await interactiveEnginePicker(config, rl, id);
           if (selected && selected !== id) { id = selected; continue; }
-        }
-        else if (command === '/gateway') {
-          id = await newGatewayConversation(config, rl, id);
-          continue;
         }
         else if (command === '/account' || command === '/accounts') await interactiveAccountPicker(rl, id);
         else if (command === '/add-account' || command === '/addaccount') await interactiveAddAccount(rl, id);
@@ -3830,7 +3890,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
             rl.panel?.(manager.label, result || 'No entries.');
             if (rl.render) await rl.question('Press Enter to return › ');
           } else if (manager.manageArgv && rl instanceof FullScreenHarnessPrompter) {
-            rl.suspend();
+            await rl.suspend();
             try { await runNativeHarnessCommand(selectedHarness, manager.manageArgv, environment); }
             finally { rl.resume(); }
           } else throw new Error(`${selectedHarness.displayName} requires an interactive terminal for ${manager.label}.`);
@@ -4020,7 +4080,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
           if (!authRetried && activeFullScreenHarness && harness.loginArgv) {
             authRetried = true;
             activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-            activeFullScreenHarness.suspend();
+            await activeFullScreenHarness.suspend();
             try {
               await loginNativeHarness(harness, environment);
             } finally {
