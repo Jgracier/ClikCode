@@ -829,17 +829,78 @@ interface HarnessPrompter {
  * survive the character-offset word-wrap below, which slices through ANSI
  * codes with no awareness of them), inline code keeps its content without
  * the backticks, and links keep their label with the URL alongside it. */
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```[a-z]*\n?/g, '').replace(/```$/g, ''))
-    .replace(/(\*\*\*|___)(.+?)\1/g, '$2')
-    .replace(/(\*\*|__)(.+?)\1/g, '$2')
-    .replace(/(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
-  // Header `#` prefixes are deliberately left in place here -- formatParagraph
-  // below detects and strips them itself so it can apply real bold styling
-  // instead of just discarding the marker.
+/** Applies `style` to each word of `text` individually, leaving whitespace
+ * untouched -- not one open/close pair around the whole phrase. wrapWords
+ * measures visible width correctly through embedded ANSI codes already, but
+ * it still breaks lines on whitespace, so a single open-code-at-the-start,
+ * close-code-at-the-end span would leave its close code stranded on a
+ * different wrapped line than its open code if the phrase wraps, `-- not
+ * corrupting anything (chalk's own codes are self-contained), but silently
+ * losing the styling on whichever words landed after the break. Per-word
+ * styling means every word carries its own complete open+close pair, so a
+ * mid-phrase wrap just ends one styled run and starts another identical
+ * one -- no dependency on where the line happens to break. */
+function styleWords(text: string, style: (word: string) => string): string {
+  return text.split(/(\s+)/).map((part) => (part && !/^\s+$/.test(part) ? style(part) : part)).join('');
+}
+
+/** Inline spans (bold/italic/code/links) get real ANSI styling instead of
+ * being discarded -- unlike the header/bullet/list handling in
+ * formatParagraph, which strips its own markers because the paragraph-level
+ * prefix system already conveys that structure. Code spans are converted
+ * first, specifically so literal asterisks inside inline code (a glob
+ * pattern, a multiplication in a comment) can't get misread as a bold/italic
+ * marker by the regexes that run after -- the reverse order would let
+ * that happen, and the original plain-text stripMarkdown() this replaced
+ * had exactly that latent ordering issue. */
+// One combined regex, one single `.replace()` pass -- NOT the sequential
+// per-construct `.replace()` chain this used to be. That chain had a real
+// bug: each pass ran against the *output* of the previous one, which by
+// then already contained chalk escape codes like `\x1b[1m` -- and an escape
+// code's own `[` is indistinguishable, to a naive `\[...\]` link regex,
+// from a real markdown link's opening bracket. A bold span earlier in the
+// paragraph could supply that stray `[`, and the link regex would then
+// greedily consume everything from there up to the *next* real `]` --
+// which might be a real link many words later -- wrapping that whole
+// stretch in underline. Matching everything in one pass against the
+// original, escape-code-free text closes that off entirely: every
+// construct is found at its real source position exactly once, and nothing
+// ever gets re-scanned after styling is applied.
+const INLINE_MARKDOWN_PATTERN = /`([^`]+)`|(\*\*\*|___)(.+?)\2|(\*\*|__)(.+?)\4|(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)|\[([^\]]+)\]\(([^)]+)\)/g;
+
+function renderInlineMarkdown(text: string): string {
+  return text.replace(
+    INLINE_MARKDOWN_PATTERN,
+    (_match, code: string | undefined, _boldItalicMarker, boldItalic: string | undefined, _boldMarker, bold: string | undefined, italic: string | undefined, linkLabel: string | undefined, linkUrl: string | undefined) => {
+      if (code !== undefined) return styleWords(code, (word) => chalk.cyan(word));
+      if (boldItalic !== undefined) return styleWords(boldItalic, (word) => chalk.bold(chalk.italic(word)));
+      if (bold !== undefined) return styleWords(bold, (word) => chalk.bold(word));
+      if (italic !== undefined) return styleWords(italic, (word) => chalk.italic(word));
+      if (linkLabel !== undefined) return `${styleWords(linkLabel, (word) => chalk.underline(word))} ${chalk.dim(`(${linkUrl})`)}`;
+      return _match;
+    },
+  );
+}
+
+type MessageBlock = { kind: 'code'; lines: string[] } | { kind: 'text'; paragraph: string };
+
+/** Fenced code blocks are pulled out as their own non-reflowed unit before
+ * the normal per-paragraph pipeline ever sees them -- word-wrapping code
+ * would change what it means (a wrapped shell command or JSON blob reads
+ * differently than the original), so those lines get hard-truncated instead
+ * of wrapped when rendered, same principle as visibleSlice elsewhere in
+ * this file. */
+function splitIntoBlocks(text: string): MessageBlock[] {
+  const blocks: MessageBlock[] = [];
+  const parts = text.split(/```[a-z]*\n?/i);
+  parts.forEach((part, index) => {
+    if (index % 2 === 1) {
+      blocks.push({ kind: 'code', lines: part.replace(/```$/, '').split(/\r?\n/).filter((_line, lineIndex, all) => !(lineIndex === all.length - 1 && all[lineIndex] === '')) });
+    } else {
+      for (const paragraph of part.split(/\r?\n/)) blocks.push({ kind: 'text', paragraph });
+    }
+  });
+  return blocks;
 }
 
 /** Every harness's assistant text is plain markdown-convention prose
@@ -852,11 +913,33 @@ function stripMarkdown(text: string): string {
  * open ANSI codes across a wrap boundary, which stripMarkdown already
  * discards to plain text; a header or list marker is always at the start of
  * its own paragraph, so no such boundary problem exists here. */
-function formatParagraph(paragraph: string): { prefix: string; hangIndent: string; text: string; bold: boolean } {
+interface FormattedParagraph {
+  prefix: string;
+  hangIndent: string;
+  text: string;
+  bold: boolean;
+  /** A horizontal rule has no text at all -- the render loop draws a full
+   * dim rule line and skips wrapping entirely for it. */
+  rule: boolean;
+}
+
+function formatParagraph(paragraph: string): FormattedParagraph {
+  if (/^([-*_])\1{2,}\s*$/.test(paragraph.trim())) return { prefix: '', hangIndent: '', text: '', bold: false, rule: true };
   const header = /^#{1,6}\s+(.*)$/.exec(paragraph);
-  if (header) return { prefix: '', hangIndent: '', text: header[1], bold: true };
+  if (header) return { prefix: '', hangIndent: '', text: header[1], bold: true, rule: false };
+  const quote = /^>\s?(.*)$/.exec(paragraph);
+  // Only the marker is dim, not chalk.dim() around the whole line -- bold
+  // and dim share the same SGR "normal intensity" reset code (22), so
+  // concatenating a dim-wrapped string around a separately-bold-wrapped
+  // inline span (from renderInlineMarkdown, applied after this returns)
+  // would let the bold span's own reset code end the dim early for the
+  // rest of the line. Chalk only fixes that automatically for styles
+  // nested as actual JS calls (chalk.dim(chalk.bold(x))), not for
+  // pre-rendered strings spliced together afterward, which is what happens
+  // here -- so this sidesteps the collision instead of triggering it.
+  if (quote) return { prefix: `${chalk.dim('│')} `, hangIndent: '  ', text: quote[1], bold: false, rule: false };
   const bullet = /^([-*+])\s+(.*)$/.exec(paragraph);
-  if (bullet) return { prefix: `${chalk.dim('•')} `, hangIndent: ' '.repeat(2), text: bullet[2], bold: false };
+  if (bullet) return { prefix: `${chalk.dim('•')} `, hangIndent: ' '.repeat(2), text: bullet[2], bold: false, rule: false };
   const numbered = /^(\d+[.)])\s+(.*)$/.exec(paragraph);
   // hangIndent is a plain space string matching the *visible* width of
   // `prefix` (marker plus its trailing space) exactly -- not a rounded
@@ -865,8 +948,8 @@ function formatParagraph(paragraph: string): { prefix: string; hangIndent: strin
   // "round up to a 2-space unit" version of this got wrong for any
   // odd-length marker (e.g. a 2-character "2." plus its space is 3 wide,
   // not the 4 that formula produced).
-  if (numbered) return { prefix: `${chalk.dim(numbered[1])} `, hangIndent: ' '.repeat(numbered[1].length + 1), text: numbered[2], bold: false };
-  return { prefix: '', hangIndent: '', text: paragraph, bold: false };
+  if (numbered) return { prefix: `${chalk.dim(numbered[1])} `, hangIndent: ' '.repeat(numbered[1].length + 1), text: numbered[2], bold: false, rule: false };
+  return { prefix: '', hangIndent: '', text: paragraph, bold: false, rule: false };
 }
 
 function visibleSlice(value: string, width: number): string {
@@ -1200,15 +1283,33 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
       let firstLine = true;
-      for (const rawParagraph of stripMarkdown(message.content).split(/\r?\n/)) {
-        const { prefix: bulletPrefix, hangIndent, text, bold } = formatParagraph(rawParagraph || ' ');
+      for (const block of splitIntoBlocks(message.content)) {
+        if (block.kind === 'code') {
+          // Not word-wrapped -- re-flowing code would change what it means.
+          // Hard-truncated instead, same as visibleSlice does for a single
+          // overlong token elsewhere in this file.
+          for (const codeLine of block.lines) {
+            const prefix = firstLine ? `${marker} ` : '  ';
+            conversation.push({ text: `${prefix}  ${chalk.cyan(visibleSlice(codeLine, Math.max(1, conversationInner - 2)))}` });
+            firstLine = false;
+          }
+          continue;
+        }
+        const { prefix: bulletPrefix, hangIndent, text, bold, rule } = formatParagraph(block.paragraph || ' ');
+        if (rule) {
+          const prefix = firstLine ? `${marker} ` : '  ';
+          conversation.push({ text: `${prefix}${chalk.dim('─'.repeat(Math.max(1, conversationInner)))}` });
+          firstLine = false;
+          continue;
+        }
+        const styled = renderInlineMarkdown(text);
         const budget = Math.max(1, conversationInner - terminalCellWidth(bulletPrefix || hangIndent));
         // conversationInner is already the full per-line budget after the
         // 2-column marker/indent prefix; wrapWords breaks at spaces (falling
         // back to a hard break only for a single word wider than the whole
         // line) instead of the flat character-count slice this replaced,
         // which split words wherever the count happened to land.
-        const wrapped = wrapWords(text, budget);
+        const wrapped = wrapWords(styled, budget);
         for (const [lineIndex, line] of wrapped.entries()) {
           const prefix = firstLine ? `${marker} ` : '  ';
           const structural = lineIndex === 0 ? bulletPrefix : hangIndent;
