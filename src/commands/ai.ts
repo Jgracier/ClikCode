@@ -3441,6 +3441,18 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
  * generic <PROVIDER>_API_KEY guess for anything not in this short list. */
 const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
   anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GOOGLE_API_KEY', qwen: 'DASHSCOPE_API_KEY',
+  // Confirmed real and current, not guessed: google-antigravity/antigravity-cli
+  // issue #632 was closed 2 days before this was written (state_reason:
+  // "completed"), with a maintainer's exact working recipe --
+  // GEMINI_API_KEY plus modelProvider:"gemini" in the CLI's own
+  // settings.json (handled below, in addApiKeyAccount itself, since this
+  // map only carries the env var name). Cross-checked against the actual
+  // installed binary: modelProvider is a real, present string in it. This
+  // matters specifically because it's the only way to authenticate
+  // Antigravity CLI that stays inside ClikCode at all -- it has no login
+  // subcommand of its own (confirmed via --help), only a full interactive
+  // TUI otherwise.
+  antigravity: 'GEMINI_API_KEY',
 };
 
 async function addApiKeyAccount(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
@@ -3455,6 +3467,25 @@ async function addApiKeyAccount(rl: HarnessPrompter, id: string, harness: AiLoca
   const envName = (entered || suggested).toUpperCase();
   if (!/^[A-Z][A-Z0-9_]*$/.test(envName)) throw new Error('environment variable name must be letters, numbers, and underscores only');
   if (!process.env[envName]) throw new Error(`${envName} is not set in this shell -- export it first, then try again. ClikCode never asks for or stores the raw key itself, only this reference.`);
+  // Antigravity CLI needs one more thing beyond the env var itself: its
+  // own settings.json must set modelProvider to "gemini", or it ignores
+  // GEMINI_API_KEY entirely and falls back to OAuth (confirmed directly:
+  // a maintainer's exact recipe on the now-closed antigravity-cli#632, plus
+  // real user reports on #78 of the env var alone having no effect without
+  // it). No isolated profile exists for this harness (confirmed: no
+  // profileEnv), so this is always the one real, global settings file --
+  // merged in, not overwritten, so any of the user's other settings
+  // (colorScheme, permissions, trustedWorkspaces, etc.) survive untouched.
+  if (harness.command === 'antigravity') {
+    const settingsPath = join(homedir(), '.gemini', 'antigravity-cli', 'settings.json');
+    let settings: Record<string, unknown> = {};
+    try { settings = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>; } catch { /* no existing settings file yet */ }
+    if (settings.modelProvider !== 'gemini') {
+      settings.modelProvider = 'gemini';
+      await mkdir(join(settingsPath, '..'), { recursive: true });
+      await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+    }
+  }
   const state = await readState();
   const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
   const label = `${harness.displayName} (${envName})`;
