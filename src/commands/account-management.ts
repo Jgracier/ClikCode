@@ -201,6 +201,53 @@ export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, prof
   }
   return undefined;
 }
+
+/**
+ * After ANY successful native-CLI login -- not just the explicit "add
+ * another account" flow -- checks whether the account's real identity, as
+ * the vendor CLI just wrote it, differs from what's on record, and merges
+ * or renames accordingly. This exists because a plain provider selection
+ * that silently re-triggers its own login (aiHarnessSelect, or the
+ * reactive retry-on-auth-failure path) used to only rename an account if
+ * its label still looked like the generic "X default" placeholder --
+ * missing entirely the case this fixes: re-authenticating as a genuinely
+ * DIFFERENT real account, where the label was already a real (just wrong,
+ * now-stale) email rather than a placeholder. One real login, one real
+ * identity check, everywhere a login can happen -- not two different
+ * strengths of the same check depending on which command triggered it.
+ */
+export async function syncAccountIdentityAfterLogin(
+  harness: AiLocalHarnessDefinition, account: AiHarnessAccount, state: HarnessState,
+): Promise<AiHarnessAccount> {
+  // Called right after loginNativeHarness resolved without throwing, so the
+  // login itself is known-good regardless of what identity check follows --
+  // always mark ready and persist, so a caller never has to separately
+  // remember to do either around this call.
+  account.status = 'ready';
+  const derived = await deriveAccountLabel(harness, account.nativeProfile?.path);
+  if (!derived || derived.toLowerCase() === account.label.toLowerCase()) {
+    await writeState(state);
+    return account;
+  }
+  const existingMatch = state.accounts.find(
+    (item) => item.id !== account.id && item.provider === harness.provider && item.label.toLowerCase() === derived.toLowerCase(),
+  );
+  if (existingMatch) {
+    // The login just completed authenticated as a DIFFERENT real account
+    // ClikCode already has a record for -- merge into that one (repoint its
+    // nativeProfile at this fresh login, since the old one may be stale)
+    // instead of leaving two records for the same real identity.
+    existingMatch.status = 'ready';
+    if (account.nativeProfile) existingMatch.nativeProfile = account.nativeProfile;
+    state.accounts = state.accounts.filter((item) => item.id !== account.id);
+    await writeState(state);
+    return existingMatch;
+  }
+  account.label = derived;
+  await writeState(state);
+  return account;
+}
+
 /** Starts the vendor-owned login flow and records only a local opaque profile reference.
  * With no explicit label, the final name is decided *after* login completes: a
  * numbered placeholder is picked first (so an explicit-label caller and duplicate
