@@ -279,9 +279,29 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   const nativeProfile = profilePath && harness.profileEnv
     ? { env: harness.profileEnv, path: profilePath, ...(Object.keys(extraEnv).length ? { extraEnv } : {}) }
     : undefined;
-  await loginNativeHarness(harness, nativeProfileEnvironment(nativeProfile));
+  let loginError: unknown;
+  try {
+    await loginNativeHarness(harness, nativeProfileEnvironment(nativeProfile));
+  } catch (error) {
+    // Antigravity's login command (-p 'hi' ...) doesn't just verify
+    // authentication -- it also runs a real chat turn, so ANY unrelated
+    // failure in that turn (quota, rate limit, a transient API error) exits
+    // non-zero and looks identical to authentication itself having failed.
+    // Discarding a login this eagerly threw away real, successful OAuth
+    // sessions whenever the account happened to be rate-limited. Hold the
+    // error and check independently, via the log Antigravity itself writes
+    // on successful auth, whether authentication actually succeeded despite
+    // the verification turn failing -- only surface the error if it didn't.
+    if (harness.command !== 'antigravity' || !profilePath) throw error;
+    loginError = error;
+  }
+  // An explicit label means derivation below never runs, so there is no
+  // independent way to confirm auth actually succeeded despite the error --
+  // surface it rather than silently treat a real failure as success.
+  if (explicit && loginError) throw loginError;
   if (!explicit) {
     const derived = await deriveAccountLabel(harness, profilePath);
+    if (!derived && loginError) throw loginError;
     if (derived) {
       // A derived identity matching an account that already exists means
       // this is the SAME real account signing in again -- not a new one --
