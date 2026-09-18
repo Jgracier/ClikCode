@@ -6,7 +6,7 @@
  * same as every other headless-callable ai* function. */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stdout as output } from 'node:process';
@@ -146,6 +146,57 @@ export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, prof
       const parsed = JSON.parse(await readFile(join(homedir(), '.cursor', 'cli-config.json'), 'utf8')) as { authInfo?: { email?: string } };
       const email = parsed.authInfo?.email;
       return typeof email === 'string' && email ? email : undefined;
+    } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
+  }
+  if (harness.command === 'antigravity') {
+    // No credentials file anywhere in its config tree carries an email --
+    // checked settings.json, jetski_state.pbtxt, the default project id
+    // file, all confirmed byte-identical across accounts. The real,
+    // authenticated identity only ever surfaces in its own log output:
+    // `server_oauth.go` logs `OAuth: authenticated successfully as
+    // <email>` on every successful login, confirmed live against a real
+    // one. Reading the most-recently-modified log file (one gets written
+    // per invocation) after the login turn just completed is the only way
+    // to recover this -- this is also what makes "endless accounts without
+    // conflict" actually work here: the aiAccountLogin dedup below already
+    // reuses an existing account when a freshly derived label matches one,
+    // so a login that resolves to the same real email in a new profile
+    // directory collapses back into the one account it actually is,
+    // instead of leaving an indistinguishable duplicate behind.
+    try {
+      // profilePath, when set, IS the isolated $HOME itself (not a
+      // pre-built ".../.gemini" root the way the claude/codex branches
+      // above use profilePath) -- agy still writes under $HOME/.gemini
+      // regardless of what $HOME points to, so .gemini has to be appended
+      // here too, not just in the un-isolated fallback. Missed this the
+      // first time: the manual verification that "confirmed" this path
+      // matched real content had the correct path hardcoded by hand,
+      // never actually exercising this line.
+      const logDir = join(profilePath ?? homedir(), '.gemini', 'antigravity-cli', 'log');
+      // Confirmed live: the CLI process loginNativeHarness awaits exits
+      // before this log line is actually flushed to disk -- its own log
+      // shows a background daemon/server handling the real login work
+      // ("Language server shutting down", "RemoteControl" server) whose
+      // lifecycle isn't the same as the thin client process being awaited,
+      // so this is a genuine cross-process flush delay, not a logic bug
+      // (the identical read succeeded immediately when re-checked by hand
+      // a few seconds later). A generous retry window covers that without
+      // a fixed sleep on the common case where the write already landed --
+      // measured live needing several seconds, not the ~1.6s first tried.
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const entries = await readdir(logDir, { withFileTypes: true }).catch(() => []);
+        const logs = (await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.log')).map(async (entry) => {
+          const full = join(logDir, entry.name);
+          const info = await stat(full).catch(() => undefined);
+          return info ? { full, mtime: info.mtimeMs } : undefined;
+        }))).filter((item): item is { full: string; mtime: number } => Boolean(item)).sort((left, right) => right.mtime - left.mtime);
+        for (const { full } of logs.slice(0, 3)) {
+          const content = await readFile(full, 'utf8').catch(() => '');
+          const match = /OAuth: authenticated successfully as ([^\s,]+@[^\s,]+)/.exec(content);
+          if (match) return match[1];
+        }
+        if (attempt < 11) await new Promise((resolve) => setTimeout(resolve, 600));
+      }
     } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
   }
   return undefined;
