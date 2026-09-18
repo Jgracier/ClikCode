@@ -95,9 +95,8 @@ export const AI_PROVIDERS = [
     defaultModel: "jev-latest",
     label: "TypeSafe (Jev)",
     envKey: "TYPESAFE_API_KEY",
-    modalities: ["text", "decision"],
+    modalities: ["decision"],
     chatBaseUrl: "https://api.typesafe.ai/v1",
-    chatDialect: "system-one",
     authHeader: "bearer",
     probe: {
       kind: "typesafe-models",

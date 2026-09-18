@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
+import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
 
 const account: AiHarnessAccount = {
   id: 'local-codex',
@@ -42,7 +42,7 @@ describe('selectLocalHarnessRoute', () => {
 
 describe('local harness catalog', () => {
   it('publishes a versioned adapter contract', () => {
-    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(2);
+    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(3);
   });
 
   it('uses one reversible command/provider mapping for every supported local harness', () => {
@@ -78,6 +78,32 @@ describe('local harness catalog', () => {
     for (const harness of AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal')) {
       expect(harness.turn, harness.command).toBeDefined();
     }
+  });
+
+  it('publishes a valid, duplicate-free normalized option manifest for every harness', () => {
+    for (const harness of AI_LOCAL_HARNESSES) {
+      const manifest = localHarnessCapabilityManifest(harness);
+      const ids = manifest.options.map((option) => option.id);
+      expect(new Set(ids).size, harness.command).toBe(ids.length);
+      for (const option of manifest.options) {
+        expect(option.description.length, `${harness.command}:${option.id}`).toBeGreaterThan(0);
+        if (option.kind === 'enum') expect(option.values?.length, `${harness.command}:${option.id}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('maps only declared provider options into argv and rejects unknown values', () => {
+    const claude = localHarnessForCommand('claude')!;
+    expect(nativeHarnessTurnArgv(claude, { prompt: 'inspect', options: { 'safe-mode': true, 'add-dir': ['/one', '/two'] } }))
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--safe-mode', '--add-dir', '/one', '--add-dir', '/two', 'inspect']);
+    expect(() => nativeHarnessTurnArgv(claude, { prompt: 'inspect', options: { invented: true } }))
+      .toThrow('does not declare option "invented"');
+    const cursor = localHarnessForCommand('cursor')!;
+    expect(() => nativeHarnessTurnArgv(cursor, { prompt: 'inspect', options: { mode: 'yolo' } }))
+      .toThrow('Execution mode must be one of plan, ask');
+    const codex = localHarnessForCommand('codex')!;
+    expect(nativeHarnessTurnArgv(codex, { prompt: 'research', options: { search: true } }))
+      .toEqual(['--search', 'exec', '--json', '--skip-git-repo-check', '-']);
   });
 
   it('builds headless Codex turns instead of launching the Codex TUI', () => {

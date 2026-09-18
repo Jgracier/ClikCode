@@ -3,18 +3,24 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { copyFile, mkdir, open, readFile, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { copyFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import type Conf from 'conf';
 import chalk from 'chalk';
 import { ApiClient } from '../api/client.js';
+import { login } from './auth.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
+import { classifyAccountFailure, failoverPrompt } from './ai-failover.js';
+import {
+  ADOPTED_TRANSCRIPT_READERS, conversationTitle, discoverNativeSessions, FS_SESSION_DISCOVERY, type DiscoveredNativeSession,
+} from './native-session-discovery.js';
 
 const HARNESS_STATE_VERSION = 1;
 const LOCAL_HARNESS_PROTOCOL = 1;
@@ -44,7 +50,7 @@ interface AiHarnessAccount {
   credentialRef: string;
   nativeProfile?: { env: string; path: string };
 }
-interface AiLocalHarnessDefinition {
+export interface AiLocalHarnessDefinition {
   command: string;
   provider: string;
   displayName: string;
@@ -86,7 +92,7 @@ interface AiLocalHarnessDefinition {
     createSessionArgv?: readonly string[];
     idKind?: 'uuid' | 'history-file';
     discoverArgv?: readonly string[];
-    discoverFormat?: 'json' | 'json-lines' | 'text';
+    discoverFormat?: 'json' | 'json-lines' | 'text' | 'numbered-list';
   };
 }
 interface AiRouterRuntime {
@@ -111,7 +117,16 @@ interface AiRouterRuntime {
 const require = createRequire(import.meta.url);
 let routerRuntime: AiRouterRuntime | undefined;
 function localRouter(): AiRouterRuntime {
-  routerRuntime ??= require('../ai-router-runtime.cjs') as AiRouterRuntime;
+  if (!routerRuntime) {
+    try {
+      // Normal clikdeploy-cli layout: dist/commands/ai.js → dist runtime.
+      routerRuntime = require('../ai-router-runtime.cjs') as AiRouterRuntime;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
+      // Standalone ClikCode bundle: dist/index.js → sibling runtime.
+      routerRuntime = require(fileURLToPath(new URL('./ai-router-runtime.cjs', import.meta.url))) as AiRouterRuntime;
+    }
+  }
   return routerRuntime;
 }
 function localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined {
@@ -202,10 +217,49 @@ function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string): { 
 }
 
 /** Render provider JSONL as a small provider-neutral activity stream. */
-function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string): string | undefined {
-  if (isJsonDefaultMode()) return undefined;
+/**
+ * Every harness's own JSON envelope is a different shape (Codex's generic
+ * `item.type` + `started`/`completed` states, Claude's `stream-json` content
+ * array, opencode's top-level `type` with a `part` object) -- but what a user
+ * actually needs to see collapses into the same handful of things happening:
+ * the model is thinking, a tool started, a tool finished, or it's generating
+ * the reply text. This is that common shape: each vendor's parser below maps
+ * its own real, verified envelope into one of these, and exactly one
+ * renderer (below) turns any of them into the same glyph/color/wording
+ * regardless of which harness produced it -- a Codex tool call and a Claude
+ * Code tool call read identically once they reach here.
+ */
+interface HarnessActivityEvent {
+  kind: 'thinking' | 'tool-start' | 'tool-done';
+  label: string;
+  /** Only ever populated where the harness's own JSON genuinely carries the
+   * before/after text (confirmed so far: Claude Code's Edit/Write tool_use
+   * blocks) -- never synthesized from a "files updated" style event that
+   * doesn't actually include the changed content. Each side is already
+   * capped to a few lines before this is built; the activity trail below is
+   * a 5-line rolling window (see FullScreenHarnessPrompter.activity), not a
+   * scrollback viewer, so an uncapped diff would just silently lose its
+   * earlier lines to the window sliding past them, not show a real "more"
+   * indicator -- capping here means the +N truncation notice is honest. */
+  diff?: { removed: string[]; added: string[] };
+}
+
+/** Line-capped, not byte-capped: a diff that's still readable at a glance
+ * beats a byte-perfect one that pushes everything else out of the 5-line
+ * activity window. */
+function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
+  const all = text.split(/\r?\n/);
+  return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
+}
+
+function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: string): HarnessActivityEvent | undefined {
   let value: Record<string, unknown>;
-  try { value = JSON.parse(lineText) as Record<string, unknown>; } catch { return undefined; }
+  try {
+    value = JSON.parse(lineText) as Record<string, unknown>;
+  } catch {
+    // fail-open-ok: plain-text harness output has no structured activity metadata to parse.
+    return undefined;
+  }
   const type = String(value.type ?? '');
   const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
   const itemType = String(item?.type ?? '');
@@ -222,44 +276,152 @@ function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string)
   if (type === 'thread.started' || type === 'turn.started') return undefined;
   if (/reasoning|thinking/.test(itemType) && /completed|done/.test(type)) {
     const summary = reasoningSummary(item?.summary) ?? reasoningSummary(item?.text) ?? reasoningSummary(item?.content);
-    return summary ? `  ${chalk.cyan('thinking')} ${chalk.dim(visibleSlice(summary.replace(/\s+/g, ' '), 140))}` : undefined;
+    return summary ? { kind: 'thinking', label: visibleSlice(summary.replace(/\s+/g, ' '), 140) } : undefined;
   }
   if (/command_execution/.test(itemType) && /started|completed/.test(type)) {
     const command = String(item?.command ?? item?.command_line ?? '').trim();
-    const state = type.endsWith('completed') ? chalk.green('done') : chalk.yellow('run');
-    return command ? `  ${state} ${chalk.dim(command)}` : undefined;
+    return command ? { kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: command } : undefined;
   }
-  if (/file_change/.test(itemType) && /completed/.test(type)) return `  ${chalk.green('edit')} ${chalk.dim('files updated')}`;
+  if (/file_change/.test(itemType) && /completed/.test(type)) return { kind: 'tool-done', label: 'files updated' };
   if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
     const name = String(item?.name ?? item?.server ?? 'tool');
-    return `  ${type.endsWith('completed') ? chalk.green('done') : chalk.yellow('tool')} ${chalk.dim(name)}`;
+    return { kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: name };
   }
   if (harness.command === 'claude') {
     if (type === 'system' && value.subtype === 'init') return undefined;
     if (type === 'assistant') {
       const message = value.message as { content?: Array<Record<string, unknown>> } | undefined;
       const tool = message?.content?.find((part) => part.type === 'tool_use');
-      if (tool) return `  ${chalk.yellow('tool')} ${chalk.dim(String(tool.name ?? 'tool'))}`;
+      if (!tool) return undefined;
+      const name = String(tool.name ?? 'tool');
+      const input = tool.input && typeof tool.input === 'object' ? tool.input as Record<string, unknown> : undefined;
+      // Verified against this exact session's own transcript: Edit's
+      // input carries old_string/new_string verbatim, Write carries the
+      // full new file as `content` with no prior text to diff against.
+      // Capped to 4 lines a side -- the 5-line activity window can't show
+      // more anyway, and a truncation count beats a silently-scrolled-off
+      // tail.
+      if (name === 'Edit' && typeof input?.old_string === 'string' && typeof input?.new_string === 'string') {
+        const removed = capDiffLines(input.old_string, 4);
+        const added = capDiffLines(input.new_string, 4);
+        return {
+          kind: 'tool-start', label: name,
+          diff: {
+            removed: [...removed.lines, ...(removed.truncated ? [`… ${removed.truncated} more line${removed.truncated === 1 ? '' : 's'}`] : [])],
+            added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])],
+          },
+        };
+      }
+      if (name === 'Write' && typeof input?.content === 'string') {
+        const added = capDiffLines(input.content, 4);
+        return { kind: 'tool-start', label: name, diff: { removed: [], added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])] } };
+      }
+      return { kind: 'tool-start', label: name };
     }
+  }
+  // opencode's own envelope is a different shape entirely: a top-level `type`
+  // (not nested under `item`) and a `part` object instead of an `item` one.
+  // Verified against a real `opencode run --format json` turn, including one
+  // that actually called a tool — `part.tool` is the tool name and
+  // `part.state.status` tracks completion.
+  if (harness.command === 'opencode' && type === 'tool_use') {
+    const part = value.part && typeof value.part === 'object' ? value.part as Record<string, unknown> : undefined;
+    const state = part?.state && typeof part.state === 'object' ? part.state as Record<string, unknown> : undefined;
+    const name = String(part?.tool ?? 'tool');
+    return { kind: state?.status === 'completed' ? 'tool-done' : 'tool-start', label: name };
+  }
+  // Command Code's envelope wraps each lifecycle event under a top-level
+  // `{ type: 'event', event: {...} }` (distinct from its `{ type: 'result' }`
+  // terminal frame) -- verified against its own docs, though only the
+  // `tool_running` value itself was confirmed there, not a paired
+  // completion event, so this only ever reports 'tool-start'.
+  if (harness.command === 'command' && type === 'event') {
+    const inner = value.event && typeof value.event === 'object' ? value.event as Record<string, unknown> : undefined;
+    if (inner?.type === 'tool_running') return { kind: 'tool-start', label: String(inner.toolName ?? 'tool') };
+  }
+  // Pi's own envelope: a flat `{ type: 'toolcall_start', toolName }` --
+  // verified from its own docs (packages/coding-agent/docs/json.md), but
+  // the docs excerpt available didn't name a paired completion event, so
+  // (same as Command Code above) this only ever reports 'tool-start'.
+  if (harness.command === 'pi' && type === 'toolcall_start') {
+    return { kind: 'tool-start', label: String(value.toolName ?? 'tool') };
   }
   return undefined;
 }
 
-function nativeActivityPhase(lineText: string): 'generating response' | undefined {
+/** The one place that decides what a completed/in-progress tool call or a
+ * thinking summary looks like in the persistent activity log -- every
+ * harness's parser above feeds this same renderer, so the visual language
+ * (glyph, color, wording) never drifts per-vendor. */
+/** A code-change tool call (Edit/Write, or any other harness's own naming
+ * for the same thing) gets its own color -- magenta -- distinct from a
+ * generic tool call's yellow/green, the same way Claude Code's own UI
+ * visually separates "a tool ran" from "a file changed" rather than
+ * treating every tool call identically. Name-pattern matching (not just
+ * `event.diff`'s presence) so this applies even for harnesses where the
+ * diff content itself isn't available yet -- Codex's file_change events,
+ * for instance, still get the distinct color even without line content. */
+function isCodeChangeLabel(label: string): boolean {
+  return /^(edit|write|patch)$/i.test(label) || /file/i.test(label);
+}
+
+function renderActivityLine(event: HarnessActivityEvent): string[] {
+  if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
+  const isCodeChange = Boolean(event.diff) || isCodeChangeLabel(event.label);
+  const glyph = isCodeChange ? chalk.magenta('edit') : (event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool'));
+  const summary = `  ${glyph} ${chalk.dim(event.label)}`;
+  if (!event.diff) return [summary];
+  const diffLines = [
+    ...event.diff.removed.map((line) => `    ${chalk.red(`- ${line}`)}`),
+    ...event.diff.added.map((line) => `    ${chalk.green(`+ ${line}`)}`),
+  ];
+  return [summary, ...diffLines];
+}
+
+/** Same idea for the spinner's own label: while a tool is actively running,
+ * show what it's doing instead of a static "thinking" the whole time. */
+function renderActivityPhase(event: HarnessActivityEvent): string {
+  if (event.kind === 'tool-start') return `running ${event.label}`;
+  if (event.kind === 'thinking') return 'thinking';
+  return 'generating response';
+}
+
+function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText: string): 'generating response' | undefined {
   let value: Record<string, unknown>;
-  try { value = JSON.parse(lineText) as Record<string, unknown>; } catch { return undefined; }
+  try {
+    value = JSON.parse(lineText) as Record<string, unknown>;
+  } catch {
+    // fail-open-ok: non-JSON output is ordinary assistant text, not a structured result envelope.
+    return undefined;
+  }
   const type = String(value.type ?? '');
   const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
   const itemType = String(item?.type ?? '');
   if (/assistant|agent_message/.test(itemType) && /started|delta|completed/.test(type)) return 'generating response';
   if (type === 'assistant') return 'generating response';
+  if (harness.command === 'opencode' && type === 'text') return 'generating response';
   return undefined;
 }
+
+/**
+ * Claude Code's `--model` aliases are deliberately version-less — they always
+ * track whatever Anthropic currently ships for that tier, so passing the bare
+ * alias (not a dated id) is the correct, future-proof argv value. That leaves
+ * the alias alone unreadable in a picker ("sonnet" looks stale next to
+ * "Sonnet 5"), so this is display-only: which concrete generation each alias
+ * currently resolves to, verified against a real `claude --model <alias>
+ * --output-format stream-json` run's `system.init.model` field. Update when
+ * Anthropic ships a new tier — same manual-maintenance shape as the Copilot
+ * model list a few lines below.
+ */
+const CLAUDE_ALIAS_LABELS: Readonly<Record<string, string>> = {
+  fable: 'Fable 5.1', opus: 'Opus 5', sonnet: 'Sonnet 5', haiku: 'Haiku 4.5',
+};
 
 async function nativeModelCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
-): Promise<{ configured?: string; models: string[] }> {
+): Promise<{ configured?: string; models: string[]; labels?: Readonly<Record<string, string>> }> {
   const models = new Set(account?.models ?? []);
   const addDiscoveredModels = (raw: string): void => {
     const add = (value: unknown): void => {
@@ -308,7 +470,7 @@ async function nativeModelCatalog(
       const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown };
       if (typeof settings.model === 'string' && settings.model.trim()) configured = settings.model.trim();
     } catch { /* Claude will choose its own default when no setting exists. */ }
-    ['sonnet', 'opus', 'haiku'].forEach((model) => models.add(model));
+    ['fable', 'opus', 'sonnet', 'haiku'].forEach((model) => models.add(model));
   } else if (profileRoot && harness.command === 'gemini') {
     try {
       const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown; selectedModel?: unknown };
@@ -327,7 +489,11 @@ async function nativeModelCatalog(
     } catch { /* Keep configured/account models and the custom-ID option available. */ }
   }
   if (configured) models.add(configured);
-  return { ...(configured ? { configured } : {}), models: [...models] };
+  return {
+    ...(configured ? { configured } : {}),
+    models: [...models],
+    ...(harness.command === 'claude' ? { labels: CLAUDE_ALIAS_LABELS } : {}),
+  };
 }
 
 const nativeUsageCache = new Map<string, { at: number; label?: string }>();
@@ -386,7 +552,10 @@ async function captureOpencodeSessionSummary(sessionId: string): Promise<{ cost:
             try {
               const info = JSON.parse(buffer.slice(braceStart, index + 1)) as { cost?: number; tokens?: { input?: number; output?: number } };
               return finish({ cost: typeof info.cost === 'number' ? info.cost : 0, tokens: { input: info.tokens?.input ?? 0, output: info.tokens?.output ?? 0 } });
-            } catch { return finish(); }
+            } catch {
+              // fail-open-ok: an incomplete stream fragment carries no usable response payload.
+              return finish();
+            }
           }
         }
       }
@@ -462,15 +631,57 @@ async function codexUsageProbe(_session: HarnessSession, environment: Readonly<R
     const used = typeof window.usedPercent === 'number' ? window.usedPercent : undefined;
     const minutes = typeof window.windowDurationMins === 'number' ? window.windowDurationMins : undefined;
     if (used === undefined || minutes === undefined) return [];
-    const period = minutes === 300 ? '5h' : minutes === 10_080 ? 'week' : minutes < 1_440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1_440)}d`;
-    return [`${period} ${Math.max(0, Math.min(100, 100 - used))}% left`];
+    const period = minutes === 300 ? '5h' : minutes === 10_080 ? 'weekly' : minutes < 1_440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1_440)}d`;
+    return [`${period} ${Math.max(0, Math.min(100, 100 - used))}%`];
   });
   return parts.length ? parts.join(' · ') : undefined;
+}
+
+/** Claude Code has no public CLI flag or subcommand for this (confirmed:
+ * `--help` and `doctor` both show nothing), but the same data Claude Code's
+ * own interactive UI displays is one authenticated call away: its own OAuth
+ * token — already sitting in ~/.claude/.credentials.json, refreshed by
+ * Claude Code's own background daemon — is accepted by
+ * `/api/oauth/usage`, the private endpoint its UI calls internally.
+ * Verified live: real five_hour/seven_day utilization percentages, matching
+ * what the interactive session shows. This reads an already-authenticated
+ * user's own token to display their own account's own usage, the same data
+ * the vendor's own client already shows them — not a new grant of access. */
+async function claudeUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+  // Real bug, not a hypothetical: this ignored both its parameters entirely
+  // and always read the default ~/.claude path, so every Claude Code
+  // account -- including genuinely isolated ones under their own
+  // CLAUDE_CONFIG_DIR (see the profileEnv on its catalog entry) -- reported
+  // the same, first account's usage. The caller (nativeUsageLabel) already
+  // computes the right environment per account; this just wasn't using it.
+  let token: string | undefined;
+  try {
+    const configDir = environment.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+    const raw = await readFile(join(configDir, '.credentials.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
+    token = typeof parsed.claudeAiOauth?.accessToken === 'string' ? parsed.claudeAiOauth.accessToken : undefined;
+  } catch { return undefined; }
+  if (!token) return undefined;
+  try {
+    const response = await fetch('https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1', {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+    });
+    if (!response.ok) return undefined;
+    const body = await response.json() as {
+      five_hour?: { utilization?: number };
+      seven_day?: { utilization?: number };
+    };
+    const parts: string[] = [];
+    if (typeof body.five_hour?.utilization === 'number') parts.push(`5h ${Math.max(0, Math.min(100, 100 - body.five_hour.utilization))}%`);
+    if (typeof body.seven_day?.utilization === 'number') parts.push(`weekly ${Math.max(0, Math.min(100, 100 - body.seven_day.utilization))}%`);
+    return parts.length ? parts.join(' · ') : undefined;
+  } catch { return undefined; }
 }
 
 const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
   codex: codexUsageProbe,
   opencode: opencodeUsageProbe,
+  claude: claudeUsageProbe,
 };
 
 async function nativeUsageLabel(session: HarnessSession, state: HarnessState): Promise<string | undefined> {
@@ -598,30 +809,165 @@ function compactPath(path: string): string {
   return path === home ? '~' : path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
 }
 
-function conversationTitle(prompt: string): string {
-  const title = prompt.replace(/\s+/g, ' ').trim();
-  return title.length > 64 ? `${title.slice(0, 63).trimEnd()}…` : title;
-}
-
 function sessionEngine(session: HarnessSession): string {
-  return session.nativeHarness ?? session.provider ?? (session.route === 'gateway' ? 'gateway' : 'none');
+  return session.route === 'gateway' ? 'gateway' : session.nativeHarness ?? session.provider ?? 'none';
 }
 
 function sessionProviderLabel(session: HarnessSession): string {
+  if (session.route === 'gateway') return 'ClikDeploy Gateway';
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-  return harness?.displayName ?? session.provider ?? (session.route === 'gateway' ? 'ClikDeploy Gateway' : 'Not selected');
+  return harness?.displayName ?? session.provider ?? 'Not selected';
 }
 
 interface HarnessPrompter {
-  question(prompt: string, commands?: readonly PickerOption<string>[]): Promise<string>;
-  select?<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined>;
+  question(prompt: string, commands?: readonly PickerOption<string>[], settings?: { cancellable?: boolean }): Promise<string>;
+  select?<T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
+  panel?(title: string, body: string): void;
   close(): void;
 }
 
+/** Vendor responses come back as real markdown, but the transcript view is a
+ * fixed-width character grid with no rich-text renderer behind it — showing
+ * that syntax verbatim (literal ** around bold text, backticks around code,
+ * a raw [text](url) pair) reads as visibly broken rather than styled. Strips
+ * the syntax down to plain, readable text instead of attempting real
+ * rendering: bold/italic markers are dropped (chalk styling would have to
+ * survive the character-offset word-wrap below, which slices through ANSI
+ * codes with no awareness of them), inline code keeps its content without
+ * the backticks, and links keep their label with the URL alongside it. */
+/** Applies `style` to each word of `text` individually, leaving whitespace
+ * untouched -- not one open/close pair around the whole phrase. wrapWords
+ * measures visible width correctly through embedded ANSI codes already, but
+ * it still breaks lines on whitespace, so a single open-code-at-the-start,
+ * close-code-at-the-end span would leave its close code stranded on a
+ * different wrapped line than its open code if the phrase wraps, `-- not
+ * corrupting anything (chalk's own codes are self-contained), but silently
+ * losing the styling on whichever words landed after the break. Per-word
+ * styling means every word carries its own complete open+close pair, so a
+ * mid-phrase wrap just ends one styled run and starts another identical
+ * one -- no dependency on where the line happens to break. */
+function styleWords(text: string, style: (word: string) => string): string {
+  return text.split(/(\s+)/).map((part) => (part && !/^\s+$/.test(part) ? style(part) : part)).join('');
+}
+
+/** Inline spans (bold/italic/code/links) get real ANSI styling instead of
+ * being discarded -- unlike the header/bullet/list handling in
+ * formatParagraph, which strips its own markers because the paragraph-level
+ * prefix system already conveys that structure. Code spans are converted
+ * first, specifically so literal asterisks inside inline code (a glob
+ * pattern, a multiplication in a comment) can't get misread as a bold/italic
+ * marker by the regexes that run after -- the reverse order would let
+ * that happen, and the original plain-text stripMarkdown() this replaced
+ * had exactly that latent ordering issue. */
+// One combined regex, one single `.replace()` pass -- NOT the sequential
+// per-construct `.replace()` chain this used to be. That chain had a real
+// bug: each pass ran against the *output* of the previous one, which by
+// then already contained chalk escape codes like `\x1b[1m` -- and an escape
+// code's own `[` is indistinguishable, to a naive `\[...\]` link regex,
+// from a real markdown link's opening bracket. A bold span earlier in the
+// paragraph could supply that stray `[`, and the link regex would then
+// greedily consume everything from there up to the *next* real `]` --
+// which might be a real link many words later -- wrapping that whole
+// stretch in underline. Matching everything in one pass against the
+// original, escape-code-free text closes that off entirely: every
+// construct is found at its real source position exactly once, and nothing
+// ever gets re-scanned after styling is applied.
+const INLINE_MARKDOWN_PATTERN = /`([^`]+)`|(\*\*\*|___)(.+?)\2|(\*\*|__)(.+?)\4|(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)|\[([^\]]+)\]\(([^)]+)\)/g;
+
+function renderInlineMarkdown(text: string): string {
+  return text.replace(
+    INLINE_MARKDOWN_PATTERN,
+    (_match, code: string | undefined, _boldItalicMarker, boldItalic: string | undefined, _boldMarker, bold: string | undefined, italic: string | undefined, linkLabel: string | undefined, linkUrl: string | undefined) => {
+      if (code !== undefined) return styleWords(code, (word) => chalk.cyan(word));
+      if (boldItalic !== undefined) return styleWords(boldItalic, (word) => chalk.bold(chalk.italic(word)));
+      if (bold !== undefined) return styleWords(bold, (word) => chalk.bold(word));
+      if (italic !== undefined) return styleWords(italic, (word) => chalk.italic(word));
+      if (linkLabel !== undefined) return `${styleWords(linkLabel, (word) => chalk.underline(word))} ${chalk.dim(`(${linkUrl})`)}`;
+      return _match;
+    },
+  );
+}
+
+type MessageBlock = { kind: 'code'; lines: string[] } | { kind: 'text'; paragraph: string };
+
+/** Fenced code blocks are pulled out as their own non-reflowed unit before
+ * the normal per-paragraph pipeline ever sees them -- word-wrapping code
+ * would change what it means (a wrapped shell command or JSON blob reads
+ * differently than the original), so those lines get hard-truncated instead
+ * of wrapped when rendered, same principle as visibleSlice elsewhere in
+ * this file. */
+function splitIntoBlocks(text: string): MessageBlock[] {
+  const blocks: MessageBlock[] = [];
+  const parts = text.split(/```[a-z]*\n?/i);
+  parts.forEach((part, index) => {
+    if (index % 2 === 1) {
+      blocks.push({ kind: 'code', lines: part.replace(/```$/, '').split(/\r?\n/).filter((_line, lineIndex, all) => !(lineIndex === all.length - 1 && all[lineIndex] === '')) });
+    } else {
+      for (const paragraph of part.split(/\r?\n/)) blocks.push({ kind: 'text', paragraph });
+    }
+  });
+  return blocks;
+}
+
+/** Every harness's assistant text is plain markdown-convention prose
+ * regardless of vendor, so this -- unlike HarnessActivityEvent's per-vendor
+ * JSON parsing -- applies identically no matter which harness produced the
+ * paragraph: a header renders bold, a list item gets a dim glyph and a
+ * hanging indent for any wrapped continuation lines, and anything else
+ * passes through untouched. Deliberately paragraph-level, not span-level --
+ * inline styling (bold *within* a sentence) would need wrapWords to track
+ * open ANSI codes across a wrap boundary, which stripMarkdown already
+ * discards to plain text; a header or list marker is always at the start of
+ * its own paragraph, so no such boundary problem exists here. */
+interface FormattedParagraph {
+  prefix: string;
+  hangIndent: string;
+  text: string;
+  bold: boolean;
+  /** A horizontal rule has no text at all -- the render loop draws a full
+   * dim rule line and skips wrapping entirely for it. */
+  rule: boolean;
+}
+
+function formatParagraph(paragraph: string): FormattedParagraph {
+  if (/^([-*_])\1{2,}\s*$/.test(paragraph.trim())) return { prefix: '', hangIndent: '', text: '', bold: false, rule: true };
+  const header = /^#{1,6}\s+(.*)$/.exec(paragraph);
+  if (header) return { prefix: '', hangIndent: '', text: header[1], bold: true, rule: false };
+  const quote = /^>\s?(.*)$/.exec(paragraph);
+  // Only the marker is dim, not chalk.dim() around the whole line -- bold
+  // and dim share the same SGR "normal intensity" reset code (22), so
+  // concatenating a dim-wrapped string around a separately-bold-wrapped
+  // inline span (from renderInlineMarkdown, applied after this returns)
+  // would let the bold span's own reset code end the dim early for the
+  // rest of the line. Chalk only fixes that automatically for styles
+  // nested as actual JS calls (chalk.dim(chalk.bold(x))), not for
+  // pre-rendered strings spliced together afterward, which is what happens
+  // here -- so this sidesteps the collision instead of triggering it.
+  if (quote) return { prefix: `${chalk.dim('│')} `, hangIndent: '  ', text: quote[1], bold: false, rule: false };
+  const bullet = /^([-*+])\s+(.*)$/.exec(paragraph);
+  if (bullet) return { prefix: `${chalk.dim('•')} `, hangIndent: ' '.repeat(2), text: bullet[2], bold: false, rule: false };
+  const numbered = /^(\d+[.)])\s+(.*)$/.exec(paragraph);
+  // hangIndent is a plain space string matching the *visible* width of
+  // `prefix` (marker plus its trailing space) exactly -- not a rounded
+  // approximation -- so a wrapped continuation line lines up under the
+  // first line's text instead of drifting a column off, which an earlier
+  // "round up to a 2-space unit" version of this got wrong for any
+  // odd-length marker (e.g. a 2-character "2." plus its space is 3 wide,
+  // not the 4 that formula produced).
+  if (numbered) return { prefix: `${chalk.dim(numbered[1])} `, hangIndent: ' '.repeat(numbered[1].length + 1), text: numbered[2], bold: false, rule: false };
+  return { prefix: '', hangIndent: '', text: paragraph, bold: false, rule: false };
+}
+
 function visibleSlice(value: string, width: number): string {
-  if (value.length <= width) return value;
-  return `${value.slice(0, Math.max(1, width - 1))}…`;
+  if (terminalCellWidth(value) <= width) return value;
+  const available = Math.max(0, width - 1);
+  let rendered = '';
+  for (const character of value) {
+    if (terminalCellWidth(rendered + character) > available) break;
+    rendered += character;
+  }
+  return `${rendered}…`;
 }
 
 function terminalCellWidth(value: string): number {
@@ -633,6 +979,52 @@ function terminalCellWidth(value: string): number {
     width += code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd)) ? 2 : 1;
   }
   return width;
+}
+
+/** Greedy word-wrap that never splits a word across lines, measuring by
+ * terminal cell width (so wide/CJK characters count correctly) rather than
+ * raw string length. A single word longer than `width` on its own still has
+ * to be hard-broken -- there's no other way to fit it -- but that's the
+ * fallback, not the common case the plain character-slice loop this
+ * replaced used unconditionally. */
+function wrapWords(text: string, width: number): string[] {
+  const safeWidth = Math.max(1, width);
+  const lines: string[] = [];
+  let current = '';
+  let currentWidth = 0;
+  for (const word of text.split(/(\s+)/)) {
+    if (!word) continue;
+    if (/^\s+$/.test(word)) {
+      if (currentWidth > 0) { current += word; currentWidth += terminalCellWidth(word); }
+      continue;
+    }
+    const wordWidth = terminalCellWidth(word);
+    if (currentWidth > 0 && currentWidth + wordWidth > safeWidth) {
+      lines.push(current.replace(/\s+$/, ''));
+      current = '';
+      currentWidth = 0;
+    }
+    if (wordWidth > safeWidth) {
+      let remaining = word;
+      while (terminalCellWidth(remaining) > safeWidth) {
+        let cut = 0;
+        for (const character of remaining) {
+          if (terminalCellWidth(remaining.slice(0, cut + character.length)) > safeWidth) break;
+          cut += character.length;
+        }
+        cut = Math.max(cut, 1);
+        lines.push(remaining.slice(0, cut));
+        remaining = remaining.slice(cut);
+      }
+      current = remaining;
+      currentWidth = terminalCellWidth(remaining);
+      continue;
+    }
+    current += word;
+    currentWidth += wordWidth;
+  }
+  if (current || lines.length === 0) lines.push(current.replace(/\s+$/, ''));
+  return lines;
 }
 
 function previousCharacterIndex(value: string, index: number): number {
@@ -670,11 +1062,19 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   private draftSelected = 0;
   private draftPrompt = '› ';
   private draftCursor = 0;
+  private draftPalette?: { capacity?: number; hint?: string; hideCursor?: boolean };
   private waitingTimer?: NodeJS.Timeout;
   private waitingFrame = 0;
   private waitingLabel = '';
+  private waitingStartedAt = 0;
   private activityLines: string[] = [];
   private activityAnchor = 0;
+  /** Lines back from the very end of the conversation. 0 means "showing the
+   * latest" (the default, and where every repaint clamps back to if the
+   * conversation is shorter than this). Deliberately a line count, not a
+   * message index: paging by whole screens needs to know how many wrapped
+   * lines actually fit, which messages alone don't tell you. */
+  private historyScroll = 0;
   private waitingScreenRow?: number;
   private usageLabel?: string;
   private selecting = false;
@@ -700,7 +1100,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   private readonly onResize = (): void => {
     if (!this.closed) {
       output.write('\u001b[2J');
-      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
   };
 
@@ -723,6 +1123,13 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
+  panel(title: string, body: string): void {
+    const lines = body.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    this.activityLines = [chalk.bold(title), ...lines].slice(-6);
+    this.activityAnchor = this.currentSession?.messages?.length ?? 0;
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+  }
+
   startWaiting(message: string, onCancel?: () => void): void {
     this.stopWaiting(false);
     this.activityLines = [];
@@ -731,6 +1138,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     this.cancelWaiting = onCancel;
     this.waitingCancelled = false;
     this.waitingFrame = 0;
+    this.waitingStartedAt = Date.now();
     if (input.isTTY) {
       input.setRawMode(true);
       input.resume();
@@ -773,17 +1181,44 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     if (!session) return '';
     const context = compactPath(session.workspace ?? process.cwd());
     const provider = `${sessionProviderLabel(session)}${this.usageLabel ? `  ${this.usageLabel}` : ''}`;
-    return [provider, `${session.model ?? 'automatic'} ${session.effort}`, context].join('  •  ');
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    const rawModel = harness?.modelArgvPrefix ? session.model ?? 'automatic' : undefined;
+    const model = rawModel && harness?.command === 'claude' ? CLAUDE_ALIAS_LABELS[rawModel] ?? rawModel : rawModel;
+    const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
+    // The title used to share this line with provider/model/directory, which
+    // meant a long title truncated whichever of those came after it — the
+    // exact information you'd want intact regardless of how long the title
+    // is. It gets its own line now (see titleText below).
+    return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
   }
 
+  /** The only other place a chat's title ever appeared was a transient line in
+   * the /resume picker itself — once you were actually inside a resumed
+   * conversation there was nothing on screen confirming which one, so
+   * switching looked like it hadn't done anything even when the transcript
+   * above had in fact changed. Right-aligned on its own line so it never
+   * competes with statusText()'s provider/model/directory for space. */
+  private titleText(): string | undefined {
+    return this.currentSession?.name || undefined;
+  }
+
+  /** Elapsed time alongside the label -- matching a native CLI's own "Cogitated
+   * for 5m 31s" style -- so a long turn reads as "still working, N seconds in"
+   * rather than the same static label sitting there with no sense of how long
+   * it's actually been (only the spinner glyph itself changing every 90ms). */
   private waitingText(): string {
     const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    return `${frames[this.waitingFrame % frames.length]} ${this.waitingLabel}`;
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
+    const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
+    return `${frames[this.waitingFrame % frames.length]} ${this.waitingLabel} (${elapsed})`;
   }
 
   private updateWaiting(): void {
     if (!this.waitingLabel || !this.waitingScreenRow) return;
-    const width = Math.max(48, (output.columns || 100) - 1);
+    // No -1 margin here: DEC autowrap is disabled for the whole frame this
+    // row belongs to, so writing all the way to the terminal's real last
+    // column is safe and doesn't trigger a wrap.
+    const width = Math.max(12, output.columns || 100);
     // Hiding the cursor for this one write keeps it from visibly jumping to the
     // activity row and back every ~90ms while the spinner ticks.
     output.write(`\u001b[?25l\u001b7\u001b[${this.waitingScreenRow};1H\u001b[2K  ${chalk.cyan('●')} ${chalk.dim(visibleSlice(this.waitingText(), width - 6))}\u001b8\u001b[?25h`);
@@ -809,38 +1244,83 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     this.draftSelected = selected;
     this.draftPrompt = prompt;
     this.draftCursor = cursor;
-    const width = Math.max(48, (output.columns || 100) - 1);
+    this.draftPalette = palette ? { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } : undefined;
+    // No -1 margin: DEC autowrap is off for this whole frame (see the
+    // `[?7l` at the top of it), so the real last column is safe to
+    // use, not just columns-1.
+    const width = Math.max(12, output.columns || 100);
     const inner = width - 4;
+    // The conversation transcript gets its own, tighter margin: a bare
+    // marker-and-space (2 columns) instead of inner's extra 2-space wrapper
+    // on top of its own 4-column reservation (6 total) -- next to a native
+    // CLI's own output, which runs close to the full terminal width with
+    // only a bullet-and-space margin, ClikCode's wider gutter read as
+    // noticeably narrower and "bleaker" for no real reason; this doesn't
+    // touch inner itself, so the notice/composer/meta lines below (which
+    // share it) are unaffected.
+    const conversationInner = width - 2;
     const rule = chalk.dim('─'.repeat(width));
     const allMessages = session.messages ?? [];
-    const messages = allMessages.slice(-6);
+    // 40, not 6: matches the same replay/adoption cap used elsewhere
+    // (failoverPrompt, ADOPTED_TRANSCRIPT_LIMIT) and — now that the
+    // conversation area supports scrolling — gives Page Up somewhere real to
+    // go instead of a pool too small to scroll through at all.
+    const messages = allMessages.slice(-40);
     const messageStart = allMessages.length - messages.length;
-    const paletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
+    const targetHeight = Math.max(4, (output.rows || 30) - 1);
+    const requestedPaletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
+    const paletteCapacity = Math.min(requestedPaletteCapacity, Math.max(0, targetHeight - 5));
     const footerOnly = palette?.footerOnly ?? false;
     const paletteRows = paletteCapacity;
     const noticeRows = this.currentNotice ? 1 : 0;
-    // -2, not -1: leaves one real blank row at the bottom so the status line
-    // isn't pinned flush against the terminal's last row, and keeps total
-    // frame height strictly under the terminal height as a margin against
-    // the exact-height scroll class of bug (see the meta-line write below).
-    const targetHeight = Math.max(20, (output.rows || 30) - 2);
-    const rows = Math.max(4, targetHeight - 3 - paletteRows - noticeRows);
+    // 4 reserved lines below the conversation/palette/notice bands: rule,
+    // composer, a second rule (with the chat's title embedded at its right
+    // edge) — each newline-terminated — plus one further implicit row for
+    // meta (provider/model/directory), deliberately the one line with no
+    // trailing newline; see the comment on that write below for why.
+    const rows = Math.max(1, targetHeight - 4 - paletteRows - noticeRows);
     const conversation: Array<{ text: string; waiting?: boolean }> = [];
     let activityAppended = false;
     const appendActivity = (): void => {
       if (activityAppended) return;
       activityAppended = true;
-      for (const activity of this.activityLines) conversation.push({ text: `  ${chalk.dim('·')} ${activity}` });
-      if (this.waitingLabel) conversation.push({ text: `  ${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`, waiting: true });
+      for (const activity of this.activityLines) conversation.push({ text: `${chalk.dim('·')} ${activity}` });
+      if (this.waitingLabel) conversation.push({ text: `${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`, waiting: true });
     };
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
       let firstLine = true;
-      for (const paragraph of message.content.split(/\r?\n/)) {
-        const clean = paragraph || ' ';
-        for (let offset = 0; offset < clean.length; offset += inner - 2) {
+      for (const block of splitIntoBlocks(message.content)) {
+        if (block.kind === 'code') {
+          // Not word-wrapped -- re-flowing code would change what it means.
+          // Hard-truncated instead, same as visibleSlice does for a single
+          // overlong token elsewhere in this file.
+          for (const codeLine of block.lines) {
+            const prefix = firstLine ? `${marker} ` : '  ';
+            conversation.push({ text: `${prefix}  ${chalk.cyan(visibleSlice(codeLine, Math.max(1, conversationInner - 2)))}` });
+            firstLine = false;
+          }
+          continue;
+        }
+        const { prefix: bulletPrefix, hangIndent, text, bold, rule } = formatParagraph(block.paragraph || ' ');
+        if (rule) {
           const prefix = firstLine ? `${marker} ` : '  ';
-          conversation.push({ text: `  ${prefix}${clean.slice(offset, offset + inner - 2)}` });
+          conversation.push({ text: `${prefix}${chalk.dim('─'.repeat(Math.max(1, conversationInner)))}` });
+          firstLine = false;
+          continue;
+        }
+        const styled = renderInlineMarkdown(text);
+        const budget = Math.max(1, conversationInner - terminalCellWidth(bulletPrefix || hangIndent));
+        // conversationInner is already the full per-line budget after the
+        // 2-column marker/indent prefix; wrapWords breaks at spaces (falling
+        // back to a hard break only for a single word wider than the whole
+        // line) instead of the flat character-count slice this replaced,
+        // which split words wherever the count happened to land.
+        const wrapped = wrapWords(styled, budget);
+        for (const [lineIndex, line] of wrapped.entries()) {
+          const prefix = firstLine ? `${marker} ` : '  ';
+          const structural = lineIndex === 0 ? bulletPrefix : hangIndent;
+          conversation.push({ text: `${prefix}${structural}${bold ? chalk.bold(line) : line}` });
           firstLine = false;
         }
       }
@@ -848,9 +1328,23 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       if (messageStart + messageIndex + 1 === this.activityAnchor) appendActivity();
     }
     if (!activityAppended) appendActivity();
-    const shown = conversation.slice(-rows);
+    // Clamped here (not just where scroll changes) because the available
+    // content shifts underneath the same scroll value on every repaint: a
+    // new message arriving grows `conversation`, a session switch can shrink
+    // it out from under a scroll position that made sense for the old one.
+    const maxScroll = Math.max(0, conversation.length - rows);
+    this.historyScroll = Math.min(this.historyScroll, maxScroll);
+    const windowStart = Math.max(0, conversation.length - rows - this.historyScroll);
+    const shown = conversation.slice(windowStart, windowStart + rows);
+    if (this.historyScroll > 0 && shown.length) {
+      shown[0] = { text: `  ${chalk.dim(`── ${this.historyScroll} line${this.historyScroll === 1 ? '' : 's'} below · PgDn to catch up ──`)}` };
+    }
     const meta = this.statusText();
-    let frame = '\u001b[?25l';
+    // DEC autowrap must stay off while an absolute-positioned frame is written.
+    // A provider-supplied label can otherwise occupy two physical terminal rows
+    // while the renderer still counts one, shifting every subsequent footer-only
+    // repaint and leaving stale option rows above the composer.
+    let frame = '\u001b[?25l\u001b[?7l';
     const screenLine = (text = ''): void => { frame += `\r\u001b[2K${text}\n`; };
     if (footerOnly) {
       frame += `\u001b[${rows + noticeRows + 1};1H`;
@@ -878,30 +1372,45 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       const windowed = options.slice(start, start + visibleRows);
       windowed.forEach((option, index) => {
         const absoluteIndex = start + index;
-        screenLine(`  ${absoluteIndex === selected ? chalk.cyan('❯') : ' '} ${absoluteIndex === selected ? chalk.bold(option.label) : option.label}${option.detail ? `  ${chalk.dim(option.detail)}` : ''}`);
+        const selectedOption = absoluteIndex === selected;
+        const available = Math.max(1, width - 4);
+        const label = visibleSlice(option.label, available);
+        const remaining = available - terminalCellWidth(label);
+        const detail = option.detail && remaining > 3 ? visibleSlice(option.detail, remaining - 2) : '';
+        screenLine(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
       });
       for (let index = windowed.length; index < visibleRows; index++) screenLine();
-      screenLine(`  ${chalk.dim(palette?.hint ?? '↑↓ select · Tab complete · Enter run')}`);
+      screenLine(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
     screenLine(rule);
     const viewport = composerViewport(composer, cursor, Math.max(8, inner - terminalCellWidth(prompt)));
     screenLine(`  ${chalk.white(prompt)}${viewport.text}`);
-    screenLine();
-    // No trailing "\n" here: total frame height is exactly the terminal height, so a
-    // newline after this, its last line, would land the cursor on the last row and
-    // scroll the whole screen by one -- invisible in a one-off full repaint (which
-    // starts over from \u001b[H next time), but fatal for footerOnly/select()
-    // repaints, which jump back to a fixed absolute row: every such scroll left that
-    // target one row stale, so the old line was never overwritten, only added to --
-    // the "adds a line every time you scroll" reports in the palette and pickers.
-    frame += `\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}`;
-    if (!palette?.hideCursor) frame += `\u001b[2A\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\u001b[?25h`;
+    // The rule below the composer carries the chat's title at its right
+    // edge instead of a plain dashed line -- dashes fill from the left up to
+    // wherever the title starts, so a longer title just eats more of the
+    // rule rather than needing a line of its own. Provider/model/directory
+    // (meta) stay on their own separate line below, never sharing space with
+    // the title the way they used to.
+    const title = this.titleText();
+    const titleSuffix = title ? ` ${visibleSlice(title, Math.max(0, width - 4))}` : '';
+    const ruleWidth = Math.max(0, width - terminalCellWidth(titleSuffix));
+    screenLine(`${chalk.dim('─'.repeat(ruleWidth))}${chalk.dim(titleSuffix)}`);
+    // meta is the true last line: total frame height is exactly the terminal
+    // height, so a newline after the very last line would land the cursor on
+    // the last row and scroll the whole screen by one -- invisible in a
+    // one-off full repaint (which starts over from \x1b[H next time), but
+    // fatal for footerOnly/select() repaints, which jump back to a fixed
+    // absolute row: every such scroll left that target one row stale, so the
+    // old line was never overwritten, only added to -- the "adds a line
+    // every time you scroll" reports in the palette and pickers.
+    frame += `\r\x1b[2K  ${chalk.dim(visibleSlice(meta, inner))}\x1b[?7h`;
+    if (!palette?.hideCursor) frame += `\x1b[2A\r\x1b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\x1b[?25h`;
     output.write(frame);
   }
 
-  question(prompt: string, commands: readonly PickerOption<string>[] = []): Promise<string> {
+  question(prompt: string, commands: readonly PickerOption<string>[] = [], settings?: { cancellable?: boolean }): Promise<string> {
     if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
-    return new Promise((resolveQuestion) => {
+    return new Promise((resolveQuestion, rejectQuestion) => {
       let value = '';
       let cursor = 0;
       let selected = 0;
@@ -912,16 +1421,36 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       // reflowing (and the cursor from jumping) as the number of matches narrows.
       const paletteCapacity = commands.length ? Math.min(commands.length, 8) + 2 : 0;
       let paletteOpen = false;
+      // No .slice(0, 8) here: that used to cap the real match list itself,
+      // not just what's visible at once, so typing "/" (matching every
+      // command) could never scroll to anything past the 8th regardless of
+      // how far down you pressed -- selected's own wraparound never saw
+      // past index 7 because options.length itself was capped there. The
+      // windowed scroll in paint() below already exists specifically to
+      // show a scrollable slice of a longer list; capping the list before
+      // it ever got there defeated that.
       const matches = () => value.startsWith('/') && !value.includes(' ')
-        ? commands.filter((option) => option.value.startsWith(value)).slice(0, 8)
+        ? commands.filter((option) => option.value.startsWith(value))
         : [];
-      const draw = (): void => {
+      // Scrolling the conversation needs the full paint() path — the normal
+      // (no-palette) branch below only ever touches the composer's own line
+      // for performance, so a scroll action changing what's shown *above* the
+      // composer would otherwise never actually repaint, which is exactly
+      // what silently ate the first attempt at this: the key was received
+      // and historyScroll did change, nothing on screen ever reflected it.
+      const draw = (forceFullRepaint = false): void => {
         const options = matches();
         if (selected >= options.length) selected = 0;
         if (options.length || showedPalette) {
           this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, footerOnly: paletteOpen });
           paletteOpen = true;
           this.paletteActive = true;
+        } else if (forceFullRepaint) {
+          // No real palette here — pass no palette config at all, otherwise
+          // paint() would size a footer band for one anyway (its own
+          // capacity default comes from the full slash-command list, not
+          // "is a palette actually showing").
+          this.paint(value, [], 0, prompt, cursor);
         } else {
           const available = Math.max(8, (output.columns || 100) - 5 - terminalCellWidth(prompt));
           const viewport = composerViewport(value, cursor, available);
@@ -947,9 +1476,27 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         resolveQuestion(answer);
       };
       let finished = false;
+      // Opt-in, not a default: this same question() drives the persistent
+      // chat composer too, where Esc doing nothing is the existing,
+      // intentional behavior (there's nothing to "cancel" mid-draft the way
+      // there is for a one-off prompt). Callers that need real cancel
+      // semantics -- like the API-key env-var-name prompt, previously
+      // "esc doesn't cancel" with no way out short of Ctrl+C -- pass
+      // { cancellable: true } and get a real rejection to catch, instead of
+      // an empty string indistinguishable from "accepted the default".
+      const cancel = (): void => {
+        if (finished) return;
+        finished = true;
+        this.paletteActive = false;
+        input.off('data', onData);
+        input.setRawMode(false);
+        output.write('\u001b[?25h');
+        rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
+      };
       const handleKey = (key: string): void => {
         const options = matches();
         if (key === '\u0003' || key === '\u0004') return finish('/exit');
+        if (key === '\u001b' && settings?.cancellable) return cancel();
         if (key === '\r' || key === '\n') {
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
             const command = options[selected].value;
@@ -963,18 +1510,36 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
           cursor = value.length;
           return draw();
         }
+        // Plain Up/Down scroll the conversation now, not prompt history: a
+        // swipe gesture or a terminal app's own on-screen scrollbar (common
+        // on mobile SSH clients, which is how this was actually being tried)
+        // sends exactly these two sequences, nothing else -- Page Up/Down
+        // below is real and works from a physical keyboard, but was
+        // unreachable from a touch interface, which is what "I can see the
+        // scrollbar but the chat doesn't move, even using the scrollbar
+        // itself" was: the keys arrived, but at prompt-history recall, which
+        // silently did nothing when there was no history yet to recall.
+        // Prompt history moves to Ctrl+P/Ctrl+N (common readline-style
+        // bindings) so it isn't lost, just no longer on the key that has to
+        // mean "scroll" for a touch interface to be usable at all.
         if (key === '\u001b[A') {
-          if (options.length) selected = (selected - 1 + options.length) % options.length;
-          else if (historyIndex > 0) { historyIndex--; value = this.history[historyIndex] ?? ''; cursor = value.length; }
-          return draw();
+          if (options.length) { selected = (selected - 1 + options.length) % options.length; return draw(); }
+          this.historyScroll += 3;
+          return draw(true);
         }
         if (key === '\u001b[B') {
-          if (options.length) selected = (selected + 1) % options.length;
-          else { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; }
-          return draw();
+          if (options.length) { selected = (selected + 1) % options.length; return draw(); }
+          this.historyScroll = Math.max(0, this.historyScroll - 3);
+          return draw(true);
         }
+        if (key === '\u0010' && !options.length) { if (historyIndex > 0) { historyIndex--; value = this.history[historyIndex] ?? ''; cursor = value.length; } return draw(); }
+        if (key === '\u000e' && !options.length) { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; return draw(); }
         if (key === '\u001b[D') { cursor = previousCharacterIndex(value, cursor); return draw(); }
         if (key === '\u001b[C') { cursor = nextCharacterIndex(value, cursor); return draw(); }
+        // Page Up/Down scroll by a full page instead of 3 lines, for a real
+        // keyboard's own dedicated keys.
+        if (key === '\u001b[5~') { this.historyScroll += 10; return draw(true); }
+        if (key === '\u001b[6~') { this.historyScroll = Math.max(0, this.historyScroll - 10); return draw(true); }
         if (key === '\u007f' || key === '\b') {
           if (cursor > 0) { const previous = previousCharacterIndex(value, cursor); value = value.slice(0, previous) + value.slice(cursor); cursor = previous; }
           return draw();
@@ -990,7 +1555,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         }
       };
       const onData = (chunk: Buffer | string): void => {
-        const keys = String(chunk).match(/\u001b\[[ABCD]|[\s\S]/g) ?? [];
+        const keys = String(chunk).match(/\u001b\[[ABCD]|\u001b\[[56]~|[\s\S]/g) ?? [];
         for (const key of keys) {
           if (finished) break;
           handleKey(key);
@@ -1010,19 +1575,38 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
    * already draws for slash commands: the picker sits right where the composer is,
    * the conversation stays visible above it, and after the first frame every arrow
    * key is a footer-only repaint instead of a full-screen one. */
-  select<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined> {
+  /** Type-to-filter: a picker with more than a screenful of options (the
+   * /resume list, across every ClikCode session plus every discovered vendor
+   * chat, easily exceeds 50) was arrow-keys-only with no count, no scroll
+   * indicator, and silent wraparound at each end -- a real conversation could
+   * sit in the middle of a list that long and be effectively unfindable by
+   * scrolling alone. Letters/digits/space now narrow the list live by
+   * substring match against label and detail (title, provider, status);
+   * arrow keys still navigate whatever is currently visible. This is why the
+   * old 'j'/'k'/'q' single-letter aliases are gone: they would collide with
+   * typing a real filter query character (searching for "qwen" or "junk"). */
+  select<T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined> {
     if (!options.length) return Promise.resolve(undefined);
     return new Promise((resolveSelection) => {
       this.selecting = true;
+      let query = '';
       let selected = 0;
       let painted = false;
       const capacity = Math.min(options.length, 8) + 2;
-      const renderOptions = options.map((option) => ({ label: option.label, detail: option.detail, value: '' }));
+      const visibleOptions = (): readonly PickerOption<T>[] => {
+        if (!query) return options;
+        const needle = query.toLowerCase();
+        return options.filter((option) =>
+          option.label.toLowerCase().includes(needle) || (option.detail ?? '').toLowerCase().includes(needle));
+      };
       const draw = (): void => {
-        this.paint(title, renderOptions, selected, '', 0, {
-          capacity, footerOnly: painted, hideCursor: true,
-          hint: '↑↓ move · Enter choose · Esc cancel',
-        });
+        const visible = visibleOptions();
+        if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+        const renderOptions = visible.map((option) => ({ label: option.label, detail: option.detail, value: '' }));
+        const hint = query
+          ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} \u00b7 \u2191\u2193 move \u00b7 Enter choose \u00b7 Esc clear`
+          : `${options.length} total \u00b7 \u2191\u2193 move \u00b7 Enter choose \u00b7 Esc cancel \u00b7 type to filter`;
+        this.paint(title, renderOptions, selected, '', 0, { capacity, footerOnly: painted, hideCursor: true, hint });
         painted = true;
       };
       let finished = false;
@@ -1032,14 +1616,40 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         this.selecting = false;
         input.off('data', onData);
         input.setRawMode(false);
-        this.paint('', [], 0, '› ', 0);
+        this.paint('', [], 0, '\u203a ', 0);
         resolveSelection(value);
       };
+      // Right arrow, not Enter, opens an option's own actions (disconnect,
+      // reauthenticate, ...) -- only when it actually declares any,
+      // otherwise this is a no-op so every existing picker that never sets
+      // `actions` is completely unaffected. Runs a small nested select() for
+      // the action list itself, pausing this picker's own key handling
+      // while it's open (both would otherwise react to the same keypress --
+      // Node lets multiple 'data' listeners stack) and redrawing this
+      // picker's own view once it's done, since the nested call's own
+      // cleanup repaints the plain composer over top of it.
+      const openActions = async (option: PickerOption<T>): Promise<void> => {
+        if (!option.actions?.length) return;
+        input.off('data', onData);
+        const actionValue = await this.select(option.label, option.actions.map((action) => ({ label: action.label, value: action.value })));
+        if (finished) return;
+        if (actionValue) await onAction?.(option.value, actionValue);
+        if (finished) return;
+        input.setRawMode(true);
+        input.resume();
+        input.on('data', onData);
+        draw();
+      };
       const handleKey = (key: string): void => {
-        if (key === '\u001b[A' || key === 'k') selected = (selected - 1 + options.length) % options.length;
-        else if (key === '\u001b[B' || key === 'j') selected = (selected + 1) % options.length;
-        else if (key === '\r' || key === '\n') return finish(options[selected].value);
-        else if (key === '\u001b' || key === '\u0003' || key === 'q') return finish(undefined);
+        const visible = visibleOptions();
+        if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
+        else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
+        else if (key === '\u001b[C') { if (visible[selected]) void openActions(visible[selected]); return; }
+        else if (key === '\r' || key === '\n') { if (visible[selected]) finish(visible[selected].value); return; }
+        else if (key === '\u0003') return finish(undefined);
+        else if (key === '\u001b') { if (query) { query = ''; selected = 0; } else return finish(undefined); }
+        else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; }
+        else if (key.length === 1 && key >= ' ') { query += key; selected = 0; }
         else return;
         draw();
       };
@@ -1070,15 +1680,36 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
    * login) without tearing the session down, so ClikCode's UI can resume in
    * place once that process exits. */
-  suspend(): void {
+  async suspend(): Promise<void> {
     if (input.isTTY) input.setRawMode(false);
     input.pause();
     output.write('\u001b[?25h\u001b[?1049l');
+    // Best-effort mitigation, not a confirmed root cause: a vendor login's
+    // own paste handling erroring right after handoff is plausibly a race
+    // between the terminal actually finishing its mode switch (raw -> cooked,
+    // alt-screen -> main buffer) and the child process starting to read --
+    // both writes above are fire-and-forget from Node's side, with no way to
+    // know when the terminal itself has caught up. A short settle window
+    // before the caller spawns anything costs nothing on the success path
+    // and closes the gap if that race is real.
+    await new Promise((resolveSettle) => setTimeout(resolveSettle, 50));
   }
 
   resume(): void {
     if (this.closed) return;
-    output.write('\u001b[?1049h');
+    // \x1b[2J explicitly clears the whole alt-screen buffer before painting
+    // -- suspend() hands control to the real terminal for a login prompt,
+    // and the terminal's actual dimensions can genuinely change in that
+    // window (most plausibly a mobile SSH client's on-screen keyboard
+    // appearing/disappearing). Every other repaint in this file only clears
+    // the exact lines it's about to rewrite (screenLine's \x1b[2K on each
+    // line as the cursor advances), which is fine when the frame height is
+    // stable between paints, but would leave old content below a shorter
+    // new frame -- e.g. an old meta/status line -- never revisited. That's
+    // the concrete "meta line duplicates after switching providers" report
+    // this fixes: switching to a provider needing login is exactly the
+    // path that goes through suspend/resume.
+    output.write('\u001b[?1049h\u001b[2J');
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
@@ -1136,13 +1767,16 @@ async function prepareAttachments(paths: readonly string[]): Promise<{ textConte
 }
 
 function renderSessionCard(session: HarnessSession, account?: string): string {
+  const modelLabel = session.model && session.nativeHarness === 'claude'
+    ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
+    : session.model;
   return [
     chalk.bold.cyan('ClikCode'),
     ...(session.name ? [line('chat', session.name)] : []),
     line('project', compactPath(session.workspace ?? process.cwd())),
     line('provider', sessionProviderLabel(session)),
     line('account', account ?? 'default'),
-    line('model', session.model ?? 'provider default'),
+    line('model', modelLabel ?? 'provider default'),
     line('effort', session.effort),
     line('access', session.permissionMode ?? 'workspace-write'),
     line('session', session.id.slice(0, 8)),
@@ -1212,7 +1846,8 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
       ['/new', 'start a clean conversation'],
       ['/resume', 'choose a saved session'],
       ['/status', 'show the current workspace and settings'],
-      ['/account', 'choose, view, or add an account'],
+      ['/account', 'choose or view an account'],
+      ['/add-account', 'log in and add another account for this provider'],
       ['/model <name>', 'choose or view a model'],
       ['/effort <level>', 'set reasoning effort'],
       ['/permissions', 'choose filesystem access'],
@@ -1337,12 +1972,10 @@ async function readState(): Promise<HarnessState> {
       status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
       permissionMode: session.permissionMode ?? 'workspace-write',
     }));
-    const now = Date.now();
-    const accounts = (parsed.accounts as AiHarnessAccount[]).map((account) => (
-      account.quotaState === 'exhausted' && account.quotaRetryAt && Date.parse(account.quotaRetryAt) <= now
-        ? { ...account, quotaState: 'available' as const, quotaRetryAt: undefined }
-        : account
-    ));
+    // Older builds invented a 60-second quota reset. A real limit remains
+    // exhausted until the user explicitly retries that account or the provider
+    // publishes a trustworthy reset signal.
+    const accounts = (parsed.accounts as AiHarnessAccount[]).map(({ quotaRetryAt: _obsoleteRetryAt, ...account }) => account);
     const normalized = {
       ...(parsed as HarnessState), accounts, sessions, invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [],
       globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings },
@@ -1457,12 +2090,6 @@ function localApiKey(account: AiHarnessAccount): string {
   return value;
 }
 
-function isUsageExhaustion(error: unknown): boolean {
-  const status = (error as { statusCode?: unknown; response?: { status?: unknown } } | null)?.statusCode
-    ?? (error as { response?: { status?: unknown } } | null)?.response?.status;
-  if (status === 402 || status === 429) return true;
-  return /(?:quota exceeded|quota exhausted|usage limit|session limit|rate limit|too many requests|credits? exhausted)/i.test(error instanceof Error ? error.message : String(error));
-}
 
 /** Starts an intentionally loopback-only harness service. It exposes no provider tokens. */
 export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
@@ -1623,12 +2250,62 @@ export async function aiDoctor(): Promise<void> {
   emitJson({ adapterVersion: localRouter().AI_LOCAL_HARNESS_ADAPTER_VERSION, harnesses });
 }
 
-/** Starts the vendor-owned login flow and records only a local opaque profile reference. */
-export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<void> {
+/** Reads real account info out of a harness's own credential storage right
+ * after login -- verified so far only for Claude Code, whose
+ * ~/.claude/.credentials.json (or the isolated profile path, if this
+ * harness supports multiple accounts) carries a real `subscriptionType`
+ * field (checked directly against a live file earlier: no email/name field
+ * exists there, but the subscription tier does, and it's real account
+ * info, not a guess). Returns undefined -- never a fabricated name -- for
+ * every harness without a confirmed credential shape to read, which is
+ * every other one right now; the numbered placeholder below covers those.
+ */
+async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
+  if (harness.command === 'claude') {
+    try {
+      const path = join(profilePath ?? join(homedir(), '.claude'), '.credentials.json');
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as { claudeAiOauth?: { accessToken?: string } };
+      const token = parsed.claudeAiOauth?.accessToken;
+      if (!token) return undefined;
+      // subscriptionType duplicated the provider's own display name right
+      // next to itself ("Claude Code (pro)" sitting beside "Claude Code" in
+      // the status line and picker) without actually distinguishing one
+      // account from another with the same plan. /api/oauth/profile is a
+      // real endpoint (verified directly: returns this exact token's own
+      // account.email) -- and since the token itself is already confirmed
+      // profile-scoped (it comes from this account's own, possibly
+      // CLAUDE_CONFIG_DIR-isolated, credentials file), the email it returns
+      // is guaranteed specific to *this* account, not shared across every
+      // Claude Code account the way a file outside that isolated directory
+      // (~/.claude.json, sibling to the redirectable ~/.claude/ folder --
+      // checked, and its own OAuth path isn't confirmed to move with
+      // CLAUDE_CONFIG_DIR) would have been.
+      const response = await fetch('https://api.anthropic.com/api/oauth/profile', {
+        headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+      });
+      if (!response.ok) return undefined;
+      const body = await response.json() as { account?: { email?: string } };
+      return typeof body.account?.email === 'string' && body.account.email ? body.account.email : undefined;
+    } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
+  }
+  return undefined;
+}
+
+/** Starts the vendor-owned login flow and records only a local opaque profile reference.
+ * With no explicit label, the final name is decided *after* login completes: a
+ * numbered placeholder is picked first (so an explicit-label caller and duplicate
+ * checks upfront still behave as before), but if deriveAccountLabel finds real
+ * account info once the credential file actually exists, that replaces the
+ * placeholder -- removing the old interactive "Account name [...]" prompt this
+ * used to require without falling back to an arbitrary made-up name. */
+export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<string> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   const state = await readState();
-  const accountLabel = (label ?? `${harness.displayName} local`).trim();
+  const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
+  const placeholder = `${harness.displayName} ${existingForProvider + 1}`;
+  const explicit = label?.trim();
+  let accountLabel = explicit || placeholder;
   if (!accountLabel) throw new Error('account label cannot be empty');
   const existing = state.accounts.find((account) => account.label.toLowerCase() === accountLabel.toLowerCase());
   if (existing) throw new Error(`a local AI account named "${accountLabel}" already exists`);
@@ -1642,11 +2319,39 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   if (profilePath) await mkdir(profilePath, { recursive: true, mode: 0o700 });
   const nativeProfile = profilePath && harness.profileEnv ? { env: harness.profileEnv, path: profilePath } : undefined;
   await loginNativeHarness(harness, nativeProfile ? { [nativeProfile.env]: nativeProfile.path } : {});
+  if (!explicit) {
+    const derived = await deriveAccountLabel(harness, profilePath);
+    if (derived) {
+      // A derived identity matching an account that already exists means
+      // this is the SAME real account signing in again -- not a new one --
+      // even though the login flow just created a brand-new isolated
+      // profile directory to get here (there's no way to know who's behind
+      // a login before actually completing it). Previously this only
+      // skipped renaming to the derived label in that case and fell
+      // through to pushing a duplicate anyway under the numbered
+      // placeholder -- the exact "logged in with the same email, it
+      // created a new one and left the old one" bug. Now it reuses the
+      // existing account outright: repoints its nativeProfile at the fresh
+      // login (the old profile directory may be stale/expired) instead of
+      // creating anything new, and the just-created directory above is
+      // simply orphaned rather than referenced by two accounts.
+      const existingMatch = state.accounts.find((account) => account.provider === harness.provider && account.label.toLowerCase() === derived.toLowerCase());
+      if (existingMatch) {
+        existingMatch.status = 'ready';
+        if (nativeProfile) existingMatch.nativeProfile = nativeProfile;
+        await writeState(state);
+        emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });
+        return existingMatch.label;
+      }
+      accountLabel = derived;
+    }
+  }
   if (!state.accounts.some((account) => account.label.toLowerCase() === accountLabel.toLowerCase())) {
     state.accounts.push({ id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) });
     await writeState(state);
   }
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
+  return accountLabel;
 }
 
 function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {
@@ -1690,6 +2395,7 @@ async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, environment:
   try {
     stdout = await captureNativeHarnessOutput(harness, harness.statusArgv, environment, 8_000);
   } catch {
+    // fail-open-ok: an unverified account must authenticate before it can be selected safely.
     return true;
   }
   try {
@@ -1749,7 +2455,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
     if (freshInstall || await harnessNeedsLogin(harness, environment)) {
       activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-      activeFullScreenHarness.suspend();
+      await activeFullScreenHarness.suspend();
       try {
         await loginNativeHarness(harness, environment);
       } finally {
@@ -1852,6 +2558,47 @@ export async function aiAccountRemove(labelOrId: string): Promise<void> {
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['read-only', 'workspace-write', 'auto'];
 
+function optionForHarness(harness: AiLocalHarnessDefinition, id: string): AiHarnessOptionDefinition | undefined {
+  return localHarnessCapabilityManifest(harness).options.find((option) => option.id === id);
+}
+
+function parseHarnessOption(option: AiHarnessOptionDefinition, raw: string): unknown {
+  const value = raw.trim();
+  if (option.kind === 'boolean') {
+    if (['true', 'on', 'yes', '1', 'enabled'].includes(value.toLowerCase())) return true;
+    if (['false', 'off', 'no', '0', 'disabled'].includes(value.toLowerCase())) return false;
+    throw new Error(`${option.label} must be on or off`);
+  }
+  if (option.kind === 'number') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${option.label} must be a non-negative number`);
+    return parsed;
+  }
+  if (option.kind === 'string-list' || option.kind === 'path-list') {
+    const values = value.split(',').map((item) => item.trim()).filter(Boolean);
+    if (!values.length) throw new Error(`${option.label} requires at least one value`);
+    return values;
+  }
+  if (option.values?.length && !option.values.includes(value)) throw new Error(`${option.label} must be one of ${option.values.join(', ')}`);
+  if (!value) throw new Error(`${option.label} cannot be empty`);
+  return value;
+}
+
+function setSessionHarnessOption(session: HarnessSession, harness: AiLocalHarnessDefinition, id: string, raw: string): void {
+  const option = optionForHarness(harness, id);
+  if (!option) throw new Error(`${harness.displayName} does not support option "${id}"`);
+  const parsed = parseHarnessOption(option, raw);
+  if (id === 'model') session.model = String(parsed);
+  else if (id === 'effort') session.effort = String(parsed);
+  else if (id === 'workspace') session.workspace = String(parsed);
+  else if (id === 'permissions') session.permissionMode = String(parsed) as AiHarnessPermissionMode;
+  else session.harnessOptions = { ...(session.harnessOptions ?? {}), [id]: parsed };
+  if (option.requiresNewSession) {
+    session.nativeSessionId = undefined;
+    session.nativeStartedAt = undefined;
+  }
+}
+
 function normalizeFailoverWord(value: string): 'never' | 'on-quota-exhausted' {
   if (value === 'auto') return 'on-quota-exhausted';
   if (value === 'never') return 'never';
@@ -1933,6 +2680,14 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     : undefined;
   if (options.route === 'local' && options.account && !account) throw new Error(`local AI account "${options.account}" was not found`);
   const provider = options.provider ?? account?.provider ?? null;
+  const harness = provider ? localHarnessForProvider(provider) : undefined;
+  if (provider && !harness && options.route === 'local') throw new Error(`unknown local provider "${provider}"`);
+  if (options.model && harness && !harness.modelArgvPrefix) throw new Error(`${harness.displayName} does not publish a model selector.`);
+  if (options.effort && harness) {
+    const effortOption = optionForHarness(harness, 'effort');
+    if (!effortOption) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
+    parseHarnessOption(effortOption, options.effort);
+  }
   const defaults = resolveDefaultSettings(state, provider);
   const now = new Date().toISOString();
   const session: HarnessSession = {
@@ -1971,9 +2726,9 @@ export async function aiSessionOpenDefault(config: Conf): Promise<void> {
     const now = new Date().toISOString();
     session = {
       id: randomUUID(), route: previous?.route ?? 'local', accountId: previous?.accountId ?? null,
-      provider, model: previous?.model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
-      effort: previous?.effort ?? defaults.effort, accountFailover: previous?.accountFailover ?? defaults.accountFailover,
-      permissionMode: previous?.permissionMode ?? defaults.permissionMode,
+      provider, model: (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
+      effort: defaults.effort, accountFailover: defaults.accountFailover,
+      permissionMode: defaults.permissionMode,
       createdAt: now, updatedAt: now, status: 'active',
     };
     state.sessions.push(session);
@@ -2007,6 +2762,19 @@ export async function aiSessionClose(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  // A session that never received a single turn AND was never linked to a
+  // real vendor conversation has nothing to resume — keeping it as "closed"
+  // clutter buries real conversations under identical "Untitled chat" entries
+  // every time the app is opened and exited without typing anything. Drop it
+  // outright instead of accumulating it. A set nativeSessionId is kept even
+  // with zero ClikCode-tracked messages: it may be adopted from, or linked
+  // directly to, a vendor's own conversation that has real content ClikCode
+  // just never routed a turn through.
+  if (!(session.messages ?? []).length && !session.nativeSessionId) {
+    state.sessions = state.sessions.filter((item) => item.id !== id);
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
+  }
   if (session.status !== 'closed') {
     session.status = 'closed';
     session.closedAt = new Date().toISOString();
@@ -2049,8 +2817,9 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   if (head === 'permissions') {
     const value = words.shift()?.toLowerCase();
     if (!value) return emitHarnessOutput({ panel: 'permissions', session, controls: ['read-only', 'workspace-write', 'auto'] });
-    if (value !== 'read-only' && value !== 'workspace-write' && value !== 'auto') throw new Error('Choose read-only, workspace-write, or auto.');
-    session.permissionMode = value;
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!harness) throw new Error('Choose a provider before setting permissions.');
+    setSessionHarnessOption(session, harness, 'permissions', value);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
@@ -2129,6 +2898,8 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   if (head === 'model') {
     const value = words.join(' ').trim();
     if (!value) throw new Error('Choose a model from /model or use /model <name>.');
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
     session.model = value === 'default' || value === 'auto' ? null : value;
     session.updatedAt = new Date().toISOString();
     await writeState(state);
@@ -2136,8 +2907,9 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   }
   if (head === 'effort') {
     const value = words.join(' ').trim().toLowerCase();
-    if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)) throw new Error('Choose low, medium, high, xhigh, max, or ultra.');
-    session.effort = value;
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!harness) throw new Error('Choose a provider before setting effort.');
+    setSessionHarnessOption(session, harness, 'effort', value);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
@@ -2201,14 +2973,26 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       }
       session.accountId = account.id;
       session.provider = account.provider;
+      session.route = 'local';
+      account.quotaState = 'available';
+      account.quotaRetryAt = undefined;
     } else if (setting === 'model') {
-      session.model = value;
+      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+      if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
+      session.model = value === 'default' || value === 'auto' ? null : value;
     } else if (setting === 'effort') {
-      if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)) throw new Error('effort must be low, medium, high, xhigh, max, or ultra');
-      session.effort = value;
+      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+      if (!harness) throw new Error('Choose a provider before setting effort.');
+      setSessionHarnessOption(session, harness, 'effort', value);
     } else if (setting === 'permissions' || setting === 'permission') {
-      if (value !== 'read-only' && value !== 'workspace-write' && value !== 'auto') throw new Error('permissions must be read-only, workspace-write, or auto');
-      session.permissionMode = value;
+      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+      if (!harness) throw new Error('Choose a provider before setting permissions.');
+      setSessionHarnessOption(session, harness, 'permissions', value);
+    } else if (setting === 'option') {
+      const [optionId, ...optionValue] = value.split(/\s+/);
+      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+      if (!harness || !optionId || !optionValue.length) throw new Error('usage: /settings option <id> <value>');
+      setSessionHarnessOption(session, harness, optionId, optionValue.join(' '));
     } else if (setting === 'accountfailover' || setting === 'account-failover') {
       if (value !== 'never' && value !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
       session.accountFailover = value;
@@ -2242,6 +3026,10 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
         session.nativeStartedAt = undefined;
       }
       session.accountId = account.id;
+      // Explicit selection is the user's retry signal for an account previously
+      // marked exhausted. Automatic routing never guesses a reset time.
+      account.quotaState = 'available';
+      account.quotaRetryAt = undefined;
       session.provider = account.provider;
       session.route = 'local';
       session.updatedAt = new Date().toISOString();
@@ -2251,7 +3039,8 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     if (action === 'login') {
       const harnessName = words.shift()?.toLowerCase();
       if (!harnessName) throw new Error('usage: /accounts login <harness> [label]');
-      return aiAccountLogin(harnessName, words.join(' ') || undefined);
+      await aiAccountLogin(harnessName, words.join(' ') || undefined);
+      return;
     }
     if (action === 'remove' || action === 'rm') {
       const labelOrId = words.join(' ').trim();
@@ -2263,7 +3052,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       const provider = shortcut ? (localHarnessForCommand(shortcut)?.provider ?? shortcut) : undefined;
       if (!provider) throw new Error('usage: /accounts add <harness>');
       const knownHarness = shortcut ? localHarnessForCommand(shortcut) : undefined;
-      if (knownHarness?.surface === 'terminal') return aiAccountLogin(knownHarness.command, words.join(' ') || undefined);
+      if (knownHarness?.surface === 'terminal') { await aiAccountLogin(knownHarness.command, words.join(' ') || undefined); return; }
       return emitHarnessOutput({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
     if (action === 'failover') {
@@ -2276,6 +3065,17 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     }
     return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['use <label-or-id>', 'login <harness> [label]', 'add <harness> [label]', 'remove <label-or-id>', 'failover auto|never'] });
   }
+  if (head === 'gateway') {
+    session.route = 'gateway';
+    session.accountId = null;
+    session.provider = 'clikdeploy-gateway';
+    session.nativeHarness = undefined;
+    session.nativeSessionId = undefined;
+    session.nativeStartedAt = undefined;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'provider-selected', harness: 'gateway', displayName: 'ClikDeploy Gateway', provider: 'clikdeploy-gateway', account: null, model: 'platform', centralized: true });
+  }
   const harness = localHarnessForCommand(head);
   if (harness) {
     await aiHarnessSelect(harness.command, id);
@@ -2286,11 +3086,17 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   throw new Error(`unknown slash command: /${head}`);
 }
 
-interface PickerOption<T> { label: string; detail?: string; value: T }
+/** actions is deliberately narrow -- a plain label/value pair, not a full
+ * nested PickerOption -- since it's rendered by select()'s own generic
+ * right-arrow handler for *any* picker, not something built per-caller.
+ * A caller (e.g. the account picker) that wants "disconnect"/"reauthenticate"
+ * attaches them here; select() has no idea what they mean, it just shows
+ * them and returns whichever one was chosen. */
+interface PickerOption<T> { label: string; detail?: string; value: T; actions?: readonly { label: string; value: string }[] }
 
-async function chooseOption<T>(rl: HarnessPrompter, title: string, options: readonly PickerOption<T>[]): Promise<T | undefined> {
+async function chooseOption<T>(rl: HarnessPrompter, title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined> {
   if (options.length === 0) return undefined;
-  if (rl.select) return rl.select(title, options);
+  if (rl.select) return rl.select(title, options, onAction);
   output.write(`\n${chalk.bold(title)}\n`);
   options.forEach((option, index) => {
     output.write(`  ${chalk.cyan(String(index + 1).padStart(2))}  ${option.label}${option.detail ? ` ${chalk.dim(option.detail)}` : ''}\n`);
@@ -2313,11 +3119,12 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
+  const defaults = resolveDefaultSettings(state, harness.provider);
   const now = new Date().toISOString();
   const session: HarnessSession = {
     id: randomUUID(), route: 'local', accountId: accounts.length === 1 ? accounts[0].id : null,
-    provider: harness.provider, model: null, effort: current.effort,
-    permissionMode: current.permissionMode ?? 'workspace-write', accountFailover: current.accountFailover,
+    provider: harness.provider, model: state.providerSettings[harness.provider]?.model ?? null, effort: defaults.effort,
+    permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
     workspace: current.workspace ?? process.cwd(), nativeHarness: harness.command, createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
@@ -2326,19 +3133,56 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
   return session.id;
 }
 
-async function interactiveEnginePicker(rl: HarnessPrompter, id: string): Promise<string | undefined> {
-  const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
-    .filter((harness) => harness.surface === 'terminal' && harness.turn)
-    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
-    .filter((item) => item.inspection.installed);
-  if (installed.length === 0) {
-    emitHarnessOutput({ panel: 'error', message: 'No supported coding-agent CLI is installed. Run clikcode doctor to see installation options.' });
-    return undefined;
+async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<void> {
+  const apiUrl = ApiClient.getApiUrl(config);
+  if (ApiClient.getApiKeyForUrl(config, apiUrl)) return;
+  const provider = await chooseOption(rl, 'Sign in to ClikDeploy Gateway', [
+    { label: 'Continue with Google', value: 'google' as const },
+    { label: 'Continue with GitHub', value: 'github' as const },
+  ]);
+  if (!provider) throw new Error('ClikDeploy Gateway sign-in was cancelled.');
+  if (rl instanceof FullScreenHarnessPrompter) await rl.suspend();
+  try {
+    await login(config, { google: provider === 'google', github: provider === 'github', embedded: true });
+  } finally {
+    if (rl instanceof FullScreenHarnessPrompter) rl.resume();
   }
-  const selected = await chooseOption(rl, 'Choose a provider', installed.map(({ harness, inspection }) => ({
-    label: harness.displayName, detail: inspection.version ? `· ${inspection.version}` : undefined, value: harness.command,
-  })));
+  if (!ApiClient.getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a Gateway credential.');
+}
+
+async function newGatewayConversation(config: Conf, rl: HarnessPrompter, currentId: string): Promise<string> {
+  await ensureGatewayLogin(config, rl);
+  const state = await readState();
+  const current = state.sessions.find((item) => item.id === currentId);
+  if (!current) throw new Error(`AI session "${currentId}" was not found`);
+  const now = new Date().toISOString();
+  const session: HarnessSession = {
+    id: randomUUID(), route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null,
+    effort: current.effort, permissionMode: current.permissionMode, accountFailover: 'never',
+    workspace: current.workspace ?? process.cwd(), createdAt: now, updatedAt: now, status: 'active',
+  };
+  state.sessions.push(session);
+  await writeState(state);
+  return session.id;
+}
+
+async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
+  const available = await Promise.all(localRouter().AI_LOCAL_HARNESSES
+    .filter((harness) => harness.surface === 'terminal' && harness.turn)
+    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) })));
+  const gatewayConnected = Boolean(ApiClient.getApiKeyForUrl(config, ApiClient.getApiUrl(config)));
+  const selected = await chooseOption(rl, 'Choose a provider', [
+    { label: 'ClikDeploy Gateway', detail: gatewayConnected ? '· connected' : '· sign in with OAuth', value: '__gateway__' },
+    ...available.map(({ harness, inspection }) => ({
+      label: harness.displayName,
+      detail: inspection.installed
+        ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
+        : harness.npmPackage ? '· install on selection' : '· vendor install required',
+      value: harness.command,
+    })),
+  ]);
   if (!selected) return undefined;
+  if (selected === '__gateway__') return newGatewayConversation(config, rl, id);
   const state = await readState();
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
@@ -2394,23 +3238,78 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
   return false;
 }
 
-async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promise<void> {
+/** Shared by both the /account picker's "Add another account…" entry and
+ * /add-account's direct path: suggest a name, take it or a typed override,
+ * run the vendor login, then make the new account the current one for this
+ * session. The two entry points differ only in how `harness` gets chosen --
+ * everything after that is identical. */
+/** Well-known SDK/CLI environment variable names each vendor's own tooling
+ * already looks for -- not invented here, just the standard name suggested
+ * as a starting point for the env var prompt below. Falls back to a
+ * generic <PROVIDER>_API_KEY guess for anything not in this short list. */
+const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
+  anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GOOGLE_API_KEY', qwen: 'DASHSCOPE_API_KEY',
+};
+
+async function addApiKeyAccount(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+  const suggested = PROVIDER_API_KEY_ENV[harness.provider] ?? `${harness.provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
+  let entered: string;
+  try {
+    entered = (await rl.question(`Environment variable holding the key ${chalk.dim(`[${suggested}]`)} › `, [], { cancellable: true })).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_CANCELLED') return;
+    throw error;
+  }
+  const envName = (entered || suggested).toUpperCase();
+  if (!/^[A-Z][A-Z0-9_]*$/.test(envName)) throw new Error('environment variable name must be letters, numbers, and underscores only');
+  if (!process.env[envName]) throw new Error(`${envName} is not set in this shell -- export it first, then try again. ClikCode never asks for or stores the raw key itself, only this reference.`);
+  const state = await readState();
+  const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
+  const label = `${harness.displayName} (${envName})`;
+  await aiAccountAdd({ provider: harness.provider, label: state.accounts.some((account) => account.label === label) ? `${label} ${existingForProvider + 1}` : label, auth: 'api-key', credentialRef: `env:${envName}` });
+  await aiSessionCommand(id, `/settings account ${label}`);
+}
+
+async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+  // Vendor login is the only path this offered before -- but Claude Code
+  // (and others) also declare api-key as a supported local auth kind, with
+  // no way to actually set one up short of the fully manual, headless-only
+  // `accounts add --auth api-key --credential-ref env:VAR` invocation. Only
+  // asks when there's a real choice to make; a harness with just one
+  // supported local auth kind skips straight to it, same as before.
+  const choices = harness.localAuth.filter((kind) => kind === 'vendor-cli' || kind === 'api-key');
+  const authKind = choices.length > 1
+    ? await chooseOption(rl, `Sign in to ${harness.displayName} with`, [
+        { label: 'Vendor login', detail: 'opens the CLI’s own sign-in flow', value: 'vendor-cli' as const },
+        { label: 'API key', detail: 'reference an environment variable, never typed here', value: 'api-key' as const },
+      ])
+    : choices[0];
+  if (!authKind) return;
+  if (authKind === 'api-key') {
+    await addApiKeyAccount(rl, id, harness);
+    return;
+  }
+  // No name prompt: aiAccountLogin picks a numbered placeholder up front and
+  // replaces it with something derived from the harness's own credentials
+  // once login actually completes, wherever that's possible -- one less
+  // step than asking the user to type or confirm a name themselves.
+  const label = await aiAccountLogin(harness.command);
+  await aiSessionCommand(id, `/settings account ${label}`);
+}
+
+/** The direct path: skips the harness picker entirely when the current
+ * session already has a provider, since asking "which provider?" again is
+ * exactly the extra step this command exists to cut -- you're already in
+ * one. Only falls back to picking a harness for a session that has none
+ * yet (a brand-new chat with nothing chosen), where there's genuinely no
+ * "current provider" to default to. */
+async function interactiveAddAccount(rl: HarnessPrompter, id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  const accounts = state.accounts.filter((account) => account.status === 'ready');
-  const usages = await Promise.all(accounts.map((account) => accountUsageLabel(account, state)));
-  const selected = await chooseOption(rl, 'Choose an account', [
-    ...accounts.map((account, index) => ({
-      label: account.label,
-      detail: `· ${account.provider}${usages[index] ? ` · ${usages[index]}` : ''}${account.quotaState === 'exhausted' ? ` · ${chalk.yellow('quota exhausted')}` : ''}${account.id === session.accountId ? ' · current' : ''}`,
-      value: account.label,
-    })),
-    { label: 'Add another account…', detail: 'vendor login', value: '__add__' },
-  ]);
-  if (!selected) return;
-  if (selected !== '__add__') {
-    await aiSessionCommand(id, `/settings account ${selected}`);
+  const current = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  if (current) {
+    await addAccountForHarness(rl, id, current);
     return;
   }
   const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
@@ -2421,22 +3320,203 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
     label: harness.displayName, value: harness.command,
   })));
   if (!harnessCommand) return;
-  const harness = localHarnessForCommand(harnessCommand)!;
-  const suggested = `${harness.displayName} ${accounts.filter((account) => account.provider === harness.provider).length + 1}`;
-  const entered = (await rl.question(`Account name ${chalk.dim(`[${suggested}]`)} › `)).trim();
-  const label = entered || suggested;
-  await aiAccountLogin(harness.command, label);
-  await aiSessionCommand(id, `/settings account ${label}`);
+  await addAccountForHarness(rl, id, localHarnessForCommand(harnessCommand)!);
 }
 
-async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<string | undefined> {
+/** /provider switches providers; /account switches accounts -- so once a
+ * session already has a provider, this only ever shows accounts for that
+ * one provider, never a cross-provider list to pick through. A session
+ * with no provider yet (nothing to filter to) falls back to every ready
+ * account, sorted so accounts sharing a provider stay adjacent -- the
+ * closest thing to "grouped" without inventing a non-selectable header row
+ * this picker has no concept of. */
+/** Disconnect/reauthenticate only ever offered per harness capability, same
+ * principle as everywhere else in this file that normalizes against a
+ * vendor's declared catalog fields instead of assuming every harness works
+ * the same way: Disconnect needs a real logoutArgv to actually run (Claude
+ * Code has one; several harnesses don't), reauthenticate needs loginArgv.
+ * Disconnect signs the account out (status -> needs_login) rather than
+ * deleting it, specifically so it stays visible here afterward with
+ * somewhere to reauthenticate it back to ready from -- deleting it here
+ * would have made "reauthenticate a disconnected account" unreachable. */
+async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  for (;;) {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    if (!session) throw new Error(`AI session "${id}" was not found`);
+    const currentHarness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    const vendorAccounts = state.accounts.filter((account) => account.authKind === 'vendor-cli');
+    const accounts = (currentHarness ? vendorAccounts.filter((account) => account.provider === currentHarness.provider) : vendorAccounts)
+      .sort((left, right) => left.provider.localeCompare(right.provider) || left.label.localeCompare(right.label));
+    const usages = await Promise.all(accounts.map((account) => accountUsageLabel(account, state)));
+    let actionPerformed = false;
+    const selected = await chooseOption(rl, currentHarness ? `Choose a ${currentHarness.displayName} account` : 'Choose an account', [
+      ...accounts.map((account, index) => {
+        const harness = localHarnessForProvider(account.provider);
+        const actions = [
+          ...(harness?.logoutArgv && account.status === 'ready' ? [{ label: 'Disconnect', value: 'disconnect' }] : []),
+          ...(harness?.loginArgv && account.status !== 'ready' ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
+        ];
+        return {
+          label: account.label,
+          // Provider only shown in the detail when the list actually spans
+          // more than one (i.e. no currentHarness to have already filtered
+          // to it) -- otherwise it's the exact redundant "provider name
+          // shown again right next to itself" this replaced.
+          detail: `${currentHarness ? '' : `· ${harness?.displayName ?? account.provider} `}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${usages[index] ? `· ${usages[index]} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
+          value: account.label,
+          actions,
+        };
+      }),
+      { label: 'Add another account…', detail: 'vendor login', value: '__add__' },
+    ], async (label, action) => {
+      actionPerformed = true;
+      const account = state.accounts.find((item) => item.label === label);
+      const harness = account ? localHarnessForProvider(account.provider) : undefined;
+      if (!account || !harness) return;
+      const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+      if (action === 'disconnect' && harness.logoutArgv) {
+        await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
+        account.status = 'needs_login';
+        await writeState(state);
+      } else if (action === 'reauthenticate' && harness.loginArgv) {
+        if (rl instanceof FullScreenHarnessPrompter) {
+          await rl.suspend();
+          try { await loginNativeHarness(harness, environment); } finally { await rl.resume(); }
+        } else {
+          await loginNativeHarness(harness, environment);
+        }
+        account.status = 'ready';
+        await writeState(state);
+      }
+    });
+    if (actionPerformed) continue;
+    if (!selected) return;
+    if (selected !== '__add__') {
+      await aiSessionCommand(id, `/settings account ${selected}`);
+      return;
+    }
+    await interactiveAddAccount(rl, id);
+    return;
+  }
+}
+
+
+async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string; adopted: boolean } | undefined> {
   const state = await readState();
-  const sessions = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  return chooseOption(rl, 'Resume a session', sessions.map((session) => ({
-    label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
-    detail: `· ${session.id === currentId ? 'current · ' : ''}${session.model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
-    value: session.id,
-  })));
+  const current = state.sessions.find((item) => item.id === currentId);
+  // A session with no turns yet has nothing to resume into — showing it here is
+  // indistinguishable from a real conversation until you're already inside it,
+  // and older empty sessions (from before aiSessionClose started dropping them)
+  // otherwise bury every real, titled conversation under identical
+  // "Untitled chat" entries. Always keep the current session visible even if
+  // it's still empty, so picking "current" back out of the list still works.
+  // A set nativeSessionId counts as real content too, even with zero
+  // ClikCode-tracked messages: a session adopted from a vendor's own history,
+  // or linked to one directly, has a real vendor-side conversation behind it
+  // that ClikCode simply never routed a turn through yet.
+  const sessions = state.sessions
+    .filter((session) => session.id === currentId || (session.messages ?? []).length > 0 || Boolean(session.nativeSessionId))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  // Conversations that exist only inside a vendor's own history — never opened
+  // through ClikCode — are otherwise invisible here entirely: /resume only ever
+  // looked at ClikCode's own tracked sessions. Two independent mechanisms feed
+  // this, because vendors expose their own history in genuinely different
+  // ways: a machine-readable CLI listing via discoverArgv (confirmed live:
+  // opencode, Hermes; confirmed only against docs/source, not installed here:
+  // Qwen Code, Crush; declared but with an unconfirmed JSON shape: Goose,
+  // Kilo Code; a real command with no JSON mode at all, needing its own
+  // numbered-list parser: Gemini CLI) — or, for harnesses that publish no
+  // listing command whatsoever, reading their own on-disk session files
+  // directly (confirmed live: Claude Code, Codex, Cursor Agent; docs-only,
+  // unverified against a real install: Pi). GitHub Copilot CLI, Aider, Amp,
+  // Factory Droid, Kiro CLI, Cline CLI, and Command Code are deliberately not
+  // wired in at all: each either has no local listing mechanism (Aider, Amp's
+  // canonical store is server-side), an undocumented on-disk format (Copilot
+  // CLI, Factory Droid, Kiro CLI, Cline CLI), or an unresolved identity
+  // mismatch between this catalog's entry and the only public docs found for
+  // its name (Command Code) — none of these are guessed at.
+  const workspace = current?.workspace ?? process.cwd();
+  const discoverable = localRouter().AI_LOCAL_HARNESSES.filter((harness) => harness.session?.discoverArgv);
+  const shellDiscovered = (await Promise.all(discoverable.map(async (harness) => {
+    const account = state.accounts.find((item) => item.provider === harness.provider && item.status === 'ready');
+    const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+    const found = await discoverNativeSessions(harness, environment, workspace);
+    return found.map((item) => ({ harness, item }));
+  }))).flat();
+  const fsDiscovered = (await Promise.all(Object.entries(FS_SESSION_DISCOVERY).map(async ([command, discover]) => {
+    const harness = localHarnessForCommand(command);
+    if (!harness) return [];
+    const inspection = await inspectNativeHarness(harness, 500);
+    if (!inspection.installed) return [];
+    const found = await discover(workspace).catch(() => []);
+    return found.map((item) => ({ harness, item }));
+  }))).flat();
+  const discovered = [...shellDiscovered, ...fsDiscovered]
+    .filter(({ harness, item }) => !state.sessions.some((session) => session.nativeHarness === harness.command && session.nativeSessionId === item.nativeId));
+  // Every option gets a single real recency key so the newest conversation is
+  // always near the top regardless of which source found it — grouping by
+  // source first (every ClikCode session, then every opencode result, then
+  // every Hermes result, ...) buried a two-minutes-old live Claude Code
+  // session below Hermes entries from June, since each *group* was sorted
+  // internally but the groups themselves were never interleaved. A source
+  // with no real timestamp (an unparsed vendor display string) sorts last
+  // rather than claiming a false position.
+  const options: Array<PickerOption<string> & { sortKey: number }> = [
+    ...sessions.map((session) => {
+      const model = session.model && session.nativeHarness === 'claude'
+        ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
+        : session.model;
+      const sortKey = Date.parse(session.updatedAt);
+      return {
+        label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
+        detail: `· ${session.id === currentId ? 'current · ' : ''}${model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
+        value: session.id,
+        sortKey: Number.isNaN(sortKey) ? -Infinity : sortKey,
+      };
+    }),
+    ...discovered.map(({ harness, item }) => ({
+      label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
+      detail: `· not yet in ClikCode${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
+      value: `native:${harness.command}:${item.nativeId}`,
+      sortKey: item.updatedAtMs ?? -Infinity,
+    })),
+  ];
+  options.sort((left, right) => right.sortKey - left.sortKey);
+  const selected = await chooseOption(rl, 'Resume a session', options);
+  if (!selected) return undefined;
+  if (!selected.startsWith('native:')) return { id: selected, adopted: false };
+  const rest = selected.slice('native:'.length);
+  const separator = rest.indexOf(':');
+  const harnessCommand = rest.slice(0, separator);
+  const nativeId = rest.slice(separator + 1);
+  const match = discovered.find((entry) => entry.harness.command === harnessCommand && entry.item.nativeId === nativeId);
+  if (!match) return undefined;
+  const account = state.accounts.find((item) => item.provider === match.harness.provider && item.status === 'ready');
+  const defaults = resolveDefaultSettings(state, match.harness.provider);
+  const now = new Date().toISOString();
+  // The vendor's own thread already has full context regardless — adopting
+  // its identity alone is enough for continuation to work correctly the
+  // moment a turn is sent. Populating ClikCode's own transcript view too is a
+  // separate, best-effort read: only wired for the harnesses with a confirmed
+  // way to read a whole conversation back out (see ADOPTED_TRANSCRIPT_READERS
+  // above), and never something continuation itself depends on.
+  const transcriptReader = ADOPTED_TRANSCRIPT_READERS[match.harness.command];
+  const messages = transcriptReader ? await transcriptReader(match.harness, nativeId, workspace).catch(() => []) : [];
+  const adopted: HarnessSession = {
+    id: randomUUID(), route: 'local', accountId: account?.id ?? null, provider: match.harness.provider,
+    model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
+    createdAt: now, updatedAt: now, status: 'active',
+    nativeHarness: match.harness.command, nativeSessionId: nativeId, nativeStartedAt: now,
+    workspace, name: match.item.title, ...(messages.length ? { messages } : {}),
+  };
+  state.sessions.push(adopted);
+  await writeState(state);
+  // Picking a specific vendor's own chat by name is an explicit choice to open
+  // it as that vendor — forcing it onto whatever provider was already active
+  // (the same-conversation /resume behavior below) would immediately discard
+  // the native session id just adopted, undoing the entire point of listing it.
+  return { id: adopted.id, adopted: true };
 }
 
 async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<void> {
@@ -2450,18 +3530,25 @@ async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<
   const effective = session.model ?? catalog.configured;
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
-    ...discoveredModels.map((model) => ({
-      label: model,
-      detail: model === effective ? `· current${!session.model && model === catalog.configured ? ' · provider configured' : ''}` : undefined,
-      value: model,
-    })),
+    ...discoveredModels.map((model) => {
+      const parts = [
+        catalog.labels?.[model],
+        model === effective ? 'current' : undefined,
+        model === effective && !session.model && model === catalog.configured ? 'provider configured' : undefined,
+      ].filter((part): part is string => Boolean(part));
+      return { label: model, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
+    }),
     { label: 'Automatic provider default', detail: effective ? undefined : '· current', value: 'default' },
     { label: 'Enter a model ID…', value: '__custom__' },
   ];
   const selected = await chooseOption(rl, 'Choose a model', options);
   if (!selected) return;
   const value = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : selected;
-  if (value) await applySettingScope(rl, id, 'model', value);
+  // Applies to this chat only, no further "apply to" step: a model choice is
+  // read as a per-conversation decision, unlike effort/permissions/failover,
+  // which are more often "how I always want this provider to behave" and
+  // genuinely benefit from a scope choice.
+  if (value) await aiSessionCommand(id, `/model ${value}`);
 }
 
 async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promise<'resume' | 'exit' | undefined> {
@@ -2524,10 +3611,44 @@ async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   if (harness && !harnessSupportsEffort(harness)) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
-  const selected = await chooseOption(rl, 'Choose reasoning effort', VALID_EFFORTS.map((value) => ({
+  const effortOption = harness ? optionForHarness(harness, 'effort') : undefined;
+  const efforts = effortOption?.values?.length ? effortOption.values : VALID_EFFORTS;
+  const selected = await chooseOption(rl, 'Choose reasoning effort', efforts.map((value) => ({
     label: value, detail: value === session.effort ? '· current' : undefined, value,
   })));
   if (selected) await applySettingScope(rl, id, 'effort', selected);
+}
+
+async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  if (!harness) throw new Error('Choose a provider first.');
+  const manifest = localHarnessCapabilityManifest(harness);
+  const option = await chooseOption(rl, `${harness.displayName} options`, manifest.options.map((item) => ({
+    label: item.label,
+    detail: `· ${item.description}${item.dangerous ? ` · ${chalk.yellow('dangerous')}` : ''}`,
+    value: item,
+  })));
+  if (!option) return;
+  let raw: string | undefined;
+  if (option.kind === 'boolean') {
+    raw = await chooseOption(rl, option.label, [
+      { label: 'On', value: 'on' }, { label: 'Off', value: 'off' },
+    ]);
+  } else if (option.values?.length) {
+    raw = await chooseOption(rl, option.label, option.values.map((entry) => ({ label: entry, value: entry })));
+  } else {
+    raw = (await rl.question(`${option.label} › `)).trim();
+  }
+  if (raw === undefined || raw === '') return;
+  const fresh = await readState();
+  const target = fresh.sessions.find((item) => item.id === id);
+  if (!target) return;
+  setSessionHarnessOption(target, harness, option.id, raw);
+  target.updatedAt = new Date().toISOString();
+  await writeState(fresh);
 }
 
 async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Promise<void> {
@@ -2561,21 +3682,27 @@ async function interactiveFailoverPicker(rl: HarnessPrompter, id: string): Promi
   if (selected) await applySettingScope(rl, id, 'failover', selected);
 }
 
-async function interactiveSettingsPicker(rl: HarnessPrompter, id: string): Promise<string | undefined> {
+async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const selected = await chooseOption(rl, 'Settings', [
     { label: 'Provider', detail: 'choose a coding harness', value: 'provider' },
     { label: 'Account', detail: 'switch login/profile', value: 'account' },
-    { label: 'Model', detail: 'provider default or model ID', value: 'model' },
-    { label: 'Reasoning effort', detail: 'low through ultra', value: 'effort' },
-    { label: 'Filesystem access', detail: 'read-only, workspace-write, or auto', value: 'permissions' },
+    ...(harness?.modelArgvPrefix ? [{ label: 'Model', detail: 'provider default or model ID', value: 'model' }] : []),
+    ...(harness && harnessSupportsEffort(harness) ? [{ label: 'Reasoning effort', detail: 'provider-supported levels', value: 'effort' }] : []),
+    ...(harness?.permissionModes?.length ? [{ label: 'Filesystem access', detail: 'provider-supported access policy', value: 'permissions' }] : []),
+    ...(harness && localHarnessCapabilityManifest(harness).options.some((option) => !['model', 'effort', 'workspace', 'permissions'].includes(option.id))
+      ? [{ label: `${harness.displayName} options`, detail: 'modes, tools, safety, and context', value: 'options' }] : []),
     { label: 'Quota failover', detail: 'switch accounts automatically, or not', value: 'failover' },
     { label: 'Show current setup', value: 'status' },
   ] as const);
-  if (selected === 'provider') return interactiveEnginePicker(rl, id);
+  if (selected === 'provider') return interactiveEnginePicker(config, rl, id);
   else if (selected === 'account') await interactiveAccountPicker(rl, id);
   else if (selected === 'model') await interactiveModelPicker(rl, id);
   else if (selected === 'effort') await interactiveEffortPicker(rl, id);
   else if (selected === 'permissions') await interactivePermissionPicker(rl, id);
+  else if (selected === 'options') await interactiveHarnessOptionPicker(rl, id);
   else if (selected === 'failover') await interactiveFailoverPicker(rl, id);
   else if (selected === 'status') await aiSessionCommand(id, '/status');
   return undefined;
@@ -2587,22 +3714,28 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
+    '/provider': 'choose a provider (including ClikDeploy Gateway)', '/settings': 'configure this workspace', '/account': 'choose or view an account',
+    '/add-account': 'log in and add another account for this provider',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
     '/init': 'create agent instructions', '/mention': 'attach a file', '/attachments': 'queued files', '/copy': 'copy last response',
     '/rename': 'rename conversation', '/fork': 'fork conversation', '/archive': 'archive conversation', '/delete': 'delete conversation',
+    '/options': 'provider-specific modes and controls', '/capabilities': 'selected provider capabilities',
     '/status': 'current configuration', '/usage': 'token usage', '/clear': 'refresh screen',
     '/help': 'all commands', '/exit': 'save and leave',
   };
-  const slashCommands: PickerOption<string>[] = [
-    ...Object.keys(commandDetails).map((value) => ({ label: value, detail: commandDetails[value], value })),
-    ...localRouter().AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal').map((item) => ({
-      label: `/${item.command}`, detail: `switch to ${item.displayName}`, value: `/${item.command}`,
-    })),
-  ];
-  const fallbackCommands = slashCommands.map((item) => item.value);
+  const slashCommandsFor = (target: HarnessSession): PickerOption<string>[] => {
+    const harness = target.nativeHarness ? localHarnessForCommand(target.nativeHarness) : undefined;
+    const managers = harness ? localHarnessCapabilityManifest(harness).managers ?? {} : {};
+    return [
+      ...Object.keys(commandDetails).map((value) => ({ label: value, detail: commandDetails[value], value })),
+      ...Object.entries(managers).map(([name, manager]) => ({ label: `/${name}`, detail: manager?.label ?? name, value: `/${name}` })),
+      ...localRouter().AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal').map((item) => ({
+        label: `/${item.command}`, detail: `switch to ${item.displayName}`, value: `/${item.command}`,
+      })),
+    ];
+  };
   // Created before auto-select so a first-ever install/sign-in — the most
   // common time either is actually needed — has somewhere to show its
   // "installing…" spinner and a real terminal to suspend into for a vendor
@@ -2612,19 +3745,19 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
     : createInterface({
       input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,
       completer: (value: string) => {
+        const fallbackCommands = slashCommandsFor(session!).map((item) => item.value);
         const matches = fallbackCommands.filter((command) => command.startsWith(value));
         return [matches.length ? matches : fallbackCommands, value] as [string[], string];
       },
     });
   if (rl instanceof FullScreenHarnessPrompter) activeFullScreenHarness = rl;
   rl.render?.(session);
-  if (!session.nativeHarness) {
+  if (!session.nativeHarness && session.route !== 'gateway') {
     const auto = await autoSelectSessionHarness(id);
     if (!auto) {
-      rl.close();
-      if (activeFullScreenHarness === rl) activeFullScreenHarness = undefined;
-      emitHarnessOutput({ panel: 'error', message: 'No supported coding-agent CLI is installed. Run clikcode doctor to see installation options.' });
-      return;
+      const selected = await interactiveEnginePicker(config, rl, id);
+      if (!selected) return;
+      if (selected !== id) id = selected;
     }
     const refreshed = await readState();
     const next = refreshed.sessions.find((item) => item.id === id);
@@ -2662,6 +3795,18 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
     }).catch(() => { /* Usage is optional provider metadata. */ });
   };
   refreshUsage(session, state);
+  // Without this, usage only ever refreshed at session-open and right after
+  // each submitted message -- fine for a quick back-and-forth, but a long
+  // turn or an idle stretch between messages left the number sitting there
+  // stale for however long that gap was, well past nativeUsageLabel's own
+  // 30s cache window (which bounds *how often this can update*, not
+  // *whether anything ever asks it to*). This is what actually asks.
+  const usageInterval = rl instanceof FullScreenHarnessPrompter ? setInterval(() => {
+    void readState().then((latestState) => {
+      const latest = latestState.sessions.find((item) => item.id === id);
+      if (latest) refreshUsage(latest, latestState);
+    }).catch(() => { /* Usage is optional provider metadata. */ });
+  }, 20_000) : undefined;
   let notice: string | undefined;
   try {
     while (true) {
@@ -2674,7 +3819,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         rl.render?.(latest, account, notice);
         refreshUsage(latest, latestState);
         notice = undefined;
-        line = (await rl.question('› ', slashCommands)).trim();
+        line = (await rl.question('› ', slashCommandsFor(latest))).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.
@@ -2689,16 +3834,32 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
       try {
         const command = line.toLowerCase();
         if (command === '/switch' || command === '/engine' || command === '/provider') {
-          const selected = await interactiveEnginePicker(rl, id);
-          if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+          const selected = await interactiveEnginePicker(config, rl, id);
+          if (selected && selected !== id) { id = selected; continue; }
         }
         else if (command === '/account' || command === '/accounts') await interactiveAccountPicker(rl, id);
+        else if (command === '/add-account' || command === '/addaccount') await interactiveAddAccount(rl, id);
         else if (command === '/model') await interactiveModelPicker(rl, id);
         else if (command === '/effort') await interactiveEffortPicker(rl, id);
         else if (command === '/permissions') await interactivePermissionPicker(rl, id);
+        else if (command === '/options') await interactiveHarnessOptionPicker(rl, id);
+        else if (command === '/capabilities') {
+          const commandState = await readState();
+          const commandSession = commandState.sessions.find((item) => item.id === id);
+          const selectedHarness = commandSession?.nativeHarness ? localHarnessForCommand(commandSession.nativeHarness) : undefined;
+          if (!selectedHarness) throw new Error('Choose a provider first.');
+          const manifest = localHarnessCapabilityManifest(selectedHarness);
+          const lines = [
+            ...manifest.options.map((option) => `${option.label}: ${option.description}`),
+            ...Object.entries(manifest.managers ?? {}).map(([name, manager]) => `${manager?.label ?? name}: available`),
+            ...(manifest.features ?? []).map((feature) => `${feature}: native`),
+          ];
+          rl.panel?.(`${selectedHarness.displayName} capabilities`, lines.join('\n'));
+          if (rl.render) await rl.question('Press Enter to return › ');
+        }
         else if (command === '/settings') {
-          const selected = await interactiveSettingsPicker(rl, id);
-          if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+          const selected = await interactiveSettingsPicker(config, rl, id);
+          if (selected && selected !== id) { id = selected; continue; }
         }
         else if (command.startsWith('/settings global ')) {
           const [, , key, ...rest] = line.trim().split(/\s+/);
@@ -2723,7 +3884,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
           if (action === 'exit') break;
           if (action === 'resume') {
             const selected = await interactiveSessionPicker(rl, id);
-            if (selected && selected !== id) { rl.close(); await aiSessionResume(config, selected); return; }
+            if (selected && selected.id !== id) { id = selected.id; continue; }
           }
         }
         else if (command === '/rename') {
@@ -2740,13 +3901,70 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         }
         else if (command === '/resume') {
           const selected = await interactiveSessionPicker(rl, id);
-          if (selected && selected !== id) {
-            rl.close();
-            await aiSessionResume(config, selected);
-            return;
+          if (selected && selected.id !== id) {
+            // Resuming picks up a conversation's content, not necessarily its
+            // original vendor: staying on whatever you're already running is
+            // the point of switching providers in the first place — reopening
+            // an old chat shouldn't silently pull you back to a different one.
+            // A session freshly adopted from a vendor's own history (picked by
+            // that vendor's name, e.g. "OpenCode • Test message") is the one
+            // exception: that choice already names the provider you want, and
+            // forcing it onto the current one would immediately discard the
+            // native session id just adopted.
+            if (!selected.adopted) {
+              const resumeState = await readState();
+              const current = resumeState.sessions.find((item) => item.id === id);
+              const target = resumeState.sessions.find((item) => item.id === selected.id);
+              if (current?.nativeHarness && target && target.nativeHarness !== current.nativeHarness) {
+                const originalLabel = sessionProviderLabel(target);
+                const hasContent = (target.messages ?? []).length > 0;
+                target.nativeHarness = current.nativeHarness;
+                target.provider = current.provider;
+                target.accountId = current.accountId;
+                target.model = null;
+                target.nativeSessionId = undefined;
+                target.nativeStartedAt = undefined;
+                // A title inherited from the old provider's conversation is
+                // only meaningful alongside that conversation's actual
+                // messages. Wiping the native session id above already
+                // discards the old provider's identity; leaving a title with
+                // nothing behind it produced a real, reported bug — a chat
+                // that "shows a title but never loads," because there was
+                // never anything to load once the messages were gone (a
+                // session adopted with no readable transcript, most often).
+                if (!hasContent) target.name = undefined;
+                target.updatedAt = new Date().toISOString();
+                await writeState(resumeState);
+                notice = hasContent
+                  ? `Continuing this ${originalLabel} chat under ${sessionProviderLabel(current)}.`
+                  : `Starting fresh under ${sessionProviderLabel(current)} — this ${originalLabel} chat had no readable history to bring over.`;
+              }
+            }
+            id = selected.id;
+            continue;
           }
         }
-        else if (command === '/clear') output.write('\u001b[2J\u001b[H');
+        else if (command === '/clear') rl.render?.(session);
+        else if (['/mcp', '/skills', '/plugins', '/agents', '/hooks', '/tools'].includes(command)) {
+          const managerName = command.slice(1) as 'mcp' | 'skills' | 'plugins' | 'agents' | 'hooks' | 'tools';
+          const commandState = await readState();
+          const commandSession = commandState.sessions.find((item) => item.id === id);
+          const selectedHarness = commandSession?.nativeHarness ? localHarnessForCommand(commandSession.nativeHarness) : undefined;
+          if (!selectedHarness) throw new Error('Choose a provider first.');
+          const manager = localHarnessCapabilityManifest(selectedHarness).managers?.[managerName];
+          if (!manager) throw new Error(`${selectedHarness.displayName} does not publish a ${managerName} manager.`);
+          const selectedAccount = commandSession?.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
+          const environment = selectedAccount?.nativeProfile ? { [selectedAccount.nativeProfile.env]: selectedAccount.nativeProfile.path } : {};
+          if (manager.listArgv) {
+            const result = await captureNativeHarnessOutput(selectedHarness, manager.listArgv, environment);
+            rl.panel?.(manager.label, result || 'No entries.');
+            if (rl.render) await rl.question('Press Enter to return › ');
+          } else if (manager.manageArgv && rl instanceof FullScreenHarnessPrompter) {
+            await rl.suspend();
+            try { await runNativeHarnessCommand(selectedHarness, manager.manageArgv, environment); }
+            finally { rl.resume(); }
+          } else throw new Error(`${selectedHarness.displayName} requires an interactive terminal for ${manager.label}.`);
+        }
         else if (command === '/mention') {
           const path = (await rl.question('File to attach › ')).trim();
           if (path) await aiSessionCommand(id, `/mention ${path}`);
@@ -2763,14 +3981,13 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         }
         else if (line.startsWith('/') && !line.includes(' ') && localHarnessForCommand(command.slice(1))) {
           const selected = await newProviderConversation(id, command.slice(1));
-          rl.close();
-          await aiSessionResume(config, selected);
-          return;
+          id = selected;
+          continue;
         }
         else if (line.startsWith('/')) {
           await aiSessionCommand(id, line);
           const head = command.split(/\s+/, 1)[0];
-          if (rl.render && ['/help', '/status', '/models', '/usage', '/history', '/diff', '/attachments', '/copy', '/fork'].includes(head)) {
+          if (rl.render && ['/help', '/status', '/models', '/usage', '/history', '/diff', '/attachments', '/copy', '/fork', '/capabilities', '/mcp', '/skills', '/plugins', '/agents', '/hooks', '/tools'].includes(head)) {
             await rl.question('Press Enter to return › ');
           }
         }
@@ -2802,6 +4019,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
       }
     }
   } finally {
+    if (usageInterval) clearInterval(usageInterval);
     if (activeFullScreenHarness === rl) activeFullScreenHarness = undefined;
     rl.close();
   }
@@ -2844,7 +4062,27 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     session.nativeHarness = harness.command;
     session.provider = harness.provider;
     session.workspace ??= process.cwd();
+    // A fresh native thread (no nativeSessionId yet) with prior ClikCode
+    // messages already on the session means this conversation is continuing
+    // under a different native identity than whatever produced those messages
+    // — a cross-provider /resume, most commonly. ClikCode's own transcript
+    // shows continuity either way, but the vendor process about to start has
+    // no memory of any of it unless it's carried in the prompt itself; without
+    // this, "continuing under Claude Code" is cosmetic in the UI only. The
+    // quota-failover retry below does its own version of this for the
+    // mid-conversation case; this covers every other route into a fresh
+    // native thread with history already behind it.
+    if (!session.nativeSessionId && (session.messages ?? []).length > 0) {
+      turnText = failoverPrompt(session.messages ?? [], turnText);
+    }
     let switchedFrom: string | undefined;
+    // Bounded to one attempt: this is a reactive fallback for exactly the
+    // case aiHarnessSelect's own proactive check can't catch -- a harness
+    // with no statusArgv (nothing to scriptably ask "am I logged in?"
+    // before the turn even starts), where the *first* real signal is the
+    // turn itself failing. Retrying more than once would risk a loop if
+    // login genuinely doesn't fix it (wrong account, network issue, etc.).
+    let authRetried = false;
     for (;;) {
       const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
       let createdHere = false;
@@ -2863,7 +4101,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       const argv = localRouter().nativeHarnessTurnArgv(harness, {
         prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
         launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
-        permissionMode: session.permissionMode ?? 'workspace-write', images,
+        permissionMode: session.permissionMode ?? 'workspace-write', images, options: session.harnessOptions,
       });
       // Persist an allocated native identity before the provider starts so an
       // interrupted turn cannot accidentally fork the centralized conversation.
@@ -2874,11 +4112,21 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
           signal,
           stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
           onStdoutLine: (lineText) => {
-            const phase = nativeActivityPhase(lineText);
-            if (phase) activeFullScreenHarness?.phase(phase);
-            const activity = nativeActivityLine(harness, lineText);
-            if (activity && activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
-            else if (activity) output.write(`${activity}\n`);
+            const textPhase = nativeActivityPhase(harness, lineText);
+            if (textPhase) activeFullScreenHarness?.phase(textPhase);
+            // isJsonDefaultMode() guard lives here now (not inside the parser)
+            // since the parser is also used for phase updates, which apply
+            // in every mode -- only the persistent activity *log line* is
+            // JSON-mode's business to suppress.
+            const event = parseNativeActivityEvent(harness, lineText);
+            if (!event) return;
+            activeFullScreenHarness?.phase(renderActivityPhase(event));
+            if (isJsonDefaultMode()) return;
+            const activityLines = renderActivityLine(event);
+            for (const activity of activityLines) {
+              if (activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
+              else output.write(`${activity}\n`);
+            }
           },
         },
       );
@@ -2887,9 +4135,35 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
       if (turnOutput.exitCode !== 0 || result.isError) {
         const failure = Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
-        if (!isUsageExhaustion(failure)) throw failure;
+        const failureKind = classifyAccountFailure(failure);
+        if (failureKind === 'authentication-required') {
+          account.status = 'needs_login';
+          await writeState(state);
+          // Reactive counterpart to aiHarnessSelect's proactive login check:
+          // a harness with no statusArgv gets no pre-turn "are you logged
+          // in?" probe at all (harnessNeedsLogin returns false without
+          // one), so its first real failure signal is the turn itself
+          // erroring out -- previously surfaced as a raw, unhelpful "exited
+          // N: {...}" message with no attempt to actually fix it. Same
+          // suspend/login/resume mechanism aiHarnessSelect uses, triggered
+          // here instead of only at provider-switch time.
+          if (!authRetried && activeFullScreenHarness && harness.loginArgv) {
+            authRetried = true;
+            activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+            await activeFullScreenHarness.suspend();
+            try {
+              await loginNativeHarness(harness, environment);
+            } finally {
+              activeFullScreenHarness.resume();
+            }
+            account.status = 'ready';
+            await writeState(state);
+            continue;
+          }
+        }
+        if (failureKind !== 'quota-exhausted') throw failure;
         account.quotaState = 'exhausted';
-        account.quotaRetryAt = new Date(Date.now() + 60_000).toISOString();
+        account.quotaRetryAt = undefined;
         await writeState(state);
         // Same-provider failover for the native-CLI path: switching accounts means
         // switching vendor config roots, so the in-flight native conversation can't
@@ -2912,6 +4186,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
+        turnText = failoverPrompt(session.messages ?? [], `${text}${prepared.textContext}`);
         continue;
       }
       session.nativeStartedAt ??= new Date().toISOString();
@@ -2920,7 +4195,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
       };
       state.invocations.push(invocation);
-      session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: result.text }].slice(-40);
+      session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: result.text }];
       session.name ??= conversationTitle(text);
       session.attachments = [];
       session.updatedAt = new Date().toISOString();
@@ -2942,11 +4217,16 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
   try {
     turn = await invoke(account);
   } catch (error) {
-    if (session.accountFailover !== 'on-quota-exhausted' || !isUsageExhaustion(error)) throw error;
+    const failureKind = classifyAccountFailure(error);
+    if (failureKind === 'authentication-required') {
+      account.status = 'needs_login';
+      await writeState(state);
+    }
+    if (session.accountFailover !== 'on-quota-exhausted' || failureKind !== 'quota-exhausted') throw error;
     const exhaustedAccount = account;
     if (!exhaustedAccount) throw error;
     exhaustedAccount.quotaState = 'exhausted';
-    exhaustedAccount.quotaRetryAt = new Date(Date.now() + 60_000).toISOString();
+    exhaustedAccount.quotaRetryAt = undefined;
     // Preserve the quota signal even if there is no alternate account or its
     // retry fails. It is a local scheduling fact, never a provider secret.
     await writeState(state);
@@ -2974,7 +4254,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     }
   }
   state.invocations.push(invocation);
-  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }].slice(-40);
+  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }];
   session.name ??= conversationTitle(text);
   session.attachments = [];
   session.updatedAt = new Date().toISOString();
@@ -3019,17 +4299,35 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
       const frame = buffer.slice(0, boundary).trim();
       buffer = buffer.slice(boundary + 2);
       if (frame.startsWith('data:')) {
-        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; name?: string; tool?: string };
+        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; label?: string; kind?: 'thinking' | 'tool-start'; tool?: string };
         if (event.type === 'delta' && typeof event.text === 'string') {
           activeFullScreenHarness?.phase('generating response');
           reply += event.text;
           if (streamToTerminal) { output.write(event.text); wroteDelta = true; }
         }
-        if (activeFullScreenHarness && /reasoning|thinking/.test(event.type ?? '') && event.text?.trim()) {
-          activeFullScreenHarness.activity(`${chalk.cyan('thinking')} ${chalk.dim(visibleSlice(event.text.trim().replace(/\s+/g, ' '), 140))}`);
-        }
-        if (activeFullScreenHarness && /tool/.test(event.type ?? '')) {
-          activeFullScreenHarness.activity(`${chalk.yellow('tool')} ${chalk.dim(event.name ?? event.tool ?? 'tool')}`);
+        // `kind`/`tool` are real, additive fields on the wire protocol
+        // (apps/web's chat-stream.ts / assistant/chat route) mapping the
+        // backend's own `{ status: 'thinking' }` / `{ status: 'tool_call',
+        // tool }` into the same canonical shape native harnesses' own
+        // parsers produce, so a Gateway tool call's *activity log line*
+        // renders identically to a Codex or Claude Code one — same glyph,
+        // same color, same bare-subject wording (renderActivityLine adds its
+        // own verb, so the canonical label here is the bare tool name via
+        // `tool`, not the backend's already-verbed `label`). The phase
+        // (spinner text) uses `label` directly instead, since the backend's
+        // phrasing ("Restarting the app…") is already the ideal spinner
+        // text and renderActivityPhase's own "running X" wording is for
+        // bare native-harness tool names, not a pre-verbed phrase. There's
+        // no 'tool-done' here because AssistantChatEvent has no completion
+        // signal to report (verified: 'tool_call' fires once, nothing after
+        // it) — a real gap in what the agent loop reports, not something to
+        // fake here.
+        if (event.type === 'status' && typeof event.label === 'string') {
+          activeFullScreenHarness?.phase(event.label);
+          if (!isJsonDefaultMode()) {
+            const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
+            for (const line of renderActivityLine(activityEvent)) activeFullScreenHarness?.activity(line.trim());
+          }
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
       }
@@ -3039,7 +4337,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   if (!reply) throw new Error('gateway AI response contained no text');
   const invocation = { id: randomUUID(), accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform', at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
-  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: reply }].slice(-40);
+  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: reply }];
   session.name ??= conversationTitle(text);
   session.attachments = [];
   session.updatedAt = new Date().toISOString();
