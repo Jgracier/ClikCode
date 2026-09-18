@@ -8,9 +8,10 @@ import chalk from 'chalk';
 import { visibleSlice } from './markdown-render.js';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
 import type {
   AiHarnessCapabilityManifest, AiHarnessPermissionMode, AiLocalHarnessDefinition, AiRouterRuntime,
-  HarnessActivityEvent,
+  HarnessActivityEvent, HarnessSession,
 } from './types.js';
 
 const require = createRequire(import.meta.url);
@@ -306,4 +307,15 @@ export function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText:
   if (type === 'assistant') return 'generating response';
   if (harness.command === 'opencode' && type === 'text') return 'generating response';
   return undefined;
+}
+
+export function compactPath(path: string): string {
+  const home = homedir();
+  return path === home ? '~' : path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
+}
+
+export function sessionProviderLabel(session: HarnessSession): string {
+  if (session.route === 'gateway') return 'ClikDeploy Gateway';
+  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  return harness?.displayName ?? session.provider ?? 'Not selected';
 }
