@@ -2132,6 +2132,15 @@ export async function aiSessionClose(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  // A session that never received a single turn has nothing to resume — keeping
+  // it as "closed" clutter buries real conversations under identical
+  // "Untitled chat" entries every time the app is opened and exited without
+  // typing anything. Drop it outright instead of accumulating it.
+  if (!(session.messages ?? []).length) {
+    state.sessions = state.sessions.filter((item) => item.id !== id);
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
+  }
   if (session.status !== 'closed') {
     session.status = 'closed';
     session.closedAt = new Date().toISOString();
@@ -2625,7 +2634,15 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
 
 async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<string | undefined> {
   const state = await readState();
-  const sessions = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  // A session with no turns yet has nothing to resume into — showing it here is
+  // indistinguishable from a real conversation until you're already inside it,
+  // and older empty sessions (from before aiSessionClose started dropping them)
+  // otherwise bury every real, titled conversation under identical
+  // "Untitled chat" entries. Always keep the current session visible even if
+  // it's still empty, so picking "current" back out of the list still works.
+  const sessions = state.sessions
+    .filter((session) => session.id === currentId || (session.messages ?? []).length > 0)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   return chooseOption(rl, 'Resume a session', sessions.map((session) => {
     const model = session.model && session.nativeHarness === 'claude'
       ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
