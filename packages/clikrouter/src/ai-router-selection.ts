@@ -1560,7 +1560,7 @@ export async function selectRouterCandidateDynamic(
   estimatedPromptTokens?: number,
   // Optional per-agent capability set; when provided, the router will only
   // consult an external decision-maker (like TypeSafe) if the agent has the
-  // `jev` capability enabled. This keeps routing behavior controllable per
+  // `analyze_env_remediation` capability enabled. This keeps routing behavior controllable per
   // agent without requiring global env changes.
   agentCapabilities?: readonly string[] | Set<string>,
 ): Promise<AiRouterSelection | null> {
@@ -1574,8 +1574,8 @@ export async function selectRouterCandidateDynamic(
     // capability to be present before consulting the external decision-maker.
     if (agentCapabilities) {
       const hasJeV = Array.isArray(agentCapabilities)
-        ? agentCapabilities.includes('jev')
-        : (agentCapabilities as Set<string>).has('jev');
+        ? agentCapabilities.includes('analyze_env_remediation') || agentCapabilities.includes('jev')
+        : (agentCapabilities as Set<string>).has('analyze_env_remediation') || (agentCapabilities as Set<string>).has('jev');
       if (!hasJeV) {
         return selectRouterCandidate(candidates, mode, preferredModel, estimatedPromptTokens);
       }
