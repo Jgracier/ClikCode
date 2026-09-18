@@ -2640,6 +2640,12 @@ interface DiscoveredNativeSession {
   nativeId: string;
   title?: string;
   updatedAt?: string;
+  /** Real epoch millis when known (every filesystem-based discoverer has the
+   * file's own mtime). Shell-table discoverers only have whatever display
+   * text the vendor printed ("yesterday", "11:16 AM", a bare date) — parsed
+   * into this when the format is unambiguous, left unset otherwise, so an
+   * unsortable value is never guessed into a false position. */
+  updatedAtMs?: number;
 }
 
 async function readFilePrefix(path: string, maxBytes: number): Promise<string> {
@@ -2703,7 +2709,7 @@ async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNa
         title = conversationTitle(message.content.trim());
       }
     }
-    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString() });
+    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
   }
   return sessions;
 }
@@ -2741,7 +2747,7 @@ async function discoverCodexFsSessions(workspace: string): Promise<DiscoveredNat
       }
     }
     if (!sessionId || (workspace && cwd && cwd !== workspace)) continue;
-    sessions.push({ nativeId: sessionId, title, updatedAt: new Date(file.mtimeMs).toISOString() });
+    sessions.push({ nativeId: sessionId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
   }
   return sessions;
 }
@@ -2773,6 +2779,7 @@ async function discoverCursorFsSessions(workspace: string): Promise<DiscoveredNa
       nativeId: chatId,
       title: typeof meta.title === 'string' ? meta.title : undefined,
       updatedAt: typeof meta.updatedAtMs === 'number' ? new Date(meta.updatedAtMs).toISOString() : undefined,
+      updatedAtMs: typeof meta.updatedAtMs === 'number' ? meta.updatedAtMs : undefined,
     });
   }
   return sessions.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')).slice(0, 15);
@@ -2807,7 +2814,7 @@ async function discoverPiFsSessions(workspace: string): Promise<DiscoveredNative
       else if (!title && typeof record.title === 'string') title = record.title;
     }
     if (workspace && cwd && cwd !== workspace) continue;
-    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString() });
+    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
   }
   return sessions;
 }
@@ -2828,6 +2835,33 @@ function splitTableColumns(line: string): string[] {
   return line.trim().split(/ {2,}/).map((cell) => cell.trim());
 }
 
+/** Covers exactly the display formats actually observed from an installed
+ * vendor table (opencode: a bare "11:16 AM" clock time for today; Hermes:
+ * "yesterday" or a plain "2026-08-21" date) — not a general relative-date
+ * parser. Anything else (a weekday name, "3 days ago", Gemini's "N ago" style)
+ * returns undefined rather than a guessed value, since a wrong sort position
+ * is worse than an honest "can't tell how recent this is". */
+function parseDiscoveredTimestamp(text: string | undefined): number | undefined {
+  if (!text) return undefined;
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (lower === 'today') return startOfToday.getTime();
+  if (lower === 'yesterday') return startOfToday.getTime() - 24 * 60 * 60 * 1000;
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    const parsed = Date.parse(trimmed);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  const clock = /^(\d{1,2}):(\d{2})\s*(am|pm)$/i.exec(trimmed);
+  if (clock) {
+    let hour = Number(clock[1]) % 12;
+    if (clock[3].toLowerCase() === 'pm') hour += 12;
+    return startOfToday.getTime() + hour * 60 * 60 * 1000 + Number(clock[2]) * 60 * 1000;
+  }
+  return undefined;
+}
+
 /** Vendor session-list output is a fixed-width table with vendor-chosen column
  * order (opencode puts the id first, Hermes puts it last) — reading the header
  * row to find each column by keyword instead of a hardcoded position is what
@@ -2845,10 +2879,12 @@ function parseDiscoveredSessionsText(raw: string): DiscoveredNativeSession[] {
     const cells = splitTableColumns(line);
     const nativeId = cells[idIndex];
     if (!nativeId || nativeId === '—' || nativeId === '-') continue;
+    const updatedAt = updatedIndex >= 0 ? cells[updatedIndex] : undefined;
     sessions.push({
       nativeId,
       title: titleIndex >= 0 ? cells[titleIndex] : undefined,
-      updatedAt: updatedIndex >= 0 ? cells[updatedIndex] : undefined,
+      updatedAt,
+      updatedAtMs: parseDiscoveredTimestamp(updatedAt),
     });
   }
   return sessions;
@@ -2984,23 +3020,36 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   }))).flat();
   const discovered = [...shellDiscovered, ...fsDiscovered]
     .filter(({ harness, item }) => !state.sessions.some((session) => session.nativeHarness === harness.command && session.nativeSessionId === item.nativeId));
-  const selected = await chooseOption(rl, 'Resume a session', [
+  // Every option gets a single real recency key so the newest conversation is
+  // always near the top regardless of which source found it — grouping by
+  // source first (every ClikCode session, then every opencode result, then
+  // every Hermes result, ...) buried a two-minutes-old live Claude Code
+  // session below Hermes entries from June, since each *group* was sorted
+  // internally but the groups themselves were never interleaved. A source
+  // with no real timestamp (an unparsed vendor display string) sorts last
+  // rather than claiming a false position.
+  const options: Array<PickerOption<string> & { sortKey: number }> = [
     ...sessions.map((session) => {
       const model = session.model && session.nativeHarness === 'claude'
         ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
         : session.model;
+      const sortKey = Date.parse(session.updatedAt);
       return {
         label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
         detail: `· ${session.id === currentId ? 'current · ' : ''}${model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
         value: session.id,
+        sortKey: Number.isNaN(sortKey) ? -Infinity : sortKey,
       };
     }),
     ...discovered.map(({ harness, item }) => ({
       label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
       detail: `· not yet in ClikCode${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
       value: `native:${harness.command}:${item.nativeId}`,
+      sortKey: item.updatedAtMs ?? -Infinity,
     })),
-  ]);
+  ];
+  options.sort((left, right) => right.sortKey - left.sortKey);
+  const selected = await chooseOption(rl, 'Resume a session', options);
   if (!selected) return undefined;
   if (!selected.startsWith('native:')) return { id: selected, adopted: false };
   const rest = selected.slice('native:'.length);
