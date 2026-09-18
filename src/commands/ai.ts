@@ -2301,35 +2301,55 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       // Persist an allocated native identity before the provider starts so an
       // interrupted turn cannot accidentally fork the centralized conversation.
       if (createdHere) await writeState(state);
-      const turnOutput = await captureNativeHarnessTurn(
-        harness, argv, environment, {
-          cwd: session.workspace,
-          signal,
-          stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
-          onStdoutLine: (lineText) => {
-            const textPhase = nativeActivityPhase(harness, lineText);
-            if (textPhase) activeFullScreenHarness?.phase(textPhase);
-            // isJsonDefaultMode() guard lives here now (not inside the parser)
-            // since the parser is also used for phase updates, which apply
-            // in every mode -- only the persistent activity *log line* is
-            // JSON-mode's business to suppress.
-            const event = parseNativeActivityEvent(harness, lineText);
-            if (!event) return;
-            activeFullScreenHarness?.phase(renderActivityPhase(event));
-            if (isJsonDefaultMode()) return;
-            const activityLines = renderActivityLine(event);
-            for (const activity of activityLines) {
-              if (activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
-              else output.write(`${activity}\n`);
-            }
+      // A rejection here (not just a resolved-but-failed turnOutput) is a
+      // real, reproduced case: captureNativeHarnessTurn itself rejects
+      // directly whenever the process exits non-zero with no usable
+      // stdout -- exactly what a failed native-thread resume looks like
+      // (the real error text lands on stderr, nothing meaningful reaches
+      // stdout). That threw past every check below before this caught it,
+      // making the native-thread-invalid recovery just added completely
+      // unreachable for the one failure it was built for. Catching it here
+      // and synthesizing a failed result lets the SAME classification and
+      // recovery logic below handle both shapes of failure identically.
+      let caughtTurnFailure: Error | undefined;
+      let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>>;
+      try {
+        turnOutput = await captureNativeHarnessTurn(
+          harness, argv, environment, {
+            cwd: session.workspace,
+            signal,
+            stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
+            onStdoutLine: (lineText) => {
+              const textPhase = nativeActivityPhase(harness, lineText);
+              if (textPhase) activeFullScreenHarness?.phase(textPhase);
+              // isJsonDefaultMode() guard lives here now (not inside the parser)
+              // since the parser is also used for phase updates, which apply
+              // in every mode -- only the persistent activity *log line* is
+              // JSON-mode's business to suppress.
+              const event = parseNativeActivityEvent(harness, lineText);
+              if (!event) return;
+              activeFullScreenHarness?.phase(renderActivityPhase(event));
+              if (isJsonDefaultMode()) return;
+              const activityLines = renderActivityLine(event);
+              for (const activity of activityLines) {
+                if (activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
+                else output.write(`${activity}\n`);
+              }
+            },
           },
-        },
-      );
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError') throw error;
+        caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
+        turnOutput = { stdout: '', stderr: '', exitCode: 1 };
+      }
       if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-      const result = nativeTurnResult(harness, turnOutput.stdout);
+      const result = caughtTurnFailure
+        ? { isError: true, text: caughtTurnFailure.message, statusCode: undefined as number | undefined, nativeSessionId: undefined as string | undefined }
+        : nativeTurnResult(harness, turnOutput.stdout);
       if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
       if (turnOutput.exitCode !== 0 || result.isError) {
-        const failure = Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
+        const failure = caughtTurnFailure ?? Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
         const failureKind = classifyAccountFailure(failure);
         if (failureKind === 'authentication-required') {
           account.status = 'needs_login';
