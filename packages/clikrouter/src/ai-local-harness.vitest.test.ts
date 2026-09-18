@@ -144,10 +144,33 @@ describe('local harness catalog', () => {
   });
 
   it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
+    const fullThreeTier = new Set(['codex', 'claude', 'cursor', 'antigravity']);
+    const autoOnly = new Set(['opencode', 'hermes']);
     for (const harness of AI_LOCAL_HARNESSES) {
-      const expected = harness.command === 'codex' || harness.command === 'claude';
-      expect(harnessSupportsPermissionMode(harness, 'workspace-write')).toBe(expected);
+      expect(harnessSupportsPermissionMode(harness, 'workspace-write')).toBe(fullThreeTier.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'auto')).toBe(fullThreeTier.has(harness.command) || autoOnly.has(harness.command));
     }
+  });
+
+  it('maps each newly-supported harness\'s permission modes to its own real, confirmed flags', () => {
+    const opencode = localHarnessForCommand('opencode')!;
+    expect(nativeHarnessTurnArgv(opencode, { prompt: 'hi', permissionMode: 'auto' })).toContain('--auto');
+    expect(nativeHarnessTurnArgv(opencode, { prompt: 'hi', permissionMode: 'workspace-write' })).not.toContain('--auto');
+
+    const cursor = localHarnessForCommand('cursor')!;
+    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'read-only' })).toEqual(expect.arrayContaining(['--mode', 'plan']));
+    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'auto' })).toContain('--force');
+    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'workspace-write' })).not.toEqual(expect.arrayContaining(['--mode']));
+
+    const hermes = localHarnessForCommand('hermes')!;
+    expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'auto' })).toContain('--yolo');
+    expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'workspace-write' })).not.toContain('--yolo');
+
+    const antigravity = localHarnessForCommand('antigravity')!;
+    expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'read-only' })).toEqual(expect.arrayContaining(['--mode', 'plan']));
+    expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'workspace-write' })).toEqual(expect.arrayContaining(['--mode', 'accept-edits']));
+    const antigravityAuto = nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'auto' });
+    expect(antigravityAuto).toEqual(expect.arrayContaining(['--mode', 'accept-edits', '--dangerously-skip-permissions']));
   });
 
   it('declares image-attachment support only where a real flag exists, and drops images silently otherwise', () => {
