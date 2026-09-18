@@ -2632,8 +2632,95 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
   await aiSessionCommand(id, `/settings account ${label}`);
 }
 
-async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<string | undefined> {
+interface DiscoveredNativeSession {
+  nativeId: string;
+  title?: string;
+  updatedAt?: string;
+}
+
+function splitTableColumns(line: string): string[] {
+  return line.trim().split(/ {2,}/).map((cell) => cell.trim());
+}
+
+/** Vendor session-list output is a fixed-width table with vendor-chosen column
+ * order (opencode puts the id first, Hermes puts it last) — reading the header
+ * row to find each column by keyword instead of a hardcoded position is what
+ * lets one parser cover every vendor's own layout without a per-vendor branch. */
+function parseDiscoveredSessionsText(raw: string): DiscoveredNativeSession[] {
+  const lines = raw.split(/\r?\n/).filter((line) => line.trim() && !/^[-─—\s]+$/.test(line));
+  if (lines.length < 2) return [];
+  const header = splitTableColumns(lines[0]).map((cell) => cell.toLowerCase());
+  const idIndex = header.findIndex((cell) => cell === 'id' || cell.endsWith(' id'));
+  if (idIndex === -1) return [];
+  const titleIndex = header.findIndex((cell) => cell.includes('title') || cell.includes('name'));
+  const updatedIndex = header.findIndex((cell) => cell.includes('updated') || cell.includes('active') || cell.includes('modified'));
+  const sessions: DiscoveredNativeSession[] = [];
+  for (const line of lines.slice(1)) {
+    const cells = splitTableColumns(line);
+    const nativeId = cells[idIndex];
+    if (!nativeId || nativeId === '—' || nativeId === '-') continue;
+    sessions.push({
+      nativeId,
+      title: titleIndex >= 0 ? cells[titleIndex] : undefined,
+      updatedAt: updatedIndex >= 0 ? cells[updatedIndex] : undefined,
+    });
+  }
+  return sessions;
+}
+
+/** Structured vendor listings are unverified for any harness not actually
+ * installed here (only opencode and Hermes were confirmed live; qwen and
+ * goose declare a JSON discovery command this build has never observed
+ * running). Duck-typing common field names and returning nothing on a shape
+ * that doesn't match is a deliberate fail-soft: a guess is fine as a lookup
+ * that quietly turns up empty, never as one that throws or fabricates ids. */
+function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-lines'): DiscoveredNativeSession[] {
+  const records: unknown[] = [];
+  try {
+    if (format === 'json-lines') {
+      for (const line of raw.split(/\r?\n/)) { const trimmed = line.trim(); if (trimmed) records.push(JSON.parse(trimmed)); }
+    } else {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) records.push(...parsed);
+      else if (parsed && typeof parsed === 'object') {
+        const container = Object.values(parsed as Record<string, unknown>).find((value) => Array.isArray(value));
+        if (Array.isArray(container)) records.push(...container);
+      }
+    }
+  } catch { return []; }
+  const sessions: DiscoveredNativeSession[] = [];
+  for (const record of records) {
+    if (!record || typeof record !== 'object') continue;
+    const item = record as Record<string, unknown>;
+    const nativeId = item.id ?? item.sessionId ?? item.session_id ?? item.sessionID;
+    if (typeof nativeId !== 'string' || !nativeId) continue;
+    const title = item.title ?? item.name ?? item.summary;
+    const updatedAt = item.updatedAt ?? item.updated_at ?? item.lastActive ?? item.modified;
+    sessions.push({ nativeId, title: typeof title === 'string' ? title : undefined, updatedAt: typeof updatedAt === 'string' ? updatedAt : undefined });
+  }
+  return sessions;
+}
+
+/** Never installs anything for a passive scan (only harnesses already found on
+ * PATH are queried), and never throws — a harness that isn't installed, has
+ * no discovery command, or returns something this parser doesn't recognize
+ * just contributes zero results instead of failing the whole picker. */
+async function discoverNativeSessions(
+  harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>, workspace: string | undefined,
+): Promise<DiscoveredNativeSession[]> {
+  if (!harness.session?.discoverArgv) return [];
+  const inspection = await inspectNativeHarness(harness, 800);
+  if (!inspection.installed) return [];
+  try {
+    const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
+    return harness.session.discoverFormat === 'text' ? parseDiscoveredSessionsText(raw)
+      : parseDiscoveredSessionsStructured(raw, harness.session.discoverFormat ?? 'json');
+  } catch { return []; }
+}
+
+async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string; adopted: boolean } | undefined> {
   const state = await readState();
+  const current = state.sessions.find((item) => item.id === currentId);
   // A session with no turns yet has nothing to resume into — showing it here is
   // indistinguishable from a real conversation until you're already inside it,
   // and older empty sessions (from before aiSessionClose started dropping them)
@@ -2643,16 +2730,71 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   const sessions = state.sessions
     .filter((session) => session.id === currentId || (session.messages ?? []).length > 0)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  return chooseOption(rl, 'Resume a session', sessions.map((session) => {
-    const model = session.model && session.nativeHarness === 'claude'
-      ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
-      : session.model;
-    return {
-      label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
-      detail: `· ${session.id === currentId ? 'current · ' : ''}${model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
-      value: session.id,
-    };
-  }));
+  // Conversations that exist only inside a vendor's own history — never opened
+  // through ClikCode — are otherwise invisible here entirely: /resume only ever
+  // looked at ClikCode's own tracked sessions. Only harnesses that publish an
+  // official listing command can be asked for theirs at all; that's currently
+  // opencode, Hermes, qwen, and goose (per the catalog), and only the first two
+  // are confirmed to actually return anything on this build's real CLIs.
+  const workspace = current?.workspace ?? process.cwd();
+  const discoverable = localRouter().AI_LOCAL_HARNESSES.filter((harness) => harness.session?.discoverArgv);
+  const discovered = (await Promise.all(discoverable.map(async (harness) => {
+    const account = state.accounts.find((item) => item.provider === harness.provider && item.status === 'ready');
+    const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+    const found = await discoverNativeSessions(harness, environment, workspace);
+    return found
+      .filter((item) => !state.sessions.some((session) => session.nativeHarness === harness.command && session.nativeSessionId === item.nativeId))
+      .map((item) => ({ harness, item }));
+  }))).flat();
+  const selected = await chooseOption(rl, 'Resume a session', [
+    ...sessions.map((session) => {
+      const model = session.model && session.nativeHarness === 'claude'
+        ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
+        : session.model;
+      return {
+        label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
+        detail: `· ${session.id === currentId ? 'current · ' : ''}${model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
+        value: session.id,
+      };
+    }),
+    ...discovered.map(({ harness, item }) => ({
+      label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
+      detail: `· not yet in ClikCode${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
+      value: `native:${harness.command}:${item.nativeId}`,
+    })),
+  ]);
+  if (!selected) return undefined;
+  if (!selected.startsWith('native:')) return { id: selected, adopted: false };
+  const rest = selected.slice('native:'.length);
+  const separator = rest.indexOf(':');
+  const harnessCommand = rest.slice(0, separator);
+  const nativeId = rest.slice(separator + 1);
+  const match = discovered.find((entry) => entry.harness.command === harnessCommand && entry.item.nativeId === nativeId);
+  if (!match) return undefined;
+  const account = state.accounts.find((item) => item.provider === match.harness.provider && item.status === 'ready');
+  const defaults = resolveDefaultSettings(state, match.harness.provider);
+  const now = new Date().toISOString();
+  // Adopting only the vendor's own session identity — not its transcript — is
+  // deliberate: the vendor CLI's `--resume <id>` (or equivalent) already has
+  // full native context for this thread, so continuation works correctly the
+  // moment a turn is sent. Reproducing every prior message in ClikCode's own
+  // view too would mean parsing each vendor's own message-export schema
+  // (verified so far for exactly one of them), which is a separate feature
+  // from making a vendor's existing chat resumable at all.
+  const adopted: HarnessSession = {
+    id: randomUUID(), route: 'local', accountId: account?.id ?? null, provider: match.harness.provider,
+    model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
+    createdAt: now, updatedAt: now, status: 'active',
+    nativeHarness: match.harness.command, nativeSessionId: nativeId, nativeStartedAt: now,
+    workspace, name: match.item.title,
+  };
+  state.sessions.push(adopted);
+  await writeState(state);
+  // Picking a specific vendor's own chat by name is an explicit choice to open
+  // it as that vendor — forcing it onto whatever provider was already active
+  // (the same-conversation /resume behavior below) would immediately discard
+  // the native session id just adopted, undoing the entire point of listing it.
+  return { id: adopted.id, adopted: true };
 }
 
 async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<void> {
@@ -3006,7 +3148,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
           if (action === 'exit') break;
           if (action === 'resume') {
             const selected = await interactiveSessionPicker(rl, id);
-            if (selected && selected !== id) { id = selected; continue; }
+            if (selected && selected.id !== id) { id = selected.id; continue; }
           }
         }
         else if (command === '/rename') {
@@ -3023,27 +3165,34 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
         }
         else if (command === '/resume') {
           const selected = await interactiveSessionPicker(rl, id);
-          if (selected && selected !== id) {
+          if (selected && selected.id !== id) {
             // Resuming picks up a conversation's content, not necessarily its
             // original vendor: staying on whatever you're already running is
             // the point of switching providers in the first place — reopening
             // an old chat shouldn't silently pull you back to a different one.
-            const resumeState = await readState();
-            const current = resumeState.sessions.find((item) => item.id === id);
-            const target = resumeState.sessions.find((item) => item.id === selected);
-            if (current?.nativeHarness && target && target.nativeHarness !== current.nativeHarness) {
-              const originalLabel = sessionProviderLabel(target);
-              target.nativeHarness = current.nativeHarness;
-              target.provider = current.provider;
-              target.accountId = current.accountId;
-              target.model = null;
-              target.nativeSessionId = undefined;
-              target.nativeStartedAt = undefined;
-              target.updatedAt = new Date().toISOString();
-              await writeState(resumeState);
-              notice = `Continuing this ${originalLabel} chat under ${sessionProviderLabel(current)}.`;
+            // A session freshly adopted from a vendor's own history (picked by
+            // that vendor's name, e.g. "OpenCode • Test message") is the one
+            // exception: that choice already names the provider you want, and
+            // forcing it onto the current one would immediately discard the
+            // native session id just adopted.
+            if (!selected.adopted) {
+              const resumeState = await readState();
+              const current = resumeState.sessions.find((item) => item.id === id);
+              const target = resumeState.sessions.find((item) => item.id === selected.id);
+              if (current?.nativeHarness && target && target.nativeHarness !== current.nativeHarness) {
+                const originalLabel = sessionProviderLabel(target);
+                target.nativeHarness = current.nativeHarness;
+                target.provider = current.provider;
+                target.accountId = current.accountId;
+                target.model = null;
+                target.nativeSessionId = undefined;
+                target.nativeStartedAt = undefined;
+                target.updatedAt = new Date().toISOString();
+                await writeState(resumeState);
+                notice = `Continuing this ${originalLabel} chat under ${sessionProviderLabel(current)}.`;
+              }
             }
-            id = selected;
+            id = selected.id;
             continue;
           }
         }

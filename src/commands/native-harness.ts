@@ -124,10 +124,10 @@ export async function captureNativeHarness(spec: NativeHarnessSpec, args: readon
 }
 
 /** Capture documented listing/helper output without invoking a shell. */
-export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs = 15_000): Promise<string> {
+export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs = 15_000, cwd?: string): Promise<string> {
   await ensureNativeHarness(spec);
   return new Promise((resolve, reject) => {
-    const child = spawn(spec.binary, [...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...envOverrides } });
+    const child = spawn(spec.binary, [...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...envOverrides }, ...(cwd ? { cwd } : {}) });
     let stdout = '';
     let stderr = '';
     let exceededLimit = false;
