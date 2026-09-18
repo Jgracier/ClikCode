@@ -512,13 +512,18 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (activeFullScreenHarness && harness.loginArgv) {
     const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
     if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
-      activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-      await activeFullScreenHarness.suspend();
-      try {
-        announceBareInteractiveLogin(harness);
-        await loginNativeHarness(harness, environment);
-      } finally {
-        activeFullScreenHarness.resume();
+      if (harness.loginCapturable) {
+        activeFullScreenHarness.startWaiting(`signing in to ${harness.displayName}…`);
+        try { await loginNativeHarness(harness, environment); } finally { activeFullScreenHarness.stopWaiting(); }
+      } else {
+        activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+        await activeFullScreenHarness.suspend();
+        try {
+          announceBareInteractiveLogin(harness);
+          await loginNativeHarness(harness, environment);
+        } finally {
+          activeFullScreenHarness.resume();
+        }
       }
       // Only rename if it's still the generic placeholder -- a user who's
       // already renamed this account to something of their own gets to
@@ -1390,7 +1395,10 @@ async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: Ai
   // raw-mode/alt-screen state is still active competing for the same
   // terminal.
   let label: string;
-  if (rl instanceof FullScreenHarnessPrompter) {
+  if (harness.loginCapturable && rl instanceof FullScreenHarnessPrompter) {
+    rl.startWaiting(`signing in to ${harness.displayName}…`);
+    try { label = await aiAccountLogin(harness.command); } finally { rl.stopWaiting(); }
+  } else if (rl instanceof FullScreenHarnessPrompter) {
     await rl.suspend();
     try {
       announceBareInteractiveLogin(harness);
@@ -1491,7 +1499,10 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
         account.status = 'needs_login';
         await writeState(state);
       } else if (action === 'reauthenticate' && harness.loginArgv) {
-        if (rl instanceof FullScreenHarnessPrompter) {
+        if (harness.loginCapturable && rl instanceof FullScreenHarnessPrompter) {
+          rl.startWaiting(`signing in to ${harness.displayName}…`);
+          try { await loginNativeHarness(harness, environment); } finally { rl.stopWaiting(); }
+        } else if (rl instanceof FullScreenHarnessPrompter) {
           await rl.suspend();
           try {
             announceBareInteractiveLogin(harness);
@@ -2263,12 +2274,17 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
           // here instead of only at provider-switch time.
           if (!authRetried && activeFullScreenHarness && harness.loginArgv) {
             authRetried = true;
-            activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-            await activeFullScreenHarness.suspend();
-            try {
-              await loginNativeHarness(harness, environment);
-            } finally {
-              activeFullScreenHarness.resume();
+            if (harness.loginCapturable) {
+              activeFullScreenHarness.startWaiting(`signing in to ${harness.displayName}…`);
+              try { await loginNativeHarness(harness, environment); } finally { activeFullScreenHarness.stopWaiting(); }
+            } else {
+              activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+              await activeFullScreenHarness.suspend();
+              try {
+                await loginNativeHarness(harness, environment);
+              } finally {
+                activeFullScreenHarness.resume();
+              }
             }
             account.status = 'ready';
             await writeState(state);
