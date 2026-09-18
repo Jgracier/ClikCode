@@ -2716,6 +2716,21 @@ async function newestFiles(paths: readonly string[], limit: number): Promise<Arr
     .sort((left, right) => right.mtimeMs - left.mtimeMs).slice(0, limit);
 }
 
+/** Both Claude Code and Codex represent a message's content as either a plain
+ * string or a list of content blocks ({type:'text', text:'...'}, possibly
+ * mixed with non-text blocks like tool calls) — real API message shapes, not
+ * one canonical format. Used for both title extraction (first real message)
+ * and full transcript reading (every message), so a session that happens to
+ * use the array shape gets the same treatment either way instead of only
+ * being fixed for the one caller that was reported broken. */
+function extractMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((part) => typeof (part as { text?: unknown })?.text === 'string' ? (part as { text: string }).text : '').join(' ').trim();
+}
+
+const ADOPTED_TRANSCRIPT_LIMIT = 40;
+
 /** Claude Code has no CLI command that lists past sessions (`--resume` with no
  * id opens an interactive TUI picker only), but it writes one real, stable
  * `<uuid>.jsonl` file per session under a project folder named by literalizing
@@ -2738,16 +2753,7 @@ async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNa
       if (record.type === 'ai-title' && typeof record.aiTitle === 'string') { title = record.aiTitle; break; }
       const message = record.message as { content?: unknown } | undefined;
       if (!title && record.type === 'user') {
-        // A user message's content is a plain string in some sessions and a
-        // list of content blocks ({type:'text', text:'...'}, possibly mixed
-        // with non-text blocks) in others — real API message shapes, not one
-        // canonical format. Missing the array case meant a session that
-        // happened to only have array-shaped turns showed no title at all,
-        // not a wrong one.
-        const content = message?.content;
-        const text = typeof content === 'string' ? content
-          : Array.isArray(content) ? content.map((part) => typeof (part as { text?: unknown })?.text === 'string' ? (part as { text: string }).text : '').join(' ').trim()
-          : '';
+        const text = extractMessageText(message?.content);
         // Claude Code also injects synthetic wrapper turns (e.g. a
         // "<local-command-caveat>" note about a slash command's own output) as
         // literal role:"user" messages — the same reason Codex's fallback below
@@ -2758,6 +2764,32 @@ async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNa
     sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
   }
   return sessions;
+}
+
+/** Reads every user/assistant turn from a Claude Code session's own jsonl file
+ * (not just the prefix scanned for a title) and maps it onto ClikCode's own
+ * {role, content} message shape, so adopting a Claude Code chat shows its
+ * real prior conversation instead of starting the ClikCode view blank while
+ * only the native thread underneath actually remembers anything. Capped to
+ * the most recent messages for the same reason failoverPrompt caps replay:
+ * an adoption is a one-time read, not something that should scale with a
+ * session's total lifetime size. */
+async function readClaudeFsTranscript(nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+  const path = join(homedir(), '.claude', 'projects', workspace.replace(/\//g, '-'), `${nativeId}.jsonl`);
+  let raw: string;
+  try { raw = await readFile(path, 'utf8'); } catch { return []; }
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let record: Record<string, unknown>;
+    try { record = JSON.parse(line); } catch { continue; }
+    if (record.type !== 'user' && record.type !== 'assistant') continue;
+    const message = record.message as { content?: unknown } | undefined;
+    const text = extractMessageText(message?.content);
+    if (!text || text.startsWith('<')) continue;
+    messages.push({ role: record.type, content: text });
+  }
+  return messages.slice(-ADOPTED_TRANSCRIPT_LIMIT);
 }
 
 /** Codex writes one `rollout-<timestamp>-<uuid>.jsonl` file per session under
@@ -2785,10 +2817,7 @@ async function discoverCodexFsSessions(workspace: string): Promise<DiscoveredNat
         sessionId = typeof payload?.session_id === 'string' ? payload.session_id : undefined;
         cwd = typeof payload?.cwd === 'string' ? payload.cwd : undefined;
       } else if (!title && record.type === 'response_item' && payload?.role === 'user') {
-        const content = payload.content;
-        const text = Array.isArray(content)
-          ? content.map((part) => typeof (part as { text?: unknown })?.text === 'string' ? (part as { text: string }).text : '').join(' ').trim()
-          : typeof content === 'string' ? content.trim() : '';
+        const text = extractMessageText(payload.content);
         if (text && !text.startsWith('<')) title = conversationTitle(text);
       }
     }
@@ -2796,6 +2825,61 @@ async function discoverCodexFsSessions(workspace: string): Promise<DiscoveredNat
     sessions.push({ nativeId: sessionId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
   }
   return sessions;
+}
+
+/** Codex's rollout filename ends in the session's own uuid
+ * (`rollout-<timestamp>-<uuid>.jsonl`), so the exact file is a direct lookup
+ * rather than re-scanning every file's session_meta again. Reads every
+ * response_item user/assistant turn from the full file (the discovery pass
+ * above only scans a bounded prefix, enough for a title, not a transcript). */
+async function readCodexFsTranscript(nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+  const root = join(homedir(), '.codex', 'sessions');
+  const files = await walkFilesRecursive(root, 4, '.jsonl');
+  const path = files.find((file) => file.endsWith(`${nativeId}.jsonl`));
+  if (!path) return [];
+  let raw: string;
+  try { raw = await readFile(path, 'utf8'); } catch { return []; }
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let record: Record<string, unknown>;
+    try { record = JSON.parse(line); } catch { continue; }
+    if (record.type !== 'response_item') continue;
+    const payload = record.payload as Record<string, unknown> | undefined;
+    const role = payload?.role;
+    if (role !== 'user' && role !== 'assistant') continue;
+    const text = extractMessageText(payload?.content);
+    if (!text || text.startsWith('<')) continue;
+    messages.push({ role, content: text });
+  }
+  void workspace; // Codex sessions aren't project-scoped by path; discovery already filtered by cwd.
+  return messages.slice(-ADOPTED_TRANSCRIPT_LIMIT);
+}
+
+/** opencode publishes a real export command (`opencode export <sessionID>`,
+ * confirmed live) that dumps the full session as JSON: a `messages` array of
+ * `{info: {role}, parts: [{type, text}]}` entries. Only `type: "text"` parts
+ * are used — tool calls and their results are real parts too but have no
+ * plain-text representation in ClikCode's own {role, content: string}
+ * message model, the same reason Claude/Codex transcripts above only keep
+ * text blocks. */
+async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+  let raw: string;
+  try { raw = await captureNativeHarnessOutput(harness, ['export', nativeId], {}, 8_000, workspace); } catch { return []; }
+  // `export` prints a human progress line ("Exporting session: <id>") before
+  // the JSON body — skip to the first '{' rather than assume a fixed line count.
+  const jsonStart = raw.indexOf('{');
+  if (jsonStart === -1) return [];
+  let parsed: { messages?: Array<{ info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> }> };
+  try { parsed = JSON.parse(raw.slice(jsonStart)); } catch { return []; }
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const message of parsed.messages ?? []) {
+    const role = message.info?.role;
+    if (role !== 'user' && role !== 'assistant') continue;
+    const text = (message.parts ?? []).filter((part) => part.type === 'text').map((part) => part.text ?? '').join(' ').trim();
+    if (text) messages.push({ role, content: text });
+  }
+  return messages.slice(-ADOPTED_TRANSCRIPT_LIMIT);
 }
 
 /** Cursor Agent's own `ls`/`--resume` are interactive pickers with no JSON
@@ -2875,6 +2959,19 @@ const FS_SESSION_DISCOVERY: Readonly<Record<string, (workspace: string) => Promi
   codex: discoverCodexFsSessions,
   cursor: discoverCursorFsSessions,
   pi: discoverPiFsSessions,
+};
+
+/** Only wired for the harnesses with a confirmed, complete way to read a
+ * whole past conversation back out (not just enough to title it): Claude
+ * Code and Codex's own jsonl files, and opencode's real `export` command.
+ * Adopting a chat from any other harness still works — its native identity
+ * is real either way, and the underlying vendor thread has its own full
+ * memory regardless — it just starts blank in ClikCode's own transcript view
+ * until the next turn, the same as it did for every harness before this. */
+const ADOPTED_TRANSCRIPT_READERS: Readonly<Record<string, (harness: AiLocalHarnessDefinition, nativeId: string, workspace: string) => Promise<Array<{ role: 'user' | 'assistant'; content: string }>>>> = {
+  claude: (_harness, nativeId, workspace) => readClaudeFsTranscript(nativeId, workspace),
+  codex: (_harness, nativeId, workspace) => readCodexFsTranscript(nativeId, workspace),
+  opencode: readOpencodeTranscript,
 };
 
 function splitTableColumns(line: string): string[] {
@@ -3107,19 +3204,20 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   const account = state.accounts.find((item) => item.provider === match.harness.provider && item.status === 'ready');
   const defaults = resolveDefaultSettings(state, match.harness.provider);
   const now = new Date().toISOString();
-  // Adopting only the vendor's own session identity — not its transcript — is
-  // deliberate: the vendor CLI's `--resume <id>` (or equivalent) already has
-  // full native context for this thread, so continuation works correctly the
-  // moment a turn is sent. Reproducing every prior message in ClikCode's own
-  // view too would mean parsing each vendor's own message-export schema
-  // (verified so far for exactly one of them), which is a separate feature
-  // from making a vendor's existing chat resumable at all.
+  // The vendor's own thread already has full context regardless — adopting
+  // its identity alone is enough for continuation to work correctly the
+  // moment a turn is sent. Populating ClikCode's own transcript view too is a
+  // separate, best-effort read: only wired for the harnesses with a confirmed
+  // way to read a whole conversation back out (see ADOPTED_TRANSCRIPT_READERS
+  // above), and never something continuation itself depends on.
+  const transcriptReader = ADOPTED_TRANSCRIPT_READERS[match.harness.command];
+  const messages = transcriptReader ? await transcriptReader(match.harness, nativeId, workspace).catch(() => []) : [];
   const adopted: HarnessSession = {
     id: randomUUID(), route: 'local', accountId: account?.id ?? null, provider: match.harness.provider,
     model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
     createdAt: now, updatedAt: now, status: 'active',
     nativeHarness: match.harness.command, nativeSessionId: nativeId, nativeStartedAt: now,
-    workspace, name: match.item.title,
+    workspace, name: match.item.title, ...(messages.length ? { messages } : {}),
   };
   state.sessions.push(adopted);
   await writeState(state);
