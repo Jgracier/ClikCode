@@ -82,9 +82,40 @@ async function inspectNativeHarnessUncached(spec: NativeHarnessSpec, timeoutMs: 
   });
 }
 
+/** Opens a URL in the user's default browser -- best-effort only: if the
+ * platform opener isn't available (a genuinely headless box with no
+ * browser at all), the login flow still works exactly as before, just
+ * without this convenience. Never blocks or throws into the caller. */
+function openInBrowser(url: string): void {
+  const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  try {
+    spawn(opener, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' }).unref();
+  } catch { /* fail-open-ok: the URL is still printed on screen either way. */ }
+}
+
+/** stdout is piped rather than inherited so a login flow's own printed URL
+ * (Claude Code, Codex, Antigravity CLI's native flow, anything using this
+ * "print a URL, wait for a pasted code" shape) can be detected and opened
+ * automatically -- every byte is still forwarded to the real terminal
+ * completely unchanged, so nothing about what the user sees is any
+ * different, just faster to act on. Only the *first* URL in the stream
+ * triggers an open, since some flows print progress or a fallback URL
+ * again later that shouldn't reopen a second tab. */
 function run(command: string, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], { stdio: 'inherit', env: { ...process.env, ...envOverrides } });
+    const child = spawn(command, [...args], { stdio: ['inherit', 'pipe', 'inherit'], env: { ...process.env, ...envOverrides } });
+    let opened = false;
+    let carry = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      process.stdout.write(chunk);
+      if (opened) return;
+      carry = (carry + chunk.toString('utf8')).slice(-2048);
+      const match = /https?:\/\/[^\s"'<>]+/.exec(carry);
+      if (match) {
+        opened = true;
+        openInBrowser(match[0]);
+      }
+    });
     const forward = (signal: NodeJS.Signals): void => {
       if (child.exitCode === null && child.signalCode === null) child.kill(signal);
     };
