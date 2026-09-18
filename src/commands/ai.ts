@@ -837,7 +837,12 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const rawModel = harness?.modelArgvPrefix ? session.model ?? 'automatic' : undefined;
     const model = rawModel && harness?.command === 'claude' ? CLAUDE_ALIAS_LABELS[rawModel] ?? rawModel : rawModel;
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
-    return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
+    // The only other place a chat's title ever appeared was a transient line in the
+    // /resume picker itself — once you were actually inside a resumed conversation
+    // there was nothing on screen confirming which one, so switching looked like it
+    // hadn't done anything even when the transcript above had in fact changed.
+    const title = session.name ? `“${session.name}”` : undefined;
+    return [provider, title, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
   }
 
   private waitingText(): string {
