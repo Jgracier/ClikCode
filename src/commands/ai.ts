@@ -758,8 +758,37 @@ function stripMarkdown(text: string): string {
     .replace(/(\*\*|__)(.+?)\1/g, '$2')
     .replace(/(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
-    .replace(/^#{1,6}\s+/gm, '');
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
+  // Header `#` prefixes are deliberately left in place here -- formatParagraph
+  // below detects and strips them itself so it can apply real bold styling
+  // instead of just discarding the marker.
+}
+
+/** Every harness's assistant text is plain markdown-convention prose
+ * regardless of vendor, so this -- unlike HarnessActivityEvent's per-vendor
+ * JSON parsing -- applies identically no matter which harness produced the
+ * paragraph: a header renders bold, a list item gets a dim glyph and a
+ * hanging indent for any wrapped continuation lines, and anything else
+ * passes through untouched. Deliberately paragraph-level, not span-level --
+ * inline styling (bold *within* a sentence) would need wrapWords to track
+ * open ANSI codes across a wrap boundary, which stripMarkdown already
+ * discards to plain text; a header or list marker is always at the start of
+ * its own paragraph, so no such boundary problem exists here. */
+function formatParagraph(paragraph: string): { prefix: string; hangIndent: string; text: string; bold: boolean } {
+  const header = /^#{1,6}\s+(.*)$/.exec(paragraph);
+  if (header) return { prefix: '', hangIndent: '', text: header[1], bold: true };
+  const bullet = /^([-*+])\s+(.*)$/.exec(paragraph);
+  if (bullet) return { prefix: `${chalk.dim('•')} `, hangIndent: ' '.repeat(2), text: bullet[2], bold: false };
+  const numbered = /^(\d+[.)])\s+(.*)$/.exec(paragraph);
+  // hangIndent is a plain space string matching the *visible* width of
+  // `prefix` (marker plus its trailing space) exactly -- not a rounded
+  // approximation -- so a wrapped continuation line lines up under the
+  // first line's text instead of drifting a column off, which an earlier
+  // "round up to a 2-space unit" version of this got wrong for any
+  // odd-length marker (e.g. a 2-character "2." plus its space is 3 wide,
+  // not the 4 that formula produced).
+  if (numbered) return { prefix: `${chalk.dim(numbered[1])} `, hangIndent: ' '.repeat(numbered[1].length + 1), text: numbered[2], bold: false };
+  return { prefix: '', hangIndent: '', text: paragraph, bold: false };
 }
 
 function visibleSlice(value: string, width: number): string {
@@ -1093,16 +1122,19 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
       let firstLine = true;
-      for (const paragraph of stripMarkdown(message.content).split(/\r?\n/)) {
-        const clean = paragraph || ' ';
+      for (const rawParagraph of stripMarkdown(message.content).split(/\r?\n/)) {
+        const { prefix: bulletPrefix, hangIndent, text, bold } = formatParagraph(rawParagraph || ' ');
+        const budget = Math.max(1, conversationInner - terminalCellWidth(bulletPrefix || hangIndent));
         // conversationInner is already the full per-line budget after the
         // 2-column marker/indent prefix; wrapWords breaks at spaces (falling
         // back to a hard break only for a single word wider than the whole
         // line) instead of the flat character-count slice this replaced,
         // which split words wherever the count happened to land.
-        for (const line of wrapWords(clean, conversationInner)) {
+        const wrapped = wrapWords(text, budget);
+        for (const [lineIndex, line] of wrapped.entries()) {
           const prefix = firstLine ? `${marker} ` : '  ';
-          conversation.push({ text: `${prefix}${line}` });
+          const structural = lineIndex === 0 ? bulletPrefix : hangIndent;
+          conversation.push({ text: `${prefix}${structural}${bold ? chalk.bold(line) : line}` });
           firstLine = false;
         }
       }
