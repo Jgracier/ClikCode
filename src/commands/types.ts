@@ -149,6 +149,15 @@ export interface HarnessSession {
   closedAt?: string;
   /** Native agent identity, owned by the selected vendor CLI and never sent to Gateway. */
   nativeHarness?: string;
+  /**
+   * Set only by an explicit Gateway selection (newGatewayConversation) --
+   * never by aiSessionOpenDefault's own default-session-creation path, which
+   * silently carries `route`/`provider`/`accountId` forward from whatever
+   * session came before even when the user has configured nothing yet.
+   * Mirrors nativeHarness's role as an "explicit choice happened" signal for
+   * the one route (Gateway) that doesn't otherwise have one.
+   */
+  gatewayConfirmed?: true;
   nativeSessionId?: string;
   nativeStartedAt?: string;
   workspace?: string;

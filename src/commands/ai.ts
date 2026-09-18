@@ -820,10 +820,9 @@ export async function aiSessionClose(id: string): Promise<void> {
   // `accountId`, and `route`, which aiSessionOpenDefault's own "create a
   // fresh default session" path silently carries forward from whatever
   // session came before, even when the user has configured nothing yet.
-  // Gateway sessions (route: 'gateway') have the identical mid-setup-loss
-  // risk this fix addresses, but no equally reliable "was this deliberate"
-  // signal exists for them today -- a real, separate gap, not fixed here.
-  if (!(session.messages ?? []).length && !session.nativeSessionId && !session.nativeHarness) {
+  // gatewayConfirmed is the same signal for the one route (Gateway) that
+  // doesn't otherwise have a reliable "was this deliberate" field to check.
+  if (!(session.messages ?? []).length && !session.nativeSessionId && !session.nativeHarness && !session.gatewayConfirmed) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
@@ -1212,6 +1211,7 @@ async function newGatewayConversation(config: Conf, rl: HarnessPrompter, current
     id: randomUUID(), route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null,
     effort: current.effort, permissionMode: current.permissionMode, accountFailover: 'never',
     workspace: current.workspace ?? process.cwd(), createdAt: now, updatedAt: now, status: 'active',
+    gatewayConfirmed: true,
   };
   state.sessions.push(session);
   await writeState(state);
