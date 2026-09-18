@@ -2938,7 +2938,11 @@ async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<
   const selected = await chooseOption(rl, 'Choose a model', options);
   if (!selected) return;
   const value = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : selected;
-  if (value) await applySettingScope(rl, id, 'model', value);
+  // Applies to this chat only, no further "apply to" step: a model choice is
+  // read as a per-conversation decision, unlike effort/permissions/failover,
+  // which are more often "how I always want this provider to behave" and
+  // genuinely benefit from a scope choice.
+  if (value) await aiSessionCommand(id, `/model ${value}`);
 }
 
 async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promise<'resume' | 'exit' | undefined> {
