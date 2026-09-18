@@ -190,7 +190,19 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // pty. The one real cost: unlike Claude/Codex's dedicated login
   // subcommands, this is a genuine (trivial) turn, not a free auth-only
   // call, since agy has no login-only command in its own CLI surface.
-  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli', 'api-key'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
+  // profileEnv: 'HOME' -- confirmed live: agy resolves its entire config
+  // tree (~/.gemini/antigravity-cli/, credentials included) from $HOME, the
+  // same way it would with a real home directory, so redirecting HOME per
+  // account is a real isolation mechanism here, not a guess -- verified
+  // `agy models` runs cleanly under a freshly isolated HOME. This is what
+  // makes "add a new/different account" actually work: a fresh, empty HOME
+  // has no cached credential, so the loginArgv turn below genuinely
+  // triggers OAuth rather than silently reusing whatever's cached under
+  // the real HOME. Reauthenticating an account whose own isolated HOME
+  // still holds a *valid* credential will still silently reuse it, same as
+  // a fresh install would -- agy has no forced-relogin flag in its own CLI
+  // surface to force past that, confirmed via --help.
+  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli', 'api-key'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
   { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
   { command: 'droid', provider: 'factory', displayName: 'Factory Droid', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'droid', modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], turn: { startArgv: ['exec', '--output-format', 'json'], resumeIdPrefix: ['--resume'], output: 'json', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'] } },
   { command: 'kiro', provider: 'kiro', displayName: 'Kiro CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'kiro-cli', launchArgv: ['chat'], turn: { startArgv: ['chat', '--no-interactive'], resumeIdPrefix: ['--resume-id'], output: 'text' }, session: { resumeIdPrefix: ['chat', '--resume-id'], continueArgv: ['chat', '--resume'] } },
