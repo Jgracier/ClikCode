@@ -2415,8 +2415,35 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   if (!accountLabel) throw new Error('account label cannot be empty');
   const existing = state.accounts.find((account) => account.label.toLowerCase() === accountLabel.toLowerCase());
   if (existing) throw new Error(`a local AI account named "${accountLabel}" already exists`);
-  if (!harness.profileEnv && state.accounts.some((account) => account.provider === harness.provider && account.authKind === 'vendor-cli')) {
-    throw new Error(`${harness.displayName} does not publish an isolated configuration-root contract; only its default native profile can be registered safely`);
+  // A harness with no profileEnv can only ever have one real vendor-cli
+  // identity ClikCode can track (there's no isolated directory to give a
+  // second one its own credentials) -- but the useful thing to do about
+  // that is reauthenticate the one that's already there, not dead-end.
+  // This used to just throw here unconditionally, which is exactly what
+  // "Antigravity CLI does not publish an isolated configuration-root
+  // contract" was: the harness's one slot was already claimed by an
+  // account that had never actually been through a real login (created by
+  // aiHarnessSelect's own auto-creation, which -- before a companion fix --
+  // had no way to know a statusArgv-less harness like this one wasn't
+  // really authenticated yet), leaving no path back to authenticate it at
+  // all. Re-running login against the same unisolated default profile and
+  // updating that existing account in place is the correct "add an
+  // account" outcome for this shape of harness.
+  const singleSlotExisting = !harness.profileEnv
+    ? state.accounts.find((account) => account.provider === harness.provider && account.authKind === 'vendor-cli')
+    : undefined;
+  if (singleSlotExisting) {
+    await loginNativeHarness(harness, {});
+    if (!explicit) {
+      const derived = await deriveAccountLabel(harness, undefined);
+      if (derived && !state.accounts.some((account) => account.id !== singleSlotExisting.id && account.label.toLowerCase() === derived.toLowerCase())) {
+        singleSlotExisting.label = derived;
+      }
+    }
+    singleSlotExisting.status = 'ready';
+    await writeState(state);
+    emitHarnessOutput({ status: 'connected', harness: harness.command, account: singleSlotExisting.label, credentialBoundary: 'local-only' });
+    return singleSlotExisting.label;
   }
   const accountId = randomUUID();
   const profilePath = harness.profileEnv
@@ -2458,6 +2485,26 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   }
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
   return accountLabel;
+}
+
+/** Written directly to the real terminal, not ClikCode's own alt-screen
+ * activity log -- an activity() call right before suspend() gets thrown
+ * away the instant the alt-screen exits, so it's never actually visible;
+ * this writes after suspend() has already switched to the main buffer,
+ * where it's the last thing on screen before the child's own output
+ * starts. Only for harnesses whose loginArgv is an empty array (currently
+ * Gemini CLI, Antigravity CLI): that shape means "launch bare, no
+ * dedicated login subcommand exists" -- confirmed live for Antigravity
+ * specifically that this drops into its own full interactive session
+ * (a real, separate program, not a quick sign-in step) with no way back to
+ * ClikCode until the user exits *that* program on its own terms. Every
+ * other harness's loginArgv actually targets a real login flow that
+ * returns control on its own once finished, so this notice would be noise
+ * for those. */
+function announceBareInteractiveLogin(harness: AiLocalHarnessDefinition): void {
+  if (harness.loginArgv?.length === 0) {
+    output.write(`\n${chalk.dim(`Opening ${harness.displayName}'s own interactive session to sign in -- exit it (its own quit/Ctrl+C) once done to return here.`)}\n\n`);
+  }
 }
 
 function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {
@@ -2544,10 +2591,24 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   session.route = 'local';
   session.workspace ??= process.cwd();
   const selected = session.accountId ? state.accounts.find((account) => account.id === session.accountId) : undefined;
+  // Tracks whether the account below is being minted right now, not found
+  // pre-existing -- needed because harnessNeedsLogin returns false
+  // unconditionally for any harness with no statusArgv (Gemini, Antigravity,
+  // Amp: nothing to scriptably ask "are you logged in?" at all), so a
+  // brand-new placeholder account for one of those would otherwise be
+  // marked 'ready' and never get a single chance at the login/suspend
+  // handoff -- the real mechanism behind "Antigravity CLI does not publish
+  // an isolated configuration-root contract" surfacing at /add-account
+  // time instead: the placeholder had already silently claimed the one
+  // available account slot for a harness with no profileEnv, with the user
+  // never having had a real opportunity to authenticate it in the first
+  // place.
+  let accountJustCreated = false;
   if (!selected || selected.provider !== harness.provider || selected.status !== 'ready') {
     const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli' && account.status === 'ready');
     if (accounts.length === 1) session.accountId = accounts[0].id;
     else if (accounts.length === 0) {
+      accountJustCreated = true;
       // Same derivation addAccountForHarness uses after an explicit login,
       // applied here too so a session's very first auto-created account
       // shows a real identity from the start instead of the generic "X
@@ -2576,10 +2637,11 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   if (activeFullScreenHarness && harness.loginArgv) {
     const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
-    if (freshInstall || await harnessNeedsLogin(harness, environment)) {
+    if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
       activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
       await activeFullScreenHarness.suspend();
       try {
+        announceBareInteractiveLogin(harness);
         await loginNativeHarness(harness, environment);
       } finally {
         activeFullScreenHarness.resume();
@@ -3449,7 +3511,27 @@ async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: Ai
   // replaces it with something derived from the harness's own credentials
   // once login actually completes, wherever that's possible -- one less
   // step than asking the user to type or confirm a name themselves.
-  const label = await aiAccountLogin(harness.command);
+  //
+  // suspend/resume around this call, previously missing here entirely: the
+  // one place aiHarnessSelect's own login flow has always had this, but
+  // this second entry point into the exact same loginNativeHarness spawn
+  // didn't. Claude Code's own login (print a URL, wait for a pasted code)
+  // happens to tolerate running without it, which is why this went
+  // unnoticed -- but a harness whose login is a full interactive TUI
+  // needing exclusive terminal control (Antigravity CLI's bubbletea, which
+  // opens /dev/tty directly) has no business running while ClikCode's own
+  // raw-mode/alt-screen state is still active competing for the same
+  // terminal.
+  let label: string;
+  if (rl instanceof FullScreenHarnessPrompter) {
+    await rl.suspend();
+    try {
+      announceBareInteractiveLogin(harness);
+      label = await aiAccountLogin(harness.command);
+    } finally { rl.resume(); }
+  } else {
+    label = await aiAccountLogin(harness.command);
+  }
   await aiSessionCommand(id, `/settings account ${label}`);
 }
 
@@ -3544,7 +3626,10 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
       } else if (action === 'reauthenticate' && harness.loginArgv) {
         if (rl instanceof FullScreenHarnessPrompter) {
           await rl.suspend();
-          try { await loginNativeHarness(harness, environment); } finally { await rl.resume(); }
+          try {
+            announceBareInteractiveLogin(harness);
+            await loginNativeHarness(harness, environment);
+          } finally { await rl.resume(); }
         } else {
           await loginNativeHarness(harness, environment);
         }
