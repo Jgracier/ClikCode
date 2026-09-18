@@ -193,14 +193,30 @@ function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string): { 
   const messages: string[] = [];
   let isError = false;
   let statusCode: number | undefined;
+  // Distinct from `messages`: a string `error` field is a failure reason,
+  // never the assistant's own reply, so it must never end up as the
+  // returned "text" for a successful-looking turn -- but without capturing
+  // it separately, a genuine failure with no text in any of `fields` (a
+  // real, verified shape: Antigravity CLI's own {status:"ERROR",
+  // error:"API error...", response:""}) surfaced only as a generic
+  // "returned no assistant text", discarding the real reason entirely.
+  let errorMessage: string | undefined;
   const visit = (value: unknown, parentType?: string): void => {
     if (Array.isArray(value)) return value.forEach((item) => visit(item, parentType));
     if (!value || typeof value !== 'object') return;
     const record = value as Record<string, unknown>;
     const type = typeof record.type === 'string' ? record.type : parentType;
-    if (record.is_error === true || record.error === true) isError = true;
+    // record.status as a string 'ERROR'/'FAILED' is a real, distinct shape
+    // from the number >= 400 check below it -- caught verifying Antigravity
+    // CLI live: its own result event is {status: "ERROR", error: "<message
+    // string>", response: ""}, which the boolean-only check above never
+    // matched. A generic check, not Antigravity-specific: any other harness
+    // using this same string-status convention benefits the same way, and
+    // it can't collide with the number check since they're different types.
+    if (record.is_error === true || record.error === true || (typeof record.status === 'string' && /^(error|failed)$/i.test(record.status))) isError = true;
     if (typeof record.api_error_status === 'number') statusCode = record.api_error_status;
     else if (typeof record.status === 'number' && record.status >= 400) statusCode = record.status;
+    if (typeof record.error === 'string' && record.error.trim()) errorMessage = record.error.trim();
     for (const [key, child] of Object.entries(record)) {
       if (fields.has(key) && typeof child === 'string' && child.trim()) {
         // JSON event streams often contain tool input and user echoes. Only
@@ -210,7 +226,11 @@ function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string): { 
     }
   };
   values.forEach((value) => visit(value));
-  const text = messages[messages.length - 1]?.trim();
+  // errorMessage only as a fallback, never preferred over real assistant
+  // text -- a turn that produced actual output before failing partway
+  // through should still show that output, not the failure reason instead
+  // of it.
+  const text = messages[messages.length - 1]?.trim() || errorMessage;
   if (!text) throw new Error(`${harness.displayName} returned no assistant text in its structured output`);
   const ids = nativeSessionIds(stdout, harness.turn.output);
   return { text, nativeSessionId: [...ids][0], ...(isError ? { isError } : {}), ...(statusCode ? { statusCode } : {}) };
@@ -418,10 +438,33 @@ const CLAUDE_ALIAS_LABELS: Readonly<Record<string, string>> = {
   fable: 'Fable 5.1', opus: 'Opus 5', sonnet: 'Sonnet 5', haiku: 'Haiku 4.5',
 };
 
+type ModelCatalogResult = { configured?: string; models: string[]; labels?: Readonly<Record<string, string>> };
+// Model lists change even less often than installation status -- 5 minutes
+// is conservative, not aggressive. Without this, every single /model open
+// re-ran a real subprocess (harness.modelDiscoveryArgv) with up to a
+// 12-second timeout for any harness that declares one (opencode, several
+// others) -- on top of inspectNativeHarness's own cost this stacked into
+// exactly the "options are still slow" report, in a second picker beyond
+// /provider.
+const modelCatalogCache = new Map<string, { at: number; result: ModelCatalogResult }>();
+const MODEL_CATALOG_CACHE_TTL_MS = 300_000;
+
 async function nativeModelCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
-): Promise<{ configured?: string; models: string[]; labels?: Readonly<Record<string, string>> }> {
+): Promise<ModelCatalogResult> {
+  const cacheKey = `${harness.command}:${account?.nativeProfile?.path ?? account?.id ?? 'default'}`;
+  const cached = modelCatalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < MODEL_CATALOG_CACHE_TTL_MS) return cached.result;
+  const result = await nativeModelCatalogUncached(harness, account);
+  modelCatalogCache.set(cacheKey, { at: Date.now(), result });
+  return result;
+}
+
+async function nativeModelCatalogUncached(
+  harness: AiLocalHarnessDefinition,
+  account?: AiHarnessAccount,
+): Promise<ModelCatalogResult> {
   const models = new Set(account?.models ?? []);
   const addDiscoveredModels = (raw: string): void => {
     const add = (value: unknown): void => {
@@ -477,11 +520,29 @@ async function nativeModelCatalog(
       const value = typeof settings.model === 'string' ? settings.model : settings.selectedModel;
       if (typeof value === 'string' && value.trim()) configured = value.trim();
     } catch { /* Gemini will choose its own default when no setting exists. */ }
-    ['auto', 'pro', 'flash', 'flash-lite'].forEach((model) => models.add(model));
+    // No injected model-name list here on purpose: unlike Claude's alias
+    // names just above (confirmed directly from `claude --help`'s own
+    // documented flag values, plus verified live against real turns),
+    // there is no equivalent verified source for Gemini's -- the previous
+    // ['auto','pro','flash','flash-lite'] list was never confirmed against
+    // Gemini CLI itself, and checking Antigravity CLI's real, live `models`
+    // output (a different tool that also routes to Gemini models) showed
+    // genuinely different, more specific names entirely
+    // (gemini-3.8-flash-high, etc.) -- meaning that list was already
+    // presenting stale/wrong data as if it were reliable. No Gemini CLI
+    // command or local file was found that actually lists its own models
+    // (confirmed: no `models` subcommand in --help, no cache file under
+    // ~/.gemini/). Better to show only what's genuinely known (`configured`
+    // from settings.json, or an account's own explicitly set models) than a
+    // guess that looks like real data.
   }
-  if (harness.command === 'copilot') {
-    ['auto', 'claude-sonnet-4.6', 'gpt-5.4', 'gpt-6-astra', 'claude-haiku-4.5', 'gpt-5.3-codex', 'gemini-3.1-pro-preview', 'gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.7-flash'].forEach((model) => models.add(model));
-  }
+  // Copilot had the same problem, worse: a full hardcoded model list with
+  // no discovery mechanism and no verification against Copilot CLI itself
+  // ever performed -- checked its own GitHub issue tracker directly
+  // (github/copilot-cli#700, #1356, #236), which confirms this is a known,
+  // still-open gap in Copilot CLI itself: there is no `copilot models`
+  // command, only an interactive picker with no scriptable equivalent.
+  // Removed rather than kept as a guess.
   if (harness.modelDiscoveryArgv) {
     const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
     try {
@@ -2296,6 +2357,28 @@ async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath
       return typeof body.account?.email === 'string' && body.account.email ? body.account.email : undefined;
     } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
   }
+  if (harness.command === 'codex') {
+    try {
+      const path = join(profilePath ?? join(homedir(), '.codex'), 'auth.json');
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as { tokens?: { id_token?: string } };
+      const idToken = parsed.tokens?.id_token;
+      if (!idToken) return undefined;
+      // No API call needed here, unlike Claude: Codex's id_token is a
+      // standard OIDC JWT and its payload already carries a real `email`
+      // claim directly -- verified against this exact file's own token.
+      // Decoding the payload to read a claim isn't the same as verifying
+      // the token's signature (not needed here; this is read-only display
+      // of a claim from a credential file already trusted enough to
+      // authenticate real requests with), and the payload segment is
+      // profile-scoped the same way the whole auth.json file is (CODEX_HOME
+      // isolation, verified from this catalog entry's own profileEnv).
+      const payload = idToken.split('.')[1];
+      if (!payload) return undefined;
+      const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+      const claims = JSON.parse(Buffer.from(padded, 'base64url').toString('utf8')) as { email?: string };
+      return typeof claims.email === 'string' && claims.email ? claims.email : undefined;
+    } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
+  }
   return undefined;
 }
 
@@ -3285,7 +3368,25 @@ async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: Ai
   // `accounts add --auth api-key --credential-ref env:VAR` invocation. Only
   // asks when there's a real choice to make; a harness with just one
   // supported local auth kind skips straight to it, same as before.
-  const choices = harness.localAuth.filter((kind) => kind === 'vendor-cli' || kind === 'api-key');
+  //
+  // 'vendor-cli' only counts as a real choice when loginArgv actually
+  // exists -- caught during a full audit: localAuth is a broader claim
+  // ("this provider conceptually supports vendor-cli auth"), separate from
+  // whether this catalog has a scriptable command to perform it. Several
+  // harnesses (Aider, Goose, Crush, Factory Droid, Kiro CLI) declare
+  // vendor-cli in localAuth with no loginArgv at all -- offering "Vendor
+  // login" for those would fall through to aiAccountLogin's own
+  // `harness.loginArgv ?? []` default and run the bare binary with no
+  // arguments, which isn't a login flow for any of them.
+  const choices = harness.localAuth.filter((kind) => (kind === 'vendor-cli' && harness.loginArgv) || kind === 'api-key');
+  // Factory Droid and Kiro CLI currently land here: oauth-only in localAuth
+  // (no api-key) and no loginArgv either, so there's genuinely no way for
+  // this catalog to add an account for them yet -- rather than fabricate a
+  // login command that isn't verified, say so plainly instead of silently
+  // doing nothing (choices[0] being undefined used to fall through to the
+  // same "if (!authKind) return" as a real cancel, indistinguishable from
+  // one).
+  if (choices.length === 0) throw new Error(`${harness.displayName} doesn't publish a login command or a supported API-key auth mode yet -- nothing here can add an account for it.`);
   const authKind = choices.length > 1
     ? await chooseOption(rl, `Sign in to ${harness.displayName} with`, [
         { label: 'Vendor login', detail: 'opens the CLI’s own sign-in flow', value: 'vendor-cli' as const },
@@ -3356,10 +3457,16 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
     const vendorAccounts = state.accounts.filter((account) => account.authKind === 'vendor-cli');
     const accounts = (currentHarness ? vendorAccounts.filter((account) => account.provider === currentHarness.provider) : vendorAccounts)
       .sort((left, right) => left.provider.localeCompare(right.provider) || left.label.localeCompare(right.label));
-    const usages = await Promise.all(accounts.map((account) => accountUsageLabel(account, state)));
+    // No usage preview here on purpose: it used to await accountUsageLabel
+    // (a real network call per account) before this picker could show
+    // anything at all -- the exact "a slash option takes a few seconds to
+    // render" complaint, just in a second picker beyond /provider. Usage is
+    // already visible in the persistent status line the moment an account
+    // is actually active; a list you're choosing *from* doesn't need to
+    // block on it too.
     let actionPerformed = false;
     const selected = await chooseOption(rl, currentHarness ? `Choose a ${currentHarness.displayName} account` : 'Choose an account', [
-      ...accounts.map((account, index) => {
+      ...accounts.map((account) => {
         const harness = localHarnessForProvider(account.provider);
         const actions = [
           ...(harness?.logoutArgv && account.status === 'ready' ? [{ label: 'Disconnect', value: 'disconnect' }] : []),
@@ -3371,7 +3478,7 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
           // more than one (i.e. no currentHarness to have already filtered
           // to it) -- otherwise it's the exact redundant "provider name
           // shown again right next to itself" this replaced.
-          detail: `${currentHarness ? '' : `· ${harness?.displayName ?? account.provider} `}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${usages[index] ? `· ${usages[index]} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
+          detail: `${currentHarness ? '' : `· ${harness?.displayName ?? account.provider} `}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
           value: account.label,
           actions,
         };

@@ -47,7 +47,7 @@ describe('local harness catalog', () => {
 
   it('uses one reversible command/provider mapping for every supported local harness', () => {
     expect(AI_LOCAL_HARNESSES.map((item) => item.command)).toEqual([
-      'claude', 'codex', 'gemini', 'opencode', 'copilot', 'aider', 'goose', 'amp', 'pi',
+      'claude', 'codex', 'gemini', 'opencode', 'copilot', 'aider', 'goose', 'amp', 'antigravity', 'pi',
       'droid', 'kiro', 'qwen', 'cline', 'roo', 'kilo', 'cursor', 'windsurf', 'crush',
       'hermes', 'command',
     ]);
