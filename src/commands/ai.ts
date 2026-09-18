@@ -792,6 +792,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingTimer?: NodeJS.Timeout;
   private waitingFrame = 0;
   private waitingLabel = '';
+  private waitingStartedAt = 0;
   private activityLines: string[] = [];
   private activityAnchor = 0;
   /** Lines back from the very end of the conversation. 0 means "showing the
@@ -863,6 +864,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     this.cancelWaiting = onCancel;
     this.waitingCancelled = false;
     this.waitingFrame = 0;
+    this.waitingStartedAt = Date.now();
     if (input.isTTY) {
       input.setRawMode(true);
       input.resume();
@@ -926,9 +928,15 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     return this.currentSession?.name || undefined;
   }
 
+  /** Elapsed time alongside the label -- matching a native CLI's own "Cogitated
+   * for 5m 31s" style -- so a long turn reads as "still working, N seconds in"
+   * rather than the same static label sitting there with no sense of how long
+   * it's actually been (only the spinner glyph itself changing every 90ms). */
   private waitingText(): string {
     const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    return `${frames[this.waitingFrame % frames.length]} ${this.waitingLabel}`;
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
+    const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
+    return `${frames[this.waitingFrame % frames.length]} ${this.waitingLabel} (${elapsed})`;
   }
 
   private updateWaiting(): void {
@@ -962,6 +970,15 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     this.draftPalette = palette ? { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } : undefined;
     const width = Math.max(12, (output.columns || 100) - 1);
     const inner = width - 4;
+    // The conversation transcript gets its own, tighter margin: a bare
+    // marker-and-space (2 columns) instead of inner's extra 2-space wrapper
+    // on top of its own 4-column reservation (6 total) -- next to a native
+    // CLI's own output, which runs close to the full terminal width with
+    // only a bullet-and-space margin, ClikCode's wider gutter read as
+    // noticeably narrower and "bleaker" for no real reason; this doesn't
+    // touch inner itself, so the notice/composer/meta lines below (which
+    // share it) are unaffected.
+    const conversationInner = width - 2;
     const rule = chalk.dim('─'.repeat(width));
     const allMessages = session.messages ?? [];
     // 40, not 6: matches the same replay/adoption cap used elsewhere
@@ -987,17 +1004,17 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const appendActivity = (): void => {
       if (activityAppended) return;
       activityAppended = true;
-      for (const activity of this.activityLines) conversation.push({ text: `  ${chalk.dim('·')} ${activity}` });
-      if (this.waitingLabel) conversation.push({ text: `  ${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`, waiting: true });
+      for (const activity of this.activityLines) conversation.push({ text: `${chalk.dim('·')} ${activity}` });
+      if (this.waitingLabel) conversation.push({ text: `${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`, waiting: true });
     };
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
       let firstLine = true;
       for (const paragraph of stripMarkdown(message.content).split(/\r?\n/)) {
         const clean = paragraph || ' ';
-        for (let offset = 0; offset < clean.length; offset += inner - 2) {
+        for (let offset = 0; offset < clean.length; offset += conversationInner - 2) {
           const prefix = firstLine ? `${marker} ` : '  ';
-          conversation.push({ text: `  ${prefix}${clean.slice(offset, offset + inner - 2)}` });
+          conversation.push({ text: `${prefix}${clean.slice(offset, offset + conversationInner - 2)}` });
           firstLine = false;
         }
       }
