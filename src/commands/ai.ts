@@ -2186,12 +2186,43 @@ export async function aiDoctor(): Promise<void> {
   emitJson({ adapterVersion: localRouter().AI_LOCAL_HARNESS_ADAPTER_VERSION, harnesses });
 }
 
-/** Starts the vendor-owned login flow and records only a local opaque profile reference. */
-export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<void> {
+/** Reads real account info out of a harness's own credential storage right
+ * after login -- verified so far only for Claude Code, whose
+ * ~/.claude/.credentials.json (or the isolated profile path, if this
+ * harness supports multiple accounts) carries a real `subscriptionType`
+ * field (checked directly against a live file earlier: no email/name field
+ * exists there, but the subscription tier does, and it's real account
+ * info, not a guess). Returns undefined -- never a fabricated name -- for
+ * every harness without a confirmed credential shape to read, which is
+ * every other one right now; the numbered placeholder below covers those.
+ */
+async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
+  if (harness.command === 'claude') {
+    try {
+      const path = join(profilePath ?? join(homedir(), '.claude'), '.credentials.json');
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as { claudeAiOauth?: { subscriptionType?: string } };
+      const tier = parsed.claudeAiOauth?.subscriptionType;
+      if (typeof tier === 'string' && tier) return `${harness.displayName} (${tier})`;
+    } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
+  }
+  return undefined;
+}
+
+/** Starts the vendor-owned login flow and records only a local opaque profile reference.
+ * With no explicit label, the final name is decided *after* login completes: a
+ * numbered placeholder is picked first (so an explicit-label caller and duplicate
+ * checks upfront still behave as before), but if deriveAccountLabel finds real
+ * account info once the credential file actually exists, that replaces the
+ * placeholder -- removing the old interactive "Account name [...]" prompt this
+ * used to require without falling back to an arbitrary made-up name. */
+export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<string> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   const state = await readState();
-  const accountLabel = (label ?? `${harness.displayName} local`).trim();
+  const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
+  const placeholder = `${harness.displayName} ${existingForProvider + 1}`;
+  const explicit = label?.trim();
+  let accountLabel = explicit || placeholder;
   if (!accountLabel) throw new Error('account label cannot be empty');
   const existing = state.accounts.find((account) => account.label.toLowerCase() === accountLabel.toLowerCase());
   if (existing) throw new Error(`a local AI account named "${accountLabel}" already exists`);
@@ -2205,11 +2236,16 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   if (profilePath) await mkdir(profilePath, { recursive: true, mode: 0o700 });
   const nativeProfile = profilePath && harness.profileEnv ? { env: harness.profileEnv, path: profilePath } : undefined;
   await loginNativeHarness(harness, nativeProfile ? { [nativeProfile.env]: nativeProfile.path } : {});
+  if (!explicit) {
+    const derived = await deriveAccountLabel(harness, profilePath);
+    if (derived && !state.accounts.some((account) => account.label.toLowerCase() === derived.toLowerCase())) accountLabel = derived;
+  }
   if (!state.accounts.some((account) => account.label.toLowerCase() === accountLabel.toLowerCase())) {
     state.accounts.push({ id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) });
     await writeState(state);
   }
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
+  return accountLabel;
 }
 
 function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {
@@ -2897,7 +2933,8 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     if (action === 'login') {
       const harnessName = words.shift()?.toLowerCase();
       if (!harnessName) throw new Error('usage: /accounts login <harness> [label]');
-      return aiAccountLogin(harnessName, words.join(' ') || undefined);
+      await aiAccountLogin(harnessName, words.join(' ') || undefined);
+      return;
     }
     if (action === 'remove' || action === 'rm') {
       const labelOrId = words.join(' ').trim();
@@ -2909,7 +2946,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       const provider = shortcut ? (localHarnessForCommand(shortcut)?.provider ?? shortcut) : undefined;
       if (!provider) throw new Error('usage: /accounts add <harness>');
       const knownHarness = shortcut ? localHarnessForCommand(shortcut) : undefined;
-      if (knownHarness?.surface === 'terminal') return aiAccountLogin(knownHarness.command, words.join(' ') || undefined);
+      if (knownHarness?.surface === 'terminal') { await aiAccountLogin(knownHarness.command, words.join(' ') || undefined); return; }
       return emitHarnessOutput({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
     if (action === 'failover') {
@@ -3094,13 +3131,12 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
  * run the vendor login, then make the new account the current one for this
  * session. The two entry points differ only in how `harness` gets chosen --
  * everything after that is identical. */
-async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
-  const state = await readState();
-  const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
-  const suggested = `${harness.displayName} ${existingForProvider + 1}`;
-  const entered = (await rl.question(`Account name ${chalk.dim(`[${suggested}]`)} › `)).trim();
-  const label = entered || suggested;
-  await aiAccountLogin(harness.command, label);
+async function addAccountForHarness(id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+  // No name prompt: aiAccountLogin picks a numbered placeholder up front and
+  // replaces it with something derived from the harness's own credentials
+  // once login actually completes, wherever that's possible -- one less
+  // step than asking the user to type or confirm a name themselves.
+  const label = await aiAccountLogin(harness.command);
   await aiSessionCommand(id, `/settings account ${label}`);
 }
 
@@ -3116,7 +3152,7 @@ async function interactiveAddAccount(rl: HarnessPrompter, id: string): Promise<v
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const current = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   if (current) {
-    await addAccountForHarness(rl, id, current);
+    await addAccountForHarness(id, current);
     return;
   }
   const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
@@ -3127,7 +3163,7 @@ async function interactiveAddAccount(rl: HarnessPrompter, id: string): Promise<v
     label: harness.displayName, value: harness.command,
   })));
   if (!harnessCommand) return;
-  await addAccountForHarness(rl, id, localHarnessForCommand(harnessCommand)!);
+  await addAccountForHarness(id, localHarnessForCommand(harnessCommand)!);
 }
 
 async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promise<void> {
