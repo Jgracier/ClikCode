@@ -288,6 +288,22 @@ function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: s
     const name = String(part?.tool ?? 'tool');
     return { kind: state?.status === 'completed' ? 'tool-done' : 'tool-start', label: name };
   }
+  // Command Code's envelope wraps each lifecycle event under a top-level
+  // `{ type: 'event', event: {...} }` (distinct from its `{ type: 'result' }`
+  // terminal frame) -- verified against its own docs, though only the
+  // `tool_running` value itself was confirmed there, not a paired
+  // completion event, so this only ever reports 'tool-start'.
+  if (harness.command === 'command' && type === 'event') {
+    const inner = value.event && typeof value.event === 'object' ? value.event as Record<string, unknown> : undefined;
+    if (inner?.type === 'tool_running') return { kind: 'tool-start', label: String(inner.toolName ?? 'tool') };
+  }
+  // Pi's own envelope: a flat `{ type: 'toolcall_start', toolName }` --
+  // verified from its own docs (packages/coding-agent/docs/json.md), but
+  // the docs excerpt available didn't name a paired completion event, so
+  // (same as Command Code above) this only ever reports 'tool-start'.
+  if (harness.command === 'pi' && type === 'toolcall_start') {
+    return { kind: 'tool-start', label: String(value.toolName ?? 'tool') };
+  }
   return undefined;
 }
 
