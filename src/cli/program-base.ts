@@ -99,7 +99,7 @@ function isMutatingLifecycleCommand(commandPath: string): boolean {
  * the banner + --local resolution preAction, the lifecycle-lock hooks, and the
  * process-level error safety net.
  */
-export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolean; banner?: string } = {}): Command {
+export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolean; banner?: string; standaloneClikCode?: boolean; version?: string } = {}): Command {
   const program = new Command();
   const banner = options.banner ?? BANNER;
   let activeLifecycleLock: LifecycleLock | null = null;
@@ -116,16 +116,12 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
   program
     .name('clikdeploy')
     .description('Deploy apps with one command - autonomous by default, simple by design')
-    .version(CLI_VERSION)
-    .option(
-      '--local',
-      'Use local platform URL for this command only (defaults to http://localhost:3000; override with CLIKDEPLOY_LOCAL_API_URL or `clikdeploy config localApiUrl <url>`)'
-    )
+    .version(options.version ?? CLI_VERSION)
     .option('--json', 'Render structured JSON output (default behavior; accepted for compatibility)')
     .option('--human', 'Render human-readable output (default is JSON)')
     .option(
       '--debug',
-      'On failure, also print the stack, HTTP status and response body (or set CLIKDEPLOY_DEBUG=1)'
+      `On failure, also print the stack, HTTP status and response body${options.standaloneClikCode ? '' : ' (or set CLIKDEPLOY_DEBUG=1)'}`
     )
     .hook('preAction', () => {
       // Hand commander's parse of --json/--human/--debug to the modules that
@@ -141,7 +137,7 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
 
       // One-off URL override is `CLIKDEPLOY_API_URL` (see #495). `--local` is
       // the localhost shorthand. `--api-url` is not a registered global flag.
-      if (opts.local) {
+      if (!options.standaloneClikCode && opts.local) {
         const localFromEnv = String(process.env.CLIKDEPLOY_LOCAL_API_URL || '').trim();
         const localFromConfig = String(config.get(CONFIG_KEYS.LOCAL_API_URL) || '').trim();
         process.env[CLI_API_URL_OVERRIDE_ENV] = normalizeApiUrl(
@@ -151,6 +147,13 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
         delete process.env[CLI_API_URL_OVERRIDE_ENV];
       }
     });
+
+  if (!options.standaloneClikCode) {
+    program.option(
+      '--local',
+      'Use local platform URL for this command only (defaults to http://localhost:3000; override with CLIKDEPLOY_LOCAL_API_URL or `clikdeploy config localApiUrl <url>`)'
+    );
+  }
 
   program.hook('preAction', (_thisCommand, actionCommand) => {
     if (options.lifecycleLock === false) return;

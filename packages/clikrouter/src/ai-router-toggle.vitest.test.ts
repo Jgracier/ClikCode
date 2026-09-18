@@ -9,7 +9,7 @@ describe('Router toggle behavior (per-agent and global)', () => {
     delete process.env.ROUTER_DECISION_MAKER_ENABLED;
   });
 
-  it('consults TypeSafe when agent has `jev` capability', async () => {
+  it('consults TypeSafe when agent has the Jev remediation capability', async () => {
     const fakeDecision = { top_choice: 'openai:gpt-5' };
     // @ts-ignore
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => fakeDecision });
@@ -19,12 +19,12 @@ describe('Router toggle behavior (per-agent and global)', () => {
       { provider: 'openai', model: 'gpt-5', accessClass: 'metered', estimatedCostPerMTok: 0.1, inputCostPerMTok: 0.1, accountId: 'a1' },
     ];
 
-    const selected = await selectLocalHarnessRouteAsync(accounts as any, candidates as any, { route: 'local', strategy: 'auto', agentCapabilities: ['jev'] });
+    const selected = await selectLocalHarnessRouteAsync(accounts as any, candidates as any, { route: 'local', strategy: 'auto', agentCapabilities: ['analyze_env_remediation'] });
     expect(selected.provider).toBe('openai');
     expect(selected.model).toBe('gpt-5');
   });
 
-  it('falls back to local selection when agent lacks `jev` capability', async () => {
+  it('falls back to local selection when agent lacks the Jev remediation capability', async () => {
     const fakeDecision = { top_choice: 'openai:gpt-5' };
     // @ts-ignore
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => fakeDecision });
@@ -56,7 +56,7 @@ describe('Router toggle behavior (per-agent and global)', () => {
       { provider: 'openai', model: 'gpt-5', accessClass: 'metered', estimatedCostPerMTok: 0.1, inputCostPerMTok: 0.1, accountId: 'a1' },
     ];
 
-    const selected = await selectLocalHarnessRouteAsync(accounts as any, candidates as any, { route: 'local', strategy: 'budget', agentCapabilities: ['jev'] });
+    const selected = await selectLocalHarnessRouteAsync(accounts as any, candidates as any, { route: 'local', strategy: 'budget', agentCapabilities: ['analyze_env_remediation'] });
     expect(selected.provider).toBe('anthropic');
   });
 });

@@ -61,6 +61,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   sessions.command('create').description('Create a session')
     .option('--route <route>', 'local or gateway', 'local').option('--account <account>', 'Local account label or id')
     .option('--provider <provider>', 'Provider id').option('--model <model>', 'Model id')
-    .option('--effort <effort>', 'low, medium, high, or xhigh', 'medium').option('--account-failover <mode>', 'never or on-quota-exhausted', 'on-quota-exhausted')
+    .option('--effort <effort>', 'Provider-native reasoning level').option('--account-failover <mode>', 'never or on-quota-exhausted')
     .action((options) => aiSessionCreate(options));
 }

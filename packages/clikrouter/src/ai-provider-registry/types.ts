@@ -11,6 +11,7 @@
  */
 export type AiModality =
   | "text" // chat / completion — the only modality any agent lane routes to
+  | "decision" // structured decision service; never ordinary chat routing
   | "embedding"
   | "image"
   | "video"
@@ -37,6 +38,7 @@ export const AI_PROVIDER_CATEGORY_ORDER: readonly AiProviderCategory[] = [
 
 export type AiProbeKind =
   | "openai-models" // GET url with `Authorization: Bearer` (OpenAI-style /models)
+  | "typesafe-models" // TypeSafe catalog with bearer auth
   | "openai-codex-models" // ChatGPT subscription catalog at /backend-api/codex/models
   | "anthropic-models" // GET url with x-api-key (or Bearer for OAuth) + anthropic-version
   | "google-code-assist" // Google Gemini CLI OAuth account/tier probe

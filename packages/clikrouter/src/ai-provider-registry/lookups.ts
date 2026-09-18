@@ -85,7 +85,7 @@ export function providerModalities(spec: AiProviderSpec): readonly AiModality[] 
  */
 export function providerCategory(spec: AiProviderSpec): AiProviderCategory {
   const m = providerModalities(spec);
-  if (m.includes("text") || m.includes("embedding")) return "text";
+  if (m.includes("text") || m.includes("embedding") || m.includes("decision")) return "text";
   if (m.includes("image") || m.includes("video")) return "visual";
   return "audio";
 }
