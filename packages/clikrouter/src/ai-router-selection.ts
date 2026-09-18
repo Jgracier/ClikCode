@@ -1575,8 +1575,8 @@ export async function selectRouterCandidateDynamic(
     // capability to be present before consulting the external decision-maker.
     if (agentCapabilities) {
       const hasJeV = Array.isArray(agentCapabilities)
-        ? agentCapabilities.includes('analyze_env_remediation') || agentCapabilities.includes('jev')
-        : (agentCapabilities as Set<string>).has('analyze_env_remediation') || (agentCapabilities as Set<string>).has('jev');
+        ? agentCapabilities.includes('analyze_env_remediation') || agentCapabilities.includes('run_jev_task') || agentCapabilities.includes('jev')
+        : (agentCapabilities as Set<string>).has('analyze_env_remediation') || (agentCapabilities as Set<string>).has('run_jev_task') || (agentCapabilities as Set<string>).has('jev');
       if (!hasJeV) {
         return selectRouterCandidate(candidates, mode, preferredModel, estimatedPromptTokens);
       }
