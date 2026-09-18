@@ -21,7 +21,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   accounts.command('providers').description('List supported local harnesses and login kinds').action(aiAccountProviders);
   accounts.command('login <harness>').description('Install if necessary, then run the harness’s official local login flow')
     .option('--label <label>', 'Local account label')
-    .action((harness, options) => aiAccountLogin(harness, options.label));
+    .action(async (harness, options) => { await aiAccountLogin(harness, options.label); });
   accounts.command('status <labelOrId>').description('Run the vendor’s declared account-status check').action(aiAccountStatus);
   accounts.command('logout <labelOrId>').description('Run vendor logout and retain the local alias as needs-login').action(aiAccountLogout);
   accounts.command('add').description('Register a local provider login reference; credentials remain on this device')

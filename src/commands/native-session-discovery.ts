@@ -47,7 +47,10 @@ async function readFilePrefix(path: string, maxBytes: number): Promise<string> {
 
 async function walkFilesRecursive(dir: string, maxDepth: number, suffix: string): Promise<string[]> {
   let entries;
-  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return []; }
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch {
+    // fail-open-ok: a missing or unreadable optional vendor history directory has no sessions.
+    return [];
+  }
   const files: string[] = [];
   for (const entry of entries) {
     const full = join(dir, entry.name);
@@ -127,7 +130,10 @@ async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNa
 async function readClaudeFsTranscript(nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
   const path = join(homedir(), '.claude', 'projects', workspace.replace(/\//g, '-'), `${nativeId}.jsonl`);
   let raw: string;
-  try { raw = await readFile(path, 'utf8'); } catch { return []; }
+  try { raw = await readFile(path, 'utf8'); } catch {
+    // fail-open-ok: an optional native transcript that disappeared during discovery contributes no messages.
+    return [];
+  }
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -188,7 +194,10 @@ async function readCodexFsTranscript(nativeId: string, workspace: string): Promi
   const path = files.find((file) => file.endsWith(`${nativeId}.jsonl`));
   if (!path) return [];
   let raw: string;
-  try { raw = await readFile(path, 'utf8'); } catch { return []; }
+  try { raw = await readFile(path, 'utf8'); } catch {
+    // fail-open-ok: an optional native transcript that disappeared during discovery contributes no messages.
+    return [];
+  }
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -215,13 +224,19 @@ async function readCodexFsTranscript(nativeId: string, workspace: string): Promi
  * text blocks. */
 async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
   let raw: string;
-  try { raw = await captureNativeHarnessOutput(harness, ['export', nativeId], {}, 8_000, workspace); } catch { return []; }
+  try { raw = await captureNativeHarnessOutput(harness, ['export', nativeId], {}, 8_000, workspace); } catch {
+    // fail-open-ok: session adoption is optional; a failed read-only vendor export has no importable messages.
+    return [];
+  }
   // `export` prints a human progress line ("Exporting session: <id>") before
   // the JSON body — skip to the first '{' rather than assume a fixed line count.
   const jsonStart = raw.indexOf('{');
   if (jsonStart === -1) return [];
   let parsed: { messages?: Array<{ info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> }> };
-  try { parsed = JSON.parse(raw.slice(jsonStart)); } catch { return []; }
+  try { parsed = JSON.parse(raw.slice(jsonStart)); } catch {
+    // fail-open-ok: malformed optional vendor export output cannot yield a trustworthy transcript.
+    return [];
+  }
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   for (const message of parsed.messages ?? []) {
     const role = message.info?.role;
@@ -239,7 +254,10 @@ async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, nativeI
 async function discoverCursorFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
   const root = join(homedir(), '.cursor', 'chats');
   let projectDirs;
-  try { projectDirs = await readdir(root, { withFileTypes: true }); } catch { return []; }
+  try { projectDirs = await readdir(root, { withFileTypes: true }); } catch {
+    // fail-open-ok: a missing or unreadable optional vendor history directory has no sessions.
+    return [];
+  }
   const metaFiles: Array<{ chatId: string; path: string }> = [];
   for (const projectDir of projectDirs) {
     if (!projectDir.isDirectory()) continue;
@@ -404,7 +422,10 @@ function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-l
         if (Array.isArray(container)) records.push(...container);
       }
     }
-  } catch { return []; }
+  } catch {
+    // fail-open-ok: malformed optional session-list output cannot yield trustworthy resumable ids.
+    return [];
+  }
   const sessions: DiscoveredNativeSession[] = [];
   for (const record of records) {
     if (!record || typeof record !== 'object') continue;
@@ -458,5 +479,8 @@ export async function discoverNativeSessions(
     if (format === 'text') return parseDiscoveredSessionsText(raw);
     if (format === 'numbered-list') return parseDiscoveredSessionsNumberedList(raw);
     return parseDiscoveredSessionsStructured(raw, format);
-  } catch { return []; }
+  } catch {
+    // fail-open-ok: passive discovery must not break the picker when an optional vendor command fails.
+    return [];
+  }
 }
