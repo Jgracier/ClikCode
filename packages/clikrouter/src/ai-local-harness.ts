@@ -575,7 +575,7 @@ export async function selectLocalHarnessRouteAsync(
   // use dynamic, pluggable selector; pass agent capabilities (if any) so the
   // router can honor per-agent toggles like `jev` before consulting external
   // decision-makers.
-  const selected = await import('./ai-router-selection').then((m) =>
+  const selected = await import('./ai-router-selection.js').then((m) =>
     m.selectRouterCandidateDynamic(eligible, request.strategy, request.preferredModel, request.estimatedPromptTokens, request.agentCapabilities),
   );
   if (!selected) {
