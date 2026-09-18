@@ -888,8 +888,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
    * above had in fact changed. Right-aligned on its own line so it never
    * competes with statusText()'s provider/model/directory for space. */
   private titleText(): string | undefined {
-    const session = this.currentSession;
-    return session?.name ? `“${session.name}”` : undefined;
+    return this.currentSession?.name || undefined;
   }
 
   private waitingText(): string {
@@ -1127,23 +1126,34 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
           cursor = value.length;
           return draw();
         }
+        // Plain Up/Down scroll the conversation now, not prompt history: a
+        // swipe gesture or a terminal app's own on-screen scrollbar (common
+        // on mobile SSH clients, which is how this was actually being tried)
+        // sends exactly these two sequences, nothing else -- Page Up/Down
+        // below is real and works from a physical keyboard, but was
+        // unreachable from a touch interface, which is what "I can see the
+        // scrollbar but the chat doesn't move, even using the scrollbar
+        // itself" was: the keys arrived, but at prompt-history recall, which
+        // silently did nothing when there was no history yet to recall.
+        // Prompt history moves to Ctrl+P/Ctrl+N (common readline-style
+        // bindings) so it isn't lost, just no longer on the key that has to
+        // mean "scroll" for a touch interface to be usable at all.
         if (key === '\u001b[A') {
-          if (options.length) selected = (selected - 1 + options.length) % options.length;
-          else if (historyIndex > 0) { historyIndex--; value = this.history[historyIndex] ?? ''; cursor = value.length; }
-          return draw();
+          if (options.length) { selected = (selected - 1 + options.length) % options.length; return draw(); }
+          this.historyScroll += 3;
+          return draw(true);
         }
         if (key === '\u001b[B') {
-          if (options.length) selected = (selected + 1) % options.length;
-          else { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; }
-          return draw();
+          if (options.length) { selected = (selected + 1) % options.length; return draw(); }
+          this.historyScroll = Math.max(0, this.historyScroll - 3);
+          return draw(true);
         }
+        if (key === '\u0010' && !options.length) { if (historyIndex > 0) { historyIndex--; value = this.history[historyIndex] ?? ''; cursor = value.length; } return draw(); }
+        if (key === '\u000e' && !options.length) { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; return draw(); }
         if (key === '\u001b[D') { cursor = previousCharacterIndex(value, cursor); return draw(); }
         if (key === '\u001b[C') { cursor = nextCharacterIndex(value, cursor); return draw(); }
-        // Page Up/Down scroll the conversation area itself rather than the
-        // composer -- the conversation only ever showed its most recent tail
-        // before this, with no way to look further back regardless of
-        // terminal height. A fixed 10-line step (not the exact visible row
-        // count) keeps this independent of paint()'s own internal layout math.
+        // Page Up/Down scroll by a full page instead of 3 lines, for a real
+        // keyboard's own dedicated keys.
         if (key === '\u001b[5~') { this.historyScroll += 10; return draw(true); }
         if (key === '\u001b[6~') { this.historyScroll = Math.max(0, this.historyScroll - 10); return draw(true); }
         if (key === '\u007f' || key === '\b') {
