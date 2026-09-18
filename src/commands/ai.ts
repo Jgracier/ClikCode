@@ -651,7 +651,7 @@ function normalizeFailoverWord(value: string): 'never' | 'on-quota-exhausted' {
  * a provider override could be accepted and then silently do nothing: the
  * turn-argv builder already only applies effort when `effortArgvPrefix` is
  * declared, and only applies permission mode when the harness's declared
- * `permissionModes` includes it (today: Codex and Claude Code only). */
+ * `permissionModes` includes it. */
 function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { model: string }>, key: string, value: string, harness?: AiLocalHarnessDefinition): void {
   const normalizedKey = key.toLowerCase();
   if (normalizedKey === 'effort') {
@@ -899,9 +899,13 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   }
   if (head === 'permissions') {
     const value = words.shift()?.toLowerCase();
-    if (!value) return emitHarnessOutput({ panel: 'permissions', session, controls: ['ask', 'bypass', 'auto'] });
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness) throw new Error('Choose a provider before setting permissions.');
+    if (!value) {
+      const controls = VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode));
+      if (!controls.length) throw new Error(`${harness.displayName} does not map ClikCode's permission modes to a real flag.`);
+      return emitHarnessOutput({ panel: 'permissions', session, controls });
+    }
     setSessionHarnessOption(session, harness, 'permissions', value);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
