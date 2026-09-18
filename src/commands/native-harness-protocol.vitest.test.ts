@@ -19,8 +19,8 @@ const codex = {
 describe('native harness turn results', () => {
   it('keeps a valid final answer successful after a failed internal sub-command', () => {
     const stdout = [
-      JSON.stringify({ source: 'unified_exec_startup', status: 'failed', error: 'command exited 1' }),
-      JSON.stringify({ type: 'assistant_message', text: 'The complete answer.' }),
+      JSON.stringify({ type: 'item.completed', item: { type: 'command_execution', command: 'exit 1', status: 'failed', exit_code: 1 } }),
+      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'The complete answer.' } }),
     ].join('\n');
 
     const result = nativeTurnResult(codex, stdout);
@@ -35,9 +35,9 @@ describe('native harness turn results', () => {
     expect(result).toMatchObject({ text: 'authentication required', isError: true });
   });
 
-  it('honors an explicit top-level failed status even when text is present', () => {
-    const result = nativeTurnResult(codex, JSON.stringify({ status: 'failed', text: 'partial response' }));
+  it('honors an explicit terminal failed status', () => {
+    const result = nativeTurnResult(codex, JSON.stringify({ type: 'turn.failed', status: 'failed', error: 'quota exhausted' }));
 
-    expect(result).toMatchObject({ text: 'partial response', isError: true });
+    expect(result).toMatchObject({ text: 'quota exhausted', isError: true });
   });
 });
