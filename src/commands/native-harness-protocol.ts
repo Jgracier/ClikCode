@@ -135,6 +135,12 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     }
   };
   values.forEach((value) => visit(value));
+  // Some harnesses report a bare string `error` without also setting an
+  // is_error flag or top-level failed status. When no assistant message was
+  // produced, that string is still a turn failure rather than a successful
+  // reply. This matters now that process exit codes are only advisory: a
+  // non-zero exit must not be the sole signal preserving this failure.
+  if (messages.length === 0 && errorMessage) isError = true;
   // errorMessage only as a fallback, never preferred over real assistant
   // text -- a turn that produced actual output before failing partway
   // through should still show that output, not the failure reason instead
