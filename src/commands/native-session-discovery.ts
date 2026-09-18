@@ -10,7 +10,7 @@ import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { captureNativeHarnessOutput, inspectNativeHarness } from './native-harness.js';
-import type { AiLocalHarnessDefinition } from './ai.js';
+import type { AiLocalHarnessDefinition } from './types.js';
 
 /** A short, single-line title from a chat's first real message — used both
  * here (a discovered session with no explicit title) and by ai.ts itself
