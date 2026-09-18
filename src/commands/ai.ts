@@ -812,8 +812,13 @@ export async function aiSessionClose(id: string): Promise<void> {
   // outright instead of accumulating it. A set nativeSessionId is kept even
   // with zero ClikCode-tracked messages: it may be adopted from, or linked
   // directly to, a vendor's own conversation that has real content ClikCode
-  // just never routed a turn through.
-  if (!(session.messages ?? []).length && !session.nativeSessionId) {
+  // just never routed a turn through. A session with a provider already
+  // chosen (nativeHarness set) is kept too, even message-less: choosing a
+  // provider and adding/configuring its account is real, deliberate setup
+  // work, not an accidental blank launch — deleting it made ClikCode "forget"
+  // which provider a still-mid-setup session belonged to and fall back to an
+  // older, unrelated one on the next launch.
+  if (!(session.messages ?? []).length && !session.nativeSessionId && !session.nativeHarness) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
