@@ -3,7 +3,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { copyFile, mkdir, open, readFile, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { copyFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline/promises';
@@ -2638,6 +2638,153 @@ interface DiscoveredNativeSession {
   updatedAt?: string;
 }
 
+async function readFilePrefix(path: string, maxBytes: number): Promise<string> {
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    return buffer.toString('utf8', 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function walkFilesRecursive(dir: string, maxDepth: number, suffix: string): Promise<string[]> {
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return []; }
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory() && maxDepth > 0) files.push(...await walkFilesRecursive(full, maxDepth - 1, suffix));
+    else if (entry.isFile() && entry.name.endsWith(suffix)) files.push(full);
+  }
+  return files;
+}
+
+async function newestFiles(paths: readonly string[], limit: number): Promise<Array<{ path: string; mtimeMs: number }>> {
+  const stats = await Promise.all(paths.map(async (path) => {
+    const info = await stat(path).catch(() => undefined);
+    return info ? { path, mtimeMs: info.mtimeMs } : undefined;
+  }));
+  return stats.filter((item): item is { path: string; mtimeMs: number } => Boolean(item))
+    .sort((left, right) => right.mtimeMs - left.mtimeMs).slice(0, limit);
+}
+
+/** Claude Code has no CLI command that lists past sessions (`--resume` with no
+ * id opens an interactive TUI picker only), but it writes one real, stable
+ * `<uuid>.jsonl` file per session under a project folder named by literalizing
+ * the cwd path (`/` becomes `-`) — directly observed on disk, not guessed. The
+ * first line is often `{"type":"ai-title","aiTitle":"..."}`; older sessions
+ * without one fall back to the first `type":"user"` message's own text. */
+async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
+  const dir = join(homedir(), '.claude', 'projects', workspace.replace(/\//g, '-'));
+  const files = await walkFilesRecursive(dir, 0, '.jsonl');
+  const recent = await newestFiles(files, 15);
+  const sessions: DiscoveredNativeSession[] = [];
+  for (const file of recent) {
+    const nativeId = file.path.slice(dir.length + 1).replace(/\.jsonl$/, '');
+    const prefix = await readFilePrefix(file.path, 8_000).catch(() => '');
+    let title: string | undefined;
+    for (const line of prefix.split('\n')) {
+      if (!line.trim()) continue;
+      let record: Record<string, unknown>;
+      try { record = JSON.parse(line); } catch { continue; }
+      if (record.type === 'ai-title' && typeof record.aiTitle === 'string') { title = record.aiTitle; break; }
+      const message = record.message as { content?: unknown } | undefined;
+      // Claude Code also injects synthetic wrapper turns (e.g. a
+      // "<local-command-caveat>" note about a slash command's own output) as
+      // literal role:"user" messages — the same reason Codex's fallback below
+      // skips anything starting with "<".
+      if (!title && record.type === 'user' && typeof message?.content === 'string' && !message.content.trim().startsWith('<')) {
+        title = conversationTitle(message.content.trim());
+      }
+    }
+    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString() });
+  }
+  return sessions;
+}
+
+/** Codex writes one `rollout-<timestamp>-<uuid>.jsonl` file per session under
+ * `~/.codex/sessions/<year>/<month>/<day>/`, not scoped by project directory —
+ * `session_meta`'s own `cwd` field is what filters to this workspace. There is
+ * no title field; the first real user message (skipping synthetic `<...>`
+ * wrapper turns Codex injects, like recommended-plugin notices) stands in for
+ * one, same convention ClikCode's own conversationTitle already uses. */
+async function discoverCodexFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
+  const root = join(homedir(), '.codex', 'sessions');
+  const files = await walkFilesRecursive(root, 4, '.jsonl');
+  const recent = await newestFiles(files, 25);
+  const sessions: DiscoveredNativeSession[] = [];
+  for (const file of recent) {
+    const prefix = await readFilePrefix(file.path, 64_000).catch(() => '');
+    let sessionId: string | undefined;
+    let cwd: string | undefined;
+    let title: string | undefined;
+    for (const line of prefix.split('\n')) {
+      if (!line.trim()) continue;
+      let record: Record<string, unknown>;
+      try { record = JSON.parse(line); } catch { continue; }
+      const payload = record.payload as Record<string, unknown> | undefined;
+      if (record.type === 'session_meta') {
+        sessionId = typeof payload?.session_id === 'string' ? payload.session_id : undefined;
+        cwd = typeof payload?.cwd === 'string' ? payload.cwd : undefined;
+      } else if (!title && record.type === 'response_item' && payload?.role === 'user') {
+        const content = payload.content;
+        const text = Array.isArray(content)
+          ? content.map((part) => typeof (part as { text?: unknown })?.text === 'string' ? (part as { text: string }).text : '').join(' ').trim()
+          : typeof content === 'string' ? content.trim() : '';
+        if (text && !text.startsWith('<')) title = conversationTitle(text);
+      }
+    }
+    if (!sessionId || (workspace && cwd && cwd !== workspace)) continue;
+    sessions.push({ nativeId: sessionId, title, updatedAt: new Date(file.mtimeMs).toISOString() });
+  }
+  return sessions;
+}
+
+/** Cursor Agent's own `ls`/`--resume` are interactive pickers with no JSON
+ * mode, but each chat has a real `meta.json` (schemaVersion, title, cwd,
+ * updatedAtMs) under `~/.cursor/chats/<project-hash>/<chat-uuid>/` — the
+ * chat-uuid directory name is exactly the id its `--resume <chatId>` expects. */
+async function discoverCursorFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
+  const root = join(homedir(), '.cursor', 'chats');
+  let projectDirs;
+  try { projectDirs = await readdir(root, { withFileTypes: true }); } catch { return []; }
+  const metaFiles: Array<{ chatId: string; path: string }> = [];
+  for (const projectDir of projectDirs) {
+    if (!projectDir.isDirectory()) continue;
+    const projectPath = join(root, projectDir.name);
+    let chatDirs;
+    try { chatDirs = await readdir(projectPath, { withFileTypes: true }); } catch { continue; }
+    for (const chatDir of chatDirs) {
+      if (chatDir.isDirectory()) metaFiles.push({ chatId: chatDir.name, path: join(projectPath, chatDir.name, 'meta.json') });
+    }
+  }
+  const sessions: DiscoveredNativeSession[] = [];
+  for (const { chatId, path } of metaFiles.slice(0, 200)) {
+    let meta: Record<string, unknown>;
+    try { meta = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
+    if (workspace && typeof meta.cwd === 'string' && meta.cwd !== workspace) continue;
+    sessions.push({
+      nativeId: chatId,
+      title: typeof meta.title === 'string' ? meta.title : undefined,
+      updatedAt: typeof meta.updatedAtMs === 'number' ? new Date(meta.updatedAtMs).toISOString() : undefined,
+    });
+  }
+  return sessions.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')).slice(0, 15);
+}
+
+/** Only harnesses genuinely observed to store sessions on disk in a
+ * predictable, project-scoped way get an entry here — this is deliberately
+ * not a declarative catalog field like discoverArgv, because unlike a shell
+ * command's argv, each vendor's own on-disk layout (path, format, title
+ * source) is a real, unrelated shape with nothing left to normalize. */
+const FS_SESSION_DISCOVERY: Readonly<Record<string, (workspace: string) => Promise<DiscoveredNativeSession[]>>> = {
+  claude: discoverClaudeFsSessions,
+  codex: discoverCodexFsSessions,
+  cursor: discoverCursorFsSessions,
+};
+
 function splitTableColumns(line: string): string[] {
   return line.trim().split(/ {2,}/).map((cell) => cell.trim());
 }
@@ -2732,20 +2879,30 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   // Conversations that exist only inside a vendor's own history — never opened
   // through ClikCode — are otherwise invisible here entirely: /resume only ever
-  // looked at ClikCode's own tracked sessions. Only harnesses that publish an
-  // official listing command can be asked for theirs at all; that's currently
-  // opencode, Hermes, qwen, and goose (per the catalog), and only the first two
-  // are confirmed to actually return anything on this build's real CLIs.
+  // looked at ClikCode's own tracked sessions. Two independent mechanisms feed
+  // this, because vendors expose their own history in genuinely different
+  // ways: a machine-readable CLI listing (opencode, Hermes; qwen and goose
+  // declare one too but aren't installed here to verify) via discoverArgv, or
+  // — for the harnesses that publish no such command at all — reading their
+  // own on-disk session files directly (Claude Code, Codex, Cursor Agent).
   const workspace = current?.workspace ?? process.cwd();
   const discoverable = localRouter().AI_LOCAL_HARNESSES.filter((harness) => harness.session?.discoverArgv);
-  const discovered = (await Promise.all(discoverable.map(async (harness) => {
+  const shellDiscovered = (await Promise.all(discoverable.map(async (harness) => {
     const account = state.accounts.find((item) => item.provider === harness.provider && item.status === 'ready');
     const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
     const found = await discoverNativeSessions(harness, environment, workspace);
-    return found
-      .filter((item) => !state.sessions.some((session) => session.nativeHarness === harness.command && session.nativeSessionId === item.nativeId))
-      .map((item) => ({ harness, item }));
+    return found.map((item) => ({ harness, item }));
   }))).flat();
+  const fsDiscovered = (await Promise.all(Object.entries(FS_SESSION_DISCOVERY).map(async ([command, discover]) => {
+    const harness = localHarnessForCommand(command);
+    if (!harness) return [];
+    const inspection = await inspectNativeHarness(harness, 500);
+    if (!inspection.installed) return [];
+    const found = await discover(workspace).catch(() => []);
+    return found.map((item) => ({ harness, item }));
+  }))).flat();
+  const discovered = [...shellDiscovered, ...fsDiscovered]
+    .filter(({ harness, item }) => !state.sessions.some((session) => session.nativeHarness === harness.command && session.nativeSessionId === item.nativeId));
   const selected = await chooseOption(rl, 'Resume a session', [
     ...sessions.map((session) => {
       const model = session.model && session.nativeHarness === 'claude'
