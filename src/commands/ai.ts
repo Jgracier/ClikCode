@@ -1839,6 +1839,30 @@ async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: 
 
 /** Persistent terminal session using the same command and routing surface as automation. */
 export async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
+  // A long-lived interactive session should survive a transient terminal
+  // hangup (a flaky/mobile SSH connection dropping and reconnecting mid-use
+  // is exactly the kind of thing this hits), not die from it. Node's
+  // default action for an unhandled SIGHUP is immediate termination --
+  // before any try/catch, before uncaughtException, before anything this
+  // process could do about it. run()'s own SIGHUP forwarding only covers
+  // the narrow window a login/turn subprocess is actually running; a
+  // hangup arriving in any of the gaps around that (mid-suspend, during
+  // identity derivation, mid-render) previously killed the whole process
+  // silently -- explaining a real, reproduced case where the account never
+  // saved because ClikCode itself was gone, with no crash log at all
+  // (SIGHUP's default handling pre-empts JS entirely; there was nothing
+  // for a crash handler to catch). Ignoring it here covers the session's
+  // entire lifetime, not just subprocess windows.
+  const ignoreHangup = (): void => {};
+  process.on('SIGHUP', ignoreHangup);
+  try {
+    await aiSessionInteractiveInner(config, id);
+  } finally {
+    process.off('SIGHUP', ignoreHangup);
+  }
+}
+
+async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void> {
   const state = await readState();
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
