@@ -8,7 +8,7 @@ export type AiHarnessRoute = 'local' | 'gateway';
 
 export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
 
-export type AiHarnessPermissionMode = 'read-only' | 'workspace-write' | 'auto';
+export type AiHarnessPermissionMode = 'ask' | 'bypass' | 'auto';
 
 export type AiHarnessOptionKind = 'boolean' | 'string' | 'enum' | 'string-list' | 'path' | 'path-list' | 'number';
 

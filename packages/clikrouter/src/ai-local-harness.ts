@@ -17,7 +17,7 @@ export type AiHarnessRoute = 'local' | 'gateway';
 export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
 /** Automatic failover is deliberately limited to a known usage/quota exhaustion. */
 export type AiHarnessAccountFailover = 'never' | 'on-quota-exhausted';
-export type AiHarnessPermissionMode = 'read-only' | 'workspace-write' | 'auto';
+export type AiHarnessPermissionMode = 'ask' | 'bypass' | 'auto';
 
 export type AiHarnessOptionCategory =
   | 'model' | 'reasoning' | 'mode' | 'permissions' | 'tools' | 'context'
@@ -148,8 +148,8 @@ export interface AiLocalHarnessDefinition {
 export const AI_LOCAL_HARNESS_ADAPTER_VERSION = 3;
 
 export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
-  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['read-only', 'workspace-write', 'auto'], profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--output-format', 'stream-json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
-  { command: 'codex', provider: 'openai', displayName: 'Codex', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'codex', npmPackage: '@openai/codex', loginArgv: ['login'], statusArgv: ['login', 'status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cd'], effortArgvPrefix: ['--config'], effortConfigKey: 'model_reasoning_effort', permissionModes: ['read-only', 'workspace-write', 'auto'], imageArgvPrefix: ['--image'], profileEnv: 'CODEX_HOME', turn: { startArgv: ['exec', '--json', '--skip-git-repo-check'], resumeArgv: ['exec', 'resume'], resumeIdSuffix: ['--json', '--skip-git-repo-check'], promptInput: 'stdin', output: 'json-lines', responseFields: ['text'], resumeSupportsWorkspaceSelector: false }, session: { resumeIdPrefix: ['resume'], continueArgv: ['resume', '--last'] } },
+  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--output-format', 'stream-json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'codex', provider: 'openai', displayName: 'Codex', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'codex', npmPackage: '@openai/codex', loginArgv: ['login'], statusArgv: ['login', 'status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cd'], effortArgvPrefix: ['--config'], effortConfigKey: 'model_reasoning_effort', permissionModes: ['ask', 'bypass', 'auto'], imageArgvPrefix: ['--image'], profileEnv: 'CODEX_HOME', turn: { startArgv: ['exec', '--json', '--skip-git-repo-check'], resumeArgv: ['exec', 'resume'], resumeIdSuffix: ['--json', '--skip-git-repo-check'], promptInput: 'stdin', output: 'json-lines', responseFields: ['text'], resumeSupportsWorkspaceSelector: false }, session: { resumeIdPrefix: ['resume'], continueArgv: ['resume', '--last'] } },
   // No loginArgv value actually performs a login non-interactively -- Gemini
   // CLI's real auth commands (/auth, /auth login, /auth logout) are slash
   // commands typed inside its own interactive session, not CLI flags
@@ -163,7 +163,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // `/auth login` themselves, instead of ClikCode silently assuming
   // "logged in" and only surfacing the problem as a raw turn failure.
   { command: 'gemini', provider: 'google', displayName: 'Gemini CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'gemini', npmPackage: '@google/gemini-cli', loginArgv: [], modelArgvPrefix: ['--model'], turn: { startArgv: ['--output-format', 'json'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json', responseFields: ['response', 'result', 'text'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--resume', 'latest'], discoverArgv: ['--list-sessions'], discoverFormat: 'numbered-list' } },
-  { command: 'opencode', provider: 'opencode', displayName: 'OpenCode', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'opencode', loginArgv: ['auth', 'login'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--dir'], effortArgvPrefix: ['--variant'], permissionModes: ['auto'], turn: { startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list'], discoverFormat: 'text' } },
+  { command: 'opencode', provider: 'opencode', displayName: 'OpenCode', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'opencode', loginArgv: ['auth', 'login'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--dir'], effortArgvPrefix: ['--variant'], permissionModes: ['ask', 'bypass'], turn: { startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list'], discoverFormat: 'text' } },
   { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], continueArgv: ['--continue'] } },
   { command: 'aider', provider: 'aider', displayName: 'Aider', surface: 'terminal', localAuth: ['api-key', 'vendor-cli'], binary: 'aider', modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models', ''], turn: { startArgv: [], createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'], promptArgvPrefix: ['--message'], output: 'text' }, session: { idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'] } },
   { command: 'goose', provider: 'goose', displayName: 'Goose', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', turn: { startArgv: ['run'], resumeIdPrefix: ['--resume', '--session-id'], promptArgvPrefix: ['--text'], output: 'text' }, session: { resumeIdPrefix: ['session', '--resume', '--session-id'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' } },
@@ -224,7 +224,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // stdio: 'inherit' via suspend/resume, same as Claude Code/Codex --
   // real output on screen, including the actual prompt a fresh user needs
   // to complete it, at the cost of the raw JSON dump this doesn't hide.
-  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], permissionModes: ['read-only', 'workspace-write', 'auto'], profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
+  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
   { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
   { command: 'droid', provider: 'factory', displayName: 'Factory Droid', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'droid', modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], turn: { startArgv: ['exec', '--output-format', 'json'], resumeIdPrefix: ['--resume'], output: 'json', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'] } },
   { command: 'kiro', provider: 'kiro', displayName: 'Kiro CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'kiro-cli', launchArgv: ['chat'], turn: { startArgv: ['chat', '--no-interactive'], resumeIdPrefix: ['--resume-id'], output: 'text' }, session: { resumeIdPrefix: ['chat', '--resume-id'], continueArgv: ['chat', '--resume'] } },
@@ -232,10 +232,10 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'cline', provider: 'cline', displayName: 'Cline CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', loginArgv: ['auth'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], profileEnv: 'CLINE_DATA_DIR', turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['--id'] } },
   { command: 'roo', provider: 'roo', displayName: 'Roo Code', surface: 'editor-extension', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'roo' },
   { command: 'kilo', provider: 'kilo', displayName: 'Kilo Code CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'kilo', npmPackage: '@kilocode/cli', loginArgv: ['auth', 'login'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], turn: { startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' } },
-  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'cursor-agent', loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['read-only', 'workspace-write', 'auto'], turn: { startArgv: ['-p', '--output-format', 'json'], resumeIdPrefix: ['--resume'], output: 'json', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'cursor-agent', loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], turn: { startArgv: ['-p', '--output-format', 'json'], resumeIdPrefix: ['--resume'], output: 'json', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   { command: 'windsurf', provider: 'windsurf', displayName: 'Windsurf Cascade', surface: 'editor-extension', localAuth: ['oauth', 'vendor-cli'], binary: 'windsurf' },
   { command: 'crush', provider: 'crush', displayName: 'Crush', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'crush', npmPackage: '@charmland/crush', turn: { startArgv: ['run'], resumeIdPrefix: ['--session'], output: 'text' }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list', '--json'], discoverFormat: 'json' } },
-  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['auto'], profileEnv: 'HERMES_HOME', turn: { startArgv: [], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-z'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
+  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], profileEnv: 'HERMES_HOME', turn: { startArgv: [], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-z'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
   { command: 'command', provider: 'command-code', displayName: 'Command Code', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'cmdc', npmPackage: 'command-code', loginArgv: ['login'], statusArgv: ['status', '--json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], profileEnv: 'HOME', turn: { startArgv: ['--print', '--output-format', 'json', '--yolo', '--skip-onboarding', '--no-auto-update'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
 ];
 
@@ -419,7 +419,7 @@ export function localHarnessCapabilityManifest(harness: AiLocalHarnessDefinition
   if (harness.modelArgvPrefix) normalized.push(value('model', 'Model', 'Provider model id or alias', 'model', harness.modelArgvPrefix));
   if (harness.workspaceArgvPrefix) normalized.push(value('workspace', 'Workspace', 'Working directory for the native agent', 'context', harness.workspaceArgvPrefix, 'path', { requiresNewSession: true }));
   if (harness.effortArgvPrefix) normalized.push(value('effort', 'Reasoning effort', 'Provider-native reasoning level', 'reasoning', harness.effortArgvPrefix, 'enum', { values: EFFORT_VALUES[harness.command] ?? [] }));
-  if (harness.permissionModes?.length) normalized.push({ id: 'permissions', label: 'Filesystem access', description: 'Normalized ClikCode filesystem policy', category: 'permissions', kind: 'enum', values: harness.permissionModes });
+  if (harness.permissionModes?.length) normalized.push({ id: 'permissions', label: 'Permissions', description: 'Normalized ClikCode approval behavior', category: 'permissions', kind: 'enum', values: harness.permissionModes });
   return { ...declared, options: [...normalized, ...declared.options] };
 }
 
@@ -504,45 +504,37 @@ export function nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: 
   if (input.effort && harness.effortArgvPrefix) argv.push(...harness.effortArgvPrefix, harness.effortConfigKey ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
   if (input.permissionMode && harness.permissionModes?.includes(input.permissionMode)) {
     if (harness.command === 'codex') {
-      const permissionArgs = ['--sandbox', input.permissionMode === 'auto' ? 'workspace-write' : input.permissionMode];
-      if (input.permissionMode === 'auto') permissionArgs.push('--approve-for-me');
-      // `sandbox` belongs to `codex exec`, not its `resume` subcommand. Clap
-      // accepts parent options before `resume` and rejects them after it.
-      if (resumed && harness.turn.resumeArgv?.[0] === 'exec') argv.splice(1, 0, ...permissionArgs);
-      else argv.push(...permissionArgs);
+      const permissionArgs = input.permissionMode === 'ask'
+        ? ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request']
+        : input.permissionMode === 'bypass'
+          ? ['--sandbox', 'danger-full-access', '--ask-for-approval', 'never']
+          : ['--approve-for-me'];
+      // Approval policy is a root Codex option (not an `exec` option), so the
+      // whole permission profile must precede `exec`. Keeping sandbox and
+      // approval together also gives create and resume identical semantics.
+      argv.unshift(...permissionArgs);
     } else if (harness.command === 'claude') {
-      const mode = input.permissionMode === 'read-only' ? 'plan' : input.permissionMode === 'workspace-write' ? 'acceptEdits' : 'auto';
+      const mode = input.permissionMode === 'ask' ? 'manual' : input.permissionMode === 'bypass' ? 'bypassPermissions' : 'auto';
       argv.push('--permission-mode', mode, '--permission-prompts', 'none');
+      if (input.permissionMode === 'bypass') argv.push('--allow-dangerously-skip-permissions');
     } else if (harness.command === 'opencode') {
-      // Confirmed via --help: opencode only has one real permission lever,
-      // --auto ("auto-approve permissions that are not explicitly denied").
-      // No read-only/workspace-write flag exists to map, which is why this
-      // harness's own permissionModes only declares 'auto' -- there is
-      // nothing here for the other two modes to ever select.
-      if (input.permissionMode === 'auto') argv.push('--auto');
+      // OpenCode's unflagged default asks; --auto bypasses prompts that are
+      // not explicitly denied. It has no independent auto-reviewer mode.
+      if (input.permissionMode === 'bypass') argv.push('--auto');
     } else if (harness.command === 'cursor') {
-      // Confirmed via --help: --mode plan is real read-only/planning mode
-      // (no edits). workspace-write is cursor-agent's own unflagged default
-      // for -p/--print ("has access to all tools, including write and
-      // shell" per its own help text) -- nothing to add. auto maps to
-      // --force ("allow commands unless explicitly denied"), its closest
-      // real equivalent to ClikCode's "auto-approve" concept.
-      if (input.permissionMode === 'read-only') argv.push('--mode', 'plan');
-      else if (input.permissionMode === 'auto') argv.push('--force');
+      // Cursor's unflagged default asks, --force bypasses, and --auto-review
+      // delegates approval decisions to Cursor's own reviewer.
+      if (input.permissionMode === 'bypass') argv.push('--force');
+      else if (input.permissionMode === 'auto') argv.push('--auto-review');
     } else if (harness.command === 'hermes') {
-      // Confirmed via --help: --yolo ("bypass all dangerous command approval
-      // prompts") is the only real lever; no read-only/workspace-write flag
-      // exists, matching this harness's own permissionModes declaring only
-      // 'auto'.
-      if (input.permissionMode === 'auto') argv.push('--yolo');
+      // Hermes asks by default; --yolo is its explicit bypass mode. It does
+      // not publish an automatic reviewer.
+      if (input.permissionMode === 'bypass') argv.push('--yolo');
     } else if (harness.command === 'antigravity') {
-      // Confirmed via --help: --mode accepts exactly accept-edits/plan, and
-      // --dangerously-skip-permissions auto-approves everything. workspace
-      // -write keeps edits scoped to --mode accept-edits without the
-      // additional, broader auto-approval flag; auto adds it on top.
-      if (input.permissionMode === 'read-only') argv.push('--mode', 'plan');
-      else if (input.permissionMode === 'workspace-write') argv.push('--mode', 'accept-edits');
-      else if (input.permissionMode === 'auto') argv.push('--mode', 'accept-edits', '--dangerously-skip-permissions');
+      // Antigravity asks in accept-edits mode and exposes a separate explicit
+      // bypass flag. It does not publish an automatic reviewer.
+      argv.push('--mode', 'accept-edits');
+      if (input.permissionMode === 'bypass') argv.push('--dangerously-skip-permissions');
     }
   }
   appendDeclaredHarnessOptions(argv, harness, input.options, resumed);
