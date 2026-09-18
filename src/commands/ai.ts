@@ -2132,11 +2132,15 @@ export async function aiSessionClose(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  // A session that never received a single turn has nothing to resume — keeping
-  // it as "closed" clutter buries real conversations under identical
-  // "Untitled chat" entries every time the app is opened and exited without
-  // typing anything. Drop it outright instead of accumulating it.
-  if (!(session.messages ?? []).length) {
+  // A session that never received a single turn AND was never linked to a
+  // real vendor conversation has nothing to resume — keeping it as "closed"
+  // clutter buries real conversations under identical "Untitled chat" entries
+  // every time the app is opened and exited without typing anything. Drop it
+  // outright instead of accumulating it. A set nativeSessionId is kept even
+  // with zero ClikCode-tracked messages: it may be adopted from, or linked
+  // directly to, a vendor's own conversation that has real content ClikCode
+  // just never routed a turn through.
+  if (!(session.messages ?? []).length && !session.nativeSessionId) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
@@ -2874,8 +2878,12 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   // otherwise bury every real, titled conversation under identical
   // "Untitled chat" entries. Always keep the current session visible even if
   // it's still empty, so picking "current" back out of the list still works.
+  // A set nativeSessionId counts as real content too, even with zero
+  // ClikCode-tracked messages: a session adopted from a vendor's own history,
+  // or linked to one directly, has a real vendor-side conversation behind it
+  // that ClikCode simply never routed a turn through yet.
   const sessions = state.sessions
-    .filter((session) => session.id === currentId || (session.messages ?? []).length > 0)
+    .filter((session) => session.id === currentId || (session.messages ?? []).length > 0 || Boolean(session.nativeSessionId))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   // Conversations that exist only inside a vendor's own history — never opened
   // through ClikCode — are otherwise invisible here entirely: /resume only ever
