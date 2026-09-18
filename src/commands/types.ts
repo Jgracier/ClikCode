@@ -194,6 +194,7 @@ export interface HarnessPrompter {
   question(prompt: string, commands?: readonly PickerOption<string>[], settings?: { cancellable?: boolean }): Promise<string>;
   select?<T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
+  response?(text: string, mode?: 'append' | 'replace'): void;
   panel?(title: string, body: string): void;
   close(): void;
 }

@@ -33,6 +33,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingLabel = '';
   private waitingStartedAt = 0;
   private activityLines: string[] = [];
+  private liveResponse = '';
+  private responsePaintTimer?: NodeJS.Timeout;
   private activityAnchor = 0;
   /** Lines back from the very end of the conversation. 0 means "showing the
    * latest" (the default, and where every repaint clamps back to if the
@@ -78,7 +80,27 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     this.currentSession = session;
     this.currentAccount = account;
     this.currentNotice = notice;
+    // A render receives authoritative persisted state. Drop the transient
+    // stream so the just-saved assistant message is never painted twice.
+    if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
+    this.responsePaintTimer = undefined;
+    this.liveResponse = '';
     this.paint('', [], 0, '› ', 0);
+  }
+
+  response(text: string, mode: 'append' | 'replace' = 'append'): void {
+    if (!text) return;
+    this.liveResponse = mode === 'replace' ? text : this.liveResponse + text;
+    // Cursor can emit character-sized chunks. Coalesce them into a bounded
+    // repaint rate so streaming cannot reintroduce terminal flicker/stale rows.
+    if (this.responsePaintTimer || this.selecting || this.paletteActive) return;
+    this.responsePaintTimer = setTimeout(() => {
+      this.responsePaintTimer = undefined;
+      if (!this.closed && !this.selecting && !this.paletteActive) {
+        this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+      }
+    }, 32);
+    this.responsePaintTimer.unref();
   }
 
   activity(message: string): void {
@@ -98,6 +120,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   startWaiting(message: string, onCancel?: () => void): void {
     this.stopWaiting(false);
     this.activityLines = [];
+    this.liveResponse = '';
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
     this.waitingLabel = message;
     this.cancelWaiting = onCancel;
@@ -225,7 +248,10 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // share it) are unaffected.
     const conversationInner = width - 2;
     const rule = chalk.dim('─'.repeat(width));
-    const allMessages = session.messages ?? [];
+    const persistedMessages = session.messages ?? [];
+    const allMessages = this.liveResponse
+      ? [...persistedMessages, { role: 'assistant' as const, content: this.liveResponse }]
+      : persistedMessages;
     // 40, not 6: matches the same replay/adoption cap used elsewhere
     // (failoverPrompt, ADOPTED_TRANSCRIPT_LIMIT) and — now that the
     // conversation area supports scrolling — gives Page Up somewhere real to
@@ -651,6 +677,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
+    this.responsePaintTimer = undefined;
     this.stopWaiting(false);
     process.off('SIGWINCH', this.onResize);
     if (input.isTTY) input.setRawMode(false);

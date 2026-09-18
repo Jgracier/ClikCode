@@ -64,6 +64,7 @@ export async function aiDoctor(): Promise<void> {
         workspaceSelection: Boolean(harness.workspaceArgvPrefix),
         effortSelection: Boolean(harness.effortArgvPrefix),
         permissionModeSelection: (harness.permissionModes?.length ?? 0) > 0,
+        permissionModes: harness.permissionModes ?? [],
         exactResume: Boolean(harness.session?.resumeIdPrefix),
         automaticSessionIdentity: Boolean(harness.session?.createIdPrefix || harness.session?.createSessionArgv || harness.session?.discoverArgv),
         continueLatest: Boolean(harness.session?.continueArgv),
