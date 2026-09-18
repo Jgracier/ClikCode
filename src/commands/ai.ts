@@ -3612,15 +3612,27 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
               const target = resumeState.sessions.find((item) => item.id === selected.id);
               if (current?.nativeHarness && target && target.nativeHarness !== current.nativeHarness) {
                 const originalLabel = sessionProviderLabel(target);
+                const hasContent = (target.messages ?? []).length > 0;
                 target.nativeHarness = current.nativeHarness;
                 target.provider = current.provider;
                 target.accountId = current.accountId;
                 target.model = null;
                 target.nativeSessionId = undefined;
                 target.nativeStartedAt = undefined;
+                // A title inherited from the old provider's conversation is
+                // only meaningful alongside that conversation's actual
+                // messages. Wiping the native session id above already
+                // discards the old provider's identity; leaving a title with
+                // nothing behind it produced a real, reported bug — a chat
+                // that "shows a title but never loads," because there was
+                // never anything to load once the messages were gone (a
+                // session adopted with no readable transcript, most often).
+                if (!hasContent) target.name = undefined;
                 target.updatedAt = new Date().toISOString();
                 await writeState(resumeState);
-                notice = `Continuing this ${originalLabel} chat under ${sessionProviderLabel(current)}.`;
+                notice = hasContent
+                  ? `Continuing this ${originalLabel} chat under ${sessionProviderLabel(current)}.`
+                  : `Starting fresh under ${sessionProviderLabel(current)} — this ${originalLabel} chat had no readable history to bring over.`;
               }
             }
             id = selected.id;
