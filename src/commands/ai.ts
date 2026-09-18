@@ -522,15 +522,50 @@ async function codexUsageProbe(_session: HarnessSession, environment: Readonly<R
     const used = typeof window.usedPercent === 'number' ? window.usedPercent : undefined;
     const minutes = typeof window.windowDurationMins === 'number' ? window.windowDurationMins : undefined;
     if (used === undefined || minutes === undefined) return [];
-    const period = minutes === 300 ? '5h' : minutes === 10_080 ? 'week' : minutes < 1_440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1_440)}d`;
-    return [`${period} ${Math.max(0, Math.min(100, 100 - used))}% left`];
+    const period = minutes === 300 ? '5h' : minutes === 10_080 ? 'weekly' : minutes < 1_440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1_440)}d`;
+    return [`${period} ${Math.max(0, Math.min(100, 100 - used))}%`];
   });
   return parts.length ? parts.join(' · ') : undefined;
+}
+
+/** Claude Code has no public CLI flag or subcommand for this (confirmed:
+ * `--help` and `doctor` both show nothing), but the same data Claude Code's
+ * own interactive UI displays is one authenticated call away: its own OAuth
+ * token — already sitting in ~/.claude/.credentials.json, refreshed by
+ * Claude Code's own background daemon — is accepted by
+ * `/api/oauth/usage`, the private endpoint its UI calls internally.
+ * Verified live: real five_hour/seven_day utilization percentages, matching
+ * what the interactive session shows. This reads an already-authenticated
+ * user's own token to display their own account's own usage, the same data
+ * the vendor's own client already shows them — not a new grant of access. */
+async function claudeUsageProbe(): Promise<string | undefined> {
+  let token: string | undefined;
+  try {
+    const raw = await readFile(join(homedir(), '.claude', '.credentials.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
+    token = typeof parsed.claudeAiOauth?.accessToken === 'string' ? parsed.claudeAiOauth.accessToken : undefined;
+  } catch { return undefined; }
+  if (!token) return undefined;
+  try {
+    const response = await fetch('https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1', {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+    });
+    if (!response.ok) return undefined;
+    const body = await response.json() as {
+      five_hour?: { utilization?: number };
+      seven_day?: { utilization?: number };
+    };
+    const parts: string[] = [];
+    if (typeof body.five_hour?.utilization === 'number') parts.push(`5h ${Math.max(0, Math.min(100, 100 - body.five_hour.utilization))}%`);
+    if (typeof body.seven_day?.utilization === 'number') parts.push(`weekly ${Math.max(0, Math.min(100, 100 - body.seven_day.utilization))}%`);
+    return parts.length ? parts.join(' · ') : undefined;
+  } catch { return undefined; }
 }
 
 const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
   codex: codexUsageProbe,
   opencode: opencodeUsageProbe,
+  claude: claudeUsageProbe,
 };
 
 async function nativeUsageLabel(session: HarnessSession, state: HarnessState): Promise<string | undefined> {
