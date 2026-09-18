@@ -678,6 +678,26 @@ interface HarnessPrompter {
   close(): void;
 }
 
+/** Vendor responses come back as real markdown, but the transcript view is a
+ * fixed-width character grid with no rich-text renderer behind it — showing
+ * that syntax verbatim (literal ** around bold text, backticks around code,
+ * a raw [text](url) pair) reads as visibly broken rather than styled. Strips
+ * the syntax down to plain, readable text instead of attempting real
+ * rendering: bold/italic markers are dropped (chalk styling would have to
+ * survive the character-offset word-wrap below, which slices through ANSI
+ * codes with no awareness of them), inline code keeps its content without
+ * the backticks, and links keep their label with the URL alongside it. */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```[a-z]*\n?/g, '').replace(/```$/g, ''))
+    .replace(/(\*\*\*|___)(.+?)\1/g, '$2')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    .replace(/^#{1,6}\s+/gm, '');
+}
+
 function visibleSlice(value: string, width: number): string {
   if (terminalCellWidth(value) <= width) return value;
   const available = Math.max(0, width - 1);
@@ -741,6 +761,12 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingLabel = '';
   private activityLines: string[] = [];
   private activityAnchor = 0;
+  /** Lines back from the very end of the conversation. 0 means "showing the
+   * latest" (the default, and where every repaint clamps back to if the
+   * conversation is shorter than this). Deliberately a line count, not a
+   * message index: paging by whole screens needs to know how many wrapped
+   * lines actually fit, which messages alone don't tell you. */
+  private historyScroll = 0;
   private waitingScreenRow?: number;
   private usageLabel?: string;
   private selecting = false;
@@ -850,12 +876,22 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const rawModel = harness?.modelArgvPrefix ? session.model ?? 'automatic' : undefined;
     const model = rawModel && harness?.command === 'claude' ? CLAUDE_ALIAS_LABELS[rawModel] ?? rawModel : rawModel;
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
-    // The only other place a chat's title ever appeared was a transient line in the
-    // /resume picker itself — once you were actually inside a resumed conversation
-    // there was nothing on screen confirming which one, so switching looked like it
-    // hadn't done anything even when the transcript above had in fact changed.
-    const title = session.name ? `“${session.name}”` : undefined;
-    return [provider, title, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
+    // The title used to share this line with provider/model/directory, which
+    // meant a long title truncated whichever of those came after it — the
+    // exact information you'd want intact regardless of how long the title
+    // is. It gets its own line now (see titleText below).
+    return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
+  }
+
+  /** The only other place a chat's title ever appeared was a transient line in
+   * the /resume picker itself — once you were actually inside a resumed
+   * conversation there was nothing on screen confirming which one, so
+   * switching looked like it hadn't done anything even when the transcript
+   * above had in fact changed. Right-aligned on its own line so it never
+   * competes with statusText()'s provider/model/directory for space. */
+  private titleText(): string | undefined {
+    const session = this.currentSession;
+    return session?.name ? `“${session.name}”` : undefined;
   }
 
   private waitingText(): string {
@@ -896,7 +932,11 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const inner = width - 4;
     const rule = chalk.dim('─'.repeat(width));
     const allMessages = session.messages ?? [];
-    const messages = allMessages.slice(-6);
+    // 40, not 6: matches the same replay/adoption cap used elsewhere
+    // (failoverPrompt, ADOPTED_TRANSCRIPT_LIMIT) and — now that the
+    // conversation area supports scrolling — gives Page Up somewhere real to
+    // go instead of a pool too small to scroll through at all.
+    const messages = allMessages.slice(-40);
     const messageStart = allMessages.length - messages.length;
     const targetHeight = Math.max(4, (output.rows || 30) - 1);
     const requestedPaletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
@@ -904,11 +944,12 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const footerOnly = palette?.footerOnly ?? false;
     const paletteRows = paletteCapacity;
     const noticeRows = this.currentNotice ? 1 : 0;
-    // -2, not -1: leaves one real blank row at the bottom so the status line
-    // isn't pinned flush against the terminal's last row, and keeps total
-    // frame height strictly under the terminal height as a margin against
-    // the exact-height scroll class of bug (see the meta-line write below).
-    const rows = Math.max(1, targetHeight - 3 - paletteRows - noticeRows);
+    // 4 reserved lines below the conversation/palette/notice bands: rule,
+    // composer, rule, meta (provider/model/directory) — each newline-
+    // terminated — plus one further implicit row for the title line, which
+    // (like meta before it) is deliberately the one line with no trailing
+    // newline; see the comment on that write below for why.
+    const rows = Math.max(1, targetHeight - 4 - paletteRows - noticeRows);
     const conversation: Array<{ text: string; waiting?: boolean }> = [];
     let activityAppended = false;
     const appendActivity = (): void => {
@@ -920,7 +961,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
       let firstLine = true;
-      for (const paragraph of message.content.split(/\r?\n/)) {
+      for (const paragraph of stripMarkdown(message.content).split(/\r?\n/)) {
         const clean = paragraph || ' ';
         for (let offset = 0; offset < clean.length; offset += inner - 2) {
           const prefix = firstLine ? `${marker} ` : '  ';
@@ -932,7 +973,17 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       if (messageStart + messageIndex + 1 === this.activityAnchor) appendActivity();
     }
     if (!activityAppended) appendActivity();
-    const shown = conversation.slice(-rows);
+    // Clamped here (not just where scroll changes) because the available
+    // content shifts underneath the same scroll value on every repaint: a
+    // new message arriving grows `conversation`, a session switch can shrink
+    // it out from under a scroll position that made sense for the old one.
+    const maxScroll = Math.max(0, conversation.length - rows);
+    this.historyScroll = Math.min(this.historyScroll, maxScroll);
+    const windowStart = Math.max(0, conversation.length - rows - this.historyScroll);
+    const shown = conversation.slice(windowStart, windowStart + rows);
+    if (this.historyScroll > 0 && shown.length) {
+      shown[0] = { text: `  ${chalk.dim(`── ${this.historyScroll} line${this.historyScroll === 1 ? '' : 's'} below · PgDn to catch up ──`)}` };
+    }
     const meta = this.statusText();
     // DEC autowrap must stay off while an absolute-positioned frame is written.
     // A provider-supplied label can otherwise occupy two physical terminal rows
@@ -979,16 +1030,27 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     screenLine(rule);
     const viewport = composerViewport(composer, cursor, Math.max(8, inner - terminalCellWidth(prompt)));
     screenLine(`  ${chalk.white(prompt)}${viewport.text}`);
-    screenLine();
-    // No trailing "\n" here: total frame height is exactly the terminal height, so a
-    // newline after this, its last line, would land the cursor on the last row and
-    // scroll the whole screen by one -- invisible in a one-off full repaint (which
-    // starts over from \u001b[H next time), but fatal for footerOnly/select()
-    // repaints, which jump back to a fixed absolute row: every such scroll left that
-    // target one row stale, so the old line was never overwritten, only added to --
-    // the "adds a line every time you scroll" reports in the palette and pickers.
-    frame += `\r\u001b[2K  ${chalk.dim(visibleSlice(meta, inner))}\u001b[?7h`;
-    if (!palette?.hideCursor) frame += `\u001b[2A\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\u001b[?25h`;
+    // A second rule frames the composer on both sides (there was only ever
+    // one, above it) instead of the plain blank line that used to sit here.
+    screenLine(rule);
+    // meta (provider/model/directory) now gets its own newline-terminated
+    // line -- it no longer has to share space with the title, which moves to
+    // the true last line below, right-aligned. That's the one line title
+    // shares the "no trailing newline" treatment with (previously meta's
+    // alone): total frame height is exactly the terminal height, so a
+    // newline after the very last line would land the cursor on the last row
+    // and scroll the whole screen by one -- invisible in a one-off full
+    // repaint (which starts over from [H next time), but fatal for
+    // footerOnly/select() repaints, which jump back to a fixed absolute row:
+    // every such scroll left that target one row stale, so the old line was
+    // never overwritten, only added to -- the "adds a line every time you
+    // scroll" reports in the palette and pickers.
+    screenLine(`  ${chalk.dim(visibleSlice(meta, inner))}`);
+    const title = this.titleText();
+    const titlePlain = title ? visibleSlice(title, inner) : '';
+    const titleLine = chalk.dim(titlePlain.padStart(Math.max(titlePlain.length, width - 2)));
+    frame += `\r[2K${titleLine}[?7h`;
+    if (!palette?.hideCursor) frame += `[3A\r[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C[?25h`;
     output.write(frame);
   }
 
@@ -1008,13 +1070,25 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
       const matches = () => value.startsWith('/') && !value.includes(' ')
         ? commands.filter((option) => option.value.startsWith(value)).slice(0, 8)
         : [];
-      const draw = (): void => {
+      // Scrolling the conversation needs the full paint() path — the normal
+      // (no-palette) branch below only ever touches the composer's own line
+      // for performance, so a scroll action changing what's shown *above* the
+      // composer would otherwise never actually repaint, which is exactly
+      // what silently ate the first attempt at this: the key was received
+      // and historyScroll did change, nothing on screen ever reflected it.
+      const draw = (forceFullRepaint = false): void => {
         const options = matches();
         if (selected >= options.length) selected = 0;
         if (options.length || showedPalette) {
           this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, footerOnly: paletteOpen });
           paletteOpen = true;
           this.paletteActive = true;
+        } else if (forceFullRepaint) {
+          // No real palette here — pass no palette config at all, otherwise
+          // paint() would size a footer band for one anyway (its own
+          // capacity default comes from the full slash-command list, not
+          // "is a palette actually showing").
+          this.paint(value, [], 0, prompt, cursor);
         } else {
           const available = Math.max(8, (output.columns || 100) - 5 - terminalCellWidth(prompt));
           const viewport = composerViewport(value, cursor, available);
@@ -1068,6 +1142,13 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         }
         if (key === '\u001b[D') { cursor = previousCharacterIndex(value, cursor); return draw(); }
         if (key === '\u001b[C') { cursor = nextCharacterIndex(value, cursor); return draw(); }
+        // Page Up/Down scroll the conversation area itself rather than the
+        // composer -- the conversation only ever showed its most recent tail
+        // before this, with no way to look further back regardless of
+        // terminal height. A fixed 10-line step (not the exact visible row
+        // count) keeps this independent of paint()'s own internal layout math.
+        if (key === '\u001b[5~') { this.historyScroll += 10; return draw(true); }
+        if (key === '\u001b[6~') { this.historyScroll = Math.max(0, this.historyScroll - 10); return draw(true); }
         if (key === '\u007f' || key === '\b') {
           if (cursor > 0) { const previous = previousCharacterIndex(value, cursor); value = value.slice(0, previous) + value.slice(cursor); cursor = previous; }
           return draw();
@@ -1083,7 +1164,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         }
       };
       const onData = (chunk: Buffer | string): void => {
-        const keys = String(chunk).match(/\u001b\[[ABCD]|[\s\S]/g) ?? [];
+        const keys = String(chunk).match(/\u001b\[[ABCD]|\u001b\[[56]~|[\s\S]/g) ?? [];
         for (const key of keys) {
           if (finished) break;
           handleKey(key);
