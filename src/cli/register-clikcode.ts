@@ -3,7 +3,7 @@ import type { Command } from 'commander';
 import type Conf from 'conf';
 import {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList,
-  aiDoctor, aiGatewaySessionSend, aiGatewayStatus, aiModelsList, aiSessionCommand,
+  aiDoctor, aiGatewaySessionSend, aiGatewayStatus, aiModelsList, aiPermissions, aiSessionCommand,
   aiSessionClose, aiSessionCreate, aiSessionInteractive, aiSessionResume, aiSessionSet, aiSessionShow,
   aiSessionsList, aiStart, aiStatus, aiStop, aiUsage,
 } from '../commands/ai.js';
@@ -16,6 +16,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('status').description('Show the optional local control API runtime').action(aiStatus);
   program.command('stop').description('Stop this ClikCode installation’s optional control API').action(aiStop);
   program.command('doctor').description('Inspect installed harness versions and centralized capabilities').action(aiDoctor);
+  program.command('permissions [mode]').description('Choose Ask, Bypass, or Auto approval behavior for the active chat')
+    .action((mode?: string) => aiPermissions(mode));
   const accounts = program.command('accounts').alias('account').description('Manage local provider accounts');
   accounts.command('list').alias('ls').description('List local accounts without credential material').action(aiAccountsList);
   accounts.command('providers').description('List supported local harnesses and login kinds').action(aiAccountProviders);
@@ -56,7 +58,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--route <route>', 'local or gateway').option('--account <account>', 'Local account label or id')
     .option('--provider <provider>', 'Provider id').option('--model <model>', 'Model id')
     .option('--native-session <id>', 'Verified native session id to resume through its adapter')
-    .option('--effort <effort>', 'low, medium, high, or xhigh').option('--account-failover <mode>', 'never or on-quota-exhausted')
+    .option('--effort <effort>', 'low, medium, high, or xhigh').option('--permissions <mode>', 'ask, bypass, or auto')
+    .option('--account-failover <mode>', 'never or on-quota-exhausted')
     .action((id, options) => aiSessionSet(id, options));
   sessions.command('create').description('Create a session')
     .option('--route <route>', 'local or gateway', 'local').option('--account <account>', 'Local account label or id')

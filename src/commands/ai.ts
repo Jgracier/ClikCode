@@ -121,7 +121,7 @@ function renderSessionCard(session: HarnessSession, account?: string): string {
     line('account', account ?? 'default'),
     line('model', modelLabel ?? 'provider default'),
     line('effort', session.effort),
-    line('access', session.permissionMode ?? 'workspace-write'),
+    line('permissions', session.permissionMode ?? 'ask'),
     line('session', session.id.slice(0, 8)),
   ].join('\n');
 }
@@ -192,7 +192,7 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
       ['/account', 'choose, view, or add an account'],
       ['/model <name>', 'choose or view a model'],
       ['/effort <level>', 'set reasoning effort'],
-      ['/permissions', 'choose filesystem access'],
+      ['/permissions', 'choose approval behavior'],
       ['/sessions', 'list saved sessions'],
       ['/history', 'show this conversation'],
       ['/diff', 'show uncommitted project changes'],
@@ -592,7 +592,7 @@ export async function aiGatewayStatus(config: Conf): Promise<void> {
 }
 
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
-const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['read-only', 'workspace-write', 'auto'];
+const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['ask', 'bypass', 'auto'];
 
 function optionForHarness(harness: AiLocalHarnessDefinition, id: string): AiHarnessOptionDefinition | undefined {
   return localHarnessCapabilityManifest(harness).options.find((option) => option.id === id);
@@ -659,7 +659,7 @@ function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { model: s
     if (!VALID_EFFORTS.includes(value as (typeof VALID_EFFORTS)[number])) throw new Error(`effort must be one of ${VALID_EFFORTS.join(', ')}`);
     target.effort = value;
   } else if (normalizedKey === 'permissions' || normalizedKey === 'permissionmode') {
-    if (!VALID_PERMISSION_MODES.includes(value as AiHarnessPermissionMode)) throw new Error('permissions must be read-only, workspace-write, or auto');
+    if (!VALID_PERMISSION_MODES.includes(value as AiHarnessPermissionMode)) throw new Error('permissions must be ask, bypass, or auto');
     if (harness && !harnessSupportsPermissionMode(harness, value as AiHarnessPermissionMode)) throw new Error(`${harness.displayName} does not map ClikCode's permission modes to a real flag; setting one here would silently do nothing.`);
     target.permissionMode = value as AiHarnessPermissionMode;
   } else if (normalizedKey === 'failover') {
@@ -740,6 +740,43 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
 export async function aiSessionsList(): Promise<void> {
   const state = await readState();
   emitJson({ sessions: state.sessions });
+}
+
+/** Edit the active conversation's approval behavior from the top-level
+ * `clikcode permissions` command. The same picker and provider capability
+ * checks back the in-chat `/permissions` command, so the two surfaces cannot
+ * drift. With no conversation yet, a selection becomes the global default. */
+export async function aiPermissions(mode?: string): Promise<void> {
+  const normalizedMode = mode?.trim().toLowerCase() as AiHarnessPermissionMode | undefined;
+  if (normalizedMode && !VALID_PERMISSION_MODES.includes(normalizedMode)) {
+    throw new Error('permissions must be ask, bypass, or auto');
+  }
+  const state = await readState();
+  const session = [...state.sessions]
+    .sort((left, right) => Number(right.status === 'active') - Number(left.status === 'active') || right.updatedAt.localeCompare(left.updatedAt))[0];
+  if (normalizedMode) {
+    if (session) await aiSessionCommand(session.id, `/permissions ${normalizedMode}`);
+    else await aiSettingsSetGlobal('permissions', normalizedMode);
+    return;
+  }
+  if (!input.isTTY || !output.isTTY) throw new Error('interactive input is required; use `clikcode permissions ask|bypass|auto`');
+  const rl = new FullScreenHarnessPrompter();
+  activeFullScreenHarness = rl;
+  try {
+    if (session) {
+      const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
+      rl.render?.(session, account);
+      await interactivePermissionPicker(rl, session.id);
+    } else {
+      const selected = await chooseOption(rl, 'Choose permissions', VALID_PERMISSION_MODES.map((value) => ({
+        label: value[0].toUpperCase() + value.slice(1), value,
+      })));
+      if (selected) await aiSettingsSetGlobal('permissions', selected);
+    }
+  } finally {
+    activeFullScreenHarness = undefined;
+    rl.close();
+  }
 }
 
 /**
@@ -862,7 +899,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   }
   if (head === 'permissions') {
     const value = words.shift()?.toLowerCase();
-    if (!value) return emitHarnessOutput({ panel: 'permissions', session, controls: ['read-only', 'workspace-write', 'auto'] });
+    if (!value) return emitHarnessOutput({ panel: 'permissions', session, controls: ['ask', 'bypass', 'auto'] });
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness) throw new Error('Choose a provider before setting permissions.');
     setSessionHarnessOption(session, harness, 'permissions', value);
@@ -1811,16 +1848,16 @@ async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Pro
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-  const current = session.permissionMode ?? 'workspace-write';
+  const current = session.permissionMode ?? 'ask';
   const descriptions: Record<AiHarnessPermissionMode, string> = {
-    'read-only': 'inspect and plan; deny writes',
-    'workspace-write': 'allow edits inside this project',
+    ask: 'ask before actions that need approval',
+    bypass: 'run without approval prompts',
     auto: 'provider reviews approval requests automatically',
   };
   const supported = harness ? VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode)) : VALID_PERMISSION_MODES;
   if (!supported.length) throw new Error(`${harness?.displayName ?? 'This provider'} does not map ClikCode's permission modes to a real flag.`);
-  const selected = await chooseOption(rl, 'Choose filesystem access', supported.map((value) => ({
-    label: value, detail: `· ${descriptions[value]}${value === current ? ' · current' : ''}`, value,
+  const selected = await chooseOption(rl, 'Choose permissions', supported.map((value) => ({
+    label: value[0].toUpperCase() + value.slice(1), detail: `· ${descriptions[value]}${value === current ? ' · current' : ''}`, value,
   })));
   if (selected) await applySettingScope(rl, id, 'permissions', selected);
 }
@@ -1846,7 +1883,7 @@ async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: 
     { label: 'Account', detail: 'switch login/profile', value: 'account' },
     ...(harness?.modelArgvPrefix ? [{ label: 'Model', detail: 'provider default or model ID', value: 'model' }] : []),
     ...(harness && harnessSupportsEffort(harness) ? [{ label: 'Reasoning effort', detail: 'provider-supported levels', value: 'effort' }] : []),
-    ...(harness?.permissionModes?.length ? [{ label: 'Filesystem access', detail: 'provider-supported access policy', value: 'permissions' }] : []),
+    ...(harness?.permissionModes?.length ? [{ label: 'Permissions', detail: 'provider-supported approval behavior', value: 'permissions' }] : []),
     ...(harness && localHarnessCapabilityManifest(harness).options.some((option) => !['model', 'effort', 'workspace', 'permissions'].includes(option.id))
       ? [{ label: `${harness.displayName} options`, detail: 'modes, tools, safety, and context', value: 'options' }] : []),
     { label: 'Quota failover', detail: 'switch accounts automatically, or not', value: 'failover' },
@@ -1913,7 +1950,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const commandDetails: Record<string, string> = {
     '/provider': 'choose a provider (including ClikDeploy Gateway)', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
-    '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
+    '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'approval behavior',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
     '/init': 'create agent instructions', '/mention': 'attach a file', '/attachments': 'queued files', '/copy': 'copy last response',
@@ -2297,7 +2334,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       const argv = localRouter().nativeHarnessTurnArgv(harness, {
         prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
         launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
-        permissionMode: session.permissionMode ?? 'workspace-write', images, options: session.harnessOptions,
+        permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
       });
       // Persist an allocated native identity before the provider starts so an
       // interrupted turn cannot accidentally fork the centralized conversation.
@@ -2349,7 +2386,15 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         ? { isError: true, text: caughtTurnFailure.message, statusCode: undefined as number | undefined, nativeSessionId: undefined as string | undefined }
         : nativeTurnResult(harness, turnOutput.stdout);
       if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
-      if (turnOutput.exitCode !== 0 || result.isError) {
+      // A non-zero exit code alone is not treated as failure here: by this
+      // point nativeTurnResult has already thrown if it found no genuine
+      // assistant text at all, so result.text existing means a real,
+      // complete response was extracted. A harness can legitimately exit
+      // non-zero because one internal sub-step failed (e.g. Codex's own
+      // shell-command execution) while still producing a full final answer
+      // -- the exit code by itself doesn't distinguish that from a genuine
+      // failure, but an explicit isError/errorMessage signal does.
+      if (caughtTurnFailure || result.isError) {
         const failure = caughtTurnFailure ?? Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
         const failureKind = classifyAccountFailure(failure);
         if (failureKind === 'authentication-required') {
@@ -2583,9 +2628,10 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   else if (!activeFullScreenHarness) emitHarnessOutput({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
 }
 
-export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted'; nativeSession?: string }): Promise<void> {
+export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; permissions?: AiHarnessPermissionMode; accountFailover?: 'never' | 'on-quota-exhausted'; nativeSession?: string }): Promise<void> {
   if (options.route !== undefined && options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
+  if (options.permissions !== undefined && !VALID_PERMISSION_MODES.includes(options.permissions)) throw new Error('permissions must be ask, bypass, or auto');
   const state = await readState();
   const index = state.sessions.findIndex((item) => item.id === id);
   if (index < 0) throw new Error(`AI session "${id}" was not found`);
@@ -2600,6 +2646,10 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     if (!harness?.session?.resumeIdPrefix) throw new Error(`${harness?.displayName ?? current.nativeHarness} does not declare exact native-session resume support`);
     if (!options.nativeSession.trim()) throw new Error('native session id cannot be empty');
   }
+  const selectedHarness = current.nativeHarness ? localHarnessForCommand(current.nativeHarness) : undefined;
+  if (options.permissions && selectedHarness && !harnessSupportsPermissionMode(selectedHarness, options.permissions)) {
+    throw new Error(`${selectedHarness.displayName} does not support ${options.permissions} permissions.`);
+  }
   const next: HarnessSession = {
     ...current,
     ...(options.route ? { route: options.route } : {}),
@@ -2607,6 +2657,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.provider ? { provider: options.provider } : {}),
     ...(options.model ? { model: options.model } : {}),
     ...(options.effort ? { effort: options.effort } : {}),
+    ...(options.permissions ? { permissionMode: options.permissions } : {}),
     ...(options.accountFailover ? { accountFailover: options.accountFailover } : {}),
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),

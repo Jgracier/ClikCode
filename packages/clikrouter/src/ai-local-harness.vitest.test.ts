@@ -120,20 +120,22 @@ describe('local harness catalog', () => {
       .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--session-id', 'new-id', '--effort', 'high', 'hello']);
     expect(nativeHarnessTurnArgv(claude, { prompt: 'again', nativeSessionId: 'old-id' }))
       .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--resume', 'old-id', 'again']);
-    expect(nativeHarnessTurnArgv(claude, { prompt: 'safe edit', permissionMode: 'workspace-write' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', 'safe edit']);
-    expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', permissionMode: 'read-only' }))
-      .toEqual(['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '-']);
-    expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'continue', nativeSessionId: 'thread-id', permissionMode: 'workspace-write' }))
-      .toEqual(['exec', '--sandbox', 'workspace-write', 'resume', 'thread-id', '--json', '--skip-git-repo-check', '-']);
+    expect(nativeHarnessTurnArgv(claude, { prompt: 'safe edit', permissionMode: 'ask' }))
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--permission-mode', 'manual', '--permission-prompts', 'none', 'safe edit']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', permissionMode: 'ask' }))
+      .toEqual(['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request', 'exec', '--json', '--skip-git-repo-check', '-']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'continue', nativeSessionId: 'thread-id', permissionMode: 'bypass' }))
+      .toEqual(['--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'exec', 'resume', 'thread-id', '--json', '--skip-git-repo-check', '-']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', permissionMode: 'auto' }))
+      .toEqual(['--approve-for-me', 'exec', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', images: ['/tmp/screen.png'] }))
       .toEqual(['exec', '--json', '--skip-git-repo-check', '--image', '/tmp/screen.png', '-']);
   });
 
   it('leaves permission mode as a no-op for a harness that does not declare support for it', () => {
     const gemini = localHarnessForCommand('gemini')!;
-    expect(harnessSupportsPermissionMode(gemini, 'read-only')).toBe(false);
-    expect(nativeHarnessTurnArgv(gemini, { prompt: 'inspect', permissionMode: 'read-only' }))
+    expect(harnessSupportsPermissionMode(gemini, 'ask')).toBe(false);
+    expect(nativeHarnessTurnArgv(gemini, { prompt: 'inspect', permissionMode: 'ask' }))
       .toEqual(['--output-format', 'json', '-p', 'inspect']);
   });
 
@@ -144,33 +146,33 @@ describe('local harness catalog', () => {
   });
 
   it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
-    const fullThreeTier = new Set(['codex', 'claude', 'cursor', 'antigravity']);
-    const autoOnly = new Set(['opencode', 'hermes']);
+    const fullThreeTier = new Set(['codex', 'claude', 'cursor']);
+    const askAndBypass = new Set(['opencode', 'hermes', 'antigravity']);
     for (const harness of AI_LOCAL_HARNESSES) {
-      expect(harnessSupportsPermissionMode(harness, 'workspace-write')).toBe(fullThreeTier.has(harness.command));
-      expect(harnessSupportsPermissionMode(harness, 'auto')).toBe(fullThreeTier.has(harness.command) || autoOnly.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'ask')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'bypass')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'auto')).toBe(fullThreeTier.has(harness.command));
     }
   });
 
   it('maps each newly-supported harness\'s permission modes to its own real, confirmed flags', () => {
     const opencode = localHarnessForCommand('opencode')!;
-    expect(nativeHarnessTurnArgv(opencode, { prompt: 'hi', permissionMode: 'auto' })).toContain('--auto');
-    expect(nativeHarnessTurnArgv(opencode, { prompt: 'hi', permissionMode: 'workspace-write' })).not.toContain('--auto');
+    expect(nativeHarnessTurnArgv(opencode, { prompt: 'hi', permissionMode: 'bypass' })).toContain('--auto');
+    expect(nativeHarnessTurnArgv(opencode, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--auto');
 
     const cursor = localHarnessForCommand('cursor')!;
-    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'read-only' })).toEqual(expect.arrayContaining(['--mode', 'plan']));
-    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'auto' })).toContain('--force');
-    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'workspace-write' })).not.toEqual(expect.arrayContaining(['--mode']));
+    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--force');
+    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'bypass' })).toContain('--force');
+    expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'auto' })).toContain('--auto-review');
 
     const hermes = localHarnessForCommand('hermes')!;
-    expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'auto' })).toContain('--yolo');
-    expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'workspace-write' })).not.toContain('--yolo');
+    expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'bypass' })).toContain('--yolo');
+    expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--yolo');
 
     const antigravity = localHarnessForCommand('antigravity')!;
-    expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'read-only' })).toEqual(expect.arrayContaining(['--mode', 'plan']));
-    expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'workspace-write' })).toEqual(expect.arrayContaining(['--mode', 'accept-edits']));
-    const antigravityAuto = nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'auto' });
-    expect(antigravityAuto).toEqual(expect.arrayContaining(['--mode', 'accept-edits', '--dangerously-skip-permissions']));
+    expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'ask' })).toEqual(expect.arrayContaining(['--mode', 'accept-edits']));
+    const antigravityBypass = nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'bypass' });
+    expect(antigravityBypass).toEqual(expect.arrayContaining(['--mode', 'accept-edits', '--dangerously-skip-permissions']));
   });
 
   it('declares image-attachment support only where a real flag exists, and drops images silently otherwise', () => {
