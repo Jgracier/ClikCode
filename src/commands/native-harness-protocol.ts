@@ -57,7 +57,7 @@ export function nativeSessionIds(outputText: string, format: 'json' | 'json-line
     if (Array.isArray(value)) return value.forEach(visit);
     if (!value || typeof value !== 'object') return;
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      if (/^(?:id|session_?id|thread_?id|chat_?id|session)$/i.test(key) && typeof child === 'string' && child.trim()) ids.add(child.trim());
+      if (/^(?:id|session_?id|thread_?id|chat_?id|conversation_?id|session)$/i.test(key) && typeof child === 'string' && child.trim()) ids.add(child.trim());
       else visit(child);
     }
   };
@@ -123,11 +123,24 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
       if (fields.has(key) && typeof child === 'string' && child.trim()) {
         // JSON event streams often contain tool input and user echoes. Only
         // accept generic text/content from assistant/result-shaped events.
-        if (!['text', 'content'].includes(key) || !type || /assistant|agent|message|result|complete|text/i.test(type)) messages.push(child.trim());
+        if (!['text', 'content'].includes(key) || !type || /assistant|agent|message|result|complete|text|say/i.test(type)) messages.push(child.trim());
       } else visit(child, type);
     }
   };
   values.forEach((value) => visit(value));
+  // Gemini's stream-json terminal result contains statistics rather than a
+  // repeated final response. Its assistant `message` records are genuine
+  // incremental chunks, so reconstruct them in order instead of returning
+  // only the final chunk collected by the generic structured-output walk.
+  const geminiStreamText = harness.command === 'gemini'
+    ? values.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const record = value as Record<string, unknown>;
+      return record.type === 'message' && record.role === 'assistant' && typeof record.content === 'string'
+        ? [record.content]
+        : [];
+    }).join('')
+    : '';
   // Some harnesses report a bare string `error` without also setting an
   // is_error flag or top-level failed status. When no assistant message was
   // produced, that string is still a turn failure rather than a successful
@@ -138,10 +151,56 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   // text -- a turn that produced actual output before failing partway
   // through should still show that output, not the failure reason instead
   // of it.
-  const text = messages[messages.length - 1]?.trim() || errorMessage;
+  const text = geminiStreamText.trim() || messages[messages.length - 1]?.trim() || errorMessage;
   if (!text) throw new Error(`${harness.displayName} returned no assistant text in its structured output`);
   const ids = nativeSessionIds(stdout, harness.turn.output);
   return { text, nativeSessionId: [...ids][0], ...(isError ? { isError } : {}), ...(statusCode ? { statusCode } : {}) };
+}
+
+export interface NativeResponseUpdate {
+  text: string;
+  /** Delta chunks append; snapshots replace the in-progress response. */
+  mode: 'append' | 'replace';
+}
+
+/** Extract only provider-documented assistant stream updates. Keeping this
+ * pure and separate from terminal painting prevents protocol details from
+ * leaking into the UI or the session orchestrator. */
+export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText: string): NativeResponseUpdate | undefined {
+  let value: Record<string, unknown>;
+  try {
+    value = JSON.parse(lineText) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  if (harness.command === 'antigravity' && value.event === 'step_update') {
+    const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
+    if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string' && step.text_delta) {
+      return { text: step.text_delta, mode: 'append' };
+    }
+  }
+  if ((harness.command === 'claude' || harness.command === 'qwen') && value.type === 'stream_event') {
+    const event = value.event && typeof value.event === 'object' ? value.event as Record<string, unknown> : undefined;
+    const delta = event?.delta && typeof event.delta === 'object' ? event.delta as Record<string, unknown> : undefined;
+    if (event?.type === 'content_block_delta' && typeof delta?.text === 'string' && delta.text) {
+      return { text: delta.text, mode: 'append' };
+    }
+  }
+  if (harness.command === 'gemini' && value.type === 'message' && value.role === 'assistant' && typeof value.content === 'string' && value.content) {
+    return { text: value.content, mode: value.delta === false ? 'replace' : 'append' };
+  }
+  if (harness.command === 'cursor' && value.type === 'assistant') {
+    const message = value.message && typeof value.message === 'object' ? value.message as Record<string, unknown> : undefined;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    const text = content.flatMap((part) => part && typeof part === 'object' && (part as Record<string, unknown>).type === 'text' && typeof (part as Record<string, unknown>).text === 'string'
+      ? [String((part as Record<string, unknown>).text)] : []).join('');
+    if (text) return { text, mode: 'append' };
+  }
+  if (harness.command === 'cline' && value.type === 'say' && typeof value.text === 'string' && value.text) {
+    // Cline's partial `say` records are snapshots of the current message.
+    return { text: value.text, mode: 'replace' };
+  }
+  return undefined;
 }
 
 /** Render provider JSONL as a small provider-neutral activity stream. */
@@ -175,6 +234,12 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
     return undefined;
   }
   const type = String(value.type ?? '');
+  if (harness.command === 'antigravity' && value.event === 'step_update') {
+    const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
+    if (step?.step_type === 'tool') {
+      return { kind: step.state === 'DONE' ? 'tool-done' : 'tool-start', label: String(step.tool_name ?? 'tool') };
+    }
+  }
   const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
   const itemType = String(item?.type ?? '');
   const reasoningSummary = (candidate: unknown): string | undefined => {
@@ -311,6 +376,10 @@ export function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText:
   const type = String(value.type ?? '');
   const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
   const itemType = String(item?.type ?? '');
+  if (harness.command === 'antigravity' && value.event === 'step_update') {
+    const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
+    if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string') return 'generating response';
+  }
   if (/assistant|agent_message/.test(itemType) && /started|delta|completed/.test(type)) return 'generating response';
   if (type === 'assistant') return 'generating response';
   if (harness.command === 'opencode' && type === 'text') return 'generating response';

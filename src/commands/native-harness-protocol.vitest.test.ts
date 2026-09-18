@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nativeTurnResult } from './native-harness-protocol';
+import { nativeResponseUpdate, nativeSessionIds, nativeTurnResult } from './native-harness-protocol';
 import type { AiLocalHarnessDefinition } from './types';
 
 const codex = {
@@ -39,5 +39,42 @@ describe('native harness turn results', () => {
     const result = nativeTurnResult(codex, JSON.stringify({ type: 'turn.failed', status: 'failed', error: 'quota exhausted' }));
 
     expect(result).toMatchObject({ text: 'quota exhausted', isError: true });
+  });
+
+  it('reassembles Gemini assistant deltas instead of returning only the last chunk', () => {
+    const gemini = { ...codex, command: 'gemini', displayName: 'Gemini', turn: { ...codex.turn, responseFields: ['content'] } };
+    const stdout = [
+      JSON.stringify({ type: 'message', role: 'assistant', content: 'Hello ', delta: true }),
+      JSON.stringify({ type: 'message', role: 'assistant', content: 'world.', delta: true }),
+      JSON.stringify({ type: 'result', status: 'success' }),
+    ].join('\n');
+    expect(nativeTurnResult(gemini, stdout).text).toBe('Hello world.');
+  });
+
+  it('accepts Cline say snapshots as assistant output', () => {
+    const cline = { ...codex, command: 'cline', displayName: 'Cline', turn: { ...codex.turn, responseFields: ['text'] } };
+    expect(nativeTurnResult(cline, JSON.stringify({ type: 'say', text: 'Finished.', partial: false })).text).toBe('Finished.');
+  });
+});
+
+describe('native harness response streams', () => {
+  const harness = (command: string): AiLocalHarnessDefinition => ({ ...codex, command, displayName: command });
+
+  it('extracts documented Antigravity deltas and conversation ids', () => {
+    const line = JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'c3b66b04-872b-4fbe-a3a4-058a026ef20a', step_type: 'agent_response', text_delta: 'chunk' } });
+    expect(nativeResponseUpdate(harness('antigravity'), line)).toEqual({ text: 'chunk', mode: 'append' });
+    expect([...nativeSessionIds(line, 'json-lines')]).toContain('c3b66b04-872b-4fbe-a3a4-058a026ef20a');
+  });
+
+  it('extracts Claude/Qwen stream events, Gemini chunks, Cursor deltas, and Cline snapshots', () => {
+    const streamEvent = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'A' } } });
+    expect(nativeResponseUpdate(harness('claude'), streamEvent)).toEqual({ text: 'A', mode: 'append' });
+    expect(nativeResponseUpdate(harness('qwen'), streamEvent)).toEqual({ text: 'A', mode: 'append' });
+    expect(nativeResponseUpdate(harness('gemini'), JSON.stringify({ type: 'message', role: 'assistant', content: 'B', delta: true })))
+      .toEqual({ text: 'B', mode: 'append' });
+    expect(nativeResponseUpdate(harness('cursor'), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'C' }] } })))
+      .toEqual({ text: 'C', mode: 'append' });
+    expect(nativeResponseUpdate(harness('cline'), JSON.stringify({ type: 'say', text: 'Current', partial: true })))
+      .toEqual({ text: 'Current', mode: 'replace' });
   });
 });
