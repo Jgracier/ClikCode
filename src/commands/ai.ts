@@ -1782,7 +1782,8 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
       ['/new', 'start a clean conversation'],
       ['/resume', 'choose a saved session'],
       ['/status', 'show the current workspace and settings'],
-      ['/account', 'choose, view, or add an account'],
+      ['/account', 'choose or view an account'],
+      ['/add-account', 'log in and add another account for this provider'],
       ['/model <name>', 'choose or view a model'],
       ['/effort <level>', 'set reasoning effort'],
       ['/permissions', 'choose filesystem access'],
@@ -3088,6 +3089,47 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
   return false;
 }
 
+/** Shared by both the /account picker's "Add another account…" entry and
+ * /add-account's direct path: suggest a name, take it or a typed override,
+ * run the vendor login, then make the new account the current one for this
+ * session. The two entry points differ only in how `harness` gets chosen --
+ * everything after that is identical. */
+async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+  const state = await readState();
+  const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
+  const suggested = `${harness.displayName} ${existingForProvider + 1}`;
+  const entered = (await rl.question(`Account name ${chalk.dim(`[${suggested}]`)} › `)).trim();
+  const label = entered || suggested;
+  await aiAccountLogin(harness.command, label);
+  await aiSessionCommand(id, `/settings account ${label}`);
+}
+
+/** The direct path: skips the harness picker entirely when the current
+ * session already has a provider, since asking "which provider?" again is
+ * exactly the extra step this command exists to cut -- you're already in
+ * one. Only falls back to picking a harness for a session that has none
+ * yet (a brand-new chat with nothing chosen), where there's genuinely no
+ * "current provider" to default to. */
+async function interactiveAddAccount(rl: HarnessPrompter, id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const current = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  if (current) {
+    await addAccountForHarness(rl, id, current);
+    return;
+  }
+  const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
+    .filter((harness) => harness.surface === 'terminal' && harness.turn)
+    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
+    .filter((item) => item.inspection.installed);
+  const harnessCommand = await chooseOption(rl, 'Add an account for', installed.map(({ harness }) => ({
+    label: harness.displayName, value: harness.command,
+  })));
+  if (!harnessCommand) return;
+  await addAccountForHarness(rl, id, localHarnessForCommand(harnessCommand)!);
+}
+
 async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
@@ -3107,20 +3149,7 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
     await aiSessionCommand(id, `/settings account ${selected}`);
     return;
   }
-  const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
-    .filter((harness) => harness.surface === 'terminal' && harness.turn)
-    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
-    .filter((item) => item.inspection.installed);
-  const harnessCommand = await chooseOption(rl, 'Add an account for', installed.map(({ harness }) => ({
-    label: harness.displayName, value: harness.command,
-  })));
-  if (!harnessCommand) return;
-  const harness = localHarnessForCommand(harnessCommand)!;
-  const suggested = `${harness.displayName} ${accounts.filter((account) => account.provider === harness.provider).length + 1}`;
-  const entered = (await rl.question(`Account name ${chalk.dim(`[${suggested}]`)} › `)).trim();
-  const label = entered || suggested;
-  await aiAccountLogin(harness.command, label);
-  await aiSessionCommand(id, `/settings account ${label}`);
+  await interactiveAddAccount(rl, id);
 }
 
 
@@ -3436,7 +3465,8 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider', '/gateway': 'switch to ClikDeploy Gateway', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
+    '/provider': 'choose a provider', '/gateway': 'switch to ClikDeploy Gateway', '/settings': 'configure this workspace', '/account': 'choose or view an account',
+    '/add-account': 'log in and add another account for this provider',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'filesystem access',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
@@ -3551,6 +3581,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
           continue;
         }
         else if (command === '/account' || command === '/accounts') await interactiveAccountPicker(rl, id);
+        else if (command === '/add-account' || command === '/addaccount') await interactiveAddAccount(rl, id);
         else if (command === '/model') await interactiveModelPicker(rl, id);
         else if (command === '/effort') await interactiveEffortPicker(rl, id);
         else if (command === '/permissions') await interactivePermissionPicker(rl, id);
