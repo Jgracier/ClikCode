@@ -35,7 +35,7 @@ import {
   capDiffLines, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   isCodeChangeLabel, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
   localRouter, nativeActivityPhase, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent,
-  compactPath, renderActivityLine, renderActivityPhase, sessionProviderLabel, streamLocalAiTurn,
+  compactPath, nativeProfileEnvironment, renderActivityLine, renderActivityPhase, sessionProviderLabel, streamLocalAiTurn,
 } from './native-harness-protocol.js';
 import {
   accountView, deviceManifest, harnessCommand, harnessStatePath, readState, resolveDefaultSettings, writeState,
@@ -45,7 +45,7 @@ import {
 } from './native-account-data.js';
 import {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
-  aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin,
+  aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, ensureGcloudInstalled, harnessNeedsLogin,
   nativeAccountContext, setEmitHarnessOutput,
 } from './account-management.js';
 import { FullScreenHarnessPrompter } from './terminal-ui.js';
@@ -451,6 +451,15 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     activeFullScreenHarness?.startWaiting(`installing ${harness.displayName}…`);
     try { await ensureNativeHarness(harness); } finally { activeFullScreenHarness?.stopWaiting(); }
   }
+  // Checked at selection time, not only when an account is actually added:
+  // by the time the user gets to /add-account, this dependency is already
+  // in place rather than surfacing as a mid-login delay. Idempotent --
+  // returns immediately once installed, so this costs nothing on every
+  // later selection of the same provider.
+  if (harness.command === 'antigravity') {
+    activeFullScreenHarness?.startWaiting('checking Google Cloud SDK…');
+    try { await ensureGcloudInstalled(); } finally { activeFullScreenHarness?.stopWaiting(); }
+  }
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
@@ -510,7 +519,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   }
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   if (activeFullScreenHarness && harness.loginArgv) {
-    const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+    const environment = nativeProfileEnvironment(account?.nativeProfile);
     if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
       if (harness.loginCapturable) {
         activeFullScreenHarness.startWaiting(`signing in to ${harness.displayName}…`);
@@ -1493,7 +1502,7 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
       const account = state.accounts.find((item) => item.label === label);
       const harness = account ? localHarnessForProvider(account.provider) : undefined;
       if (!account || !harness) return;
-      const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+      const environment = nativeProfileEnvironment(account.nativeProfile);
       if (action === 'disconnect' && harness.logoutArgv) {
         await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
         account.status = 'needs_login';
@@ -1565,7 +1574,7 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   const discoverable = localRouter().AI_LOCAL_HARNESSES.filter((harness) => harness.session?.discoverArgv);
   const shellDiscovered = (await Promise.all(discoverable.map(async (harness) => {
     const account = state.accounts.find((item) => item.provider === harness.provider && item.status === 'ready');
-    const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+    const environment = nativeProfileEnvironment(account?.nativeProfile);
     const found = await discoverNativeSessions(harness, environment, workspace);
     return found.map((item) => ({ harness, item }));
   }))).flat();
@@ -2079,7 +2088,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
           const manager = localHarnessCapabilityManifest(selectedHarness).managers?.[managerName];
           if (!manager) throw new Error(`${selectedHarness.displayName} does not publish a ${managerName} manager.`);
           const selectedAccount = commandSession?.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
-          const environment = selectedAccount?.nativeProfile ? { [selectedAccount.nativeProfile.env]: selectedAccount.nativeProfile.path } : {};
+          const environment = nativeProfileEnvironment(selectedAccount?.nativeProfile);
           if (manager.listArgv) {
             const result = await captureNativeHarnessOutput(selectedHarness, manager.listArgv, environment);
             rl.panel?.(manager.label, result || 'No entries.');
@@ -2209,7 +2218,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     // login genuinely doesn't fix it (wrong account, network issue, etc.).
     let authRetried = false;
     for (;;) {
-      const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+      const environment = nativeProfileEnvironment(account.nativeProfile);
       let createdHere = false;
       if (!session.nativeSessionId && harness.session?.idKind === 'uuid' && harness.turn.createIdPrefix) {
         session.nativeSessionId = randomUUID();

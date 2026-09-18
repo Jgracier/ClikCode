@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import type {
-  AiHarnessCapabilityManifest, AiHarnessPermissionMode, AiLocalHarnessDefinition, AiRouterRuntime,
+  AiHarnessAccount, AiHarnessCapabilityManifest, AiHarnessPermissionMode, AiLocalHarnessDefinition, AiRouterRuntime,
   HarnessActivityEvent, HarnessSession,
 } from './types.js';
 
@@ -318,4 +318,15 @@ export function sessionProviderLabel(session: HarnessSession): string {
   if (session.route === 'gateway') return 'ClikDeploy Gateway';
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   return harness?.displayName ?? session.provider ?? 'Not selected';
+}
+
+/** The one place that turns an account's nativeProfile into an actual
+ * environment object -- every call site used to build `{ [env]: path }`
+ * directly, nine of them, which meant nativeProfile.extraEnv (needed only
+ * for Antigravity's ADC-based isolation) would have had to be added to all
+ * nine individually, with a real risk of missing one and silently falling
+ * back to shared, unisolated auth for just that one call path. */
+export function nativeProfileEnvironment(nativeProfile: AiHarnessAccount['nativeProfile']): Record<string, string> {
+  if (!nativeProfile) return {};
+  return { [nativeProfile.env]: nativeProfile.path, ...nativeProfile.extraEnv };
 }
