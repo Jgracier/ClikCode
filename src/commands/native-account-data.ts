@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from './native-harness.js';
-import { localHarnessForProvider } from './native-harness-protocol.js';
+import { localHarnessForProvider, nativeProfileEnvironment } from './native-harness-protocol.js';
 import type {
   AiHarnessAccount, AiLocalHarnessDefinition, HarnessSession, HarnessState, ModelCatalogResult, NativeUsageProbe,
 } from './types.js';
@@ -139,7 +139,7 @@ export async function nativeModelCatalogUncached(
   // command, only an interactive picker with no scriptable equivalent.
   // Removed rather than kept as a guess.
   if (harness.modelDiscoveryArgv) {
-    const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+    const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
       addDiscoveredModels(await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, 12_000));
     } catch { /* Keep configured/account models and the custom-ID option available. */ }
@@ -346,7 +346,7 @@ export async function nativeUsageLabel(session: HarnessSession, state: HarnessSt
   const cacheKey = `${session.nativeHarness}:${account?.nativeProfile?.path ?? session.nativeSessionId ?? 'default'}`;
   const cached = nativeUsageCache.get(cacheKey);
   if (cached && Date.now() - cached.at < 30_000) return cached.label;
-  const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+  const environment = nativeProfileEnvironment(account?.nativeProfile);
   const label = await probe(session, environment).catch(() => undefined);
   nativeUsageCache.set(cacheKey, { at: Date.now(), ...(label ? { label } : {}) });
   return label;

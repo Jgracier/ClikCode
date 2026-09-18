@@ -33,7 +33,18 @@ export interface AiHarnessAccount {
   quotaState?: 'available' | 'exhausted';
   quotaRetryAt?: string;
   credentialRef: string;
-  nativeProfile?: { env: string; path: string };
+  nativeProfile?: {
+    env: string;
+    path: string;
+    /** Static env vars a specific harness's isolation needs beyond the one
+     * profile-root variable -- currently only Antigravity CLI, whose
+     * per-account isolation depends on Application Default Credentials
+     * (a real file under the isolated HOME) rather than its own default
+     * keyring-based auth, which ignores HOME entirely and would otherwise
+     * silently collapse every isolated account back into one shared
+     * identity. Optional and unused by every other harness. */
+    extraEnv?: Readonly<Record<string, string>>;
+  };
 }
 
 export interface AiLocalHarnessDefinition {
