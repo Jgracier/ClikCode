@@ -1852,13 +1852,32 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   // saved because ClikCode itself was gone, with no crash log at all
   // (SIGHUP's default handling pre-empts JS entirely; there was nothing
   // for a crash handler to catch). Ignoring it here covers the session's
-  // entire lifetime, not just subprocess windows.
+  // entire lifetime, not just subprocess windows. SIGINT gets the identical
+  // treatment for a related but distinct reason: run()'s own Ctrl+C
+  // forwarding to a login/turn subprocess is removed the INSTANT that
+  // subprocess exits -- but the terminal stays in cooked mode (raw mode
+  // off, from suspend()) for everything that happens after, including this
+  // codebase's own identity-derivation retry loop, which can legitimately
+  // run for several seconds with nothing visibly changing on screen. A
+  // Ctrl+C landing in that specific gap -- a completely natural thing to do
+  // when the screen looks idle right after pasting an auth code --
+  // previously had no handler registered at all, so Node's default SIGINT
+  // action (immediate termination) applied, killing the process mid-save.
+  // While raw mode IS active (the normal composer state), Ctrl+C is read
+  // as data (byte 0x03) handled entirely inside this UI, never reaching
+  // the OS as a real signal at all -- so ignoring the signal here changes
+  // nothing about that existing, working "cancel the current turn"
+  // behavior; it only closes the gap where raw mode is temporarily off and
+  // nothing else is watching. /exit and /quit remain the ways to leave.
   const ignoreHangup = (): void => {};
+  const ignoreInterrupt = (): void => {};
   process.on('SIGHUP', ignoreHangup);
+  process.on('SIGINT', ignoreInterrupt);
   try {
     await aiSessionInteractiveInner(config, id);
   } finally {
     process.off('SIGHUP', ignoreHangup);
+    process.off('SIGINT', ignoreInterrupt);
   }
 }
 
