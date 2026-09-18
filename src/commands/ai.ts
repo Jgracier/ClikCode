@@ -509,21 +509,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     } else session.accountId = null;
   }
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  // Same rule as addAccountForHarness's own choice picker: a harness whose
-  // only vendor-cli login is its full bare interactive session (Gemini
-  // CLI, Antigravity CLI -- loginArgv: []) must never get auto-launched
-  // from here either, or picking this provider for the first time via
-  // /provider would hand the terminal to a separate program with no
-  // choice involved at all -- worse than /add-account's picker, which at
-  // least asks. When a real api-key path exists, mark the account as
-  // needing login and stop; the user reaches the working, ClikCode-native
-  // path (the api-key choice, or the account picker's Reauthenticate
-  // action) explicitly instead.
-  const bareInteractiveOnly = harness.loginArgv?.length === 0 && harness.localAuth.includes('api-key');
-  if (bareInteractiveOnly && account && account.status === 'ready' && accountJustCreated) {
-    account.status = 'needs_login';
-    await writeState(state);
-  } else if (activeFullScreenHarness && harness.loginArgv && !bareInteractiveOnly) {
+  if (activeFullScreenHarness && harness.loginArgv) {
     const environment = account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
     if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
       activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
@@ -1368,19 +1354,7 @@ async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: Ai
   // login" for those would fall through to aiAccountLogin's own
   // `harness.loginArgv ?? []` default and run the bare binary with no
   // arguments, which isn't a login flow for any of them.
-  // A harness whose only "vendor login" is launching its own full
-  // interactive session (loginArgv: [], no scriptable subcommand -- Gemini
-  // CLI, Antigravity CLI) breaks the one rule this whole picker exists to
-  // uphold: everything maps back into ClikCode, nothing hands the terminal
-  // to a separate program. When that harness also declares a real api-key
-  // path, that's the only choice offered here; vendor-cli only appears when
-  // it's either scriptable (a real loginArgv subcommand) or genuinely the
-  // sole option available at all.
-  const bareInteractiveOnly = harness.loginArgv?.length === 0;
-  const choices = harness.localAuth.filter((kind) => {
-    if (kind === 'vendor-cli') return Boolean(harness.loginArgv) && !(bareInteractiveOnly && harness.localAuth.includes('api-key'));
-    return kind === 'api-key';
-  });
+  const choices = harness.localAuth.filter((kind) => (kind === 'vendor-cli' && harness.loginArgv) || kind === 'api-key');
   // Factory Droid and Kiro CLI currently land here: oauth-only in localAuth
   // (no api-key) and no loginArgv either, so there's genuinely no way for
   // this catalog to add an account for them yet -- rather than fabricate a
@@ -1490,18 +1464,9 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
     const selected = await chooseOption(rl, currentHarness ? `Choose a ${currentHarness.displayName} account` : 'Choose an account', [
       ...accounts.map((account) => {
         const harness = localHarnessForProvider(account.provider);
-        // Reauthenticate always runs vendor-cli login -- for a harness whose
-        // only vendor-cli path is a bare interactive session (Gemini CLI,
-        // Antigravity CLI) with a real api-key alternative also available,
-        // offering it here would be the same "leaves ClikCode with no
-        // ClikCode-native option shown" mistake addAccountForHarness's own
-        // picker already had fixed. /add-account is the way back for that
-        // case -- it now excludes vendor-cli from its own choices the same
-        // way, so it only ever offers the path that stays here.
-        const bareInteractiveOnly = harness?.loginArgv?.length === 0 && harness.localAuth.includes('api-key');
         const actions = [
           ...(harness?.logoutArgv && account.status === 'ready' ? [{ label: 'Disconnect', value: 'disconnect' }] : []),
-          ...(harness?.loginArgv && account.status !== 'ready' && !bareInteractiveOnly ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
+          ...(harness?.loginArgv && account.status !== 'ready' ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
         ];
         return {
           label: account.label,
