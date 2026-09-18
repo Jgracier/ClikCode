@@ -232,6 +232,24 @@ function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string): { 
 interface HarnessActivityEvent {
   kind: 'thinking' | 'tool-start' | 'tool-done';
   label: string;
+  /** Only ever populated where the harness's own JSON genuinely carries the
+   * before/after text (confirmed so far: Claude Code's Edit/Write tool_use
+   * blocks) -- never synthesized from a "files updated" style event that
+   * doesn't actually include the changed content. Each side is already
+   * capped to a few lines before this is built; the activity trail below is
+   * a 5-line rolling window (see FullScreenHarnessPrompter.activity), not a
+   * scrollback viewer, so an uncapped diff would just silently lose its
+   * earlier lines to the window sliding past them, not show a real "more"
+   * indicator -- capping here means the +N truncation notice is honest. */
+  diff?: { removed: string[]; added: string[] };
+}
+
+/** Line-capped, not byte-capped: a diff that's still readable at a glance
+ * beats a byte-perfect one that pushes everything else out of the 5-line
+ * activity window. */
+function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
+  const all = text.split(/\r?\n/);
+  return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
 }
 
 function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: string): HarnessActivityEvent | undefined {
@@ -274,7 +292,31 @@ function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: s
     if (type === 'assistant') {
       const message = value.message as { content?: Array<Record<string, unknown>> } | undefined;
       const tool = message?.content?.find((part) => part.type === 'tool_use');
-      if (tool) return { kind: 'tool-start', label: String(tool.name ?? 'tool') };
+      if (!tool) return undefined;
+      const name = String(tool.name ?? 'tool');
+      const input = tool.input && typeof tool.input === 'object' ? tool.input as Record<string, unknown> : undefined;
+      // Verified against this exact session's own transcript: Edit's
+      // input carries old_string/new_string verbatim, Write carries the
+      // full new file as `content` with no prior text to diff against.
+      // Capped to 4 lines a side -- the 5-line activity window can't show
+      // more anyway, and a truncation count beats a silently-scrolled-off
+      // tail.
+      if (name === 'Edit' && typeof input?.old_string === 'string' && typeof input?.new_string === 'string') {
+        const removed = capDiffLines(input.old_string, 4);
+        const added = capDiffLines(input.new_string, 4);
+        return {
+          kind: 'tool-start', label: name,
+          diff: {
+            removed: [...removed.lines, ...(removed.truncated ? [`… ${removed.truncated} more line${removed.truncated === 1 ? '' : 's'}`] : [])],
+            added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])],
+          },
+        };
+      }
+      if (name === 'Write' && typeof input?.content === 'string') {
+        const added = capDiffLines(input.content, 4);
+        return { kind: 'tool-start', label: name, diff: { removed: [], added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])] } };
+      }
+      return { kind: 'tool-start', label: name };
     }
   }
   // opencode's own envelope is a different shape entirely: a top-level `type`
@@ -311,9 +353,29 @@ function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: s
  * thinking summary looks like in the persistent activity log -- every
  * harness's parser above feeds this same renderer, so the visual language
  * (glyph, color, wording) never drifts per-vendor. */
-function renderActivityLine(event: HarnessActivityEvent): string {
-  if (event.kind === 'thinking') return `  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`;
-  return `  ${event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool')} ${chalk.dim(event.label)}`;
+/** A code-change tool call (Edit/Write, or any other harness's own naming
+ * for the same thing) gets its own color -- magenta -- distinct from a
+ * generic tool call's yellow/green, the same way Claude Code's own UI
+ * visually separates "a tool ran" from "a file changed" rather than
+ * treating every tool call identically. Name-pattern matching (not just
+ * `event.diff`'s presence) so this applies even for harnesses where the
+ * diff content itself isn't available yet -- Codex's file_change events,
+ * for instance, still get the distinct color even without line content. */
+function isCodeChangeLabel(label: string): boolean {
+  return /^(edit|write|patch)$/i.test(label) || /file/i.test(label);
+}
+
+function renderActivityLine(event: HarnessActivityEvent): string[] {
+  if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
+  const isCodeChange = Boolean(event.diff) || isCodeChangeLabel(event.label);
+  const glyph = isCodeChange ? chalk.magenta('edit') : (event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool'));
+  const summary = `  ${glyph} ${chalk.dim(event.label)}`;
+  if (!event.diff) return [summary];
+  const diffLines = [
+    ...event.diff.removed.map((line) => `    ${chalk.red(`- ${line}`)}`),
+    ...event.diff.added.map((line) => `    ${chalk.green(`+ ${line}`)}`),
+  ];
+  return [summary, ...diffLines];
 }
 
 /** Same idea for the spinner's own label: while a tool is actively running,
@@ -3651,9 +3713,11 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
             if (!event) return;
             activeFullScreenHarness?.phase(renderActivityPhase(event));
             if (isJsonDefaultMode()) return;
-            const activity = renderActivityLine(event);
-            if (activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
-            else output.write(`${activity}\n`);
+            const activityLines = renderActivityLine(event);
+            for (const activity of activityLines) {
+              if (activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
+              else output.write(`${activity}\n`);
+            }
           },
         },
       );
@@ -3832,7 +3896,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
           activeFullScreenHarness?.phase(event.label);
           if (!isJsonDefaultMode()) {
             const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
-            activeFullScreenHarness?.activity(renderActivityLine(activityEvent).trim());
+            for (const line of renderActivityLine(activityEvent)) activeFullScreenHarness?.activity(line.trim());
           }
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
