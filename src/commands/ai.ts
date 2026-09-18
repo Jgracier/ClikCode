@@ -1090,19 +1090,38 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
    * already draws for slash commands: the picker sits right where the composer is,
    * the conversation stays visible above it, and after the first frame every arrow
    * key is a footer-only repaint instead of a full-screen one. */
+  /** Type-to-filter: a picker with more than a screenful of options (the
+   * /resume list, across every ClikCode session plus every discovered vendor
+   * chat, easily exceeds 50) was arrow-keys-only with no count, no scroll
+   * indicator, and silent wraparound at each end -- a real conversation could
+   * sit in the middle of a list that long and be effectively unfindable by
+   * scrolling alone. Letters/digits/space now narrow the list live by
+   * substring match against label and detail (title, provider, status);
+   * arrow keys still navigate whatever is currently visible. This is why the
+   * old 'j'/'k'/'q' single-letter aliases are gone: they would collide with
+   * typing a real filter query character (searching for "qwen" or "junk"). */
   select<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined> {
     if (!options.length) return Promise.resolve(undefined);
     return new Promise((resolveSelection) => {
       this.selecting = true;
+      let query = '';
       let selected = 0;
       let painted = false;
       const capacity = Math.min(options.length, 8) + 2;
-      const renderOptions = options.map((option) => ({ label: option.label, detail: option.detail, value: '' }));
+      const visibleOptions = (): readonly PickerOption<T>[] => {
+        if (!query) return options;
+        const needle = query.toLowerCase();
+        return options.filter((option) =>
+          option.label.toLowerCase().includes(needle) || (option.detail ?? '').toLowerCase().includes(needle));
+      };
       const draw = (): void => {
-        this.paint(title, renderOptions, selected, '', 0, {
-          capacity, footerOnly: painted, hideCursor: true,
-          hint: '↑↓ move · Enter choose · Esc cancel',
-        });
+        const visible = visibleOptions();
+        if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
+        const renderOptions = visible.map((option) => ({ label: option.label, detail: option.detail, value: '' }));
+        const hint = query
+          ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} \u00b7 \u2191\u2193 move \u00b7 Enter choose \u00b7 Esc clear`
+          : `${options.length} total \u00b7 \u2191\u2193 move \u00b7 Enter choose \u00b7 Esc cancel \u00b7 type to filter`;
+        this.paint(title, renderOptions, selected, '', 0, { capacity, footerOnly: painted, hideCursor: true, hint });
         painted = true;
       };
       let finished = false;
@@ -1112,14 +1131,18 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         this.selecting = false;
         input.off('data', onData);
         input.setRawMode(false);
-        this.paint('', [], 0, '› ', 0);
+        this.paint('', [], 0, '\u203a ', 0);
         resolveSelection(value);
       };
       const handleKey = (key: string): void => {
-        if (key === '\u001b[A' || key === 'k') selected = (selected - 1 + options.length) % options.length;
-        else if (key === '\u001b[B' || key === 'j') selected = (selected + 1) % options.length;
-        else if (key === '\r' || key === '\n') return finish(options[selected].value);
-        else if (key === '\u001b' || key === '\u0003' || key === 'q') return finish(undefined);
+        const visible = visibleOptions();
+        if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
+        else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
+        else if (key === '\r' || key === '\n') { if (visible[selected]) finish(visible[selected].value); return; }
+        else if (key === '\u0003') return finish(undefined);
+        else if (key === '\u001b') { if (query) { query = ''; selected = 0; } else return finish(undefined); }
+        else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; }
+        else if (key.length === 1 && key >= ' ') { query += key; selected = 0; }
         else return;
         draw();
       };
