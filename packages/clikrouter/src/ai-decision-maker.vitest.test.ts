@@ -40,4 +40,17 @@ describe('Router dynamic decision with TypeSafe', () => {
     expect(selected).not.toBeNull();
     expect(selected!.provider).toBe('anthropic');
   });
+
+  it('rejects a provider and model that were not admitted to the candidate pool', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ top_choice: 'unapproved-provider:unapproved-model' }),
+    });
+    const candidates = [
+      { provider: 'anthropic', model: 'claude-opus-5', accessClass: 'subscription', estimatedCostPerMTok: 0.05, inputCostPerMTok: 0.05 },
+      { provider: 'openai', model: 'gpt-5', accessClass: 'metered', estimatedCostPerMTok: 0.1, inputCostPerMTok: 0.1 },
+    ];
+    const selected = await selectRouterCandidateDynamic(candidates as any, 'budget');
+    expect(selected).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5' });
+  });
 });
