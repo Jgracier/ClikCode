@@ -3595,17 +3595,26 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
       const frame = buffer.slice(0, boundary).trim();
       buffer = buffer.slice(boundary + 2);
       if (frame.startsWith('data:')) {
-        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; name?: string; tool?: string };
+        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; label?: string };
         if (event.type === 'delta' && typeof event.text === 'string') {
           activeFullScreenHarness?.phase('generating response');
           reply += event.text;
           if (streamToTerminal) { output.write(event.text); wroteDelta = true; }
         }
-        if (activeFullScreenHarness && /reasoning|thinking/.test(event.type ?? '') && event.text?.trim()) {
-          activeFullScreenHarness.activity(`${chalk.cyan('thinking')} ${chalk.dim(visibleSlice(event.text.trim().replace(/\s+/g, ' '), 140))}`);
-        }
-        if (activeFullScreenHarness && /tool/.test(event.type ?? '')) {
-          activeFullScreenHarness.activity(`${chalk.yellow('tool')} ${chalk.dim(event.name ?? event.tool ?? 'tool')}`);
+        // The real event here is `{ type: 'status', label: '...' }` — the
+        // Gateway backend (apps/web's assistant/chat route) already turns its
+        // own `{ status: 'thinking' }` / `{ status: 'tool_call', tool }`
+        // internals into a ready-made human label ("Thinking", "Running
+        // deploy_app…") before this ever reaches ClikCode, so there's no
+        // per-tool wording to invent here the way native harnesses need. This
+        // used to check for `reasoning`/`thinking`/`tool` substrings in
+        // `event.type` — none of which the real backend ever sends (it only
+        // ever sends `delta`, `status`, `speak`, `result`, `error`) — so every
+        // status update from the Gateway path was silently dropped; the
+        // spinner just said "thinking" for the whole turn regardless of what
+        // was actually happening.
+        if (activeFullScreenHarness && event.type === 'status' && typeof event.label === 'string') {
+          activeFullScreenHarness.phase(event.label);
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
       }
