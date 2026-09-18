@@ -821,7 +821,7 @@ function sessionProviderLabel(session: HarnessSession): string {
 
 interface HarnessPrompter {
   question(prompt: string, commands?: readonly PickerOption<string>[], settings?: { cancellable?: boolean }): Promise<string>;
-  select?<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined>;
+  select?<T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
   panel?(title: string, body: string): void;
   close(): void;
@@ -1585,7 +1585,7 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
    * arrow keys still navigate whatever is currently visible. This is why the
    * old 'j'/'k'/'q' single-letter aliases are gone: they would collide with
    * typing a real filter query character (searching for "qwen" or "junk"). */
-  select<T>(title: string, options: readonly PickerOption<T>[]): Promise<T | undefined> {
+  select<T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined> {
     if (!options.length) return Promise.resolve(undefined);
     return new Promise((resolveSelection) => {
       this.selecting = true;
@@ -1619,10 +1619,32 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
         this.paint('', [], 0, '\u203a ', 0);
         resolveSelection(value);
       };
+      // Right arrow, not Enter, opens an option's own actions (disconnect,
+      // reauthenticate, ...) -- only when it actually declares any,
+      // otherwise this is a no-op so every existing picker that never sets
+      // `actions` is completely unaffected. Runs a small nested select() for
+      // the action list itself, pausing this picker's own key handling
+      // while it's open (both would otherwise react to the same keypress --
+      // Node lets multiple 'data' listeners stack) and redrawing this
+      // picker's own view once it's done, since the nested call's own
+      // cleanup repaints the plain composer over top of it.
+      const openActions = async (option: PickerOption<T>): Promise<void> => {
+        if (!option.actions?.length) return;
+        input.off('data', onData);
+        const actionValue = await this.select(option.label, option.actions.map((action) => ({ label: action.label, value: action.value })));
+        if (finished) return;
+        if (actionValue) await onAction?.(option.value, actionValue);
+        if (finished) return;
+        input.setRawMode(true);
+        input.resume();
+        input.on('data', onData);
+        draw();
+      };
       const handleKey = (key: string): void => {
         const visible = visibleOptions();
         if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
         else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
+        else if (key === '\u001b[C') { if (visible[selected]) void openActions(visible[selected]); return; }
         else if (key === '\r' || key === '\n') { if (visible[selected]) finish(visible[selected].value); return; }
         else if (key === '\u0003') return finish(undefined);
         else if (key === '\u001b') { if (query) { query = ''; selected = 0; } else return finish(undefined); }
@@ -3064,11 +3086,17 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   throw new Error(`unknown slash command: /${head}`);
 }
 
-interface PickerOption<T> { label: string; detail?: string; value: T }
+/** actions is deliberately narrow -- a plain label/value pair, not a full
+ * nested PickerOption -- since it's rendered by select()'s own generic
+ * right-arrow handler for *any* picker, not something built per-caller.
+ * A caller (e.g. the account picker) that wants "disconnect"/"reauthenticate"
+ * attaches them here; select() has no idea what they mean, it just shows
+ * them and returns whichever one was chosen. */
+interface PickerOption<T> { label: string; detail?: string; value: T; actions?: readonly { label: string; value: string }[] }
 
-async function chooseOption<T>(rl: HarnessPrompter, title: string, options: readonly PickerOption<T>[]): Promise<T | undefined> {
+async function chooseOption<T>(rl: HarnessPrompter, title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined> {
   if (options.length === 0) return undefined;
-  if (rl.select) return rl.select(title, options);
+  if (rl.select) return rl.select(title, options, onAction);
   output.write(`\n${chalk.bold(title)}\n`);
   options.forEach((option, index) => {
     output.write(`  ${chalk.cyan(String(index + 1).padStart(2))}  ${option.label}${option.detail ? ` ${chalk.dim(option.detail)}` : ''}\n`);
@@ -3302,33 +3330,75 @@ async function interactiveAddAccount(rl: HarnessPrompter, id: string): Promise<v
  * account, sorted so accounts sharing a provider stay adjacent -- the
  * closest thing to "grouped" without inventing a non-selectable header row
  * this picker has no concept of. */
+/** Disconnect/reauthenticate only ever offered per harness capability, same
+ * principle as everywhere else in this file that normalizes against a
+ * vendor's declared catalog fields instead of assuming every harness works
+ * the same way: Disconnect needs a real logoutArgv to actually run (Claude
+ * Code has one; several harnesses don't), reauthenticate needs loginArgv.
+ * Disconnect signs the account out (status -> needs_login) rather than
+ * deleting it, specifically so it stays visible here afterward with
+ * somewhere to reauthenticate it back to ready from -- deleting it here
+ * would have made "reauthenticate a disconnected account" unreachable. */
 async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promise<void> {
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session) throw new Error(`AI session "${id}" was not found`);
-  const currentHarness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-  const allReady = state.accounts.filter((account) => account.status === 'ready');
-  const accounts = (currentHarness ? allReady.filter((account) => account.provider === currentHarness.provider) : allReady)
-    .sort((left, right) => left.provider.localeCompare(right.provider) || left.label.localeCompare(right.label));
-  const usages = await Promise.all(accounts.map((account) => accountUsageLabel(account, state)));
-  const selected = await chooseOption(rl, currentHarness ? `Choose a ${currentHarness.displayName} account` : 'Choose an account', [
-    ...accounts.map((account, index) => ({
-      label: account.label,
-      // Provider only shown in the detail when the list actually spans more
-      // than one (i.e. no currentHarness to have already filtered to it) --
-      // otherwise it's the exact redundant "provider name shown again right
-      // next to itself" this replaced.
-      detail: `${currentHarness ? '' : `· ${localHarnessForProvider(account.provider)?.displayName ?? account.provider} `}${usages[index] ? `· ${usages[index]} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}`.trim(),
-      value: account.label,
-    })),
-    { label: 'Add another account…', detail: 'vendor login', value: '__add__' },
-  ]);
-  if (!selected) return;
-  if (selected !== '__add__') {
-    await aiSessionCommand(id, `/settings account ${selected}`);
+  for (;;) {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    if (!session) throw new Error(`AI session "${id}" was not found`);
+    const currentHarness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    const vendorAccounts = state.accounts.filter((account) => account.authKind === 'vendor-cli');
+    const accounts = (currentHarness ? vendorAccounts.filter((account) => account.provider === currentHarness.provider) : vendorAccounts)
+      .sort((left, right) => left.provider.localeCompare(right.provider) || left.label.localeCompare(right.label));
+    const usages = await Promise.all(accounts.map((account) => accountUsageLabel(account, state)));
+    let actionPerformed = false;
+    const selected = await chooseOption(rl, currentHarness ? `Choose a ${currentHarness.displayName} account` : 'Choose an account', [
+      ...accounts.map((account, index) => {
+        const harness = localHarnessForProvider(account.provider);
+        const actions = [
+          ...(harness?.logoutArgv && account.status === 'ready' ? [{ label: 'Disconnect', value: 'disconnect' }] : []),
+          ...(harness?.loginArgv && account.status !== 'ready' ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
+        ];
+        return {
+          label: account.label,
+          // Provider only shown in the detail when the list actually spans
+          // more than one (i.e. no currentHarness to have already filtered
+          // to it) -- otherwise it's the exact redundant "provider name
+          // shown again right next to itself" this replaced.
+          detail: `${currentHarness ? '' : `· ${harness?.displayName ?? account.provider} `}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${usages[index] ? `· ${usages[index]} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
+          value: account.label,
+          actions,
+        };
+      }),
+      { label: 'Add another account…', detail: 'vendor login', value: '__add__' },
+    ], async (label, action) => {
+      actionPerformed = true;
+      const account = state.accounts.find((item) => item.label === label);
+      const harness = account ? localHarnessForProvider(account.provider) : undefined;
+      if (!account || !harness) return;
+      const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+      if (action === 'disconnect' && harness.logoutArgv) {
+        await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
+        account.status = 'needs_login';
+        await writeState(state);
+      } else if (action === 'reauthenticate' && harness.loginArgv) {
+        if (rl instanceof FullScreenHarnessPrompter) {
+          await rl.suspend();
+          try { await loginNativeHarness(harness, environment); } finally { await rl.resume(); }
+        } else {
+          await loginNativeHarness(harness, environment);
+        }
+        account.status = 'ready';
+        await writeState(state);
+      }
+    });
+    if (actionPerformed) continue;
+    if (!selected) return;
+    if (selected !== '__add__') {
+      await aiSessionCommand(id, `/settings account ${selected}`);
+      return;
+    }
+    await interactiveAddAccount(rl, id);
     return;
   }
-  await interactiveAddAccount(rl, id);
 }
 
 
