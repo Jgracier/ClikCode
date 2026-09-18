@@ -811,12 +811,18 @@ export async function aiSessionClose(id: string): Promise<void> {
   // outright instead of accumulating it. A set nativeSessionId is kept even
   // with zero ClikCode-tracked messages: it may be adopted from, or linked
   // directly to, a vendor's own conversation that has real content ClikCode
-  // just never routed a turn through. A session with a provider already
-  // chosen (nativeHarness set) is kept too, even message-less: choosing a
-  // provider and adding/configuring its account is real, deliberate setup
-  // work, not an accidental blank launch — deleting it made ClikCode "forget"
-  // which provider a still-mid-setup session belonged to and fall back to an
-  // older, unrelated one on the next launch.
+  // just never routed a turn through. A session with nativeHarness set is
+  // kept too, even message-less: explicitly choosing a native provider and
+  // configuring its account is real, deliberate setup work, not an
+  // accidental blank launch. nativeHarness is the reliable signal here
+  // specifically because it is ONLY ever set by an explicit selection
+  // (aiHarnessSelect, newProviderConversation) -- unlike `provider`,
+  // `accountId`, and `route`, which aiSessionOpenDefault's own "create a
+  // fresh default session" path silently carries forward from whatever
+  // session came before, even when the user has configured nothing yet.
+  // Gateway sessions (route: 'gateway') have the identical mid-setup-loss
+  // risk this fix addresses, but no equally reliable "was this deliberate"
+  // signal exists for them today -- a real, separate gap, not fixed here.
   if (!(session.messages ?? []).length && !session.nativeSessionId && !session.nativeHarness) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
