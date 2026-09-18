@@ -113,7 +113,16 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     // matched. A generic check, not Antigravity-specific: any other harness
     // using this same string-status convention benefits the same way, and
     // it can't collide with the number check since they're different types.
-    if (record.is_error === true || record.error === true || (typeof record.status === 'string' && /^(error|failed)$/i.test(record.status))) isError = true;
+    // record.source marks a sub-step's own output (a single shell command
+    // within a multi-step turn, confirmed live in a real Codex transcript:
+    // {"source":"unified_exec_startup","status":"failed",...} for one
+    // failed command inside an otherwise-successful turn where the model
+    // recovered and produced a complete, good final answer). A string
+    // status only means the WHOLE TURN failed when it isn't scoped to a
+    // sub-step like that -- without this exclusion, any single failed
+    // command anywhere in a turn flagged the entire successful response as
+    // an error, discarding real, correct answers.
+    if (record.is_error === true || record.error === true || (typeof record.status === 'string' && !record.source && /^(error|failed)$/i.test(record.status))) isError = true;
     if (typeof record.api_error_status === 'number') statusCode = record.api_error_status;
     else if (typeof record.status === 'number' && record.status >= 400) statusCode = record.status;
     if (typeof record.error === 'string' && record.error.trim()) errorMessage = record.error.trim();
