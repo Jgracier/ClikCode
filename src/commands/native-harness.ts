@@ -10,6 +10,7 @@ export interface NativeHarnessSpec {
   surface?: 'terminal' | 'editor-extension';
   npmPackage?: string;
   loginArgv?: readonly string[];
+  loginCapturable?: boolean;
   versionArgv?: readonly string[];
 }
 
@@ -126,6 +127,22 @@ export async function ensureNativeHarness(spec: NativeHarnessSpec): Promise<void
 /** Login is always performed by the vendor CLI in the user's terminal. */
 export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
   await ensureNativeHarness(spec);
+  if (spec.loginCapturable) {
+    // Confirmed live for Antigravity CLI: its login turn authenticates via
+    // an OS-level browser trigger, not by printing anything the user needs
+    // to see or read a pasted code back from -- captured stdout still lets
+    // that happen, and keeps the caller's own UI on screen the whole time
+    // instead of suspending it to hand over a terminal nothing here needs.
+    const stdout = await captureNativeHarnessOutput(spec, spec.loginArgv ?? [], envOverrides, 60_000);
+    try {
+      const parsed = JSON.parse(stdout.trim().split('\n').pop() ?? '') as { status?: string; error?: string };
+      if (parsed.status === 'ERROR' && parsed.error) throw new Error(`${spec.displayName} sign-in failed: ${parsed.error}`);
+    } catch (error) {
+      if (error instanceof SyntaxError) return; // fail-open-ok: not JSON, no structured failure to report
+      throw error;
+    }
+    return;
+  }
   await run(spec.binary, spec.loginArgv ?? [], envOverrides);
 }
 
