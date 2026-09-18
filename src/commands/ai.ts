@@ -647,10 +647,17 @@ async function codexUsageProbe(_session: HarnessSession, environment: Readonly<R
  * what the interactive session shows. This reads an already-authenticated
  * user's own token to display their own account's own usage, the same data
  * the vendor's own client already shows them — not a new grant of access. */
-async function claudeUsageProbe(): Promise<string | undefined> {
+async function claudeUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+  // Real bug, not a hypothetical: this ignored both its parameters entirely
+  // and always read the default ~/.claude path, so every Claude Code
+  // account -- including genuinely isolated ones under their own
+  // CLAUDE_CONFIG_DIR (see the profileEnv on its catalog entry) -- reported
+  // the same, first account's usage. The caller (nativeUsageLabel) already
+  // computes the right environment per account; this just wasn't using it.
   let token: string | undefined;
   try {
-    const raw = await readFile(join(homedir(), '.claude', '.credentials.json'), 'utf8');
+    const configDir = environment.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+    const raw = await readFile(join(configDir, '.credentials.json'), 'utf8');
     const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
     token = typeof parsed.claudeAiOauth?.accessToken === 'string' ? parsed.claudeAiOauth.accessToken : undefined;
   } catch { return undefined; }
@@ -2200,9 +2207,28 @@ async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath
   if (harness.command === 'claude') {
     try {
       const path = join(profilePath ?? join(homedir(), '.claude'), '.credentials.json');
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as { claudeAiOauth?: { subscriptionType?: string } };
-      const tier = parsed.claudeAiOauth?.subscriptionType;
-      if (typeof tier === 'string' && tier) return `${harness.displayName} (${tier})`;
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as { claudeAiOauth?: { accessToken?: string } };
+      const token = parsed.claudeAiOauth?.accessToken;
+      if (!token) return undefined;
+      // subscriptionType duplicated the provider's own display name right
+      // next to itself ("Claude Code (pro)" sitting beside "Claude Code" in
+      // the status line and picker) without actually distinguishing one
+      // account from another with the same plan. /api/oauth/profile is a
+      // real endpoint (verified directly: returns this exact token's own
+      // account.email) -- and since the token itself is already confirmed
+      // profile-scoped (it comes from this account's own, possibly
+      // CLAUDE_CONFIG_DIR-isolated, credentials file), the email it returns
+      // is guaranteed specific to *this* account, not shared across every
+      // Claude Code account the way a file outside that isolated directory
+      // (~/.claude.json, sibling to the redirectable ~/.claude/ folder --
+      // checked, and its own OAuth path isn't confirmed to move with
+      // CLAUDE_CONFIG_DIR) would have been.
+      const response = await fetch('https://api.anthropic.com/api/oauth/profile', {
+        headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+      });
+      if (!response.ok) return undefined;
+      const body = await response.json() as { account?: { email?: string } };
+      return typeof body.account?.email === 'string' && body.account.email ? body.account.email : undefined;
     } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
   }
   return undefined;
@@ -3131,7 +3157,46 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
  * run the vendor login, then make the new account the current one for this
  * session. The two entry points differ only in how `harness` gets chosen --
  * everything after that is identical. */
-async function addAccountForHarness(id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+/** Well-known SDK/CLI environment variable names each vendor's own tooling
+ * already looks for -- not invented here, just the standard name suggested
+ * as a starting point for the env var prompt below. Falls back to a
+ * generic <PROVIDER>_API_KEY guess for anything not in this short list. */
+const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
+  anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GOOGLE_API_KEY', qwen: 'DASHSCOPE_API_KEY',
+};
+
+async function addApiKeyAccount(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+  const suggested = PROVIDER_API_KEY_ENV[harness.provider] ?? `${harness.provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
+  const entered = (await rl.question(`Environment variable holding the key ${chalk.dim(`[${suggested}]`)} › `)).trim();
+  const envName = (entered || suggested).toUpperCase();
+  if (!/^[A-Z][A-Z0-9_]*$/.test(envName)) throw new Error('environment variable name must be letters, numbers, and underscores only');
+  if (!process.env[envName]) throw new Error(`${envName} is not set in this shell -- export it first, then try again. ClikCode never asks for or stores the raw key itself, only this reference.`);
+  const state = await readState();
+  const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
+  const label = `${harness.displayName} (${envName})`;
+  await aiAccountAdd({ provider: harness.provider, label: state.accounts.some((account) => account.label === label) ? `${label} ${existingForProvider + 1}` : label, auth: 'api-key', credentialRef: `env:${envName}` });
+  await aiSessionCommand(id, `/settings account ${label}`);
+}
+
+async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+  // Vendor login is the only path this offered before -- but Claude Code
+  // (and others) also declare api-key as a supported local auth kind, with
+  // no way to actually set one up short of the fully manual, headless-only
+  // `accounts add --auth api-key --credential-ref env:VAR` invocation. Only
+  // asks when there's a real choice to make; a harness with just one
+  // supported local auth kind skips straight to it, same as before.
+  const choices = harness.localAuth.filter((kind) => kind === 'vendor-cli' || kind === 'api-key');
+  const authKind = choices.length > 1
+    ? await chooseOption(rl, `Sign in to ${harness.displayName} with`, [
+        { label: 'Vendor login', detail: 'opens the CLI’s own sign-in flow', value: 'vendor-cli' as const },
+        { label: 'API key', detail: 'reference an environment variable, never typed here', value: 'api-key' as const },
+      ])
+    : choices[0];
+  if (!authKind) return;
+  if (authKind === 'api-key') {
+    await addApiKeyAccount(rl, id, harness);
+    return;
+  }
   // No name prompt: aiAccountLogin picks a numbered placeholder up front and
   // replaces it with something derived from the harness's own credentials
   // once login actually completes, wherever that's possible -- one less
@@ -3152,7 +3217,7 @@ async function interactiveAddAccount(rl: HarnessPrompter, id: string): Promise<v
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const current = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   if (current) {
-    await addAccountForHarness(id, current);
+    await addAccountForHarness(rl, id, current);
     return;
   }
   const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
@@ -3163,19 +3228,33 @@ async function interactiveAddAccount(rl: HarnessPrompter, id: string): Promise<v
     label: harness.displayName, value: harness.command,
   })));
   if (!harnessCommand) return;
-  await addAccountForHarness(id, localHarnessForCommand(harnessCommand)!);
+  await addAccountForHarness(rl, id, localHarnessForCommand(harnessCommand)!);
 }
 
+/** /provider switches providers; /account switches accounts -- so once a
+ * session already has a provider, this only ever shows accounts for that
+ * one provider, never a cross-provider list to pick through. A session
+ * with no provider yet (nothing to filter to) falls back to every ready
+ * account, sorted so accounts sharing a provider stay adjacent -- the
+ * closest thing to "grouped" without inventing a non-selectable header row
+ * this picker has no concept of. */
 async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  const accounts = state.accounts.filter((account) => account.status === 'ready');
+  const currentHarness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  const allReady = state.accounts.filter((account) => account.status === 'ready');
+  const accounts = (currentHarness ? allReady.filter((account) => account.provider === currentHarness.provider) : allReady)
+    .sort((left, right) => left.provider.localeCompare(right.provider) || left.label.localeCompare(right.label));
   const usages = await Promise.all(accounts.map((account) => accountUsageLabel(account, state)));
-  const selected = await chooseOption(rl, 'Choose an account', [
+  const selected = await chooseOption(rl, currentHarness ? `Choose a ${currentHarness.displayName} account` : 'Choose an account', [
     ...accounts.map((account, index) => ({
       label: account.label,
-      detail: `· ${account.provider}${usages[index] ? ` · ${usages[index]}` : ''}${account.quotaState === 'exhausted' ? ` · ${chalk.yellow('quota exhausted')}` : ''}${account.id === session.accountId ? ' · current' : ''}`,
+      // Provider only shown in the detail when the list actually spans more
+      // than one (i.e. no currentHarness to have already filtered to it) --
+      // otherwise it's the exact redundant "provider name shown again right
+      // next to itself" this replaced.
+      detail: `${currentHarness ? '' : `· ${localHarnessForProvider(account.provider)?.displayName ?? account.provider} `}${usages[index] ? `· ${usages[index]} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}`.trim(),
       value: account.label,
     })),
     { label: 'Add another account…', detail: 'vendor login', value: '__add__' },
@@ -3582,6 +3661,18 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
     }).catch(() => { /* Usage is optional provider metadata. */ });
   };
   refreshUsage(session, state);
+  // Without this, usage only ever refreshed at session-open and right after
+  // each submitted message -- fine for a quick back-and-forth, but a long
+  // turn or an idle stretch between messages left the number sitting there
+  // stale for however long that gap was, well past nativeUsageLabel's own
+  // 30s cache window (which bounds *how often this can update*, not
+  // *whether anything ever asks it to*). This is what actually asks.
+  const usageInterval = rl instanceof FullScreenHarnessPrompter ? setInterval(() => {
+    void readState().then((latestState) => {
+      const latest = latestState.sessions.find((item) => item.id === id);
+      if (latest) refreshUsage(latest, latestState);
+    }).catch(() => { /* Usage is optional provider metadata. */ });
+  }, 20_000) : undefined;
   let notice: string | undefined;
   try {
     while (true) {
@@ -3798,6 +3889,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
       }
     }
   } finally {
+    if (usageInterval) clearInterval(usageInterval);
     if (activeFullScreenHarness === rl) activeFullScreenHarness = undefined;
     rl.close();
   }
