@@ -5,8 +5,9 @@
  * failed turn. No terminal UI -- writes go straight to stdout/emitJson, the
  * same as every other headless-callable ai* function. */
 
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stdout as output } from 'node:process';
@@ -15,7 +16,7 @@ import { emitJson } from '../utils/structured-output.js';
 import {
   captureNativeHarnessOutput, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand,
 } from './native-harness.js';
-import { localHarnessForCommand, localHarnessForProvider, localRouter } from './native-harness-protocol.js';
+import { localHarnessForCommand, localHarnessForProvider, localRouter, nativeProfileEnvironment } from './native-harness-protocol.js';
 import { accountView, harnessCommand, harnessStatePath, readState, writeState } from './harness-state.js';
 import { accountUsageLabel } from './native-account-data.js';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition, HarnessState } from './types.js';
@@ -202,6 +203,87 @@ export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, prof
   return undefined;
 }
 
+/** Where ClikCode puts its own managed copy of the Google Cloud SDK --
+ * mirrors the same "ClikCode manages this, not the system" convention as
+ * its isolated account profiles, rather than writing into the user's real
+ * $HOME the way the SDK's installer would by default. */
+function gcloudInstallDir(): string {
+  return join(harnessStatePath(), '..', 'gcloud-sdk');
+}
+
+/** Resolves to ClikCode's own managed gcloud if the system doesn't have one
+ * on PATH -- checked once per call rather than cached, since this only ever
+ * runs at account-add time, not per-turn. */
+async function resolveGcloudBinary(): Promise<string> {
+  const onPath = await new Promise<boolean>((resolve) => {
+    const child = spawn('gcloud', ['--version'], { stdio: 'ignore' });
+    child.once('error', () => resolve(false));
+    child.once('exit', (code) => resolve(code === 0));
+  });
+  if (onPath) return 'gcloud';
+  return join(gcloudInstallDir(), 'google-cloud-sdk', 'bin', 'gcloud');
+}
+
+/** Real, standard Google Cloud SDK dependency -- Antigravity's own login
+ * always writes to the OS keyring; the file-based Application Default
+ * Credentials it can optionally read instead are only ever produced by
+ * gcloud's own login command, not by agy itself (confirmed: no flag or
+ * hidden command in agy --help or its own binary strings does this).
+ * Installed the same way ClikCode already auto-installs a harness's own
+ * npm package on first selection -- gcloud's own documented, official,
+ * non-interactive installer (--disable-prompts), not a system package
+ * manager, so no sudo/root is ever needed: everything lands under
+ * ClikCode's own managed directory, exactly like an isolated account
+ * profile does. */
+export async function ensureGcloudInstalled(): Promise<string> {
+  const binary = await resolveGcloudBinary();
+  if (binary === 'gcloud') return binary; // already on PATH
+  const alreadyInstalledByClikCode = await access(binary).then(() => true, () => false);
+  if (alreadyInstalledByClikCode) return binary;
+  // stdio: 'ignore', not 'inherit': this runs both from aiHarnessSelect
+  // (ClikCode's own alt-screen UI still active -- inherited curl/installer
+  // output would corrupt that display) and from aiAccountLogin (already
+  // suspended). Each caller shows its own appropriate progress instead --
+  // ClikCode's own spinner in the first case, a plain notice in the second
+  // -- rather than this shared helper assuming which context it's in.
+  const installDir = gcloudInstallDir();
+  await mkdir(installDir, { recursive: true, mode: 0o700 });
+  await new Promise<void>((resolve, reject) => {
+    // The installer is piped to bash rather than saved+executed as a
+    // separate step: this is Google's own documented one-line install
+    // command (curl https://sdk.cloud.google.com | bash), just with the
+    // non-interactive flags appended via bash's own argument passthrough.
+    const child = spawn('bash', ['-c', `curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir="${installDir}"`], { stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Google Cloud SDK installer exited ${code}`));
+    });
+  });
+  return binary;
+}
+
+/** Real, interactive OAuth flow -- stdio: 'inherit' is required here (unlike
+ * Antigravity's own turn/login commands): this is what actually shows the
+ * browser/device-code prompt a fresh account needs, and the caller of
+ * aiAccountLogin has already suspended ClikCode's own alt-screen UI by the
+ * time this runs, the same way it does for any other harness's vendor-cli
+ * login. Confirmed via gcloud's own documented behavior, not this specific
+ * combination live -- this is the one piece flagged as untested going in. */
+async function runGcloudApplicationDefaultLogin(gcloudBinary: string, homePath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(gcloudBinary, ['auth', 'application-default', 'login'], {
+      stdio: 'inherit',
+      env: { ...process.env, HOME: homePath },
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`gcloud auth application-default login exited ${code}`));
+    });
+  });
+}
+
 /** Starts the vendor-owned login flow and records only a local opaque profile reference.
  * With no explicit label, the final name is decided *after* login completes: a
  * numbered placeholder is picked first (so an explicit-label caller and duplicate
@@ -255,8 +337,29 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
     ? join(harnessStatePath(), '..', 'profiles', harness.command, accountId)
     : undefined;
   if (profilePath) await mkdir(profilePath, { recursive: true, mode: 0o700 });
-  const nativeProfile = profilePath && harness.profileEnv ? { env: harness.profileEnv, path: profilePath } : undefined;
-  await loginNativeHarness(harness, nativeProfile ? { [nativeProfile.env]: nativeProfile.path } : {});
+  // Antigravity CLI's own default auth checks the OS-level keyring first --
+  // confirmed live it's tied to the login *session* (via D-Bus), not to
+  // $HOME, so every isolated profile above silently resolves to the same
+  // one shared identity regardless of path. Application Default Credentials
+  // is the one auth mode confirmed (via the real binary's own strings:
+  // AGY_ADC_AUTH, and its error text referencing GOOGLE_APPLICATION_CREDENTIALS)
+  // to read from a real file under $HOME instead -- genuinely isolatable,
+  // unlike the keyring. `gcloud auth application-default login` is the
+  // standard, real command that produces that file; running it under this
+  // account's own isolated HOME gives each account a completely separate
+  // credential with nothing shared between them.
+  const extraEnv: Record<string, string> = {};
+  if (harness.command === 'antigravity' && profilePath) {
+    output.write(`\n${chalk.dim('Checking for the Google Cloud SDK (needed for an isolated Antigravity account)…')}\n\n`);
+    const gcloudBinary = await ensureGcloudInstalled();
+    output.write(`\n${chalk.dim('Signing in with Google Cloud (a browser window may open)…')}\n\n`);
+    await runGcloudApplicationDefaultLogin(gcloudBinary, profilePath);
+    extraEnv.AGY_ADC_AUTH = '1';
+  }
+  const nativeProfile = profilePath && harness.profileEnv
+    ? { env: harness.profileEnv, path: profilePath, ...(Object.keys(extraEnv).length ? { extraEnv } : {}) }
+    : undefined;
+  await loginNativeHarness(harness, nativeProfileEnvironment(nativeProfile));
   if (!explicit) {
     const derived = await deriveAccountLabel(harness, profilePath);
     if (derived) {
@@ -318,7 +421,7 @@ export function nativeAccountContext(state: HarnessState, labelOrId: string): { 
   if (account.authKind !== 'vendor-cli') throw new Error(`account "${account.label}" is not owned by a vendor CLI`);
   const harness = localHarnessForProvider(account.provider);
   if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
-  const environment = account.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {};
+  const environment = nativeProfileEnvironment(account.nativeProfile);
   return { account, harness, environment };
 }
 
