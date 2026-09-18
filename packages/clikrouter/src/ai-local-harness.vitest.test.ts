@@ -42,7 +42,7 @@ describe('selectLocalHarnessRoute', () => {
 
 describe('local harness catalog', () => {
   it('publishes a versioned adapter contract', () => {
-    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(3);
+    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(4);
   });
 
   it('uses one reversible command/provider mapping for every supported local harness', () => {
@@ -95,7 +95,7 @@ describe('local harness catalog', () => {
   it('maps only declared provider options into argv and rejects unknown values', () => {
     const claude = localHarnessForCommand('claude')!;
     expect(nativeHarnessTurnArgv(claude, { prompt: 'inspect', options: { 'safe-mode': true, 'add-dir': ['/one', '/two'] } }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--safe-mode', '--add-dir', '/one', '--add-dir', '/two', 'inspect']);
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--safe-mode', '--add-dir', '/one', '--add-dir', '/two', 'inspect']);
     expect(() => nativeHarnessTurnArgv(claude, { prompt: 'inspect', options: { invented: true } }))
       .toThrow('does not declare option "invented"');
     const cursor = localHarnessForCommand('cursor')!;
@@ -117,17 +117,17 @@ describe('local harness catalog', () => {
   it('builds headless Claude create and resume turns', () => {
     const claude = localHarnessForCommand('claude')!;
     expect(nativeHarnessTurnArgv(claude, { prompt: 'hello', nativeSessionId: 'new-id', createdHere: true, effort: 'high' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--session-id', 'new-id', '--effort', 'high', 'hello']);
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--session-id', 'new-id', '--effort', 'high', 'hello']);
     expect(nativeHarnessTurnArgv(claude, { prompt: 'again', nativeSessionId: 'old-id' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--resume', 'old-id', 'again']);
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--resume', 'old-id', 'again']);
     expect(nativeHarnessTurnArgv(claude, { prompt: 'safe edit', permissionMode: 'ask' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--permission-mode', 'manual', '--permission-prompts', 'none', 'safe edit']);
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--permission-mode', 'manual', '--permission-prompts', 'none', 'safe edit']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', permissionMode: 'ask' }))
       .toEqual(['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request', 'exec', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'continue', nativeSessionId: 'thread-id', permissionMode: 'bypass' }))
       .toEqual(['--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'exec', 'resume', 'thread-id', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', permissionMode: 'auto' }))
-      .toEqual(['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request', '--config', 'approvals_reviewer=auto_review', 'exec', '--json', '--skip-git-repo-check', '-']);
+      .toEqual(['--approve-for-me', 'exec', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', images: ['/tmp/screen.png'] }))
       .toEqual(['exec', '--json', '--skip-git-repo-check', '--image', '/tmp/screen.png', '-']);
   });
@@ -146,10 +146,10 @@ describe('local harness catalog', () => {
   });
 
   it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
-    const fullThreeTier = new Set(['codex', 'claude', 'cursor']);
+    const fullThreeTier = new Set(['codex', 'claude', 'cursor', 'qwen', 'droid']);
     const askAndBypass = new Set([
-      'gemini', 'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'qwen', 'cline',
-      'kilo', 'hermes', 'command',
+      'gemini', 'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'cline',
+      'kilo', 'crush', 'hermes', 'command',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(harnessSupportsPermissionMode(harness, 'ask')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command));
@@ -173,9 +173,16 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--yolo');
 
     const antigravity = localHarnessForCommand('antigravity')!;
-    expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'ask' })).toEqual(expect.arrayContaining(['--mode', 'accept-edits']));
+    expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--mode');
     const antigravityBypass = nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'bypass' });
-    expect(antigravityBypass).toEqual(expect.arrayContaining(['--mode', 'accept-edits', '--dangerously-skip-permissions']));
+    expect(antigravityBypass).toContain('--dangerously-skip-permissions');
+
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('qwen')!, { prompt: 'hi', permissionMode: 'auto' }))
+      .toEqual(expect.arrayContaining(['--approval-mode', 'auto']));
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('droid')!, { prompt: 'hi', permissionMode: 'auto' }))
+      .toEqual(expect.arrayContaining(['--auto', 'low']));
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('droid')!, { prompt: 'hi', permissionMode: 'bypass' }))
+      .toContain('--skip-permissions-unsafe');
 
     const cases: Array<[string, string[], string[]]> = [
       ['gemini', ['--approval-mode', 'default'], ['--approval-mode', 'yolo']],
@@ -184,7 +191,8 @@ describe('local harness catalog', () => {
       ['aider', [], ['--yes-always']],
       ['kiro', [], ['--trust-all-tools']],
       ['cline', ['--auto-approve', 'false'], ['--auto-approve', 'true']],
-      ['kilo', [], ['--auto']],
+      ['kilo', [], ['--dangerously-skip-permissions']],
+      ['crush', [], ['--yolo']],
       ['command', [], ['--yolo']],
     ];
     for (const [command, askArgs, bypassArgs] of cases) {

@@ -34,7 +34,7 @@ import {
 import {
   capDiffLines, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   isCodeChangeLabel, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
-  localRouter, nativeActivityPhase, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent,
+  localRouter, nativeActivityPhase, nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent,
   compactPath, nativeProfileEnvironment, renderActivityLine, renderActivityPhase, sessionProviderLabel, streamLocalAiTurn,
 } from './native-harness-protocol.js';
 import {
@@ -1853,7 +1853,7 @@ async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Pro
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const current = session.permissionMode ?? 'ask';
   const descriptions: Record<AiHarnessPermissionMode, string> = {
-    ask: 'ask before actions that need approval',
+    ask: 'require approval; unanswered headless prompts are denied',
     bypass: 'run without approval prompts',
     auto: 'provider reviews approval requests automatically',
   };
@@ -2361,6 +2361,8 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
             signal,
             stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
             onStdoutLine: (lineText) => {
+              const responseUpdate = nativeResponseUpdate(harness, lineText);
+              if (responseUpdate) activeFullScreenHarness?.response(responseUpdate.text, responseUpdate.mode);
               const textPhase = nativeActivityPhase(harness, lineText);
               if (textPhase) activeFullScreenHarness?.phase(textPhase);
               // isJsonDefaultMode() guard lives here now (not inside the parser)
@@ -2587,6 +2589,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
         const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; label?: string; kind?: 'thinking' | 'tool-start'; tool?: string };
         if (event.type === 'delta' && typeof event.text === 'string') {
           activeFullScreenHarness?.phase('generating response');
+          activeFullScreenHarness?.response(event.text, 'append');
           reply += event.text;
           if (streamToTerminal) { output.write(event.text); wroteDelta = true; }
         }
