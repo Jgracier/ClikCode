@@ -45,6 +45,7 @@ export interface AiLocalHarnessDefinition {
   binary: string;
   npmPackage?: string;
   loginArgv?: readonly string[];
+  loginCapturable?: boolean;
   statusArgv?: readonly string[];
   logoutArgv?: readonly string[];
   versionArgv?: readonly string[];

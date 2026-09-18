@@ -75,6 +75,16 @@ export interface AiLocalHarnessDefinition {
   npmPackage?: string;
   /** Native argv that begins the vendor-owned interactive login flow. */
   loginArgv?: readonly string[];
+  /** True only for a harness whose loginArgv is confirmed to complete its
+   * own auth (e.g. opening a browser via an OS-level call) without ever
+   * needing the real terminal -- confirmed for Antigravity CLI by running
+   * its login command with stdout/stderr fully piped away instead of
+   * inherited, and it still authenticated successfully. When true, the
+   * login flow runs captured, with ClikCode's own UI and spinner staying
+   * up the whole time, instead of suspending the alt-screen to hand the
+   * terminal to the child process -- never guessed for a harness whose
+   * login might actually need to print a URL or read a pasted code back. */
+  loginCapturable?: boolean;
   statusArgv?: readonly string[];
   logoutArgv?: readonly string[];
   /** Side-effect-free version probe; defaults to --version. */
@@ -202,7 +212,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // still holds a *valid* credential will still silently reuse it, same as
   // a fresh install would -- agy has no forced-relogin flag in its own CLI
   // surface to force past that, confirmed via --help.
-  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli', 'api-key'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
+  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli', 'api-key'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], loginCapturable: true, modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
   { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
   { command: 'droid', provider: 'factory', displayName: 'Factory Droid', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'droid', modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], turn: { startArgv: ['exec', '--output-format', 'json'], resumeIdPrefix: ['--resume'], output: 'json', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'] } },
   { command: 'kiro', provider: 'kiro', displayName: 'Kiro CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'kiro-cli', launchArgv: ['chat'], turn: { startArgv: ['chat', '--no-interactive'], resumeIdPrefix: ['--resume-id'], output: 'text' }, session: { resumeIdPrefix: ['chat', '--resume-id'], continueArgv: ['chat', '--resume'] } },
