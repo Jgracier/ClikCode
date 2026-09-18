@@ -943,10 +943,10 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     const paletteRows = paletteCapacity;
     const noticeRows = this.currentNotice ? 1 : 0;
     // 4 reserved lines below the conversation/palette/notice bands: rule,
-    // composer, rule, meta (provider/model/directory) — each newline-
-    // terminated — plus one further implicit row for the title line, which
-    // (like meta before it) is deliberately the one line with no trailing
-    // newline; see the comment on that write below for why.
+    // composer, a second rule (with the chat's title embedded at its right
+    // edge) — each newline-terminated — plus one further implicit row for
+    // meta (provider/model/directory), deliberately the one line with no
+    // trailing newline; see the comment on that write below for why.
     const rows = Math.max(1, targetHeight - 4 - paletteRows - noticeRows);
     const conversation: Array<{ text: string; waiting?: boolean }> = [];
     let activityAppended = false;
@@ -1028,27 +1028,26 @@ class FullScreenHarnessPrompter implements HarnessPrompter {
     screenLine(rule);
     const viewport = composerViewport(composer, cursor, Math.max(8, inner - terminalCellWidth(prompt)));
     screenLine(`  ${chalk.white(prompt)}${viewport.text}`);
-    // A second rule frames the composer on both sides (there was only ever
-    // one, above it) instead of the plain blank line that used to sit here.
-    screenLine(rule);
-    // meta (provider/model/directory) now gets its own newline-terminated
-    // line -- it no longer has to share space with the title, which moves to
-    // the true last line below, right-aligned. That's the one line title
-    // shares the "no trailing newline" treatment with (previously meta's
-    // alone): total frame height is exactly the terminal height, so a
-    // newline after the very last line would land the cursor on the last row
-    // and scroll the whole screen by one -- invisible in a one-off full
-    // repaint (which starts over from [H next time), but fatal for
-    // footerOnly/select() repaints, which jump back to a fixed absolute row:
-    // every such scroll left that target one row stale, so the old line was
-    // never overwritten, only added to -- the "adds a line every time you
-    // scroll" reports in the palette and pickers.
-    screenLine(`  ${chalk.dim(visibleSlice(meta, inner))}`);
+    // The rule below the composer carries the chat's title at its right
+    // edge instead of a plain dashed line -- dashes fill from the left up to
+    // wherever the title starts, so a longer title just eats more of the
+    // rule rather than needing a line of its own. Provider/model/directory
+    // (meta) stay on their own separate line below, never sharing space with
+    // the title the way they used to.
     const title = this.titleText();
-    const titlePlain = title ? visibleSlice(title, inner) : '';
-    const titleLine = chalk.dim(titlePlain.padStart(Math.max(titlePlain.length, width - 2)));
-    frame += `\r[2K${titleLine}[?7h`;
-    if (!palette?.hideCursor) frame += `[3A\r[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C[?25h`;
+    const titleSuffix = title ? ` ${visibleSlice(title, Math.max(0, width - 4))}` : '';
+    const ruleWidth = Math.max(0, width - terminalCellWidth(titleSuffix));
+    screenLine(`${chalk.dim('─'.repeat(ruleWidth))}${chalk.dim(titleSuffix)}`);
+    // meta is the true last line: total frame height is exactly the terminal
+    // height, so a newline after the very last line would land the cursor on
+    // the last row and scroll the whole screen by one -- invisible in a
+    // one-off full repaint (which starts over from \x1b[H next time), but
+    // fatal for footerOnly/select() repaints, which jump back to a fixed
+    // absolute row: every such scroll left that target one row stale, so the
+    // old line was never overwritten, only added to -- the "adds a line
+    // every time you scroll" reports in the palette and pickers.
+    frame += `\r\x1b[2K  ${chalk.dim(visibleSlice(meta, inner))}\x1b[?7h`;
+    if (!palette?.hideCursor) frame += `\x1b[2A\r\x1b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\x1b[?25h`;
     output.write(frame);
   }
 
