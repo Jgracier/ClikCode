@@ -13,6 +13,9 @@
  */
 
 import { createRequire } from 'node:module';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import type Conf from 'conf';
@@ -58,6 +61,21 @@ ${chalk.cyan('╚═════════════════════
  * Render a command failure. JSON mode gets a machine-readable object; human mode
  * gets a friendly line, plus stack/HTTP status/response body under --debug.
  */
+/**
+ * process.exit() runs synchronously right after this in both handlers below
+ * -- an async fs write would very plausibly never flush before the process
+ * actually dies, so this uses the sync fs API specifically, not fs/promises.
+ * Never throws itself: a crash handler that can crash defeats its own point.
+ */
+function logCrashToDisk(kind: 'uncaughtException' | 'unhandledRejection', error: unknown): void {
+  try {
+    const dir = join(homedir(), '.clikcode');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const detail = error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error);
+    appendFileSync(join(dir, 'crash.log'), `[${new Date().toISOString()}] ${kind} (pid ${process.pid})\n${detail}\n\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch { /* fail-open-ok: a broken crash log must never block the actual crash handling below it. */ }
+}
+
 export function handleCommandError(error: unknown): void {
   if (isJsonDefaultMode()) {
     emitJson(toCliErrorJson(error));
@@ -105,10 +123,12 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
   let activeLifecycleLock: LifecycleLock | null = null;
 
   process.on('unhandledRejection', (err) => {
+    logCrashToDisk('unhandledRejection', err);
     handleCommandError(err);
     process.exit(process.exitCode || 1);
   });
   process.on('uncaughtException', (err) => {
+    logCrashToDisk('uncaughtException', err);
     handleCommandError(err);
     process.exit(process.exitCode || 1);
   });
