@@ -2701,12 +2701,22 @@ async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNa
       try { record = JSON.parse(line); } catch { continue; }
       if (record.type === 'ai-title' && typeof record.aiTitle === 'string') { title = record.aiTitle; break; }
       const message = record.message as { content?: unknown } | undefined;
-      // Claude Code also injects synthetic wrapper turns (e.g. a
-      // "<local-command-caveat>" note about a slash command's own output) as
-      // literal role:"user" messages — the same reason Codex's fallback below
-      // skips anything starting with "<".
-      if (!title && record.type === 'user' && typeof message?.content === 'string' && !message.content.trim().startsWith('<')) {
-        title = conversationTitle(message.content.trim());
+      if (!title && record.type === 'user') {
+        // A user message's content is a plain string in some sessions and a
+        // list of content blocks ({type:'text', text:'...'}, possibly mixed
+        // with non-text blocks) in others — real API message shapes, not one
+        // canonical format. Missing the array case meant a session that
+        // happened to only have array-shaped turns showed no title at all,
+        // not a wrong one.
+        const content = message?.content;
+        const text = typeof content === 'string' ? content
+          : Array.isArray(content) ? content.map((part) => typeof (part as { text?: unknown })?.text === 'string' ? (part as { text: string }).text : '').join(' ').trim()
+          : '';
+        // Claude Code also injects synthetic wrapper turns (e.g. a
+        // "<local-command-caveat>" note about a slash command's own output) as
+        // literal role:"user" messages — the same reason Codex's fallback below
+        // skips anything starting with "<".
+        if (text && !text.startsWith('<')) title = conversationTitle(text);
       }
     }
     sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
