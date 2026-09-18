@@ -373,8 +373,24 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     output.write(frame);
   }
 
-  question(prompt: string, commands: readonly PickerOption<string>[] = [], settings?: { cancellable?: boolean }): Promise<string> {
-    if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
+  async question(prompt: string, commands: readonly PickerOption<string>[] = [], settings?: { cancellable?: boolean }): Promise<string> {
+    if (!input.isTTY) {
+      // A single check here used to end the whole session the instant it
+      // failed once -- fatal specifically after a long suspend/resume
+      // window (a vendor login's own OAuth wait, the one case this
+      // codebase has anything that runs for 20+ seconds with the real
+      // terminal handed over), where a connection hiccup reconnecting a
+      // moment later still read as isTTY=false on the very next check and
+      // silently discarded whatever the suspended command was about to
+      // save, with no error and no crash log to show for it (this exact
+      // path, confirmed live: real OAuth completed, then the whole process
+      // was just gone). Retrying briefly gives a transient blip a real
+      // chance to resolve before treating the terminal as genuinely closed.
+      for (let attempt = 0; attempt < 20 && !input.isTTY; attempt++) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+      }
+      if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
+    }
     return new Promise((resolveQuestion, rejectQuestion) => {
       let value = '';
       let cursor = 0;
