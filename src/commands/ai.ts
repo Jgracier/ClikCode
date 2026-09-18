@@ -45,7 +45,7 @@ import {
 } from './native-account-data.js';
 import {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
-  aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, ensureGcloudInstalled, harnessNeedsLogin,
+  aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin,
   nativeAccountContext, setEmitHarnessOutput,
 } from './account-management.js';
 import { FullScreenHarnessPrompter } from './terminal-ui.js';
@@ -450,15 +450,6 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (freshInstall) {
     activeFullScreenHarness?.startWaiting(`installing ${harness.displayName}…`);
     try { await ensureNativeHarness(harness); } finally { activeFullScreenHarness?.stopWaiting(); }
-  }
-  // Checked at selection time, not only when an account is actually added:
-  // by the time the user gets to /add-account, this dependency is already
-  // in place rather than surfacing as a mid-login delay. Idempotent --
-  // returns immediately once installed, so this costs nothing on every
-  // later selection of the same provider.
-  if (harness.command === 'antigravity') {
-    activeFullScreenHarness?.startWaiting('checking Google Cloud SDK…');
-    try { await ensureGcloudInstalled(); } finally { activeFullScreenHarness?.stopWaiting(); }
   }
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
