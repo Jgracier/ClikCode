@@ -6,7 +6,12 @@
 // do not appear here. A BYO account is a local credential *reference*, never a
 // token that can be uploaded to or read by ClikDeploy.
 
-import { selectRouterCandidate, type AiRouterCandidate, type AiRoutingStrategy } from './ai-router-selection';
+import {
+  selectRouterCandidate,
+  selectRouterCandidateDynamic,
+  type AiRouterCandidate,
+  type AiRoutingStrategy,
+} from './ai-router-selection';
 
 export type AiHarnessRoute = 'local' | 'gateway';
 export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
@@ -575,8 +580,12 @@ export async function selectLocalHarnessRouteAsync(
   // use dynamic, pluggable selector; pass agent capabilities (if any) so the
   // router can honor per-agent toggles like `jev` before consulting external
   // decision-makers.
-  const selected = await import('./ai-router-selection.js').then((m) =>
-    m.selectRouterCandidateDynamic(eligible, request.strategy, request.preferredModel, request.estimatedPromptTokens, request.agentCapabilities),
+  const selected = await selectRouterCandidateDynamic(
+    eligible,
+    request.strategy,
+    request.preferredModel,
+    request.estimatedPromptTokens,
+    request.agentCapabilities,
   );
   if (!selected) {
     return {

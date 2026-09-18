@@ -21,6 +21,7 @@ import {
   fuseEvidence,
   sampleWeight,
 } from './ai-evidence';
+import { decideWithTypesafe } from './ai-decision-maker';
 
 /**
  * 'auto' / 'auto-budget' / 'auto-frontier' are the "auto family" — all three
@@ -1582,7 +1583,6 @@ export async function selectRouterCandidateDynamic(
     }
     if (maker === 'typesafe') {
       try {
-        const { decideWithTypesafe } = await import('./ai-decision-maker.js');
         const decision = await decideWithTypesafe({ candidates, mode, preferredModel, estimatedPromptTokens });
         if (decision && decision.provider && decision.model) return decision as AiRouterSelection;
       } catch (err) {
