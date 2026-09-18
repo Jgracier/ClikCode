@@ -259,10 +259,22 @@ function nativeActivityLine(harness: AiLocalHarnessDefinition, lineText: string)
       if (tool) return `  ${chalk.yellow('tool')} ${chalk.dim(String(tool.name ?? 'tool'))}`;
     }
   }
+  // opencode's own envelope is a different shape entirely: a top-level `type`
+  // (not nested under `item`) and a `part` object instead of an `item` one.
+  // Verified against a real `opencode run --format json` turn, including one
+  // that actually called a tool — `part.tool` is the tool name and
+  // `part.state.status` tracks completion.
+  if (harness.command === 'opencode' && type === 'tool_use') {
+    const part = value.part && typeof value.part === 'object' ? value.part as Record<string, unknown> : undefined;
+    const state = part?.state && typeof part.state === 'object' ? part.state as Record<string, unknown> : undefined;
+    const name = String(part?.tool ?? 'tool');
+    const done = state?.status === 'completed';
+    return `  ${done ? chalk.green('done') : chalk.yellow('tool')} ${chalk.dim(name)}`;
+  }
   return undefined;
 }
 
-function nativeActivityPhase(lineText: string): 'generating response' | undefined {
+function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText: string): 'generating response' | undefined {
   let value: Record<string, unknown>;
   try {
     value = JSON.parse(lineText) as Record<string, unknown>;
@@ -275,6 +287,7 @@ function nativeActivityPhase(lineText: string): 'generating response' | undefine
   const itemType = String(item?.type ?? '');
   if (/assistant|agent_message/.test(itemType) && /started|delta|completed/.test(type)) return 'generating response';
   if (type === 'assistant') return 'generating response';
+  if (harness.command === 'opencode' && type === 'text') return 'generating response';
   return undefined;
 }
 
@@ -3676,7 +3689,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
           signal,
           stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
           onStdoutLine: (lineText) => {
-            const phase = nativeActivityPhase(lineText);
+            const phase = nativeActivityPhase(harness, lineText);
             if (phase) activeFullScreenHarness?.phase(phase);
             const activity = nativeActivityLine(harness, lineText);
             if (activity && activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
