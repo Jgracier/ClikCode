@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, composerRightArrowValue, conversationMessageWindow, editWaitingComposer, inlineConversationPlan, liveConversationLines, pickerConfirmsSelection, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { activityLifecyclePhase, bottomAnchoredFrameGeometry, bottomAnchoredLines, commandPaletteMatches, composerRightArrowValue, conversationMessageWindow, editWaitingComposer, inlineConversationPlan, liveConversationLines, pickerConfirmsSelection, pickerDeletesSelection, rebaseActivityOffsets, responseTimeline, rightLabeledRule, streamingMarkdownBoundary, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('terminal waiting input', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
@@ -19,10 +19,8 @@ describe('terminal waiting input', () => {
     expect(glyphs.every((glyph) => [...glyph].length === 2 && terminalCellWidth(glyph) === 2)).toBe(true);
   });
 
-  it('keeps scrolling available while a provider turn is running', () => {
-    expect(waitingInputActions('\u001b[A\u001b[5~\u001b[B\u001b[6~')).toEqual([
-      'scroll-up', 'page-up', 'scroll-down', 'page-down',
-    ]);
+  it('does not pretend navigation keys are handled scroll actions', () => {
+    expect(waitingInputActions('\u001b[A\u001b[5~\u001b[B\u001b[6~')).toEqual([]);
   });
 
   it('buffers fragmented Termius escape sequences and UTF-8 characters', () => {
@@ -59,6 +57,31 @@ describe('terminal waiting input', () => {
     });
   });
 
+  it('pads reset frames above their content so the composer stays at the bottom', () => {
+    expect(bottomAnchoredLines(['response', 'spinner', 'composer'], 6)).toEqual([
+      '', '', '', 'response', 'spinner', 'composer',
+    ]);
+    expect(bottomAnchoredLines(['one', 'two', 'three'], 2)).toEqual(['one', 'two', 'three']);
+  });
+
+  it('pins every incremental frame to the viewport bottom', () => {
+    expect(bottomAnchoredFrameGeometry(20, 7, 0, 5)).toEqual({
+      scrollRows: 0, clearStartRow: 14, dynamicStartRow: 16,
+    });
+    expect(bottomAnchoredFrameGeometry(20, 5, 0, 7)).toEqual({
+      scrollRows: 2, clearStartRow: 14, dynamicStartRow: 14,
+    });
+    expect(bottomAnchoredFrameGeometry(20, 7, 1, 7)).toEqual({
+      scrollRows: 1, clearStartRow: 14, dynamicStartRow: 14,
+    });
+    expect(bottomAnchoredFrameGeometry(20, 0, 0, 5)).toEqual({
+      scrollRows: 0, clearStartRow: 16, dynamicStartRow: 16,
+    });
+    expect(bottomAnchoredFrameGeometry(20, 5, 0, 0)).toEqual({
+      scrollRows: 0, clearStartRow: 16, dynamicStartRow: 20,
+    });
+  });
+
   it('keeps real live content in the final row on compact mobile viewports', () => {
     expect(liveConversationLines(['user', '', 'streamed response', ''], true)).toEqual([
       'user', '', 'streamed response',
@@ -91,6 +114,12 @@ describe('terminal waiting input', () => {
     expect(composerRightArrowValue('', true, true)).toBeUndefined();
   });
 
+  it('uses Right Arrow or Enter to choose and Delete only for destructive row actions', () => {
+    expect(['\r', '\n', '\u001b[C'].every(pickerConfirmsSelection)).toBe(true);
+    expect(pickerConfirmsSelection('\u001b[3~')).toBe(false);
+    expect(pickerDeletesSelection('\u001b[3~')).toBe(true);
+  });
+
   it('reserves confirmation for Enter so Left Arrow can consistently navigate back', () => {
     expect(pickerConfirmsSelection('\r')).toBe(true);
     expect(pickerConfirmsSelection('\u001b[D')).toBe(false);
@@ -112,10 +141,10 @@ describe('streamed response chronology', () => {
       { kind: 'activity', responseOffset: 19, lines: ['tool read file'] },
       { kind: 'activity', responseOffset: 19, lines: ['done read file'] },
     ])).toEqual([
-      { kind: 'markdown', block: { kind: 'paragraph', text: 'I will inspect it.', quoteDepth: 0, indent: 0, sourceEnd: 20 } },
+      { kind: 'markdown', block: { kind: 'paragraph', text: 'I will inspect it.', quoteDepth: 0, indent: 0, sourceEnd: 20, blockBoundary: true } },
       { kind: 'activity', responseOffset: 19, lines: ['tool read file'] },
       { kind: 'activity', responseOffset: 19, lines: ['done read file'] },
-      { kind: 'markdown', block: { kind: 'paragraph', text: 'The issue is fixed.', quoteDepth: 0, indent: 0, sourceEnd: 39 } },
+      { kind: 'markdown', block: { kind: 'paragraph', text: 'The issue is fixed.', quoteDepth: 0, indent: 0, sourceEnd: 39, blockBoundary: true } },
     ]);
   });
 
@@ -151,18 +180,89 @@ describe('streamed response chronology', () => {
     expect(completed[0]).toMatchObject({ responseOffset: 4, event: { kind: 'tool-done', label: 'files updated' } });
   });
 
+  it('keeps the spinner on a remaining parallel tool until all tools finish', () => {
+    let state = activityLifecyclePhase(new Map(), { kind: 'tool-start', id: 'one', label: 'read files' });
+    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-start', id: 'two', label: 'run tests' });
+    expect(state.phase).toBe('running run tests');
+    state = activityLifecyclePhase(state.activeTools, { kind: 'thinking', label: 'reviewed output' });
+    expect(state.phase).toBe('running run tests');
+    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-done', id: 'two', label: 'run tests' });
+    expect(state.phase).toBe('running read files');
+    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-error', id: 'one', label: 'read files' });
+    expect(state.phase).toBe('thinking');
+  });
+
   it('collapses a tool-only burst instead of letting it dominate the viewport', () => {
     const parts = responseTimeline('Done.', Array.from({ length: 7 }, (_, index) => ({
       kind: 'activity' as const, responseOffset: 0, lines: [`done tool ${index + 1}`],
     })));
     expect(parts).toEqual([
-      { kind: 'activity', responseOffset: 0, lines: ['… 3 earlier tool calls'] },
-      { kind: 'activity', responseOffset: 0, lines: ['done tool 4'] },
+      { kind: 'activity', responseOffset: 0, lines: ['… 4 earlier tool calls'] },
       { kind: 'activity', responseOffset: 0, lines: ['done tool 5'] },
       { kind: 'activity', responseOffset: 0, lines: ['done tool 6'] },
       { kind: 'activity', responseOffset: 0, lines: ['done tool 7'] },
-      { kind: 'markdown', block: { kind: 'paragraph', text: 'Done.', quoteDepth: 0, indent: 0, sourceEnd: 5 } },
+      { kind: 'markdown', block: { kind: 'paragraph', text: 'Done.', quoteDepth: 0, indent: 0, sourceEnd: 5, blockBoundary: true } },
     ]);
+  });
+
+  it('collapses staggered tools by their effective Markdown position and row budget', () => {
+    const parts = responseTimeline('One long paragraph.', [
+      { kind: 'activity', responseOffset: 2, lines: ['tool 1', 'detail 1'] },
+      { kind: 'activity', responseOffset: 4, lines: ['tool 2', 'detail 2'] },
+      { kind: 'activity', responseOffset: 6, lines: ['tool 3', 'detail 3'] },
+      { kind: 'activity', responseOffset: 8, lines: ['tool 4', 'detail 4'] },
+    ]);
+    expect(parts.slice(1)).toEqual([
+      { kind: 'activity', responseOffset: 2, lines: ['… 1 earlier tool call'] },
+      { kind: 'activity', responseOffset: 4, lines: ['tool 2', 'detail 2'] },
+      { kind: 'activity', responseOffset: 6, lines: ['tool 3', 'detail 3'] },
+      { kind: 'activity', responseOffset: 8, lines: ['tool 4', 'detail 4'] },
+    ]);
+  });
+
+  it('applies no response-wide budget when tools sit in separate prose blocks', () => {
+    // Collapsing the older ones into a "… N earlier tool calls in this
+    // response" row put that row at the offset of the OLDEST hidden tool --
+    // near the top of the answer -- and its count changed every time another
+    // tool ran. A row whose text keeps changing can never enter native
+    // scrollback, so it pinned itself and every paragraph after it in the
+    // repainted region directly above the composer for the whole turn.
+    // Finished rows are immutable and scroll away on their own instead.
+    const paragraphs = Array.from({ length: 12 }, (_, index) => `Paragraph ${index}.`);
+    const content = paragraphs.join('\n\n');
+    let offset = 0;
+    const events = paragraphs.map((paragraph, index) => {
+      offset += paragraph.length;
+      const event = { kind: 'activity' as const, responseOffset: offset, lines: [`done tool ${index}`] };
+      offset += 2;
+      return event;
+    });
+    const activities = responseTimeline(content, events).filter((part) => part.kind === 'activity');
+    expect(activities).toHaveLength(12);
+    expect(activities.flatMap((part) => part.lines).join('\n')).not.toContain('earlier tool');
+    expect(activities.at(-1)).toMatchObject({ lines: ['done tool 11'] });
+  });
+
+  it('retains source activity beyond the visual summary limit', () => {
+    let entries = [] as ReturnType<typeof upsertActivityEvent>;
+    for (let index = 0; index < 60; index += 1) {
+      entries = upsertActivityEvent(entries, 3, index, { kind: 'tool-done', id: String(index), label: `tool ${index}` });
+    }
+    expect(entries).toHaveLength(60);
+    expect(entries[0]?.event?.label).toBe('tool 0');
+  });
+
+  it('rebases tool offsets when replacement text rewrites the streamed prefix', () => {
+    const entries = upsertActivityEvent([], 3, 12, { kind: 'tool-done', id: 'one', label: 'inspect' });
+    expect(rebaseActivityOffsets(entries, 3, 'Original response', 'Changed response')[0]?.responseOffset).toBe(0);
+    expect(rebaseActivityOffsets(entries, 3, 'Original', 'Original extended')[0]?.responseOffset).toBe(8);
+  });
+
+  it('does not freeze a live EOF block merely because a tool follows it', () => {
+    const open = responseTimeline('- first', [{ kind: 'activity', responseOffset: 7, lines: ['tool inspect'] }]);
+    expect(streamingMarkdownBoundary('- first', open, 0)).toBe(false);
+    const closed = responseTimeline('First.\n\nSecond.', [{ kind: 'activity', responseOffset: 7, lines: ['tool inspect'] }]);
+    expect(streamingMarkdownBoundary('First.\n\nSecond.', closed, 0)).toBe(true);
   });
 
   it('creates the live assistant anchor before prose so tools appear as they happen', () => {

@@ -151,7 +151,18 @@ describe('incremental native tool activity', () => {
       item: { id: 'call-1', type: 'command_execution', command: 'git status', aggregated_output: 'one\ntwo\nthree\nfour' },
     }));
     expect(event).toEqual({ kind: 'tool-done', label: 'git status', id: 'call-1', output: ['one', 'two', 'three', '… 1 more line'] });
-    expect(renderActivityLine(event!)).toHaveLength(4);
+    // Summary plus the captured output: a row shows enough of the command's
+    // result to recognise it without opening anything.
+    expect(renderActivityLine(event!)).toHaveLength(5);
+  });
+
+  it('renders failed command completions as failures rather than green done events', () => {
+    const event = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'call-failed', type: 'command_execution', command: 'pnpm test', exit_code: 1 },
+    }));
+    expect(event).toEqual({ kind: 'tool-error', label: 'pnpm test', id: 'call-failed' });
+    expect(renderActivityLine(event!)[0]!.replace(/\u001b\[[0-9;]*m/g, '')).toContain('failed');
   });
 
   it('pairs Claude tool starts and partial results by tool-use id', () => {
@@ -161,7 +172,9 @@ describe('incremental native tool activity', () => {
     const done = parseNativeActivityEvent({ ...codex, command: 'claude' }, JSON.stringify({
       type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'clean' }] },
     }));
-    expect(start).toMatchObject({ kind: 'tool-start', label: 'Bash', id: 'tool-1' });
+    // The target belongs in the label: a bare `Bash` says nothing about what
+    // ran, and the command is right there in the call's input.
+    expect(start).toMatchObject({ kind: 'tool-start', label: 'Bash(git status)', id: 'tool-1' });
     expect(done).toEqual({ kind: 'tool-done', label: 'tool', id: 'tool-1', output: ['clean'] });
   });
 

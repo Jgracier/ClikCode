@@ -15,9 +15,32 @@ import { nativeModelLabel } from './native-account-data.js';
 import type { LiveTurnInputResult } from './live-turn-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBlock, PickerOption } from './types.js';
 
-export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
+export type WaitingInputAction = 'cancel-edit' | 'cancel-stop';
 
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
+
+/** Treat any set, non-falsy value as opt-in. These are typed by hand into a
+ * shell profile, so `0`/`false`/empty must mean off rather than "the variable
+ * exists, therefore enabled". */
+function environmentFlag(...values: (string | undefined)[]): boolean {
+  const value = values.find((candidate) => candidate !== undefined && candidate !== '');
+  return value !== undefined && value !== '0' && value.toLowerCase() !== 'false';
+}
+
+/** Repainting one live region is what makes the spinner and streaming answer
+ * feel immediate, and it is also exactly what a screen reader re-announces on
+ * every frame. This mode routes to the existing line-oriented renderer, which
+ * is append-only and therefore reads once, in order. */
+export function screenReaderMode(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return environmentFlag(environment.CLIKCODE_SCREEN_READER);
+}
+
+/** Holds the spinner on a single frame and slows the refresh to the rate the
+ * elapsed counter actually needs. The turn still streams; only the decorative
+ * motion stops. */
+export function reducedMotion(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return environmentFlag(environment.CLIKCODE_REDUCED_MOTION, environment.NO_MOTION);
+}
 
 export function terminalUiSupported(
   stdinTty = Boolean(input.isTTY), stdoutTty = Boolean(output.isTTY), environment: NodeJS.ProcessEnv = process.env,
@@ -25,17 +48,30 @@ export function terminalUiSupported(
   // `TERM=dumb` explicitly promises no cursor addressing. The line-oriented
   // fallback remains usable in CI consoles, IDE output panes, Emacs shells,
   // and other pseudo-terminals that expose a TTY without ANSI capabilities.
+  if (screenReaderMode(environment)) return false;
   return stdinTty && stdoutTty && environment.TERM?.toLowerCase() !== 'dumb';
 }
 
 function waitingInputAction(key: string): WaitingInputAction | undefined {
   if (key === '\u001b') return 'cancel-edit';
   if (key === '\u0003') return 'cancel-stop';
-  if (key === '\u001b[A') return 'scroll-up';
-  if (key === '\u001b[B') return 'scroll-down';
-  if (key === '\u001b[5~') return 'page-up';
-  if (key === '\u001b[6~') return 'page-down';
   return undefined;
+}
+
+/** Bracketed paste. Without it the terminal hands pasted text over as ordinary
+ * keystrokes, so every newline inside a paste reads as Enter -- which submitted
+ * or queued each pasted line as its own separate message. With it the terminal
+ * fences the payload and the whole thing arrives as one key. */
+export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
+export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
+const PASTE_START = '\u001b[200~';
+const PASTE_END = '\u001b[201~';
+
+/** The literal text of a pasted key, or undefined for an ordinary keystroke. */
+export function pastedText(key: string): string | undefined {
+  return key.startsWith(PASTE_START) && key.endsWith(PASTE_END)
+    ? key.slice(PASTE_START.length, key.length - PASTE_END.length)
+    : undefined;
 }
 
 function normalizeTerminalKey(key: string): string {
@@ -78,6 +114,19 @@ export class TerminalInputDecoder {
       if (this.pending.length === 1) {
         if (flush) { keys.push('\u001b'); this.pending = ''; }
         break;
+      }
+      if (this.pending.startsWith(PASTE_START)) {
+        const close = this.pending.indexOf(PASTE_END);
+        if (close === -1) {
+          // A large paste spans several chunks; hold until it is fenced.
+          if (!flush) break;
+          keys.push(this.pending + PASTE_END);
+          this.pending = '';
+          continue;
+        }
+        keys.push(this.pending.slice(0, close + PASTE_END.length));
+        this.pending = this.pending.slice(close + PASTE_END.length);
+        continue;
       }
       const prefix = this.pending[1];
       if (prefix === '[') {
@@ -148,6 +197,10 @@ export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[
 }
 
 export function editWaitingComposer(value: string, cursor: number, key: string): { value: string; cursor: number; changed: boolean } {
+  const pasted = pastedText(key);
+  if (pasted !== undefined) {
+    return { value: value.slice(0, cursor) + pasted + value.slice(cursor), cursor: cursor + pasted.length, changed: true };
+  }
   if (key === '\u001b[D') return { value, cursor: previousCharacterIndex(value, cursor), changed: true };
   if (key === '\u001b[C') return { value, cursor: nextCharacterIndex(value, cursor), changed: true };
   if (key === '\u007f' || key === '\b') {
@@ -208,7 +261,11 @@ export function composerRightArrowValue(
 }
 
 export function pickerConfirmsSelection(key: string): boolean {
-  return key === '\r' || key === '\n';
+  return key === '\r' || key === '\n' || key === '\u001b[C';
+}
+
+export function pickerDeletesSelection(key: string): boolean {
+  return key === '\u001b[3~';
 }
 
 /** Fill a terminal-width rule from the left and pin a short label to its
@@ -242,6 +299,29 @@ export function inlineConversationPlan(
   };
 }
 
+/** A reset starts at the terminal home position. Fill only the unused rows
+ * above the frame so its footer/composer remains attached to the viewport's
+ * bottom edge without turning those blank rows into persisted transcript. */
+export function bottomAnchoredLines(lines: readonly string[], height: number): string[] {
+  return [...Array.from({ length: Math.max(0, height - lines.length) }, () => ''), ...lines];
+}
+
+/** Absolute viewport geometry for an incremental repaint. Completed prefix
+ * rows stay above the new live region; growth scrolls only enough rows to
+ * make that possible. The live region itself always starts at the row that
+ * makes its final row equal the terminal's bottom row. */
+export function bottomAnchoredFrameGeometry(
+  height: number, previousDynamicRows: number, permanentRows: number, dynamicRows: number,
+): { scrollRows: number; clearStartRow: number; dynamicStartRow: number } {
+  const viewportHeight = Math.max(1, height);
+  const dynamicStartRow = dynamicRows ? Math.max(1, viewportHeight - dynamicRows + 1) : viewportHeight;
+  if (!previousDynamicRows) return { scrollRows: 0, clearStartRow: dynamicStartRow, dynamicStartRow };
+  const previousStartRow = Math.max(1, viewportHeight - previousDynamicRows + 1);
+  const scrollRows = Math.max(0, previousStartRow + permanentRows - dynamicStartRow);
+  const clearStartRow = Math.min(dynamicStartRow, previousStartRow - scrollRows + permanentRows);
+  return { scrollRows, clearStartRow: Math.max(1, clearStartRow), dynamicStartRow };
+}
+
 /** A live response must end on content, not its decorative separator. On a
  * short mobile viewport the last replaceable row may be the only row visible. */
 export function liveConversationLines(lines: readonly string[], live: boolean): string[] {
@@ -271,9 +351,11 @@ export type ResponseTimelinePart = { kind: 'markdown'; block: MessageBlock } | I
 export type ActivityEntry = { anchor: number; responseOffset?: number; sequence?: number; event?: HarnessActivityEvent; lines: string[] };
 type InlineFrameState = {
   permanent: string[]; dynamic: string[]; cursorRow: number; cursorColumn: number; reset: boolean; hideCursor: boolean;
+  targetHeight: number;
 };
 
-const MAX_ACTIVITY_BURST = 4;
+const MAX_ACTIVITY_BURST = 3;
+const MAX_ACTIVITY_BURST_ROWS = 6;
 
 /** One provider may publish pending/running/progress frames for the same tool.
  * They describe one lifecycle, not separate calls. Upsert by native id, or by
@@ -310,7 +392,46 @@ export function upsertActivityEvent(
       event: normalized, lines: renderActivityLine(normalized).map((line) => line.trim()),
     });
   }
-  return next.slice(-50);
+  // Do not evict old entries here. Some may already be immutable native
+  // scrollback; removing one would invalidate the rendered prefix and force a
+  // full-screen reset. responseTimeline applies a bounded visual summary
+  // without destroying the chronological source data.
+  return next;
+}
+
+/** A replacement stream is usually a cumulative snapshot. Offsets within its
+ * unchanged prefix remain valid; offsets in rewritten text do not, so attach
+ * those events at the divergence boundary instead of leaving them beyond or
+ * inside unrelated prose. */
+export function rebaseActivityOffsets(
+  entries: readonly ActivityEntry[], anchor: number, previous: string, replacement: string,
+): ActivityEntry[] {
+  let commonPrefix = 0;
+  const shared = Math.min(previous.length, replacement.length);
+  while (commonPrefix < shared && previous[commonPrefix] === replacement[commonPrefix]) commonPrefix += 1;
+  return entries.map((entry) => entry.anchor === anchor && entry.responseOffset !== undefined
+    && entry.responseOffset > commonPrefix
+    ? { ...entry, responseOffset: commonPrefix }
+    : entry);
+}
+
+/** Derive the spinner from the whole in-flight tool set rather than the most
+ * recent provider event. A reasoning summary or one parallel completion must
+ * not claim the agent is merely thinking while another tool is still live. */
+export function activityLifecyclePhase(
+  activeTools: ReadonlyMap<string, string>, event: HarnessActivityEvent,
+): { activeTools: Map<string, string>; phase: string } {
+  const next = new Map(activeTools);
+  const key = event.id ?? event.label;
+  if (event.kind === 'tool-start') next.set(key, event.label);
+  else if (event.kind === 'tool-done' || event.kind === 'tool-error') {
+    if (!next.delete(key) && !event.id) {
+      const matchingKey = [...next].reverse().find(([, label]) => label === event.label)?.[0];
+      if (matchingKey) next.delete(matchingKey);
+    }
+  }
+  const running = [...next.values()];
+  return { activeTools: next, phase: running.length ? `running ${running[running.length - 1]}` : 'thinking' };
 }
 
 export function transientAssistantRequired(
@@ -326,42 +447,72 @@ export function transientAssistantRequired(
  * link, list, quote, or table into independently parsed fragments. */
 export function responseTimeline(content: string, events: readonly InlineResponseEvent[]): ResponseTimelinePart[] {
   const blocks = splitIntoBlocks(content);
-  const groupedEvents: InlineResponseEvent[] = [];
   const sorted = [...events].sort((left, right) => left.responseOffset - right.responseOffset
     || (left.sequence ?? 0) - (right.sequence ?? 0));
-  for (let index = 0; index < sorted.length;) {
-    const offset = sorted[index]!.responseOffset;
-    const group: InlineResponseEvent[] = [];
-    while (index < sorted.length && sorted[index]!.responseOffset === offset) group.push(sorted[index++]!);
-    const activities = group.filter((event): event is Extract<InlineResponseEvent, { kind: 'activity' }> => event.kind === 'activity');
-    const hidden = Math.max(0, activities.length - MAX_ACTIVITY_BURST);
-    const retained = new Set(activities.slice(-MAX_ACTIVITY_BURST));
-    let summarized = false;
-    for (const event of group) {
-      if (event.kind !== 'activity' || retained.has(event)) groupedEvents.push(event);
-      else if (!summarized) {
-        groupedEvents.push({
-          kind: 'activity', responseOffset: offset, sequence: event.sequence,
-          lines: [`… ${hidden} earlier tool ${hidden === 1 ? 'call' : 'calls'}`],
-        });
-        summarized = true;
+  // There is deliberately no response-level cap here. Collapsing older tools
+  // into a "… N earlier tool calls in this response" row placed that row at
+  // the offset of the OLDEST hidden tool -- near the top of the answer -- and
+  // its count changed every time another tool ran. A row whose text keeps
+  // changing can never enter native scrollback, so it held itself and every
+  // paragraph after it in the repainted region directly above the composer for
+  // the whole turn. Finished tool rows are immutable and flow away into
+  // scrollback on their own; the per-burst cap below still bounds the one case
+  // that genuinely needs it, a pile of tools at a single offset.
+  const slots: InlineResponseEvent[][] = Array.from({ length: blocks.length + 1 }, () => []);
+  for (const event of sorted) {
+    const blockIndex = event.responseOffset <= 0 ? -1
+      : blocks.findIndex((block) => event.responseOffset <= block.sourceEnd);
+    slots[blockIndex < 0 ? (event.responseOffset <= 0 ? 0 : blocks.length) : blockIndex + 1]!.push(event);
+  }
+  const compact = (slot: readonly InlineResponseEvent[]): InlineResponseEvent[] => {
+    const compacted: InlineResponseEvent[] = [];
+    const flush = (burst: Array<Extract<InlineResponseEvent, { kind: 'activity' }>>): void => {
+      if (!burst.length) return;
+      const retained: typeof burst = [];
+      let rows = 0;
+      for (let index = burst.length - 1; index >= 0 && retained.length < MAX_ACTIVITY_BURST; index -= 1) {
+        const event = burst[index]!;
+        if (retained.length && rows + event.lines.length > MAX_ACTIVITY_BURST_ROWS) break;
+        retained.unshift(event);
+        rows += event.lines.length;
       }
+      const hidden = burst.length - retained.length;
+      if (hidden) compacted.push({
+        kind: 'activity', responseOffset: burst[0]!.responseOffset,
+        ...(burst[0]!.sequence === undefined ? {} : { sequence: burst[0]!.sequence }),
+        lines: [`… ${hidden} earlier tool ${hidden === 1 ? 'call' : 'calls'}`],
+      });
+      compacted.push(...retained);
+      burst.length = 0;
+    };
+    const burst: Array<Extract<InlineResponseEvent, { kind: 'activity' }>> = [];
+    for (const event of slot) {
+      if (event.kind === 'activity') burst.push(event);
+      else { flush(burst); compacted.push(event); }
     }
-  }
-  const parts: ResponseTimelinePart[] = [];
-  let eventIndex = 0;
-  const appendEventsThrough = (boundary: number): void => {
-    while (eventIndex < groupedEvents.length && groupedEvents[eventIndex]!.responseOffset <= boundary) {
-      parts.push(groupedEvents[eventIndex++]!);
-    }
+    flush(burst);
+    return compacted;
   };
-  appendEventsThrough(0);
-  for (const block of blocks) {
+  const parts: ResponseTimelinePart[] = [];
+  parts.push(...compact(slots[0]!));
+  for (const [index, block] of blocks.entries()) {
     parts.push({ kind: 'markdown', block });
-    appendEventsThrough(block.sourceEnd);
+    parts.push(...compact(slots[index + 1]!));
   }
-  appendEventsThrough(Number.POSITIVE_INFINITY);
   return parts;
+}
+
+/** The final parsed block at a live EOF can still grow on the next token. It
+ * is safe to freeze only when later Markdown proves the parser closed it, or
+ * when an explicit blank line closes the source construct. An out-of-band
+ * tool event alone is not proof that a list/paragraph/fence is complete. */
+export function streamingMarkdownBoundary(
+  content: string, timeline: readonly ResponseTimelinePart[], index: number,
+): boolean {
+  const part = timeline[index];
+  if (part?.kind !== 'markdown' || !part.block.blockBoundary) return false;
+  if (timeline.slice(index + 1).some((candidate) => candidate.kind === 'markdown')) return true;
+  return /\n[ \t]*\n$/.test(content.slice(0, part.block.sourceEnd));
 }
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -382,6 +533,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingLabel = '';
   private waitingStartedAt = 0;
   private activityEntries: ActivityEntry[] = [];
+  private activeTools = new Map<string, string>();
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
@@ -395,12 +547,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private timelineSequence = 0;
   private readonly waitingSubmissionWrites = new Set<Promise<void>>();
   private suspended = false;
+  private readonly reducedMotion = reducedMotion();
   private activityAnchor = 0;
   /** Persisted conversation lines already emitted into the terminal's native
    * scrollback. Only the changing response/composer below them is repainted. */
   private inlinePermanentLines: string[] = [];
   private inlineWrittenPermanentLines: string[] = [];
-  private inlineCursorRow = 0;
+  private inlineDynamicRows = 0;
   private commitConversationOnNextPaint = false;
   private resetInlineScreen = true;
   private usageLabel?: string;
@@ -416,16 +569,25 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private paletteActive = false;
   private cancelWaiting?: (restoreDraft: boolean) => void;
   private waitingCancelled = false;
-  private pendingApproval?: { resolve: (accepted: boolean) => void; previousLabel: string };
+  private pendingApproval?: { resolve: (accepted: boolean) => void };
+  /** Providers fan out parallel tool calls, so a second request can arrive
+   * while the first is still on screen. Queueing asks them one at a time;
+   * resolving the extras false meant silently denying a tool the user was
+   * never shown. */
+  private approvalQueue: Array<{ title: string; detail?: string; resolve: (accepted: boolean) => void }> = [];
+  private approvalRestoreLabel?: string;
   private readonly onWaitingKey = (key: string): void => {
     if (this.pendingApproval) {
       const answer = key.toLowerCase();
       if (answer === 'y' || answer === 'n' || answer === '\r' || answer === '\n' || answer === '\u001b' || answer === '\u0003') {
         const pending = this.pendingApproval;
         this.pendingApproval = undefined;
-        this.waitingLabel = pending.previousLabel || 'thinking';
         pending.resolve(answer === 'y');
-        this.updateWaiting();
+        if (!this.presentNextApproval()) {
+          this.waitingLabel = this.approvalRestoreLabel || 'thinking';
+          this.approvalRestoreLabel = undefined;
+          this.updateWaiting();
+        }
       }
       return;
     }
@@ -480,7 +642,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   };
 
   constructor() {
-    output.write('\u001b[?25h');
+    // Take the whole terminal. `2J` clears the viewport and `3J` clears the
+    // scrollback behind it, so the shell prompt, the typed command, and
+    // whatever ran before it are not left sitting above the UI.
+    //
+    // Only ever here, at startup: the reset path in flushInlineFrame clears the
+    // viewport alone, because scrollback is where the conversation itself
+    // lives and a resize must never destroy it.
+    output.write('\u001b[2J\u001b[3J\u001b[H\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
   }
 
@@ -508,7 +677,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // about to retry on another account. Appends with no content remain a
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
-    this.liveResponse = mode === 'replace' ? text : this.liveResponse + text;
+    if (mode === 'replace') {
+      this.activityEntries = rebaseActivityOffsets(this.activityEntries, this.activityAnchor, this.liveResponse, text);
+      this.liveResponse = text;
+    } else this.liveResponse += text;
     this.schedulePaint();
   }
 
@@ -516,7 +688,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const normalized = message.trim();
     const last = this.activityEntries[this.activityEntries.length - 1];
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
-    this.activityEntries = [...this.activityEntries.slice(-49), {
+    this.activityEntries = [...this.activityEntries, {
       anchor: this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0,
       ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
       ...(this.waitingLabel ? { sequence: ++this.timelineSequence } : {}),
@@ -529,6 +701,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const anchor = this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
     const responseOffset = this.waitingLabel ? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
+    const lifecycle = activityLifecyclePhase(this.activeTools, event);
+    this.activeTools = lifecycle.activeTools;
+    this.phase(lifecycle.phase);
     this.schedulePaint();
   }
 
@@ -562,19 +737,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingDraft = '';
     this.waitingCursor = 0;
     this.waitingSubmissions = [];
+    this.activeTools.clear();
     this.waitingCancelled = false;
     this.waitingFrame = 0;
     this.waitingStartedAt = Date.now();
     if (input.isTTY) {
       input.setRawMode(true);
       input.resume();
+      output.write(ENABLE_BRACKETED_PASTE);
       this.stopWaitingInput = listenForTerminalKeys(this.onWaitingKey);
     }
     this.paint('', [], 0, '› ', 0);
     this.waitingTimer = setInterval(() => {
       this.waitingFrame++;
       this.updateWaiting();
-    }, 300);
+    }, this.reducedMotion ? 1000 : 300);
     this.waitingTimer.unref();
   }
 
@@ -589,7 +766,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   turnOutputStarted(): boolean {
     return Boolean(this.liveResponse || this.activityEntries.some((entry) =>
       entry.anchor === this.activityAnchor && entry.responseOffset !== undefined
-      && (entry.event?.kind === 'tool-start' || entry.event?.kind === 'tool-done')));
+      && (entry.event?.kind === 'tool-start' || entry.event?.kind === 'tool-done' || entry.event?.kind === 'tool-error')));
   }
 
   stopWaiting(refresh = true): void {
@@ -601,7 +778,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.cancelWaiting = undefined;
     this.waitingSubmit = undefined;
     this.waitingCancelled = false;
-    this.pendingApproval = undefined;
+    this.settleApprovals();
     this.waitingLabel = '';
     if (refresh && !this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
@@ -613,12 +790,33 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   approval(title: string, detail?: string): Promise<boolean> {
-    if (this.pendingApproval) return Promise.resolve(false);
     return new Promise((resolveApproval) => {
-      this.pendingApproval = { resolve: resolveApproval, previousLabel: this.waitingLabel };
-      this.waitingLabel = `${title}${detail ? ` · ${visibleSlice(detail.replace(/\s+/g, ' '), 90)}` : ''} · approve? [y/N]`;
-      this.updateWaiting();
+      if (!this.pendingApproval) this.approvalRestoreLabel = this.waitingLabel;
+      this.approvalQueue.push({ title, ...(detail === undefined ? {} : { detail }), resolve: resolveApproval });
+      if (!this.pendingApproval) this.presentNextApproval();
     });
+  }
+
+  /** Returns false when nothing was waiting, so the caller knows to restore
+   * the turn's own label instead of leaving a stale prompt on screen. */
+  private presentNextApproval(): boolean {
+    const next = this.approvalQueue.shift();
+    if (!next) return false;
+    this.pendingApproval = { resolve: next.resolve };
+    this.waitingLabel = `${next.title}${next.detail ? ` · ${visibleSlice(next.detail.replace(/\s+/g, ' '), 90)}` : ''} · approve? [y/N]`;
+    this.updateWaiting();
+    return true;
+  }
+
+  /** A turn can end while an approval is on screen. Denying outstanding asks
+   * is what releases the provider's own awaiting handler; dropping them left
+   * it waiting on a promise that could never settle. */
+  private settleApprovals(): void {
+    const outstanding = [this.pendingApproval, ...this.approvalQueue];
+    this.pendingApproval = undefined;
+    this.approvalQueue = [];
+    this.approvalRestoreLabel = undefined;
+    for (const item of outstanding) item?.resolve(false);
   }
 
   usage(label?: string): void {
@@ -660,8 +858,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingLine(): string {
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
     const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
-    const label = `${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to steer or queue' : ''}`;
-    return `${chalk.cyanBright(waitingSpinnerGlyph(this.waitingFrame))}  ${chalk.dim(label)}`;
+    // "steer or queue" over-promised: only the codex app-server transport can
+    // interrupt a running turn, and every other harness silently queues for the
+    // next one. The per-submission row below the composer already reports which
+    // of the two actually happened, so the invitation just says what is always
+    // true and lets the outcome speak for itself.
+    const label = `${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to send' : ''}`;
+    return `${chalk.cyanBright(waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame))}  ${chalk.dim(label)}`;
   }
 
   private updateWaiting(): void {
@@ -853,13 +1056,32 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           // complete. It can enter native scrollback if the replaceable tail
           // would otherwise exceed the viewport; the unfinished last block
           // remains editable as more streamed Markdown arrives.
-          if (trackStableTail && partIndex < timeline.length - 1) stableConversationBoundary = conversation.length;
+          if (trackStableTail && streamingMarkdownBoundary(content, timeline, partIndex)) {
+            stableConversationBoundary = conversation.length;
+          }
         }
       };
       const absoluteMessageIndex = messageStart + messageIndex;
-      const embeddedEvents: InlineResponseEvent[] = this.activityEntries
+      // Tool rows describe an assistant turn. They are anchored at the index the
+      // live assistant occupied, and the NEXT question lands on that same index
+      // once the answer is persisted -- so without this the finished tools from
+      // the previous answer rendered inside the question just typed, directly
+      // above the composer, on every single turn.
+      const embeddedEvents: InlineResponseEvent[] = (message.role !== 'assistant' ? [] : this.activityEntries)
         .filter((entry) => entry.anchor === absoluteMessageIndex && entry.responseOffset !== undefined)
-        .map((entry) => ({ kind: 'activity', responseOffset: entry.responseOffset!, sequence: entry.sequence, lines: entry.lines }));
+        // A tool that is still running is reported in the waiting band
+        // ("running <label>") and nowhere else. Its row is still mutable --
+        // completion rewrites it with the output preview -- so rendering it
+        // here forced it, and everything after it, to stay in the repainted
+        // region. Because the row is anchored at the offset where the tool
+        // STARTED, one long-running (or never-completed) tool parked its own
+        // row and every later paragraph directly above the composer for the
+        // rest of the turn. A finished row is immutable and flows into
+        // scrollback with the text around it.
+        .filter((entry) => entry.event?.kind !== 'tool-start')
+        .map((entry) => ({
+          kind: 'activity' as const, responseOffset: entry.responseOffset!, sequence: entry.sequence, lines: entry.lines,
+        }));
       if (absoluteMessageIndex === persistedMessages.length) {
         const durableSteers = pending?.steers ?? [];
         embeddedEvents.push(...durableSteers.map((item) => ({
@@ -940,7 +1162,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.inlinePermanentLines = plan.permanent;
     this.commitConversationOnNextPaint = false;
     this.resetInlineScreen = false;
-    this.writeInlineFrame(plan.permanent, dynamic, cursorRow, cursorColumn, reset, Boolean(palette?.hideCursor));
+    this.writeInlineFrame(plan.permanent, dynamic, cursorRow, cursorColumn, reset, Boolean(palette?.hideCursor), targetHeight);
   }
 
   /** Native-scrollback renderer. Persisted chat is emitted once; only the
@@ -948,13 +1170,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * rather than a private viewport offset, own wheel and touch scroll. */
   private writeInlineFrame(
     permanent: readonly string[], dynamic: readonly string[], cursorRow: number,
-    cursorColumn: number, reset: boolean, hideCursor: boolean,
+    cursorColumn: number, reset: boolean, hideCursor: boolean, targetHeight = Math.max(5, output.rows || 30),
   ): void {
     const state: InlineFrameState = {
-      permanent: [...permanent], dynamic: [...dynamic], cursorRow, cursorColumn, reset, hideCursor,
+      permanent: [...permanent], dynamic: [...dynamic], cursorRow, cursorColumn, reset, hideCursor, targetHeight,
     };
     if (this.frameInFlight) {
-      this.pendingInlineFrame = state;
+      // A resize/session reset must survive later spinner or token paints
+      // that coalesce into this pending slot before the current write drains.
+      this.pendingInlineFrame = {
+        ...state,
+        reset: state.reset || Boolean(this.pendingInlineFrame?.reset),
+      };
       return;
     }
     this.flushInlineFrame(state);
@@ -963,28 +1190,61 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private flushInlineFrame(state: InlineFrameState): void {
     if (this.closed || this.suspended) return;
     const prefixMatches = this.inlineWrittenPermanentLines.every((line, index) => state.permanent[index] === line);
-    const reset = state.reset || !prefixMatches;
+    // The live region changing height is a layout change, not new content, so
+    // it is repainted rather than scrolled. Growing it used to scroll the rows
+    // it was about to cover up into scrollback -- duplicating lines already
+    // written there and visibly walking the chat up the screen -- while
+    // shrinking it cleared those rows with nothing to put back, leaving a blank
+    // band. One viewport repaint is correct for both, and leaves the scroll in
+    // bottomAnchoredFrameGeometry to do the one job it is right for: making
+    // room for genuinely new transcript rows.
+    const liveRegionResized = state.dynamic.length !== this.inlineDynamicRows;
+    const reset = state.reset || !prefixMatches || liveRegionResized;
     const previousPermanent = reset ? [] : this.inlineWrittenPermanentLines;
     const appendedPermanent = state.permanent.slice(previousPermanent.length);
     let frame = '\u001b[?25l\u001b[?7l\r';
-    if (reset) frame += '\u001b[2J\u001b[H';
-    else {
-      if (this.inlineCursorRow > 0) frame += `\u001b[${this.inlineCursorRow}A`;
-      frame += '\u001b[J';
-    }
-    const lines = [...appendedPermanent, ...state.dynamic];
-    for (const [index, line] of lines.entries()) {
-      frame += `\r\u001b[2K${line}`;
-      if (index < lines.length - 1) frame += '\n';
+    const emit = (rows: readonly string[]): void => {
+      for (const [index, line] of rows.entries()) {
+        if (index > 0) frame += '\n';
+        frame += `\r\u001b[2K${line}`;
+      }
+    };
+    if (reset) {
+      frame += '\u001b[2J\u001b[H';
+      // Exactly one viewport, bottom-anchored. Emitting the whole retained
+      // prefix would re-dump the transcript into scrollback on every reset.
+      const anchored = bottomAnchoredLines([...appendedPermanent, ...state.dynamic], state.targetHeight);
+      emit(anchored.slice(-state.targetHeight));
+    } else {
+      const geometry = bottomAnchoredFrameGeometry(
+        state.targetHeight, this.inlineDynamicRows, appendedPermanent.length, state.dynamic.length,
+      );
+      if (geometry.scrollRows) {
+        frame += `\u001b[${state.targetHeight};1H${'\n'.repeat(geometry.scrollRows)}`;
+      }
+      frame += `\u001b[${geometry.clearStartRow};1H\u001b[J`;
+      // Rows promoted out of the live region into scrollback occupy the space
+      // the scroll above just freed, directly on top of the new live region.
+      // Emitting only `dynamic` here scrolled to make room and then never drew
+      // them: submitting a prompt left a blank gap where the prompt should be,
+      // with the composer redrawn under it, which read as the composer row
+      // being duplicated instead of the prompt entering the chat.
+      if (appendedPermanent.length) {
+        frame += `\u001b[${Math.max(1, geometry.clearStartRow - appendedPermanent.length)};1H`;
+        emit(appendedPermanent);
+      }
+      if (state.dynamic.length) {
+        frame += `\u001b[${geometry.dynamicStartRow};1H`;
+        emit(state.dynamic);
+      }
     }
     const dynamicLastRow = Math.max(0, state.dynamic.length - 1);
-    const rowsUp = Math.max(0, dynamicLastRow - state.cursorRow);
-    if (rowsUp) frame += `\u001b[${rowsUp}A`;
-    frame += `\r\u001b[${Math.max(1, state.cursorColumn)}G\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}`;
+    const cursorScreenRow = Math.max(1, state.targetHeight - dynamicLastRow + Math.min(state.cursorRow, dynamicLastRow));
+    frame += `\u001b[${cursorScreenRow};${Math.max(1, state.cursorColumn)}H\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}`;
     this.frameInFlight = true;
     output.write(frame, () => {
       this.inlineWrittenPermanentLines = state.permanent;
-      this.inlineCursorRow = Math.max(0, Math.min(state.cursorRow, dynamicLastRow));
+      this.inlineDynamicRows = state.dynamic.length;
       this.frameInFlight = false;
       const pending = this.pendingInlineFrame;
       this.pendingInlineFrame = undefined;
@@ -1060,7 +1320,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         input.setRawMode(false);
-        output.write('\u001b[?25h');
+        output.write(`${DISABLE_BRACKETED_PASTE}\u001b[?25h`);
         if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
         resolveQuestion(answer);
       };
@@ -1079,11 +1339,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         input.setRawMode(false);
-        output.write('\u001b[?25h');
+        output.write(`${DISABLE_BRACKETED_PASTE}\u001b[?25h`);
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
       const handleKey = (key: string): void => {
         const options = matches();
+        const pasted = pastedText(key);
+        if (pasted !== undefined) {
+          // Pasted newlines are content, not Enter. Splitting on them is what
+          // turned one pasted block into a queue of separate messages.
+          value = value.slice(0, cursor) + pasted + value.slice(cursor);
+          cursor += pasted.length;
+          selected = 0;
+          return draw();
+        }
         if (key === '\u0003' || key === '\u0004') return finish('/exit');
         if (key === '\u001b' && settings?.cancellable) return cancel();
         if (key === '\u001b' && options.length) {
@@ -1161,6 +1430,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       };
       input.setRawMode(true);
       input.resume();
+      output.write(ENABLE_BRACKETED_PASTE);
       stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
       draw();
     });
@@ -1210,9 +1480,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
         const renderOptions = visible.map((option) => ({ label: option.label, detail: option.detail, value: '' }));
         const confirmation = '\u2192/Enter';
+        const selectedOption = visible[selected];
+        const secondary = selectedOption?.alternates?.length ? ' · Tab history'
+          : selectedOption?.actions?.length ? ' · Tab options' : '';
+        const destructive = selectedOption?.deleteAction ? ` · Del ${selectedOption.deleteAction.label.toLowerCase()}` : '';
         const hint = query
-          ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose \u00b7 \u2190 back \u00b7 Esc exit`
-          : `${currentOptions().length} total \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose \u00b7 \u2190 back \u00b7 Esc exit \u00b7 type to filter`;
+          ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose${secondary}${destructive} \u00b7 \u2190 back \u00b7 Esc exit`
+          : `${currentOptions().length} total \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose${secondary}${destructive} \u00b7 \u2190 back \u00b7 Esc exit \u00b7 type to filter`;
         this.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, hint });
       };
       let finished = false;
@@ -1225,9 +1499,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.clearInteractiveFrame();
         resolveSelection(value);
       };
-      // Right arrow opens an option's management actions. Only one input
-      // listener owns the terminal at a time; returning from a cancelled child
-      // restores this exact frame rather than leaving an empty composer band.
+      // Tab opens optional non-destructive management actions. Right Arrow is
+      // deliberately identical to Enter for every picker.
       const openActions = async (option: PickerOption<T>): Promise<void> => {
         if (!option.actions?.length) return;
         stopInput();
@@ -1257,20 +1530,49 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
         draw();
       };
-      const handleKey = (key: string): void => {
-        const visible = visibleOptions();
-        const scrollAction = waitingInputAction(key);
-        if (key === '\u001b[A' || scrollAction === 'scroll-up') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
-        else if (key === '\u001b[B' || scrollAction === 'scroll-down') selected = visible.length ? (selected + 1) % visible.length : 0;
-        else if (key === '\u001b[C') {
-          const option = visible[selected];
-          if (!option) return;
-          if (option.actions?.length) void openActions(option);
-          else finish(option.value);
+      const openAlternates = async (option: PickerOption<T>): Promise<void> => {
+        if (!option.alternates?.length) return;
+        stopInput();
+        const value = await this.select(option.label, option.alternates);
+        if (value !== undefined) return finish(value);
+        if (finished) return;
+        input.setRawMode(true);
+        input.resume();
+        stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
+        draw();
+      };
+      const confirmDelete = async (option: PickerOption<T>): Promise<void> => {
+        const action = option.deleteAction;
+        if (!action) return;
+        stopInput();
+        const confirmed = await this.select(`${action.label} ${option.label}?`, [
+          { label: 'Cancel', value: false },
+          { label: `${action.label} ${option.label}`, value: true },
+        ]);
+        if (confirmed) {
+          await onAction?.(option.value, action.value);
+          finish(undefined);
           return;
         }
+        if (finished) return;
+        input.setRawMode(true);
+        input.resume();
+        stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
+        draw();
+      };
+      const handleKey = (key: string): void => {
+        const visible = visibleOptions();
+        if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
+        else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
         else if (key === '\u001b[D') { settings?.onBack?.(); finish(undefined); return; }
         else if (pickerConfirmsSelection(key)) { if (visible[selected]) finish(visible[selected].value); return; }
+        else if (key === '\t') {
+          const option = visible[selected];
+          if (option?.alternates?.length) void openAlternates(option);
+          else if (option?.actions?.length) void openActions(option);
+          return;
+        }
+        else if (pickerDeletesSelection(key)) { if (visible[selected]?.deleteAction) void confirmDelete(visible[selected]); return; }
         else if (key === '\u0003') return finish(undefined);
         else if (key === '\u001b') { settings?.onEscape?.(); return finish(undefined); }
         else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; }
@@ -1296,7 +1598,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     process.off('SIGWINCH', this.onResize);
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write('\u001b[?7h\u001b[?25h\n');
+    // Hand the terminal back the way it was taken: the whole conversation was
+    // this application's screen, so leaving it behind would drop the shell
+    // prompt at the bottom of a full screen of chat. The transcript is
+    // persisted and resumable, so nothing is lost by clearing it.
+    output.write(`${DISABLE_BRACKETED_PASTE}\u001b[?7h\u001b[2J\u001b[3J\u001b[H\u001b[?25h`);
   }
 
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
@@ -1309,7 +1615,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.responsePaintTimer = undefined;
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write('\u001b[?7h\u001b[?25h\n');
+    output.write(`${DISABLE_BRACKETED_PASTE}\u001b[?7h\u001b[?25h\n`);
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,

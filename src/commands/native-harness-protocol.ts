@@ -155,6 +155,26 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
 /** Line-capped, not byte-capped: a diff that's still readable at a glance
  * beats a byte-perfect one that pushes everything else out of the 5-line
  * activity window. */
+/** Captured per side, so a balanced preview always has something to show from
+ * both halves of an edit. */
+const DIFF_CAPTURE_LINES = 8;
+
+/** How much of a tool's work a transcript row shows. Enough to recognise the
+ * edit or command at a glance without the trail crowding out the answer. */
+const ACTIVITY_PREVIEW_LINES = 8;
+
+/** `Edit(src/app.ts)` rather than a bare `Edit`. The tool name alone says
+ * nothing about what was touched; every vendor carries the target in the
+ * call's input under one of a few well-known keys. */
+export function toolLabel(name: string, input?: Record<string, unknown>): string {
+  const target = ['file_path', 'filePath', 'path', 'notebook_path', 'command', 'pattern', 'query', 'url']
+    .map((key) => input?.[key])
+    .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  if (!target) return name;
+  const firstLine = target.split(/\r?\n/, 1)[0]!.trim();
+  return firstLine ? `${name}(${visibleSlice(firstLine, 72)})` : name;
+}
+
 export function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
   const all = text.split(/\r?\n/);
   return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
@@ -189,7 +209,11 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
   if (harness.command === 'antigravity' && value.event === 'step_update') {
     const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
     if (step?.step_type === 'tool') {
-      return { kind: step.state === 'DONE' ? 'tool-done' : 'tool-start', label: String(step.tool_name ?? 'tool') };
+      const state = String(step.state ?? '');
+      return {
+        kind: /error|fail/i.test(state) ? 'tool-error' : state === 'DONE' ? 'tool-done' : 'tool-start',
+        label: String(step.tool_name ?? 'tool'),
+      };
     }
   }
   const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
@@ -211,26 +235,43 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
   }
   if (/command_execution/.test(itemType) && /started|completed/.test(type)) {
     const command = String(item?.command ?? item?.command_line ?? '').trim();
-    if (!command) return undefined;
+    const startedId = typeof item?.id === 'string' ? item.id : undefined;
+    // A `started` event often carries no command text yet. Dropping it meant
+    // the tool was first recorded at its COMPLETION, which anchored the row
+    // after everything the model said while the tool was running -- so that
+    // prose rendered above the tool call that produced it. Emit the start
+    // keyed by its id; the completion upserts the real label and output onto
+    // this same row, at the position where the tool actually began.
+    if (!command) {
+      return type.endsWith('completed') || !startedId ? undefined : { kind: 'tool-start', label: 'tool', id: startedId };
+    }
     const rawOutput = typeof item?.aggregated_output === 'string' ? item.aggregated_output
       : typeof item?.output === 'string' ? item.output : '';
     const output = cappedActivityOutput(rawOutput);
     return {
-      kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: command,
+      kind: type.endsWith('completed')
+        ? (item?.status === 'failed' || item?.status === 'error'
+          || (typeof item?.exit_code === 'number' && item.exit_code !== 0)
+          || (typeof item?.exitCode === 'number' && item.exitCode !== 0) ? 'tool-error' : 'tool-done')
+        : 'tool-start', label: command,
       ...(typeof item?.id === 'string' ? { id: item.id } : {}),
       ...(output?.length ? { output } : {}),
     };
   }
   if (/file_change/.test(itemType) && /started|completed/.test(type)) {
     return {
-      kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: 'files updated',
+      kind: type.endsWith('completed')
+        ? (item?.status === 'failed' || item?.status === 'error' ? 'tool-error' : 'tool-done')
+        : 'tool-start', label: 'files updated',
       ...(typeof item?.id === 'string' ? { id: item.id } : {}),
     };
   }
   if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
     const name = String(item?.name ?? item?.server ?? 'tool');
     return {
-      kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: name,
+      kind: type.endsWith('completed')
+        ? (item?.status === 'failed' || item?.status === 'error' ? 'tool-error' : 'tool-done')
+        : 'tool-start', label: name,
       ...(typeof item?.id === 'string' ? { id: item.id } : {}),
     };
   }
@@ -249,10 +290,10 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
       // more anyway, and a truncation count beats a silently-scrolled-off
       // tail.
       if (name === 'Edit' && typeof input?.old_string === 'string' && typeof input?.new_string === 'string') {
-        const removed = capDiffLines(input.old_string, 4);
-        const added = capDiffLines(input.new_string, 4);
+        const removed = capDiffLines(input.old_string, DIFF_CAPTURE_LINES);
+        const added = capDiffLines(input.new_string, DIFF_CAPTURE_LINES);
         return {
-          kind: 'tool-start', label: name,
+          kind: 'tool-start', label: toolLabel(name, input),
           ...(typeof tool.id === 'string' ? { id: tool.id } : {}),
           diff: {
             removed: [...removed.lines, ...(removed.truncated ? [`… ${removed.truncated} more line${removed.truncated === 1 ? '' : 's'}`] : [])],
@@ -261,10 +302,10 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
         };
       }
       if (name === 'Write' && typeof input?.content === 'string') {
-        const added = capDiffLines(input.content, 4);
-        return { kind: 'tool-start', label: name, ...(typeof tool.id === 'string' ? { id: tool.id } : {}), diff: { removed: [], added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])] } };
+        const added = capDiffLines(input.content, DIFF_CAPTURE_LINES);
+        return { kind: 'tool-start', label: toolLabel(name, input), ...(typeof tool.id === 'string' ? { id: tool.id } : {}), diff: { removed: [], added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])] } };
       }
-      return { kind: 'tool-start', label: name, ...(typeof tool.id === 'string' ? { id: tool.id } : {}) };
+      return { kind: 'tool-start', label: toolLabel(name, input), ...(typeof tool.id === 'string' ? { id: tool.id } : {}) };
     }
     if (type === 'user') {
       const message = value.message as { content?: Array<Record<string, unknown>> } | undefined;
@@ -275,7 +316,7 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
           ? [String((part as Record<string, unknown>).text)] : []).join('\n') : '';
       const output = cappedActivityOutput(content);
       return {
-        kind: 'tool-done', label: 'tool',
+        kind: result.is_error === true ? 'tool-error' : 'tool-done', label: 'tool',
         ...(typeof result.tool_use_id === 'string' ? { id: result.tool_use_id } : {}),
         ...(output?.length ? { output } : {}),
       };
@@ -290,7 +331,11 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
     const part = value.part && typeof value.part === 'object' ? value.part as Record<string, unknown> : undefined;
     const state = part?.state && typeof part.state === 'object' ? part.state as Record<string, unknown> : undefined;
     const name = String(part?.tool ?? 'tool');
-    return { kind: state?.status === 'completed' ? 'tool-done' : 'tool-start', label: name };
+    return {
+      kind: /error|fail/i.test(String(state?.status ?? '')) ? 'tool-error'
+        : state?.status === 'completed' ? 'tool-done' : 'tool-start',
+      label: name,
+    };
   }
   // Command Code's envelope wraps each lifecycle event under a top-level
   // `{ type: 'event', event: {...} }` (distinct from its `{ type: 'result' }`
@@ -307,7 +352,10 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
   // (same as Command Code above) this only ever reports 'tool-start'.
   if (harness.command === 'pi') {
     if (type === 'tool_execution_start') return { kind: 'tool-start', label: String(value.toolName ?? 'tool') };
-    if (type === 'tool_execution_end') return { kind: 'tool-done', label: String(value.toolName ?? 'tool') };
+    if (type === 'tool_execution_end') return {
+      kind: value.isError === true || value.error ? 'tool-error' : 'tool-done',
+      label: String(value.toolName ?? 'tool'),
+    };
     if (type === 'message_update') {
       const event = value.assistantMessageEvent && typeof value.assistantMessageEvent === 'object'
         ? value.assistantMessageEvent as Record<string, unknown> : undefined;
@@ -336,22 +384,32 @@ export function isCodeChangeLabel(label: string): boolean {
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
   if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
   const isCodeChange = Boolean(event.diff) || isCodeChangeLabel(event.label);
-  const glyph = isCodeChange ? chalk.magenta('edit') : (event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool'));
+  const glyph = event.kind === 'tool-error' ? chalk.red('failed')
+    : isCodeChange ? chalk.magenta('edit')
+      : event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool');
   const summary = `  ${glyph} ${chalk.dim(event.label)}`;
-  const detailLines = !event.diff ? (event.output ?? []).map((line) => `    ${chalk.dim(line)}`) : [
-    ...event.diff.removed.map((line) => `    ${chalk.red(`- ${line}`)}`),
-    ...event.diff.added.map((line) => `    ${chalk.green(`+ ${line}`)}`),
+  if (!event.diff) {
+    const output = event.output ?? [];
+    const visible = output.slice(0, ACTIVITY_PREVIEW_LINES);
+    const hidden = output.length - visible.length;
+    return [summary, ...visible.map((line) => `    ${chalk.dim(line)}`),
+      ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : [])];
+  }
+  // Budget both halves of an edit rather than filling it from the top: a large
+  // deletion would otherwise consume the whole preview and hide every added
+  // line, which is the half that says what the edit actually did.
+  const { removed, added } = event.diff;
+  const removedShown = Math.min(removed.length, Math.max(
+    Math.floor(ACTIVITY_PREVIEW_LINES / 2), ACTIVITY_PREVIEW_LINES - added.length,
+  ));
+  const addedShown = Math.min(added.length, ACTIVITY_PREVIEW_LINES - removedShown);
+  const hidden = (removed.length - removedShown) + (added.length - addedShown);
+  return [
+    summary,
+    ...removed.slice(0, removedShown).map((line) => `    ${chalk.red(`- ${line}`)}`),
+    ...added.slice(0, addedShown).map((line) => `    ${chalk.green(`+ ${line}`)}`),
+    ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : []),
   ];
-  const visible = detailLines.slice(0, 2);
-  return [summary, ...visible, ...(detailLines.length > visible.length ? [`    ${chalk.dim(`… ${detailLines.length - visible.length} more`)}`] : [])];
-}
-
-/** Same idea for the spinner's own label: while a tool is actively running,
- * show what it's doing instead of a static "thinking" the whole time. */
-export function renderActivityPhase(event: HarnessActivityEvent): string {
-  if (event.kind === 'tool-start') return `running ${event.label}`;
-  if (event.kind === 'thinking') return 'thinking';
-  return 'generating response';
 }
 
 export function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText: string): 'generating response' | undefined {

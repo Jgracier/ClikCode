@@ -4,7 +4,8 @@
  * command wiring -- just "what's on disk and how do we safely change it." */
 
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount, HarnessDefaultSettings, HarnessSession, HarnessState } from './types.js';
@@ -63,6 +64,136 @@ export function newDeviceSigningIdentity(): Pick<HarnessState, 'devicePrivateKey
   };
 }
 
+/** The snapshot a state object was last known to agree with on disk. Writes
+ * diff against it so a process only ever persists what it actually changed. */
+const STATE_BASELINE = Symbol('clikcode.stateBaseline');
+type BaselinedState = HarnessState & { [STATE_BASELINE]?: HarnessState };
+
+function rememberBaseline(state: HarnessState, baseline: HarnessState): HarnessState {
+  // Non-enumerable so it never reaches JSON.stringify, equality checks, or disk.
+  Object.defineProperty(state, STATE_BASELINE, {
+    value: JSON.parse(JSON.stringify(baseline)) as HarnessState,
+    configurable: true, writable: true, enumerable: false,
+  });
+  return state;
+}
+
+type Identified = { id: string };
+
+/** Entity-level three-way merge. Records this process did not touch are taken
+ * from disk, so a stale snapshot can never erase another terminal's work.
+ * Removing a record is still expressed: present in the baseline and absent
+ * from the working copy means a deliberate delete. */
+function mergeById<T extends Identified>(baseline: readonly T[], working: readonly T[], disk: readonly T[]): T[] {
+  const before = new Map(baseline.map((item) => [item.id, JSON.stringify(item)]));
+  const workingIds = new Set(working.map((item) => item.id));
+  const merged = new Map(disk.map((item) => [item.id, item]));
+  for (const id of before.keys()) if (!workingIds.has(id)) merged.delete(id);
+  for (const item of working) {
+    const previous = before.get(item.id);
+    if (previous === undefined || previous !== JSON.stringify(item)) merged.set(item.id, item);
+  }
+  return [...merged.values()];
+}
+
+/** Same rule, per key, for the settings maps. */
+function mergeRecord<T extends object>(baseline: T, working: T, disk: T): T {
+  const before = (baseline ?? {}) as Record<string, unknown>;
+  const after = (working ?? {}) as Record<string, unknown>;
+  const result = { ...((disk ?? {}) as Record<string, unknown>) };
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+    if (after[key] === undefined) delete result[key];
+    else result[key] = after[key];
+  }
+  return result as T;
+}
+
+export function mergeHarnessState(baseline: HarnessState, working: HarnessState, disk: HarnessState): HarnessState {
+  const scalar = <K extends keyof HarnessState>(key: K): HarnessState[K] =>
+    JSON.stringify(baseline[key]) !== JSON.stringify(working[key]) ? working[key] : disk[key];
+  return {
+    ...disk,
+    version: working.version,
+    installationId: disk.installationId || working.installationId,
+    localApiToken: scalar('localApiToken'),
+    devicePrivateKeyPem: scalar('devicePrivateKeyPem'),
+    devicePublicKey: scalar('devicePublicKey'),
+    accounts: mergeById(baseline.accounts ?? [], working.accounts ?? [], disk.accounts ?? []),
+    sessions: mergeById(baseline.sessions ?? [], working.sessions ?? [], disk.sessions ?? []),
+    invocations: mergeById(baseline.invocations ?? [], working.invocations ?? [], disk.invocations ?? []),
+    globalSettings: mergeRecord(baseline.globalSettings, working.globalSettings, disk.globalSettings),
+    providerSettings: mergeRecord(baseline.providerSettings, working.providerSettings, disk.providerSettings),
+  };
+}
+
+/** Serializes writes inside this process; the lock file serializes them across
+ * terminals. Both are needed: the merge below reads the file and writes it
+ * back, and that pair has to be atomic. */
+let writeQueue: Promise<unknown> = Promise.resolve();
+const LOCK_STALE_MS = 10_000;
+const LOCK_WAIT_MS = 5_000;
+
+async function withStateLock<T>(run: () => Promise<T>): Promise<T> {
+  const result = writeQueue.then(() => withFileLock(run));
+  writeQueue = result.catch(() => undefined);
+  return result;
+}
+
+async function withFileLock<T>(run: () => Promise<T>): Promise<T> {
+  const lockPath = `${harnessStatePath()}.lock`;
+  await mkdir(join(lockPath, '..'), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let handle: FileHandle | undefined;
+  while (!handle) {
+    try {
+      handle = await open(lockPath, 'wx', 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const age = await stat(lockPath).then((info) => Date.now() - info.mtimeMs).catch(() => Number.POSITIVE_INFINITY);
+      if (age > LOCK_STALE_MS) {
+        await unlink(lockPath).catch(() => undefined);
+        continue;
+      }
+      // Never hang a chat on a lock. The merge still protects the common case,
+      // so proceeding is strictly better than refusing to save the turn.
+      if (Date.now() > deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => undefined);
+      await unlink(lockPath).catch(() => undefined);
+    }
+  }
+}
+
+/** The merge base for a write.
+ *
+ * Only a genuinely absent file means "nothing to merge against". Any other
+ * failure must NOT fall back to the caller's copy: that would overwrite the
+ * whole file and erase every other terminal's work, the precise bug the merge
+ * exists to prevent. A damaged primary falls back to the backup written beside
+ * it, which is a valid base; if neither can be read the write refuses rather
+ * than clobbering. */
+async function readStateFromDisk(): Promise<HarnessState | undefined> {
+  const path = harnessStatePath();
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as HarnessState;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    try {
+      return JSON.parse(await readFile(`${path}.bak`, 'utf8')) as HarnessState;
+    } catch (backupError) {
+      if ((backupError as NodeJS.ErrnoException).code === 'ENOENT') throw error;
+      throw backupError;
+    }
+  }
+}
+
 export function harnessStatePath(): string {
   // The caller may relocate non-secret state for testing or portable installs.
   // Provider tokens never live in this file; only opaque local credential refs do.
@@ -101,6 +232,7 @@ export async function readState(): Promise<HarnessState> {
         ])),
         sessions: (parsed.sessions as HarnessSession[]).map((session) => ({ ...session, ...normalizedConversation(session), ...normalizedSessionPermission(session) })),
       } as HarnessState;
+      rememberBaseline(upgraded, parsed as HarnessState);
       await writeState(upgraded);
       return upgraded;
     }
@@ -128,8 +260,11 @@ export async function readState(): Promise<HarnessState> {
         { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
       ])),
     };
+    rememberBaseline(normalized, parsed as HarnessState);
     if (JSON.stringify(normalized) !== JSON.stringify(parsed)) await writeState(normalized);
-    return normalized;
+    // A migration write refreshes the baseline to the migrated shape; when no
+    // migration ran the baseline is already the parsed file.
+    return rememberBaseline(normalized, normalized);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       // Atomic replacement prevents partial writes; the private backup also
@@ -161,11 +296,11 @@ export async function readState(): Promise<HarnessState> {
     // process exit; otherwise a gateway registration could be valid only for
     // the process that happened to create it.
     await writeState(fresh);
-    return fresh;
+    return rememberBaseline(fresh, fresh);
   }
 }
 
-export async function writeState(state: HarnessState): Promise<void> {
+async function persistState(state: HarnessState): Promise<void> {
   const path = harnessStatePath();
   await mkdir(join(path, '..'), { recursive: true, mode: 0o700 });
   // An interrupted write must leave the last complete account/session registry
@@ -174,6 +309,27 @@ export async function writeState(state: HarnessState): Promise<void> {
   await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(temporary, path);
   await copyFile(path, `${path}.bak`).catch(() => undefined);
+}
+
+/** Applies this process's changes to whatever is on disk now, rather than
+ * making the file equal the caller's copy.
+ *
+ * Callers legitimately hold one state object across a whole turn -- the turn
+ * checkpoint rewrites its snapshot every 250ms while a response streams -- so
+ * a blind overwrite meant any second terminal's messages, accounts, and
+ * settings were erased several times a second. Diffing against the snapshot
+ * the caller last agreed with means untouched records are taken from disk and
+ * only real changes are written. */
+export async function writeState(state: HarnessState): Promise<void> {
+  await withStateLock(async () => {
+    const baseline = (state as BaselinedState)[STATE_BASELINE];
+    const disk = baseline ? await readStateFromDisk() : undefined;
+    const merged = baseline && disk ? mergeHarnessState(baseline, state, disk) : state;
+    await persistState(merged);
+    // Later writes from this same object must diff from what it looks like
+    // now, not from the original read.
+    rememberBaseline(state, state);
+  });
 }
 
 export function accountView(account: AiHarnessAccount): Omit<AiHarnessAccount, 'credentialRef'> {

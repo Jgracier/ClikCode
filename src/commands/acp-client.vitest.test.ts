@@ -8,6 +8,8 @@ describe('shared ACP adapter contract', () => {
       .toEqual({ kind: 'tool-start', id: 'call-1', label: 'Read config' });
     expect(acpActivityEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', title: 'Read config', status: 'completed' }))
       .toEqual({ kind: 'tool-done', id: 'call-1', label: 'Read config' });
+    expect(acpActivityEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', title: 'Read config', status: 'failed' }))
+      .toEqual({ kind: 'tool-error', id: 'call-1', label: 'Read config' });
   });
 
   it('preserves ACP diff content in the provider-neutral activity event', () => {

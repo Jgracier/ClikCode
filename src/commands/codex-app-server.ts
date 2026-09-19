@@ -49,14 +49,18 @@ export function codexSteerParams(threadId: string, turnId: string, text: string)
 export function codexActivityForItem(item: JsonObject, completed: boolean): HarnessActivityEvent | undefined {
   const type = String(item.type ?? '');
   const id = typeof item.id === 'string' ? item.id : undefined;
+  const completedKind = item.status === 'failed' || item.status === 'error'
+    || (typeof item.exitCode === 'number' && item.exitCode !== 0)
+    || (typeof item.exit_code === 'number' && item.exit_code !== 0)
+    ? 'tool-error' as const : 'tool-done' as const;
   if (type === 'commandExecution') {
-    return { kind: completed ? 'tool-done' : 'tool-start', label: String(item.command ?? 'command'), ...(id ? { id } : {}) };
+    return { kind: completed ? completedKind : 'tool-start', label: String(item.command ?? 'command'), ...(id ? { id } : {}) };
   }
-  if (type === 'fileChange') return { kind: completed ? 'tool-done' : 'tool-start', label: 'files updated', ...(id ? { id } : {}) };
+  if (type === 'fileChange') return { kind: completed ? completedKind : 'tool-start', label: 'files updated', ...(id ? { id } : {}) };
   if (type === 'mcpToolCall' || type === 'dynamicToolCall' || type === 'collabAgentToolCall') {
-    return { kind: completed ? 'tool-done' : 'tool-start', label: String(item.tool ?? item.server ?? 'tool'), ...(id ? { id } : {}) };
+    return { kind: completed ? completedKind : 'tool-start', label: String(item.tool ?? item.server ?? 'tool'), ...(id ? { id } : {}) };
   }
-  if (type === 'webSearch') return { kind: completed ? 'tool-done' : 'tool-start', label: 'web search', ...(id ? { id } : {}) };
+  if (type === 'webSearch') return { kind: completed ? completedKind : 'tool-start', label: 'web search', ...(id ? { id } : {}) };
   if (type === 'reasoning' && completed) {
     const summary = Array.isArray(item.summary) ? item.summary.filter((part): part is string => typeof part === 'string').join(' ') : '';
     if (summary) return { kind: 'thinking', label: summary.replace(/\s+/g, ' ').slice(0, 140) };
