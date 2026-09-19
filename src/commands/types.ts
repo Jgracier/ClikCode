@@ -10,6 +10,58 @@ export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
 
 export type AiHarnessPermissionMode = 'ask' | 'bypass' | 'auto';
 export type AiHarnessIntegrationLevel = 'native' | 'structured' | 'compatibility' | 'editor-only';
+/** Mirrors of the catalog's declarative vocabulary (packages/clikrouter/src/
+ * ai-local-harness.ts). The CLI reads these instead of checking harness names. */
+export type AiHarnessTransport = 'codex-app-server' | 'acp' | 'structured-cli' | 'text-cli';
+export type AiHarnessTier = 'primary' | 'more' | 'experimental';
+export type AiHarnessParser =
+  | 'claude-stream-json' | 'codex-items' | 'opencode-json' | 'gemini-stream-json'
+  | 'cursor-stream-json' | 'pi-json' | 'cline-json' | 'antigravity' | 'goose'
+  | 'generic-json' | 'text';
+export type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWEN.md' | 'CONVENTIONS.md';
+
+export interface AiHarnessAcpDefinition {
+  argv: readonly string[];
+  binary?: string;
+  optionPlacement?: 'before' | 'after';
+  experimental?: boolean;
+  effortArgvPrefix?: readonly string[];
+  permissionArgv?: Readonly<Partial<Record<'bypass' | 'auto', readonly string[]>>>;
+}
+
+export interface AiHarnessAcpLaunch {
+  binary: string;
+  argv: string[];
+  modeArgv: string[];
+  optionArgv: string[];
+  optionPlacement: 'before' | 'after';
+  experimental: boolean;
+}
+
+export interface AiCustomAcpHarnessInput {
+  command: string;
+  binary: string;
+  argv: readonly string[];
+  displayName?: string;
+  provider?: string;
+  memoryFile?: AiHarnessMemoryFile;
+}
+
+export interface AiHarnessTurnDefinition {
+  startArgv: readonly string[];
+  resumeArgv?: readonly string[];
+  resumeIdPrefix?: readonly string[];
+  resumeIdSuffix?: readonly string[];
+  createIdPrefix?: readonly string[];
+  createIdSuffix?: readonly string[];
+  promptArgvPrefix?: readonly string[];
+  promptInput?: 'argv' | 'stdin';
+  stdinArgv?: readonly string[];
+  promptGuard?: 'double-dash' | 'space';
+  output: 'text' | 'json' | 'json-lines';
+  responseFields?: readonly string[];
+  resumeSupportsWorkspaceSelector?: boolean;
+}
 
 export type AiHarnessOptionKind = 'boolean' | 'string' | 'enum' | 'string-list' | 'path' | 'path-list' | 'number';
 
@@ -60,6 +112,21 @@ export interface AiLocalHarnessDefinition {
   displayName: string;
   surface: 'terminal' | 'editor-extension';
   integration?: AiHarnessIntegrationLevel;
+  /** Declared on every catalog entry. Optional here only because tests and
+   * external callers build partial definitions by hand. */
+  tier?: AiHarnessTier;
+  transport?: AiHarnessTransport;
+  parser?: AiHarnessParser;
+  memoryFile?: AiHarnessMemoryFile;
+  nativeSlashPassthrough?: boolean;
+  customCommandDirs?: readonly string[];
+  acp?: AiHarnessAcpDefinition;
+  experimental?: boolean;
+  effortValues?: readonly string[];
+  normalizedPermissionOptionIds?: readonly string[];
+  retiredOptionIds?: readonly string[];
+  profileEnvPassthrough?: readonly string[];
+  fallbackTurn?: AiHarnessTurnDefinition;
   localAuth: readonly AiHarnessAuthKind[];
   binary: string;
   npmPackage?: string;
@@ -91,6 +158,8 @@ export interface AiLocalHarnessDefinition {
     createIdSuffix?: readonly string[];
     promptArgvPrefix?: readonly string[];
     promptInput?: 'argv' | 'stdin';
+    stdinArgv?: readonly string[];
+    promptGuard?: 'double-dash' | 'space';
     output: 'text' | 'json' | 'json-lines';
     responseFields?: readonly string[];
     resumeSupportsWorkspaceSelector?: boolean;
@@ -126,6 +195,17 @@ export interface AiRouterRuntime {
     images?: readonly string[];
     options?: Readonly<Record<string, unknown>>;
   }): string[];
+  maxPromptArgvBytes: number;
+  HOME_REDIRECT_ENV_DEFAULTS: Readonly<Record<string, string | null>>;
+  allLocalHarnesses(): readonly AiLocalHarnessDefinition[];
+  registerCustomHarnesses(definitions: readonly AiLocalHarnessDefinition[]): readonly AiLocalHarnessDefinition[];
+  customAcpHarness(definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition;
+  harnessAcpLaunch(harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode }): AiHarnessAcpLaunch | undefined;
+  harnessTurnTransport(harness: AiLocalHarnessDefinition, input?: { hasImages?: boolean; allowExperimentalAcp?: boolean }): AiHarnessTransport;
+  harnessCanRunTurns(harness: AiLocalHarnessDefinition): boolean;
+  harnessTierRank(harness: AiLocalHarnessDefinition): number;
+  guardedPromptArgv(turn: Pick<AiHarnessTurnDefinition, 'promptGuard' | 'promptArgvPrefix'>, prompt: string): string[];
+  promptExceedsArgvLimit(harness: AiLocalHarnessDefinition, prompt: string): boolean;
 }
 
 export interface HarnessActivityEvent {
