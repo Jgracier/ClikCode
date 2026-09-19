@@ -17,9 +17,9 @@ import { isAllowedLoopbackHost } from './control-api-host.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
-import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
+import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, createTurnIdleController, ensureNativeHarness, noteTurnActivityEvent, inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
 import { spawnPortable as spawn } from './spawn-portable.js';
-import { classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover.js';
+import { classifyAccountFailure, failoverPrompt, interruptedTurnFailoverPrompt, replayIsSafe, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover.js';
 import {
   ADOPTED_TRANSCRIPT_READERS, conversationTitle, discoverNativeSessions, FS_SESSION_DISCOVERY, mergeNativeTranscript, type DiscoveredNativeSession,
 } from './native-session-discovery.js';
@@ -32,7 +32,7 @@ import type {
 import {
   capDiffLines, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   isCodeChangeLabel, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
-  nativeActivityPhase, nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent,
+  nativeSessionIds, nativeTurnResult, nativeTurnUsage, type NativeTurnResult,
   compactPath, nativeProfileEnvironment, renderActivityLine, sessionProviderLabel, streamLocalAiTurn,
 } from './native-harness-protocol.js';
 import {
@@ -48,10 +48,16 @@ import {
   nativeAccountContext, setEmitHarnessOutput,
 } from './account-management.js';
 import { TerminalHarnessPrompter, terminalUiSupported } from './terminal-ui.js';
-import { runCodexAppServerTurn } from './codex-app-server.js';
-import { runAcpTurn } from './acp-client.js';
-import { harnessTurnTransport } from './harness-transport.js';
-import { allLocalHarnesses, nativeHarnessTurnArgv } from './harness-runtime.js';
+import { createCodexSession, runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from './codex-app-server.js';
+import { createAcpSession, runAcpTurn, type AcpAvailableCommand, type AcpSession, type AcpTurnInput } from './acp-client.js';
+import { harnessTurnTransport, type HarnessTurnTransport } from './harness-transport.js';
+import {
+  allLocalHarnesses, harnessAcpLaunch, harnessCanRunTurns, harnessTierRank, homeRedirectEnvironment, maxPromptArgvBytes,
+  nativeHarnessTurnArgv, promptExceedsArgvLimit,
+} from './harness-runtime.js';
+import { parseHarnessLine } from './harness-event-adapters.js';
+import { appServerThreadOverrides, declaredOptionArgv, normalizeTurnUsage, type NormalizedTurnUsage } from './transport-options.js';
+import { existsSync } from 'node:fs';
 import { LiveTurnInputBroker, type LiveTurnSubmission } from './live-turn-input.js';
 import {
   beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
@@ -68,6 +74,63 @@ let activeTerminalHarness: TerminalHarnessPrompter | undefined;
 interface TurnRunOptions {
   liveInput?: LiveTurnInputBroker;
   queuedTurnId?: string;
+  /** The interactive loop keeps ONE app-server / ACP child per open session
+   * and closes it itself; headless sends stay one-shot. */
+  persistentTransports?: boolean;
+}
+
+/** Prompter methods the terminal UI is gaining; feature-detected, never assumed. */
+interface OptionalTerminalMethods {
+  setPlan?(entries: ReadonlyArray<{ content: string; status: string; priority?: string }>): void;
+  setTurnUsage?(usage: NormalizedTurnUsage): void;
+}
+function optionalTerminal(): OptionalTerminalMethods | undefined {
+  return activeTerminalHarness as unknown as OptionalTerminalMethods | undefined;
+}
+
+/** Harnesses whose `experimental` structured turn this process saw rejected;
+ * later turns go straight to the catalog's proven `fallbackTurn`. */
+const fallbackTurnHarnesses = new Set<string>();
+
+/** ACP `available_commands_update`, per ClikCode session, for the slash registry. */
+const nativeAvailableCommands = new Map<string, readonly AcpAvailableCommand[]>();
+export function sessionNativeCommands(sessionId: string): readonly AcpAvailableCommand[] {
+  return nativeAvailableCommands.get(sessionId) ?? [];
+}
+
+interface PersistentTransport { key: string; transport: HarnessTurnTransport; session: CodexSession | AcpSession }
+const persistentTransports = new Map<string, PersistentTransport>();
+/** Test seam: the transport session factories. */
+export const TRANSPORT_SESSIONS = { codex: createCodexSession, acp: createAcpSession };
+
+/** One live child per open ClikCode session, keyed by everything that makes a
+ * child reusable (harness, account, profile env, cwd). A different key closes
+ * the old child first, which is what covers account/harness/cwd changes. */
+function persistentTransportFor(sessionId: string, transport: HarnessTurnTransport, key: string): PersistentTransport {
+  const existing = persistentTransports.get(sessionId);
+  if (existing && existing.key === key && existing.transport === transport) return existing;
+  if (existing) void closePersistentTransport(sessionId);
+  const created: PersistentTransport = {
+    key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex() : TRANSPORT_SESSIONS.acp(),
+  };
+  persistentTransports.set(sessionId, created);
+  return created;
+}
+
+export async function closePersistentTransport(sessionId?: string): Promise<void> {
+  const ids = sessionId === undefined ? [...persistentTransports.keys()] : [sessionId];
+  await Promise.all(ids.map(async (id) => {
+    const live = persistentTransports.get(id);
+    if (!live) return;
+    persistentTransports.delete(id);
+    await live.session.close().catch(() => undefined);
+  }));
+}
+
+/** Profile isolation plus, for HOME-rooted profiles, the user's real git/npm/
+ * gh/docker configuration so a turn can still commit, push and install. */
+function turnEnvironment(harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined): Record<string, string> {
+  return homeRedirectEnvironment(harness, nativeProfileEnvironment(account?.nativeProfile), { home: homedir(), exists: existsSync });
 }
 
 function conversationIdFor(session: HarnessSession): string {
@@ -76,13 +139,6 @@ function conversationIdFor(session: HarnessSession): string {
 
 function hasConversationContent(session: HarnessSession): boolean {
   return Boolean(session.nativeSessionId || session.pendingTurn || (session.messages ?? []).length > 0);
-}
-
-function interruptedTurnFailoverPrompt(session: HarnessSession): string {
-  return failoverPrompt(
-    sessionTranscriptMessages(session),
-    'Continue the interrupted latest request. Inspect the current workspace first and finish the remaining work without repeating completed steps.',
-  );
 }
 
 async function nextUsableFailoverAccount(
@@ -328,6 +384,12 @@ class DurableTurnCheckpoint {
   async queue(submission: LiveTurnSubmission): Promise<void> {
     enqueueSessionTurn(this.session, submission, new Date().toISOString());
     await this.persistNow();
+  }
+
+  /** A steer that timed out was queued, then turned out to have landed after
+   * all: drop the queued copy so it is not also sent as the next turn. */
+  async unqueue(submission: LiveTurnSubmission): Promise<void> {
+    if (consumeSessionTurn(this.session, submission.id)) await this.persistNow();
   }
 
   async steer(submission: LiveTurnSubmission): Promise<void> {
@@ -899,7 +961,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
-  if (!harness.turn) throw new Error(`${harness.displayName} does not publish a non-interactive CLI contract required by the centralized ClikCode UI.`);
+  if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} does not publish a non-interactive turn contract (CLI or ACP) required by the centralized ClikCode UI.`);
   const freshInstall = !(await inspectNativeHarness(harness)).installed;
   if (freshInstall) {
     activeTerminalHarness?.startWaiting(`installing ${harness.displayName}…`);
@@ -1550,7 +1612,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       const leavingGateway = session.route === 'gateway';
       if (leavingGateway) applyFreshLocalSessionPolicy(state, session);
       const accountHarness = localHarnessForProvider(account.provider);
-      if (accountHarness?.turn && session.nativeHarness !== accountHarness.command) {
+      if (accountHarness && harnessCanRunTurns(accountHarness) && session.nativeHarness !== accountHarness.command) {
         session.nativeHarness = accountHarness.command;
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
@@ -1626,7 +1688,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
         if (selectedHarness && selectedHarness.provider !== account.provider) throw new Error(`account "${account.label}" belongs to ${account.provider}; select /${localHarnessForProvider(account.provider)?.command ?? account.provider} first`);
       }
       const accountHarness = localHarnessForProvider(account.provider);
-      if (accountHarness?.turn && session.nativeHarness !== accountHarness.command) {
+      if (accountHarness && harnessCanRunTurns(accountHarness) && session.nativeHarness !== accountHarness.command) {
         session.nativeHarness = accountHarness.command;
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
@@ -1891,8 +1953,10 @@ export function providerPickerOptions(
   configuredProviders: ReadonlySet<string> = new Set(),
   includeAll = false,
 ): PickerOption<ProviderChoice>[] {
+  // Installed first, then the catalog's declared tier, then catalog order
+  // (Array.prototype.sort is stable) -- never a hardcoded name ranking.
   const ordered = [...available].sort((left, right) => Number(right.inspection.installed) - Number(left.inspection.installed)
-    || left.harness.displayName.localeCompare(right.harness.displayName));
+    || harnessTierRank(left.harness) - harnessTierRank(right.harness));
   const visible = includeAll ? ordered : ordered.filter(({ harness, inspection }) => inspection.installed
     || configuredProviders.has(harness.provider) || session.nativeHarness === harness.command);
   const hiddenCount = ordered.length - visible.length;
@@ -2023,7 +2087,7 @@ async function interactiveAccountPicker(
 async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
   for (;;) {
     const available = await Promise.all(allLocalHarnesses()
-      .filter((harness) => harness.surface === 'terminal' && harness.turn)
+      .filter((harness) => harnessCanRunTurns(harness))
       .map(async (harness) => ({ harness, inspection: await inspectNativeHarnessForPicker(harness) })));
     const state = await readState();
     const session = state.sessions.find((item) => item.id === id);
@@ -2046,17 +2110,10 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
   }
 }
 
-function harnessAutoPreference(command: string): number {
-  if (command === 'codex') return 0;
-  if (command === 'claude') return 1;
-  return 2;
-}
-
 /**
  * Bind a session to its native agent without asking. A session that already
  * names a provider or account is matched to that agent; a session with no
- * signal picks the first installed terminal harness (Codex, then Claude Code,
- * then the rest of the catalog). Returns false only when nothing useful is
+ * signal picks the first installed terminal harness in catalog tier order. Returns false only when nothing useful is
  * installed, so the caller can surface one line of guidance instead of a picker.
  */
 async function autoSelectSessionHarness(id: string): Promise<boolean> {
@@ -2080,8 +2137,8 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
     return true;
   }
   const candidates = allLocalHarnesses()
-    .filter((harness) => harness.surface === 'terminal' && harness.turn)
-    .sort((left, right) => harnessAutoPreference(left.command) - harnessAutoPreference(right.command));
+    .filter((harness) => harnessCanRunTurns(harness))
+    .sort((left, right) => harnessTierRank(left) - harnessTierRank(right));
   for (const harness of candidates) {
     if (await isInstalled(harness)) {
       await aiHarnessSelect(harness.command, id);
@@ -3136,7 +3193,7 @@ export async function aiSessionSend(
       ? localHarnessForCommand(session.nativeHarness)
       : localHarnessForProvider(account.provider);
     if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
-    if (!harness.turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
+    if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
     if (harness.provider !== account.provider) throw new Error(`session provider ${harness.displayName} does not match account "${account.label}"`);
     const supportsImages = harnessSupportsImages(harness);
     const images = supportsImages ? prepared.images : [];
@@ -3149,6 +3206,7 @@ export async function aiSessionSend(
     const baseMessages = sessionTranscriptMessages(session);
     const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
     run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
     let switchedFrom: string | undefined;
     const attemptedAccounts = new Set<string>();
     try {
@@ -3184,7 +3242,7 @@ export async function aiSessionSend(
     // quota-failover retry below does its own version of this for the
     // mid-conversation case; this covers every other route into a fresh
     // native thread with history already behind it.
-    if (!session.nativeSessionId && baseMessages.length > 0) {
+    if ((!session.nativeSessionId || session.nativeSessionPreallocated) && baseMessages.length > 0) {
       turnText = failoverPrompt(baseMessages, turnText);
     }
     // Bounded to one attempt: this is a reactive fallback for exactly the
@@ -3194,154 +3252,246 @@ export async function aiSessionSend(
     // turn itself failing. Retrying more than once would risk a loop if
     // login genuinely doesn't fix it (wrong account, network issue, etc.).
     let authRetried = false;
+    const declaredOptions = localHarnessCapabilityManifest(harness).options;
+    /** Shared by every transport: usage seen on the wire for this attempt. */
+    let turnUsage: NormalizedTurnUsage | undefined;
+    const noteUsage = (raw: unknown): void => {
+      const usage = normalizeTurnUsage(raw);
+      if (!usage) return;
+      turnUsage = { ...turnUsage, ...usage };
+      session.lastUsage = { ...turnUsage, at: new Date().toISOString() };
+      optionalTerminal()?.setTurnUsage?.(turnUsage);
+    };
+    const onActivity = (event: HarnessActivityEvent): void => {
+      checkpoint.activity(event);
+      if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
+      else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
+    };
+    const onThought = (thought: string): void => {
+      const label = thought.replace(/\s+/g, ' ').trim();
+      if (label) onActivity({ kind: 'thinking', label: label.slice(0, 200) });
+    };
+    const onSessionId = async (nativeSessionId: string): Promise<void> => {
+      if (session.nativeSessionId === nativeSessionId && !session.nativeSessionPreallocated) return;
+      session.nativeSessionId = nativeSessionId;
+      delete session.nativeSessionPreallocated;
+      await checkpoint.persistNow();
+    };
+    /** Before replaying an interrupted turn somewhere else: a turn that already
+     * changed the workspace is never re-run blind. */
+    const confirmReplay = async (target: string): Promise<boolean> => {
+      if (replayIsSafe(session.pendingTurn)) return true;
+      const touched = (session.pendingTurn as { touchedFiles?: string[] } | undefined)?.touchedFiles ?? [];
+      const detail = `The interrupted turn had already started changing the workspace${touched.length ? `:\n${touched.map((file) => `  ${file}`).join('\n')}` : '.'}\nReplaying asks ${target} to inspect the workspace and finish the remaining work.`;
+      return (await activeTerminalHarness?.approval(`Replay the interrupted turn on ${target}?`, detail)) ?? false;
+    };
     for (;;) {
-      const environment = nativeProfileEnvironment(account.nativeProfile);
-      let createdHere = false;
-      if (!session.nativeSessionId && harness.session?.idKind === 'uuid' && harness.turn.createIdPrefix) {
-        session.nativeSessionId = randomUUID();
-        createdHere = true;
-      } else if (!session.nativeSessionId && harness.session?.idKind === 'history-file' && harness.turn.createIdPrefix) {
-        const nativeDirectory = join(harnessStatePath(), '..', 'native', harness.command);
-        await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
-        session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
-        createdHere = true;
-      } else if (!session.nativeSessionId && harness.session?.createSessionArgv) {
-        session.nativeSessionId = await captureNativeHarness(harness, harness.session.createSessionArgv, environment);
-        createdHere = true;
-      }
-      const argv = nativeHarnessTurnArgv(harness, {
-        prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
-        launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
-        permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
-      });
-      // Persist an allocated native identity before the provider starts so an
-      // interrupted turn cannot accidentally fork the centralized conversation.
-      if (createdHere) await writeState(state);
-      // A rejection here (not just a resolved-but-failed turnOutput) is a
-      // real, reproduced case: captureNativeHarnessTurn itself rejects
-      // directly whenever the process exits non-zero with no usable
-      // stdout -- exactly what a failed native-thread resume looks like
-      // (the real error text lands on stderr, nothing meaningful reaches
-      // stdout). That threw past every check below before this caught it,
-      // making the native-thread-invalid recovery just added completely
-      // unreachable for the one failure it was built for. Catching it here
-      // and synthesizing a failed result lets the SAME classification and
-      // recovery logic below handle both shapes of failure identically.
+      const environment = turnEnvironment(harness, account);
+      const hasImages = images.length > 0;
+      const transport = harnessTurnTransport(harness, hasImages, { acpImages: true });
+      // A fresh native thread with prior ClikCode messages: see above. Also
+      // covers an id ClikCode minted that the vendor never confirmed.
       let caughtTurnFailure: Error | undefined;
       let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>> = { stdout: '', stderr: '', exitCode: 0 };
-      let result: { text: string; nativeSessionId?: string; isError?: boolean; statusCode?: number } | undefined;
-      const runStructuredCliTurn = async (): Promise<typeof result> => {
-        turnOutput = await captureNativeHarnessTurn(harness, argv, environment, {
+      let result: NativeTurnResult | undefined;
+      let streamError: { message: string; statusCode?: number; kind?: string } | undefined;
+      let cliOutputStarted = false;
+      turnUsage = undefined;
+      const runStructuredCliTurn = async (): Promise<NativeTurnResult> => {
+        const cliHarness: AiLocalHarnessDefinition = fallbackTurnHarnesses.has(harness.command) && harness.fallbackTurn
+          ? { ...harness, turn: harness.fallbackTurn } : harness;
+        const turn = cliHarness.turn;
+        if (!turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
+        if (promptExceedsArgvLimit(cliHarness, turnText)) {
+          throw Object.assign(new Error(
+            `${harness.displayName} takes its prompt as a command-line argument, and this request is ${Math.ceil(Buffer.byteLength(turnText, 'utf8') / 1024)} KB (limit ${Math.floor(maxPromptArgvBytes() / 1024)} KB). Shorten it, or save the long content to a file in the workspace and ask the agent to read it.`,
+          ), { code: 'ERR_PROMPT_TOO_LARGE' });
+        }
+        // Only a structured-CLI harness gets an id minted here, and it stays
+        // marked "preallocated" until the vendor process is seen to own it:
+        // a first attempt that dies early must re-create, never `--resume` an
+        // id that was never created.
+        let createdHere = Boolean(session.nativeSessionId && session.nativeSessionPreallocated);
+        if (!session.nativeSessionId && cliHarness.session?.idKind === 'uuid' && turn.createIdPrefix) {
+          session.nativeSessionId = randomUUID();
+          session.nativeSessionPreallocated = true;
+          createdHere = true;
+        } else if (!session.nativeSessionId && cliHarness.session?.idKind === 'history-file' && turn.createIdPrefix) {
+          const nativeDirectory = join(harnessStatePath(), '..', 'native', cliHarness.command);
+          await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
+          session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
+          session.nativeSessionPreallocated = true;
+          createdHere = true;
+        } else if (!session.nativeSessionId && cliHarness.session?.createSessionArgv) {
+          session.nativeSessionId = await captureNativeHarness(cliHarness, cliHarness.session.createSessionArgv, environment);
+          createdHere = true;
+        }
+        const argv = nativeHarnessTurnArgv(cliHarness, {
+          prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
+          launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
+          permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
+        });
+        // Persist an allocated native identity before the provider starts so an
+        // interrupted turn cannot accidentally fork the centralized conversation.
+        if (createdHere) await checkpoint.persistNow();
+        const confirmNativeSession = (): void => {
+          if (!session.nativeSessionPreallocated) return;
+          delete session.nativeSessionPreallocated;
+          void checkpoint.persistNow().catch(() => undefined);
+        };
+        const idle = createTurnIdleController();
+        turnOutput = await captureNativeHarnessTurn(cliHarness, argv, environment, {
           cwd: session.workspace,
           signal,
-          stdinText: harness.turn!.promptInput === 'stdin' ? turnText : undefined,
+          idleController: idle,
+          stdinText: turn.promptInput === 'stdin' ? turnText : undefined,
           onStdoutLine: (lineText) => {
-            const responseUpdate = nativeResponseUpdate(harness, lineText);
-            if (responseUpdate) {
-              checkpoint.response(responseUpdate.text, responseUpdate.mode);
-              activeTerminalHarness?.response(responseUpdate.text, responseUpdate.mode);
+            // One JSON.parse per line: everything the line means at once.
+            const parsed = parseHarnessLine(cliHarness, lineText);
+            if (parsed.sessionId || parsed.response || parsed.activities?.length) confirmNativeSession();
+            if (parsed.response) {
+              cliOutputStarted = true;
+              idle.noteActivity();
+              checkpoint.response(parsed.response.text, parsed.response.mode);
+              activeTerminalHarness?.response(parsed.response.text, parsed.response.mode);
             }
-            const textPhase = nativeActivityPhase(harness, lineText);
-            if (textPhase) activeTerminalHarness?.phase(textPhase);
+            if (parsed.phase) activeTerminalHarness?.phase(parsed.phase);
+            if (parsed.usage) noteUsage(parsed.usage);
+            if (parsed.error) streamError = parsed.error;
             // The harness reports its own quota on this stream. Reading it here
             // costs nothing and refreshes on every turn, which is what keeps the
             // shared OAuth usage endpoint -- a per-account budget several open
             // chats used to exhaust between them -- down to a cold-start probe.
+            // (Self-gated on a substring, so it does not re-parse ordinary lines.)
             void recordNativeStreamUsage(session, lineText).catch(() => undefined);
-            const event = parseNativeActivityEvent(harness, lineText);
-            if (!event) return;
-            checkpoint.activity(event);
-            if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
-            else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
+            for (const event of parsed.activities ?? []) {
+              cliOutputStarted = true;
+              noteTurnActivityEvent(idle, event);
+              onActivity(event);
+            }
           },
         });
         if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-        return nativeTurnResult(harness, turnOutput.stdout);
+        const cliResult = nativeTurnResult(cliHarness, turnOutput.stdout);
+        if (!cliResult.isError) confirmNativeSession();
+        noteUsage(cliResult.usage ?? nativeTurnUsage(cliHarness, turnOutput.stdout));
+        return cliResult;
       };
       try {
-        const transport = harnessTurnTransport(harness, images.length > 0);
-        if (transport === 'codex-app-server') {
-          result = await runCodexAppServerTurn({
-            binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
-            cwd: session.workspace, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
-            images, environment, signal,
-            onSessionId: async (nativeSessionId) => {
-              if (session.nativeSessionId === nativeSessionId) return;
-              session.nativeSessionId = nativeSessionId;
-              await checkpoint.persistNow();
-            },
-            // Codex reports its own quota on this connection during the turn,
-            // which is the same figure codexUsageProbe otherwise spawns a whole
-            // second app-server to ask for.
-            onRateLimits: (rateLimits) => {
-              void recordDerivedUsage(session, codexRateLimitsLabel(rateLimits)).catch(() => undefined);
-            },
-            onResponseDelta: (text, mode = 'append') => {
-              checkpoint.response(text, mode);
-              activeTerminalHarness?.response(text, mode);
-            },
-            onPhase: (phase) => activeTerminalHarness?.phase(phase),
-            onApproval: (title, detail) => activeTerminalHarness?.approval(title, detail) ?? Promise.resolve(false),
-            onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText) => {
-              await handler(steerText);
-              await checkpoint.steer({ id: randomUUID(), text: steerText, submittedAt: new Date().toISOString() });
-            } : undefined),
-            onActivity: (event) => {
-              checkpoint.activity(event);
-              if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
-              else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
-            },
-          });
-        } else if (transport === 'acp') {
-          try {
-            result = await runAcpTurn({
-              binary: harness.binary, command: harness.command, prompt: turnText, nativeSessionId: session.nativeSessionId,
-              cwd: session.workspace, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask', environment, signal,
-              onSessionId: async (nativeSessionId) => {
-              if (session.nativeSessionId === nativeSessionId) return;
-              session.nativeSessionId = nativeSessionId;
-              await checkpoint.persistNow();
-            },
-              onResponseDelta: (delta) => {
-                checkpoint.response(delta, 'append');
-                activeTerminalHarness?.response(delta, 'append');
-              },
-              onActivity: (event) => {
-                checkpoint.activity(event);
-                activeTerminalHarness?.activityEvent(event);
-              },
-              onApproval: (title, detail) => activeTerminalHarness?.approval(title, detail) ?? Promise.resolve(false),
-            });
-          } catch (error) {
-            if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback) throw error;
-            activeTerminalHarness?.phase('using structured CLI fallback');
-            result = await runStructuredCliTurn();
-          }
-        } else {
+        if (transport === 'structured-cli' || transport === 'text-cli') {
           result = await runStructuredCliTurn();
+        } else {
+          // ACP and the app-server own session identity: never hand them an id
+          // ClikCode minted for a CLI attempt that the vendor never confirmed.
+          if (session.nativeSessionPreallocated) {
+            session.nativeSessionId = undefined;
+            delete session.nativeSessionPreallocated;
+          }
+          const persistent = run.persistentTransports
+            ? persistentTransportFor(session.id, transport, JSON.stringify([harness.command, account.id, environment, session.workspace]))
+            : undefined;
+          try {
+            if (transport === 'codex-app-server') {
+              const overrides = appServerThreadOverrides(declaredOptions, session.harnessOptions);
+              if (overrides.unmapped.length) activeTerminalHarness?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${overrides.unmapped.join(', ')}`));
+              const codexInput: CodexAppServerTurnInput = {
+                binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
+                cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
+                images, environment, signal, onSessionId,
+                ...(overrides.configOverrides ? { configOverrides: overrides.configOverrides } : {}),
+                ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
+                // Codex reports its own quota on this connection during the turn,
+                // which is the same figure codexUsageProbe otherwise spawns a whole
+                // second app-server to ask for.
+                onRateLimits: (rateLimits) => {
+                  void recordDerivedUsage(session, codexRateLimitsLabel(rateLimits)).catch(() => undefined);
+                },
+                onResponseDelta: (text, mode = 'append') => {
+                  checkpoint.response(text, mode);
+                  activeTerminalHarness?.response(text, mode);
+                },
+                onPhase: (phase) => activeTerminalHarness?.phase(phase),
+                onApproval: (title, detail) => activeTerminalHarness?.approval(title, detail) ?? Promise.resolve(false),
+                onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText) => {
+                  await handler(steerText);
+                  await checkpoint.steer({ id: randomUUID(), text: steerText, submittedAt: new Date().toISOString() });
+                } : undefined),
+                onActivity, onThought, onUsage: noteUsage,
+                onPlan: (entries) => optionalTerminal()?.setPlan?.(entries),
+              };
+              result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
+            } else {
+              const launch = harnessAcpLaunch(harness, { model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask' });
+              if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
+              const acpInput: AcpTurnInput = {
+                binary: launch.binary, command: harness.command, prompt: turnText,
+                argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
+                extraArgv: [...launch.optionArgv, ...declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId))],
+                ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
+                cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
+                environment, signal, images, onSessionId,
+                onResponseDelta: (delta) => {
+                  checkpoint.response(delta, 'append');
+                  activeTerminalHarness?.response(delta, 'append');
+                },
+                onActivity, onThought, onUsage: noteUsage,
+                onPlan: (entries) => optionalTerminal()?.setPlan?.(entries),
+                onAvailableCommands: (commands) => { nativeAvailableCommands.set(session.id, commands); },
+                onApproval: (title, detail) => activeTerminalHarness?.approval(title, detail) ?? Promise.resolve(false),
+              };
+              try {
+                result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
+              } catch (error) {
+                if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback || !harness.turn) throw error;
+                activeTerminalHarness?.phase('using structured CLI fallback');
+                result = await runStructuredCliTurn();
+              }
+            }
+          } catch (error) {
+            // After a failed turn the child's protocol state is unknown.
+            if (persistent) await closePersistentTransport(session.id);
+            throw error;
+          }
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError') throw error;
+        if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') throw error;
         caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
       }
       result = caughtTurnFailure
-        ? { isError: true, text: caughtTurnFailure.message, statusCode: undefined as number | undefined, nativeSessionId: undefined as string | undefined }
+        ? { isError: true, text: caughtTurnFailure.message }
         : result!;
       if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
       // A non-zero exit code alone is not treated as failure here: by this
-      // point nativeTurnResult has already thrown if it found no genuine
-      // assistant text at all, so result.text existing means a real,
-      // complete response was extracted. A harness can legitimately exit
-      // non-zero because one internal sub-step failed (e.g. Codex's own
-      // shell-command execution) while still producing a full final answer
-      // -- the exit code by itself doesn't distinguish that from a genuine
-      // failure, but an explicit isError/errorMessage signal does.
+      // point nativeTurnResult has already thrown if it found neither assistant
+      // text nor tool work, so a result means a real, complete turn. A harness
+      // can legitimately exit non-zero because one internal sub-step failed
+      // (e.g. Codex's own shell-command execution) while still producing a full
+      // final answer -- the exit code by itself doesn't distinguish that from a
+      // genuine failure, but an explicit isError/errorMessage signal does. An
+      // empty `text` after tool work (`noAssistantText`) is success everywhere.
       if (caughtTurnFailure || result.isError) {
+        const carried = (caughtTurnFailure ?? {}) as { statusCode?: number; errorKind?: string };
         const failure = caughtTurnFailure ?? Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
-        const failureKind = classifyAccountFailure(failure);
+        const failureKind = classifyAccountFailure(failure, {
+          statusCode: result.statusCode ?? carried.statusCode ?? streamError?.statusCode,
+          errorKind: result.errorKind ?? carried.errorKind ?? streamError?.kind,
+          ...(result.rateLimitStatus ? { rateLimitStatus: result.rateLimitStatus } : {}),
+          // Only the vendor's own declared error result is safe to read as
+          // wording; a thrown transport error carries its own stderr/streams.
+          ...(caughtTurnFailure ? {} : { isResultError: true }),
+        });
+        // An `experimental` structured contract an older vendor build rejects
+        // outright: retry once on the proven fallback contract, and remember it.
+        if (failureKind === 'other' && !cliOutputStarted && harness.experimental && harness.fallbackTurn
+          && !fallbackTurnHarnesses.has(harness.command) && (transport === 'structured-cli' || transport === 'text-cli')) {
+          fallbackTurnHarnesses.add(harness.command);
+          activeTerminalHarness?.phase('using compatibility turn');
+          continue;
+        }
         if (failureKind === 'authentication-required') {
           account.status = 'needs_login';
-          await writeState(state);
+          await checkpoint.persistNow();
           // Reactive counterpart to aiHarnessSelect's proactive login check:
           // a harness with no statusArgv gets no pre-turn "are you logged
           // in?" probe at all (harnessNeedsLogin returns false without
@@ -3352,6 +3502,7 @@ export async function aiSessionSend(
           // here instead of only at provider-switch time.
           if (!authRetried && activeTerminalHarness && harness.loginArgv) {
             authRetried = true;
+            await closePersistentTransport(session.id);
             if (harness.loginCapturable) {
               activeTerminalHarness.startWaiting(`signing in to ${harness.displayName}…`);
               try { await loginNativeHarness(harness, environment); } finally { activeTerminalHarness.stopWaiting(); }
@@ -3380,16 +3531,20 @@ export async function aiSessionSend(
           // regardless of provider or account": session.messages is the
           // durable, vendor-agnostic source of truth, and nativeSessionId is
           // a disposable optimization, never a requirement.
+          if (!await confirmReplay('a fresh native session')) throw failure;
           session.nativeSessionId = undefined;
           session.nativeStartedAt = undefined;
+          delete session.nativeSessionPreallocated;
           turnText = interruptedTurnFailoverPrompt(session);
+          checkpoint.response('', 'replace');
+          activeTerminalHarness?.response('', 'replace');
           continue;
         }
         if (failureKind !== 'quota-exhausted') throw failure;
         account.quotaState = 'exhausted';
         account.quotaRetryAt = undefined;
         attemptedAccounts.add(account.id);
-        await writeState(state);
+        await checkpoint.persistNow();
         // Same-provider failover for the native-CLI path: switching accounts means
         // switching vendor config roots, so the in-flight native conversation can't
         // continue under the old identity — start a fresh one under the fallback.
@@ -3398,8 +3553,13 @@ export async function aiSessionSend(
           state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
         );
         if (!fallback) {
-          await writeState(state);
+          await checkpoint.persistNow();
           throw new Error('all usage exhausted');
+        }
+        // A turn that already edited files is not re-run blind on another
+        // account: ask, and without anyone to ask, stop and say why.
+        if (!await confirmReplay(fallback.label)) {
+          throw new Error(`${account.label} ran out of quota after this turn had started changing the workspace, so it was not replayed automatically on ${fallback.label}. Review the workspace, then send a follow-up to continue.`);
         }
         switchedFrom = account.label;
         // Announced before the retry, not after it returns: switching accounts
@@ -3408,17 +3568,32 @@ export async function aiSessionSend(
         // different account with nothing to explain the (brief) extra wait.
         activeTerminalHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
         activeTerminalHarness?.phase(`retrying on ${fallback.label}`);
+        await closePersistentTransport(session.id);
         account = fallback;
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
+        delete session.nativeSessionPreallocated;
+        // Built while the interrupted attempt's touched-file hints are still on
+        // the checkpoint; only then is the partial response cleared, because
+        // the retry is a new response attempt (the direct-API path does the same).
         turnText = interruptedTurnFailoverPrompt(session);
+        checkpoint.response('', 'replace');
+        activeTerminalHarness?.response('', 'replace');
         continue;
       }
       session.nativeStartedAt ??= new Date().toISOString();
+      delete session.nativeSessionPreallocated;
+      const usage = turnUsage as NormalizedTurnUsage | undefined;
       const invocation = {
         id: randomUUID(), accountId: account.id, provider: harness.provider, model: model ?? 'provider-default',
-        at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
+        at: new Date().toISOString(), sessionId: session.id,
+        ...(usage?.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+        ...(usage?.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+        ...(usage?.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+        ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
+        ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+        latencyMs: Date.now() - startedAt,
       };
       state.invocations.push(invocation);
       session.attachments = [];
@@ -3428,7 +3603,7 @@ export async function aiSessionSend(
       // final response are reflected in ClikCode before the turn is saved.
       await synchronizeNativeTranscript(state, session);
       await writeState(state);
-      if (!activeTerminalHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+      if (!activeTerminalHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
       return;
     }
     } finally {
@@ -3436,11 +3611,12 @@ export async function aiSessionSend(
     }
   }
 
-  if (prepared.images.length) throw new Error('Image attachments currently require a vendor-CLI Codex account. Switch with /codex or clear them with /attachments clear.');
+  if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
   let switchedFrom: string | undefined;
   const attemptedAccounts = new Set<string>();
   try {
@@ -3544,7 +3720,7 @@ export async function aiGatewaySessionSend(
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
   const prepared = await prepareAttachments(session.attachments ?? []);
-  if (prepared.images.length) throw new Error('Image attachments currently require the local Codex provider. Switch with /codex or clear them with /attachments clear.');
+  if (prepared.images.length) throw new Error('ClikDeploy Gateway does not accept image attachments. Switch to a local provider with /provider or clear them with /attachments clear.');
   const turnText = `${text}${prepared.textContext}`;
   const baseUrl = getApiUrl(config).replace(/\/$/, '');
   const apiKey = getApiKeyForUrl(config, baseUrl);
@@ -3553,6 +3729,7 @@ export async function aiGatewaySessionSend(
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
   try {
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
@@ -3700,7 +3877,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   };
   if (effectiveRoute === 'gateway') applyGatewaySessionPolicy(next);
   else if (account) {
-    if (account.authKind === 'vendor-cli' && selectedHarness?.turn) {
+    if (account.authKind === 'vendor-cli' && selectedHarness && harnessCanRunTurns(selectedHarness)) {
       if (next.nativeHarness !== selectedHarness.command || current.accountId !== account.id) {
         next.nativeSessionId = undefined;
         next.nativeStartedAt = undefined;

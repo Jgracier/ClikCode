@@ -72,12 +72,16 @@ export const customAcpHarness = (definition: AiCustomAcpHarnessInput): AiLocalHa
 export const harnessAcpLaunch = (
   harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode },
 ): AiHarnessAcpLaunch | undefined => localCatalog().harnessAcpLaunch(harness, input);
-export const harnessTierRank = (harness: AiLocalHarnessDefinition): number => localCatalog().harnessTierRank(harness);
+export const harnessTierRank = (harness: AiLocalHarnessDefinition): number => withoutRuntime(
+  (router) => router.harnessTierRank(harness),
+  () => ({ primary: 0, more: 1, experimental: 2 } as const)[harness.tier ?? 'experimental'] ?? 2,
+);
 export const nativeHarnessTurnArgv = (
   harness: AiLocalHarnessDefinition, input: Parameters<AiRouterRuntime['nativeHarnessTurnArgv']>[1],
 ): string[] => localCatalog().nativeHarnessTurnArgv(harness, input);
 export const homeRedirectEnvDefaults = (): Readonly<Record<string, string | null>> => localCatalog().HOME_REDIRECT_ENV_DEFAULTS;
 export const harnessAdapterVersion = (): number => localCatalog().AI_LOCAL_HARNESS_ADAPTER_VERSION;
+export const maxPromptArgvBytes = (): number => localCatalog().maxPromptArgvBytes;
 export const promptExceedsArgvLimit = (harness: AiLocalHarnessDefinition, prompt: string): boolean => localCatalog().promptExceedsArgvLimit(harness, prompt);
 export const harnessCanRunTurns = (harness: AiLocalHarnessDefinition): boolean =>
   harness.surface === 'terminal' && Boolean(harness.turn || harness.acp);
@@ -107,3 +111,27 @@ export const harnessPreferredTransport = (
 });
 
 export const streamLocalAiTurn = (input: Record<string, unknown>): Promise<any> => localRouter().streamAiChatTurn(input);
+
+/** Redirecting HOME for an isolated account also hides the user's git, npm,
+ * gh, docker and gpg configuration from the agent's tools. For a harness whose
+ * profile root IS `HOME`, point those tools back at the real home (catalog
+ * HOME_REDIRECT_ENV_DEFAULTS, narrowed by `profileEnvPassthrough`). A variable
+ * the caller already exports wins, and `null` defaults (SSH_AUTH_SOCK, …) only
+ * ever pass the caller's value through, which process.env inheritance does. */
+export function homeRedirectEnvironment(
+  harness: AiLocalHarnessDefinition, base: Readonly<Record<string, string>>,
+  deps: { home: string; env?: NodeJS.ProcessEnv; exists: (path: string) => boolean },
+): Record<string, string> {
+  if (harness.profileEnv !== 'HOME' || base.HOME === undefined || base.HOME === deps.home) return { ...base };
+  const defaults = withoutRuntime((router) => router.HOME_REDIRECT_ENV_DEFAULTS, () => ({} as Readonly<Record<string, string | null>>));
+  const environment = deps.env ?? process.env;
+  const result: Record<string, string> = { ...base };
+  for (const name of harness.profileEnvPassthrough ?? Object.keys(defaults)) {
+    if (result[name] !== undefined || environment[name]) continue;
+    const target = defaults[name];
+    if (typeof target !== 'string') continue;
+    const path = target.startsWith('~/') ? `${deps.home.replace(/[\\/]$/, '')}/${target.slice(2)}` : target;
+    if (deps.exists(path)) result[name] = path;
+  }
+  return result;
+}
