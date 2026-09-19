@@ -51,13 +51,16 @@ export async function aiDoctor(): Promise<void> {
       provider: harness.provider,
       surface: harness.surface,
       binary: harness.binary,
+      integration: localRouter().harnessIntegrationLevel(harness),
       install: harness.npmPackage
         ? { kind: 'npm' as const, package: harness.npmPackage, automatic: true }
         : { kind: 'vendor-managed' as const, automatic: false, note: `ClikCode has no publisher to install from; put a \`${harness.binary}\` binary on PATH using ${harness.displayName}'s own installer.` },
       ...inspection,
       capabilities: {
         centralizedTurns: Boolean(harness.turn),
-        login: Boolean(harness.loginArgv),
+        scriptedLogin: Boolean(harness.loginArgv?.length),
+        interactiveAuthHandoff: harness.loginArgv !== undefined && harness.loginArgv.length === 0,
+        accountAdd: harness.localAuth.includes('api-key') || harness.loginArgv !== undefined,
         accountStatus: Boolean(harness.statusArgv),
         logout: Boolean(harness.logoutArgv),
         isolatedProfiles: Boolean(harness.profileEnv),

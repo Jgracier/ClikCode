@@ -65,6 +65,27 @@ describe('native harness turn results', () => {
     ].map(JSON.stringify).join('\n');
     expect(nativeTurnResult(goose, stdout).text).toBe('Hello world.');
   });
+
+  it('extracts final answers from every structured envelope family', () => {
+    const cases: Array<[string, 'json' | 'json-lines', unknown]> = [
+      ['claude', 'json-lines', { type: 'result', result: 'done' }],
+      ['codex', 'json-lines', { type: 'item.completed', item: { type: 'agent_message', text: 'done' } }],
+      ['opencode', 'json-lines', { type: 'text', part: { text: 'done' } }],
+      ['antigravity', 'json-lines', { status: 'SUCCESS', response: 'done' }],
+      ['pi', 'json-lines', { type: 'result', result: 'done' }],
+      ['droid', 'json', { type: 'result', result: 'done', session_id: 'droid-session' }],
+      ['kiro', 'json-lines', { type: 'result', result: 'done' }],
+      ['qwen', 'json-lines', { type: 'result', result: 'done' }],
+      ['cline', 'json-lines', { type: 'say', text: 'done', partial: false }],
+      ['kilo', 'json-lines', { type: 'text', part: { text: 'done' } }],
+      ['cursor', 'json-lines', { type: 'result', result: 'done' }],
+      ['command', 'json-lines', { type: 'result', result: 'done' }],
+    ];
+    for (const [command, output, envelope] of cases) {
+      const candidate = { ...codex, command, displayName: command, turn: { ...codex.turn, output, responseFields: ['result', 'response', 'text', 'content'] } };
+      expect(nativeTurnResult(candidate, JSON.stringify(envelope)).text, command).toBe('done');
+    }
+  });
 });
 
 describe('native harness response streams', () => {
@@ -98,6 +119,9 @@ describe('native harness response streams', () => {
       .toEqual({ text: 'D', mode: 'append' });
     expect(nativeResponseUpdate(harness('goose'), JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'E' }] } })))
       .toEqual({ text: 'E', mode: 'append' });
+    const openCodeText = JSON.stringify({ type: 'text', part: { text: 'F' } });
+    expect(nativeResponseUpdate(harness('opencode'), openCodeText)).toEqual({ text: 'F', mode: 'append' });
+    expect(nativeResponseUpdate(harness('kilo'), openCodeText)).toEqual({ text: 'F', mode: 'append' });
   });
 
   it('shows Codex agent messages as they arrive without rendering tool JSON as response text', () => {

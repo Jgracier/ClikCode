@@ -9,10 +9,11 @@
 import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import {
-  composerLayout, formatParagraph, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown,
+  composerLayout, formatParagraph, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown, renderTableBlock,
   splitIntoBlocks, terminalCellWidth, visibleSlice, wrapWords,
 } from './markdown-render.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
+import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import { nativeModelLabel } from './native-account-data.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, PickerOption } from './types.js';
 
@@ -385,7 +386,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // share it) are unaffected.
     const conversationInner = width - 2;
     const rule = chalk.dim('─'.repeat(width));
-    const persistedMessages = session.messages ?? [];
+    const persistedMessages = sessionTranscriptMessages(session);
     const allMessages = this.liveResponse
       ? [...persistedMessages, { role: 'assistant' as const, content: this.liveResponse }]
       : persistedMessages;
@@ -438,9 +439,17 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
             // Not word-wrapped -- re-flowing code would change what it means.
             // Hard-truncated instead, same as visibleSlice does for a single
             // overlong token elsewhere in this file.
-            for (const codeLine of block.lines) {
+            for (const codeLine of [...(block.language ? [chalk.dim(`[${block.language}]`)] : []), ...block.lines]) {
               const prefix = firstLine ? `${marker} ` : '  ';
               conversation.push({ text: `${prefix}  ${chalk.cyan(visibleSlice(codeLine, Math.max(1, conversationInner - 2)))}` });
+              firstLine = false;
+            }
+            continue;
+          }
+          if (block.kind === 'table') {
+            for (const tableLine of renderTableBlock(block.header, block.rows, conversationInner)) {
+              const prefix = firstLine ? `${marker} ` : '  ';
+              conversation.push({ text: `${prefix}${tableLine}` });
               firstLine = false;
             }
             continue;

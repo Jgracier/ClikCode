@@ -6,18 +6,10 @@
  * pulling in the whole broker. */
 
 import chalk from 'chalk';
+import { Lexer, marked, type Token, type Tokens } from 'marked';
 import type { FormattedParagraph, MessageBlock } from './types.js';
 
 
-/** Vendor responses come back as real markdown, but the transcript view is a
- * fixed-width character grid with no rich-text renderer behind it — showing
- * that syntax verbatim (literal ** around bold text, backticks around code,
- * a raw [text](url) pair) reads as visibly broken rather than styled. Strips
- * the syntax down to plain, readable text instead of attempting real
- * rendering: bold/italic markers are dropped (chalk styling would have to
- * survive the character-offset word-wrap below, which slices through ANSI
- * codes with no awareness of them), inline code keeps its content without
- * the backticks, and links keep their label with the URL alongside it. */
 /** Applies `style` to each word of `text` individually, leaving whitespace
  * untouched -- not one open/close pair around the whole phrase. wrapWords
  * measures visible width correctly through embedded ANSI codes already, but
@@ -33,42 +25,25 @@ export function styleWords(text: string, style: (word: string) => string): strin
   return text.split(/(\s+)/).map((part) => (part && !/^\s+$/.test(part) ? style(part) : part)).join('');
 }
 
-/** Inline spans (bold/italic/code/links) get real ANSI styling instead of
- * being discarded -- unlike the header/bullet/list handling in
- * formatParagraph, which strips its own markers because the paragraph-level
- * prefix system already conveys that structure. Code spans are converted
- * first, specifically so literal asterisks inside inline code (a glob
- * pattern, a multiplication in a comment) can't get misread as a bold/italic
- * marker by the regexes that run after -- the reverse order would let
- * that happen, and the original plain-text stripMarkdown() this replaced
- * had exactly that latent ordering issue. */
-// One combined regex, one single `.replace()` pass -- NOT the sequential
-// per-construct `.replace()` chain this used to be. That chain had a real
-// bug: each pass ran against the *output* of the previous one, which by
-// then already contained chalk escape codes like `\x1b[1m` -- and an escape
-// code's own `[` is indistinguishable, to a naive `\[...\]` link regex,
-// from a real markdown link's opening bracket. A bold span earlier in the
-// paragraph could supply that stray `[`, and the link regex would then
-// greedily consume everything from there up to the *next* real `]` --
-// which might be a real link many words later -- wrapping that whole
-// stretch in underline. Matching everything in one pass against the
-// original, escape-code-free text closes that off entirely: every
-// construct is found at its real source position exactly once, and nothing
-// ever gets re-scanned after styling is applied.
-export const INLINE_MARKDOWN_PATTERN = /`([^`]+)`|(\*\*\*|___)(.+?)\2|(\*\*|__)(.+?)\4|(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)|\[([^\]]+)\]\(([^)]+)\)/g;
-
+/** Render CommonMark/GFM inline tokens directly to self-contained ANSI spans.
+ * Tokenizing before styling prevents escape sequences from being reparsed as
+ * markdown and keeps styling valid when the terminal wraps a line. */
 export function renderInlineMarkdown(text: string): string {
-  return text.replace(
-    INLINE_MARKDOWN_PATTERN,
-    (_match, code: string | undefined, _boldItalicMarker, boldItalic: string | undefined, _boldMarker, bold: string | undefined, italic: string | undefined, linkLabel: string | undefined, linkUrl: string | undefined) => {
-      if (code !== undefined) return styleWords(code, (word) => chalk.cyan(word));
-      if (boldItalic !== undefined) return styleWords(boldItalic, (word) => chalk.bold(chalk.italic(word)));
-      if (bold !== undefined) return styleWords(bold, (word) => chalk.bold(word));
-      if (italic !== undefined) return styleWords(italic, (word) => chalk.italic(word));
-      if (linkLabel !== undefined) return `${styleWords(linkLabel, (word) => chalk.underline(word))} ${chalk.dim(`(${linkUrl})`)}`;
-      return _match;
-    },
-  );
+  type Style = (value: string) => string;
+  const render = (tokens: Token[], styles: Style[] = []): string => tokens.map((token) => {
+    const apply = (value: string, extra: Style[] = styles): string => styleWords(value, (word) => extra.reduce((result, style) => style(result), word));
+    if (token.type === 'strong') return render(token.tokens ?? [], [...styles, chalk.bold]);
+    if (token.type === 'em') return render(token.tokens ?? [], [...styles, chalk.italic]);
+    if (token.type === 'del') return render(token.tokens ?? [], [...styles, chalk.strikethrough]);
+    if (token.type === 'codespan') return apply(token.text, [...styles, chalk.cyan]);
+    if (token.type === 'link') return `${render(token.tokens ?? [], [...styles, chalk.underline])} ${chalk.dim(`(${token.href})`)}`;
+    if (token.type === 'image') return `${chalk.magenta(`[image: ${token.text || 'attachment'}]`)} ${chalk.dim(`(${token.href})`)}`;
+    if (token.type === 'br') return ' ';
+    if ('tokens' in token && Array.isArray(token.tokens)) return render(token.tokens, styles);
+    if ('text' in token && typeof token.text === 'string') return apply(token.text);
+    return typeof token.raw === 'string' ? apply(token.raw) : '';
+  }).join('');
+  return render(Lexer.lexInline(text, { gfm: true, breaks: false }));
 }
 
 
@@ -80,15 +55,60 @@ export function renderInlineMarkdown(text: string): string {
  * this file. */
 export function splitIntoBlocks(text: string): MessageBlock[] {
   const blocks: MessageBlock[] = [];
-  const parts = text.split(/```[a-z]*\n?/i);
-  parts.forEach((part, index) => {
-    if (index % 2 === 1) {
-      blocks.push({ kind: 'code', lines: part.replace(/```$/, '').split(/\r?\n/).filter((_line, lineIndex, all) => !(lineIndex === all.length - 1 && all[lineIndex] === '')) });
-    } else {
-      for (const paragraph of part.split(/\r?\n/)) blocks.push({ kind: 'text', paragraph });
+  const textBlock = (paragraph: string, prefix = ''): void => {
+    const lines = paragraph.split(/\r?\n/);
+    for (const line of lines) blocks.push({ kind: 'text', paragraph: `${prefix}${line}` });
+  };
+  const visit = (tokens: Token[], quoteDepth = 0, listDepth = 0): void => {
+    for (const token of tokens) {
+      const quote = quoteDepth ? `${'> '.repeat(quoteDepth)}` : '';
+      if (token.type === 'space' || token.type === 'def') continue;
+      if (token.type === 'code') {
+        blocks.push({ kind: 'code', lines: token.text.split(/\r?\n/), ...(token.lang ? { language: token.lang } : {}) });
+      } else if (token.type === 'heading') {
+        textBlock(`${'#'.repeat(token.depth)} ${token.text}`, quote);
+      } else if (token.type === 'hr') {
+        textBlock('---', quote);
+      } else if (token.type === 'paragraph' || token.type === 'text' || token.type === 'html') {
+        textBlock(token.text, quote);
+      } else if (token.type === 'blockquote') {
+        visit(token.tokens ?? [], quoteDepth + 1, listDepth);
+      } else if (token.type === 'table') {
+        const table = token as Tokens.Table;
+        blocks.push({ kind: 'table', header: table.header.map((cell) => cell.text), rows: table.rows.map((row) => row.map((cell) => cell.text)) });
+      } else if (token.type === 'list') {
+        const list = token as Tokens.List;
+        list.items.forEach((item: Tokens.ListItem, index: number) => {
+          const marker = list.ordered ? `${Number(list.start || 1) + index}.` : item.task ? `- [${item.checked ? 'x' : ' '}]` : '-';
+          const indentation = '  '.repeat(listDepth);
+          const content = (item.tokens ?? []).filter((child: Token) => child.type !== 'list');
+          const nested = (item.tokens ?? []).filter((child: Token) => child.type === 'list');
+          const first = content.map((child: Token) => 'text' in child && typeof child.text === 'string' ? child.text : '').filter(Boolean).join(' ');
+          textBlock(`${indentation}${marker} ${first}`, quote);
+          visit(nested, quoteDepth, listDepth + 1);
+        });
+      }
     }
-  });
+  };
+  visit(marked.lexer(text, { gfm: true, breaks: false }));
   return blocks;
+}
+
+/** Width-bounded GFM table rendering. Equal columns are predictable while
+ * per-cell truncation guarantees the table never destabilizes the frame. */
+export function renderTableBlock(header: readonly string[], rows: readonly (readonly string[])[], width: number): string[] {
+  const columns = Math.max(1, header.length, ...rows.map((row) => row.length));
+  const borders = columns + 1;
+  const padding = columns * 2;
+  const cellWidth = Math.max(3, Math.floor((Math.max(width, borders + padding + columns * 3) - borders - padding) / columns));
+  const row = (cells: readonly string[], heading = false): string => `│${Array.from({ length: columns }, (_, index) => {
+    const rendered = renderInlineMarkdown(cells[index] ?? '');
+    const clipped = visibleSlice(rendered, cellWidth);
+    const padded = `${clipped}${' '.repeat(Math.max(0, cellWidth - terminalCellWidth(clipped)))}`;
+    return ` ${heading ? chalk.bold(padded) : padded} `;
+  }).join('│')}│`;
+  const separator = `├${Array.from({ length: columns }, () => '─'.repeat(cellWidth + 2)).join('┼')}┤`;
+  return [row(header, true), separator, ...rows.map((cells) => row(cells))].map((line) => visibleSlice(line, width));
 }
 
 /** Every harness's assistant text is plain markdown-convention prose

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
+import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
 
 const account: AiHarnessAccount = {
   id: 'local-codex',
@@ -42,7 +42,21 @@ describe('selectLocalHarnessRoute', () => {
 
 describe('local harness catalog', () => {
   it('publishes a versioned adapter contract', () => {
-    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(5);
+    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(6);
+  });
+
+  it('reports integration depth without overstating compatibility adapters', () => {
+    expect(harnessIntegrationLevel(localHarnessForCommand('codex')!)).toBe('native');
+    expect(harnessIntegrationLevel(localHarnessForCommand('cursor')!)).toBe('structured');
+    expect(harnessIntegrationLevel(localHarnessForCommand('aider')!)).toBe('compatibility');
+    expect(harnessIntegrationLevel(localHarnessForCommand('roo')!)).toBe('editor-only');
+  });
+
+  it('uses the documented Kiro auth and OpenCode discovery contracts', () => {
+    expect(localHarnessForCommand('kiro')?.localAuth).toEqual(['api-key']);
+    expect(localHarnessForCommand('opencode')?.session).toMatchObject({
+      discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json',
+    });
   });
 
   it('uses one reversible command/provider mapping for every supported local harness', () => {
