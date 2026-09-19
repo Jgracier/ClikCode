@@ -8,6 +8,7 @@
 
 import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
+import { StringDecoder } from 'node:string_decoder';
 import {
   composerLayout, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown, renderTableBlock,
   splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
@@ -20,19 +21,120 @@ import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBloc
 
 export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
 
+function waitingInputAction(key: string): WaitingInputAction | undefined {
+  if (key === '\u001b') return 'cancel-edit';
+  if (key === '\u0003') return 'cancel-stop';
+  if (key === '\u001b[A' || /^\u001b\[<64;\d+;\d+[mM]$/.test(key)) return 'scroll-up';
+  if (key === '\u001b[B' || /^\u001b\[<65;\d+;\d+[mM]$/.test(key)) return 'scroll-down';
+  if (key === '\u001b[5~') return 'page-up';
+  if (key === '\u001b[6~') return 'page-down';
+  return undefined;
+}
+
+function normalizeTerminalKey(key: string): string {
+  const cursor = /^\u001b(?:O|\[(?:1(?:;\d+)?)?)([ABCD])$/.exec(key);
+  if (cursor) return `\u001b[${cursor[1]}`;
+  const page = /^\u001b\[([56])(?:;\d+)?~$/.exec(key);
+  if (page) return `\u001b[${page[1]}~`;
+  if (/^\u001b\[(?:1|7)~$/.test(key) || key === '\u001b[H' || key === '\u001bOH') return '\u0001';
+  if (/^\u001b\[(?:4|8)~$/.test(key) || key === '\u001b[F' || key === '\u001bOF') return '\u0005';
+  return key;
+}
+
+/** Stateful decoder for mobile/remote terminals, where one key's escape
+ * sequence and even one UTF-8 character may be split across data chunks. */
+export class TerminalInputDecoder {
+  private readonly utf8 = new StringDecoder('utf8');
+  private pending = '';
+
+  push(chunk: Buffer | string): string[] {
+    this.pending += typeof chunk === 'string' ? chunk : this.utf8.write(chunk);
+    return this.drain(false);
+  }
+
+  flush(): string[] {
+    this.pending += this.utf8.end();
+    return this.drain(true);
+  }
+
+  hasPending(): boolean { return this.pending.length > 0; }
+
+  private drain(flush: boolean): string[] {
+    const keys: string[] = [];
+    while (this.pending) {
+      if (this.pending[0] !== '\u001b') {
+        const end = nextCharacterIndex(this.pending, 0);
+        keys.push(this.pending.slice(0, end));
+        this.pending = this.pending.slice(end);
+        continue;
+      }
+      if (this.pending.length === 1) {
+        if (flush) { keys.push('\u001b'); this.pending = ''; }
+        break;
+      }
+      const prefix = this.pending[1];
+      if (prefix === '[') {
+        let end = 2;
+        while (end < this.pending.length && !/[\x40-\x7e]/.test(this.pending[end]!)) end++;
+        if (end >= this.pending.length) {
+          if (flush) { keys.push('\u001b'); this.pending = this.pending.slice(1); continue; }
+          break;
+        }
+        keys.push(normalizeTerminalKey(this.pending.slice(0, end + 1)));
+        this.pending = this.pending.slice(end + 1);
+        continue;
+      }
+      if (prefix === 'O') {
+        if (this.pending.length < 3) {
+          if (flush) { keys.push('\u001b'); this.pending = this.pending.slice(1); continue; }
+          break;
+        }
+        keys.push(normalizeTerminalKey(this.pending.slice(0, 3)));
+        this.pending = this.pending.slice(3);
+        continue;
+      }
+      if ((prefix.codePointAt(0) ?? 0) < 0x20 || prefix === '\u007f') {
+        keys.push('\u001b');
+        this.pending = this.pending.slice(1);
+        continue;
+      }
+      // Alt-key bindings are not used by ClikCode; preserve the pair as one ignored sequence
+      // so neither half becomes cancellation or composer text.
+      keys.push(this.pending.slice(0, 2));
+      this.pending = this.pending.slice(2);
+    }
+    return keys;
+  }
+}
+
+function listenForTerminalKeys(onKey: (key: string) => void): () => void {
+  const decoder = new TerminalInputDecoder();
+  let flushTimer: NodeJS.Timeout | undefined;
+  const deliver = (keys: readonly string[]): void => { for (const key of keys) onKey(key); };
+  const onData = (chunk: Buffer | string): void => {
+    if (flushTimer) clearTimeout(flushTimer);
+    deliver(decoder.push(chunk));
+    if (decoder.hasPending()) {
+      flushTimer = setTimeout(() => deliver(decoder.flush()), 50);
+      flushTimer.unref();
+    }
+  };
+  input.on('data', onData);
+  return () => {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = undefined;
+    input.off('data', onData);
+  };
+}
+
 /** Decode only keys that remain meaningful while a provider turn owns the
  * composer. Keeping this separate from cancellation prevents arrow/page keys
  * from being swallowed during generation. */
 export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[] {
-  const keys = String(chunk).match(/\u001b\[[AB]|\u001b\[[56]~|[\s\S]/g) ?? [];
-  return keys.flatMap((key): WaitingInputAction[] => {
-    if (key === '\u001b') return ['cancel-edit'];
-    if (key === '\u0003') return ['cancel-stop'];
-    if (key === '\u001b[A') return ['scroll-up'];
-    if (key === '\u001b[B') return ['scroll-down'];
-    if (key === '\u001b[5~') return ['page-up'];
-    if (key === '\u001b[6~') return ['page-down'];
-    return [];
+  const decoder = new TerminalInputDecoder();
+  return [...decoder.push(chunk), ...decoder.flush()].flatMap((key) => {
+    const action = waitingInputAction(key);
+    return action ? [action] : [];
   });
 }
 
@@ -47,20 +149,38 @@ export function editWaitingComposer(value: string, cursor: number, key: string):
   if (key === '\u0015') return { value: '', cursor: 0, changed: true };
   if (key === '\u0001') return { value, cursor: 0, changed: true };
   if (key === '\u0005') return { value, cursor: value.length, changed: true };
+  if (key === '\u001b[3~') {
+    if (cursor >= value.length) return { value, cursor, changed: true };
+    const next = nextCharacterIndex(value, cursor);
+    return { value: value.slice(0, cursor) + value.slice(next), cursor, changed: true };
+  }
   if (!key.startsWith('\u001b') && !/[\u0000-\u001f]/.test(key)) {
     return { value: value.slice(0, cursor) + key + value.slice(cursor), cursor: cursor + key.length, changed: true };
   }
   return { value, cursor, changed: false };
 }
 
-/** A fixed 4x4 field of identical tiny dots. Alternating diagonals breathe in
- * two phases; only brightness changes, so the compact square never rotates,
- * jumps, or changes shape. */
+/** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
+ * the same compact shape without changing its dimensions. */
 export function waitingSpinnerFrame(frame: number): [boolean[], boolean[], boolean[], boolean[]] {
-  const phase = Math.floor(Math.abs(frame) / 2) % 2;
+  const phase = Math.abs(frame) % 4;
   return Array.from({ length: 4 }, (_, row) =>
-    Array.from({ length: 4 }, (_, column) => (row + column + phase) % 2 === 0),
+    Array.from({ length: 4 }, (_, column) => (row + column + phase) % 4 < 2),
   ) as [boolean[], boolean[], boolean[], boolean[]];
+}
+
+/** Pack the logical 4x4 animation into two adjacent Braille cells. A Braille
+ * cell is itself a 2x4 dot matrix, so this preserves all sixteen positions in
+ * one terminal row without the four-row gap shown by ordinary periods. */
+export function waitingSpinnerGlyph(frame: number): string {
+  const grid = waitingSpinnerFrame(frame);
+  const bit = (column: number, row: number): number => {
+    const positions = [[0, 1, 2, 6], [3, 4, 5, 7]] as const;
+    return grid[row]![column] ? 1 << positions[column % 2]![row] : 0;
+  };
+  return [0, 2].map((start) => String.fromCodePoint(0x2800
+    | bit(start, 0) | bit(start, 1) | bit(start, 2) | bit(start, 3)
+    | bit(start + 1, 0) | bit(start + 1, 1) | bit(start + 1, 2) | bit(start + 1, 3))).join('');
 }
 
 export function commandPaletteMatches(
@@ -78,6 +198,12 @@ export function commandPaletteMatches(
 export function rightLabeledRule(width: number, label?: string): string {
   const suffix = label ? ` ${visibleSlice(label, Math.max(0, width - 4))}` : '';
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
+}
+
+/** Keep the same historical lines visible while a live response grows. */
+export function anchoredScrollOffset(current: number, previousLength: number, nextLength: number, maximum: number): number {
+  const preserved = current > 0 && nextLength > previousLength ? current + nextLength - previousLength : current;
+  return Math.max(0, Math.min(preserved, maximum));
 }
 
 export type InlineResponseEvent =
@@ -190,6 +316,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private draftCursor = 0;
   private draftPalette?: { capacity?: number; hint?: string; hideCursor?: boolean };
   private waitingTimer?: NodeJS.Timeout;
+  private stopWaitingInput?: () => void;
   private waitingFrame = 0;
   private waitingLabel = '';
   private waitingStartedAt = 0;
@@ -214,6 +341,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * message index: paging by whole screens needs to know how many wrapped
    * lines actually fit, which messages alone don't tell you. */
   private historyScroll = 0;
+  private renderedConversationLength = 0;
   private usageLabel?: string;
   private selecting = false;
   /** True while the slash palette (inside question()) has its own fixed-capacity
@@ -228,89 +356,90 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private cancelWaiting?: (restoreDraft: boolean) => void;
   private waitingCancelled = false;
   private pendingApproval?: { resolve: (accepted: boolean) => void; previousLabel: string };
-  private readonly onWaitingInput = (chunk: Buffer | string): void => {
+  private readonly onWaitingKey = (key: string): void => {
     if (this.pendingApproval) {
-      const key = String(chunk).toLowerCase();
-      if (key === 'y' || key === 'n' || key === '\r' || key === '\n' || key === '\u001b' || key === '\u0003') {
+      const answer = key.toLowerCase();
+      if (answer === 'y' || answer === 'n' || answer === '\r' || answer === '\n' || answer === '\u001b' || answer === '\u0003') {
         const pending = this.pendingApproval;
         this.pendingApproval = undefined;
         this.waitingLabel = pending.previousLabel || 'thinking';
-        pending.resolve(key === 'y');
+        pending.resolve(answer === 'y');
         this.updateWaiting();
       }
       return;
     }
-    const keys = String(chunk).match(/\u001b\[[ABCD]|\u001b\[[56]~|[\s\S]/g) ?? [];
-    for (const key of keys) {
-      const action = waitingInputActions(key)[0];
-      if (action === 'cancel-edit' || action === 'cancel-stop') {
-        if (this.waitingCancelled) continue;
-        this.waitingCancelled = true;
-        this.waitingLabel = 'stopping…';
+    const action = waitingInputAction(key);
+    if (action === 'cancel-edit' || action === 'cancel-stop') {
+      if (this.waitingCancelled) return;
+      this.waitingCancelled = true;
+      this.waitingLabel = 'stopping…';
+      this.updateWaiting();
+      this.cancelWaiting?.(action === 'cancel-edit');
+    } else if (action === 'scroll-up') {
+      this.historyScroll += 3;
+      this.updateWaiting();
+    } else if (action === 'scroll-down') {
+      this.historyScroll = Math.max(0, this.historyScroll - 3);
+      this.updateWaiting();
+    } else if (action === 'page-up') {
+      this.historyScroll += 10;
+      this.updateWaiting();
+    } else if (action === 'page-down') {
+      this.historyScroll = Math.max(0, this.historyScroll - 10);
+      this.updateWaiting();
+    } else if (key === '\r' || key === '\n') {
+      const text = this.waitingDraft.trim();
+      if (!text || !this.waitingSubmit) return;
+      this.waitingDraft = '';
+      this.waitingCursor = 0;
+      const localId = ++this.waitingSubmissionId;
+      this.waitingSubmissions.push({
+        localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
+      });
+      this.updateWaiting();
+      const write = this.waitingSubmit(text).then((result) => {
+        const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
+        if (item) item.state = result.disposition;
         this.updateWaiting();
-        this.cancelWaiting?.(action === 'cancel-edit');
-      } else if (action === 'scroll-up') {
-        this.historyScroll += 3;
-        this.updateWaiting();
-      } else if (action === 'scroll-down') {
-        this.historyScroll = Math.max(0, this.historyScroll - 3);
-        this.updateWaiting();
-      } else if (action === 'page-up') {
-        this.historyScroll += 10;
-        this.updateWaiting();
-      } else if (action === 'page-down') {
-        this.historyScroll = Math.max(0, this.historyScroll - 10);
-        this.updateWaiting();
-      } else if (key === '\r' || key === '\n') {
-        const text = this.waitingDraft.trim();
-        if (!text || !this.waitingSubmit) continue;
-        this.waitingDraft = '';
-        this.waitingCursor = 0;
-        const localId = ++this.waitingSubmissionId;
-        this.waitingSubmissions.push({
-          localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
-        });
-        this.updateWaiting();
-        const write = this.waitingSubmit(text).then((result) => {
-          const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
-          if (item) item.state = result.disposition;
-          this.updateWaiting();
-        }).catch(() => {
-          const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
-          if (item) item.state = 'error';
-          if (!this.waitingDraft) {
-            this.waitingDraft = text;
-            this.waitingCursor = text.length;
-          }
-          this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
-          this.updateWaiting();
-        });
-        this.waitingSubmissionWrites.add(write);
-        void write.finally(() => this.waitingSubmissionWrites.delete(write));
-      } else if (this.waitingSubmit) {
-        const edited = editWaitingComposer(this.waitingDraft, this.waitingCursor, key);
-        if (edited.changed) {
-          this.waitingDraft = edited.value;
-          this.waitingCursor = edited.cursor;
-          this.updateWaiting();
+      }).catch(() => {
+        const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
+        if (item) item.state = 'error';
+        if (!this.waitingDraft) {
+          this.waitingDraft = text;
+          this.waitingCursor = text.length;
         }
+        this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
+        this.updateWaiting();
+      });
+      this.waitingSubmissionWrites.add(write);
+      void write.finally(() => this.waitingSubmissionWrites.delete(write));
+    } else if (this.waitingSubmit) {
+      const edited = editWaitingComposer(this.waitingDraft, this.waitingCursor, key);
+      if (edited.changed) {
+        this.waitingDraft = edited.value;
+        this.waitingCursor = edited.cursor;
+        this.updateWaiting();
       }
     }
   };
   private readonly onResize = (): void => {
-    if (!this.closed) {
-      output.write('\u001b[2J');
-      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
-    }
+    if (!this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
   };
 
   constructor() {
-    output.write('\u001b[?1049h\u001b[?25h');
+    // Alternate-scroll mode maps a wheel/touch scroll in the alternate screen
+    // to cursor keys without enabling click tracking (which would interfere
+    // with selection and copy in mobile terminals such as Termius).
+    output.write('\u001b[?1049h\u001b[?1007h\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {
-    if (this.currentSession?.id !== session.id) this.activityEntries = [];
+    if (this.currentSession?.id !== session.id) {
+      this.activityEntries = [];
+      this.historyScroll = 0;
+      this.renderedConversationLength = 0;
+    }
     if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
     this.currentAccount = account;
@@ -385,13 +514,13 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     if (input.isTTY) {
       input.setRawMode(true);
       input.resume();
-      input.on('data', this.onWaitingInput);
+      this.stopWaitingInput = listenForTerminalKeys(this.onWaitingKey);
     }
     this.paint('', [], 0, '› ', 0);
     this.waitingTimer = setInterval(() => {
       this.waitingFrame++;
       this.updateWaiting();
-    }, 120);
+    }, 300);
     this.waitingTimer.unref();
   }
 
@@ -412,7 +541,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   stopWaiting(refresh = true): void {
     if (this.waitingTimer) clearInterval(this.waitingTimer);
     this.waitingTimer = undefined;
-    input.off('data', this.onWaitingInput);
+    this.stopWaitingInput?.();
+    this.stopWaitingInput = undefined;
     if (input.isTTY) input.setRawMode(false);
     this.cancelWaiting = undefined;
     this.waitingSubmit = undefined;
@@ -473,13 +603,11 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * for 5m 31s" style -- so a long turn reads as "still working, N seconds in"
    * rather than the same static label sitting there with no sense of how long
    * it's actually been (only the spinner glyph itself changing periodically). */
-  private waitingLines(): [string, string, string, string] {
+  private waitingLine(): string {
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
     const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
-    const dots = waitingSpinnerFrame(this.waitingFrame).map((row) => row.map((active) =>
-      active ? chalk.cyanBright('·') : chalk.dim('·')).join('')) as [string, string, string, string];
     const label = `${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to steer or queue' : ''}`;
-    return [dots[0], `${dots[1]}  ${chalk.dim(label)}`, dots[2], dots[3]];
+    return `${chalk.cyanBright(waitingSpinnerGlyph(this.waitingFrame))}  ${chalk.dim(label)}`;
   }
 
   private updateWaiting(): void {
@@ -565,20 +693,27 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // unpainted allowed an obsolete status line to remain visibly duplicated.
     const targetHeight = Math.max(5, output.rows || 30);
     const requestedPaletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
-    const paletteCapacity = Math.min(requestedPaletteCapacity, Math.max(0, targetHeight - 5));
-    const paletteRows = paletteCapacity;
-    const noticeRows = this.currentNotice ? 1 : 0;
     // Keep generation at the response's live edge, directly above the
     // composer. It is a fixed status band, not transcript content, so a long
-    // streamed answer cannot scroll it away. Very short terminals fall back
-    // to the labelled middle row rather than drawing outside the viewport.
-    const waitingRows = this.waitingLabel ? (targetHeight >= 9 ? 4 : 1) : 0;
+    // streamed answer cannot scroll it away. Optional bands share only the
+    // rows left after one composer row and its three fixed footer rows.
+    const waitingRows = this.waitingLabel && targetHeight >= 5 ? 1 : 0;
+    let optionalRows = Math.max(0, targetHeight - 4 - waitingRows);
+    const noticeRows = this.currentNotice && optionalRows > 0 ? 1 : 0;
+    optionalRows -= noticeRows;
+    const availablePaletteRows = Math.min(requestedPaletteCapacity, optionalRows);
+    const paletteCapacity = availablePaletteRows >= 3 ? availablePaletteRows : 0;
+    const paletteRows = paletteCapacity;
     const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
-    const composerRows = composerLayout(composer, cursor, composerWidth);
+    // The software keyboard can make a mobile SSH viewport dramatically
+    // shorter between two keystrokes. Bound the composer by what remains in
+    // this exact frame so it can never create a physical terminal scroll.
+    const maxComposerRows = Math.max(1, targetHeight - 3 - paletteRows - noticeRows - waitingRows);
+    const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     // Three non-composer footer rows: rule, title rule, and meta. Composer
     // rows expand upward and reduce transcript space instead of scrolling
     // horizontally off-screen.
-    const rows = Math.max(1, targetHeight - 3 - composerRows.rows.length - paletteRows - noticeRows - waitingRows);
+    const rows = Math.max(0, targetHeight - 3 - composerRows.rows.length - paletteRows - noticeRows - waitingRows);
     const conversation: Array<{ text: string }> = [];
     const ensureBlankConversationRow = (): void => {
       if (conversation.length && conversation[conversation.length - 1]?.text !== '') conversation.push({ text: '' });
@@ -689,7 +824,10 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // new message arriving grows `conversation`, a session switch can shrink
     // it out from under a scroll position that made sense for the old one.
     const maxScroll = Math.max(0, conversation.length - rows);
-    this.historyScroll = Math.min(this.historyScroll, maxScroll);
+    this.historyScroll = anchoredScrollOffset(
+      this.historyScroll, this.renderedConversationLength, conversation.length, maxScroll,
+    );
+    this.renderedConversationLength = conversation.length;
     const windowStart = Math.max(0, conversation.length - rows - this.historyScroll);
     const shown = conversation.slice(windowStart, windowStart + rows);
     if (this.historyScroll > 0 && shown.length) {
@@ -704,15 +842,16 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const screenLine = (text = ''): void => { frame += `\r\u001b[2K${text}\n`; };
     frame += '\u001b[H';
     if (shown.length) for (const row of shown) screenLine(row.text);
-    else {
-      screenLine();
-      screenLine(`  ${chalk.dim('Start a conversation. Type / to open the command palette.')}`);
-      screenLine();
+    else if (rows > 0) {
+      const emptyMessageRow = rows >= 3 ? 1 : 0;
+      for (let index = 0; index < rows; index++) {
+        screenLine(index === emptyMessageRow ? `  ${chalk.dim('Start a conversation. Type / to open the command palette.')}` : '');
+      }
     }
-    const renderedConversationRows = shown.length || 3;
+    const renderedConversationRows = shown.length || rows;
     const padding = Math.max(0, rows - renderedConversationRows);
     for (let index = 0; index < padding; index++) screenLine();
-    if (this.currentNotice) screenLine(`  ${chalk.yellow(visibleSlice(this.currentNotice, inner))}`);
+    if (noticeRows && this.currentNotice) screenLine(`  ${chalk.yellow(visibleSlice(this.currentNotice, inner))}`);
     if (paletteCapacity) {
       screenLine(rule);
       const visibleRows = paletteCapacity - 2;
@@ -731,9 +870,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       screenLine(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
     if (waitingRows) {
-      const waitingLines = this.waitingLines();
-      const visibleWaitingLines = waitingRows === 1 ? [waitingLines[1]] : waitingLines;
-      for (const line of visibleWaitingLines) screenLine(`  ${visibleSlice(line, Math.max(1, inner))}`);
+      screenLine(`  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. Keeping it out of the provider/model/directory row makes
@@ -753,8 +890,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // one at the terminal's bottom row would scroll the otherwise fixed frame.
     frame += `\r\x1b[2K  ${chalk.dim(visibleSlice(meta, inner))}\x1b[?7h`;
     if (!palette?.hideCursor) {
-      const rowsUp = 2 + (composerRows.rows.length - 1 - composerRows.cursorRow);
-      frame += `\x1b[${rowsUp}A\r\x1b[${2 + terminalCellWidth(prompt) + composerRows.cursorWidth}C\x1b[?25h`;
+      const cursorRow = Math.max(1, targetHeight - 2 - (composerRows.rows.length - 1 - composerRows.cursorRow));
+      const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
+      frame += `\x1b[${cursorRow};${cursorColumn}H\x1b[?25h`;
     }
     this.writeFrame(frame);
   }
@@ -814,6 +952,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       // show a scrollable slice of a longer list; capping the list before
       // it ever got there defeated that.
       const matches = () => commandPaletteMatches(value, commands);
+      let stopInput: () => void = () => {};
       const draw = (): void => {
         const options = commandPaletteMatches(value, commands);
         if (selected >= options.length) selected = 0;
@@ -831,7 +970,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         if (finished) return;
         finished = true;
         this.paletteActive = false;
-        input.off('data', onData);
+        stopInput();
         input.setRawMode(false);
         output.write('\u001b[?25h');
         if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
@@ -850,13 +989,18 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         if (finished) return;
         finished = true;
         this.paletteActive = false;
-        input.off('data', onData);
+        stopInput();
         input.setRawMode(false);
         output.write('\u001b[?25h');
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
       const handleKey = (key: string): void => {
         const options = matches();
+        const scrollAction = options.length ? undefined : waitingInputAction(key);
+        if (scrollAction === 'scroll-up') { this.historyScroll += 3; return draw(); }
+        if (scrollAction === 'scroll-down') { this.historyScroll = Math.max(0, this.historyScroll - 3); return draw(); }
+        if (scrollAction === 'page-up') { this.historyScroll += 10; return draw(); }
+        if (scrollAction === 'page-down') { this.historyScroll = Math.max(0, this.historyScroll - 10); return draw(); }
         if (key === '\u0003' || key === '\u0004') return finish('/exit');
         if (key === '\u001b' && settings?.cancellable) return cancel();
         if (key === '\r' || key === '\n') {
@@ -886,13 +1030,11 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         // mean "scroll" for a touch interface to be usable at all.
         if (key === '\u001b[A') {
           if (options.length) { selected = (selected - 1 + options.length) % options.length; return draw(); }
-          this.historyScroll += 3;
-          return draw();
+          return;
         }
         if (key === '\u001b[B') {
           if (options.length) { selected = (selected + 1) % options.length; return draw(); }
-          this.historyScroll = Math.max(0, this.historyScroll - 3);
-          return draw();
+          return;
         }
         if (key === '\u0010' && !options.length) { if (historyIndex > 0) { historyIndex--; value = this.history[historyIndex] ?? ''; cursor = value.length; } return draw(); }
         if (key === '\u000e' && !options.length) { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; return draw(); }
@@ -900,8 +1042,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         if (key === '\u001b[C') { cursor = nextCharacterIndex(value, cursor); return draw(); }
         // Page Up/Down scroll by a full page instead of 3 lines, for a real
         // keyboard's own dedicated keys.
-        if (key === '\u001b[5~') { this.historyScroll += 10; return draw(); }
-        if (key === '\u001b[6~') { this.historyScroll = Math.max(0, this.historyScroll - 10); return draw(); }
+        if (key === '\u001b[5~' || key === '\u001b[6~') return;
         if (key === '\u007f' || key === '\b') {
           if (cursor > 0) { const previous = previousCharacterIndex(value, cursor); value = value.slice(0, previous) + value.slice(cursor); cursor = previous; }
           return draw();
@@ -909,6 +1050,10 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         if (key === '\u0015') { value = ''; cursor = 0; return draw(); }
         if (key === '\u0001') { cursor = 0; return draw(); }
         if (key === '\u0005') { cursor = value.length; return draw(); }
+        if (key === '\u001b[3~') {
+          if (cursor < value.length) value = value.slice(0, cursor) + value.slice(nextCharacterIndex(value, cursor));
+          return draw();
+        }
         if (!key.startsWith('\u001b') && !/[\u0000-\u001f]/.test(key)) {
           value = value.slice(0, cursor) + key + value.slice(cursor);
           cursor += key.length;
@@ -916,16 +1061,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
           draw();
         }
       };
-      const onData = (chunk: Buffer | string): void => {
-        const keys = String(chunk).match(/\u001b\[[ABCD]|\u001b\[[56]~|[\s\S]/g) ?? [];
-        for (const key of keys) {
-          if (finished) break;
-          handleKey(key);
-        }
-      };
       input.setRawMode(true);
       input.resume();
-      input.on('data', onData);
+      stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
       draw();
     });
   }
@@ -948,6 +1086,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       this.selecting = true;
       let query = '';
       let selected = 0;
+      let stopInput: () => void = () => {};
       const capacity = Math.min(options.length, 8) + 2;
       const visibleOptions = (): readonly PickerOption<T>[] => {
         if (!query) return options;
@@ -970,7 +1109,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         if (finished) return;
         finished = true;
         this.selecting = false;
-        input.off('data', onData);
+        stopInput();
         input.setRawMode(false);
         this.paint('', [], 0, '\u203a ', 0);
         resolveSelection(value);
@@ -986,20 +1125,21 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       // cleanup repaints the plain composer over top of it.
       const openActions = async (option: PickerOption<T>): Promise<void> => {
         if (!option.actions?.length) return;
-        input.off('data', onData);
+        stopInput();
         const actionValue = await this.select(option.label, option.actions.map((action) => ({ label: action.label, value: action.value })));
         if (finished) return;
         if (actionValue) await onAction?.(option.value, actionValue);
         if (finished) return;
         input.setRawMode(true);
         input.resume();
-        input.on('data', onData);
+        stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
         draw();
       };
       const handleKey = (key: string): void => {
         const visible = visibleOptions();
-        if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
-        else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
+        const scrollAction = waitingInputAction(key);
+        if (key === '\u001b[A' || scrollAction === 'scroll-up') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
+        else if (key === '\u001b[B' || scrollAction === 'scroll-down') selected = visible.length ? (selected + 1) % visible.length : 0;
         else if (key === '\u001b[C') { if (visible[selected]) void openActions(visible[selected]); return; }
         else if (key === '\r' || key === '\n') { if (visible[selected]) finish(visible[selected].value); return; }
         else if (key === '\u0003') return finish(undefined);
@@ -1009,16 +1149,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         else return;
         draw();
       };
-      const onData = (chunk: Buffer | string): void => {
-        const keys = String(chunk).match(/\u001b\[[ABCD]|[\s\S]/g) ?? [];
-        for (const key of keys) {
-          if (finished) break;
-          handleKey(key);
-        }
-      };
       input.setRawMode(true);
       input.resume();
-      input.on('data', onData);
+      stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
       draw();
     });
   }
@@ -1033,7 +1166,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     process.off('SIGWINCH', this.onResize);
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write('\u001b[?25h\u001b[?1049l');
+    output.write('\u001b[?1007l\u001b[?25h\u001b[?1049l');
   }
 
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
@@ -1046,7 +1179,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     this.responsePaintTimer = undefined;
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write('\u001b[?25h\u001b[?1049l');
+    output.write('\u001b[?1007l\u001b[?25h\u001b[?1049l');
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
@@ -1073,7 +1206,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // this fixes: switching to a provider needing login is exactly the
     // path that goes through suspend/resume.
     this.suspended = false;
-    output.write('\u001b[?1049h\u001b[2J');
+    output.write('\u001b[?1049h\u001b[?1007h\u001b[2J');
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }

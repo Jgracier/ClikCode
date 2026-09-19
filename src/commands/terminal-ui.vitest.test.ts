@@ -1,27 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, editWaitingComposer, responseTimeline, rightLabeledRule, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
+import { anchoredScrollOffset, commandPaletteMatches, editWaitingComposer, responseTimeline, rightLabeledRule, TerminalInputDecoder, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('full-screen waiting input', () => {
-  it('pulses a compact 4x4 square without changing its shape', () => {
-    const first = waitingSpinnerFrame(0);
-    const held = waitingSpinnerFrame(1);
-    const alternate = waitingSpinnerFrame(2);
-    expect(first).toEqual([
-      [true, false, true, false],
-      [false, true, false, true],
-      [true, false, true, false],
-      [false, true, false, true],
-    ]);
-    expect(held).toEqual(first);
-    expect(alternate.flat()).toEqual(first.flat().map((active) => !active));
-    expect(first.flat()).toHaveLength(16);
+  it('packs four animation phases of a logical 4x4 grid into two Braille cells', () => {
+    const frames = Array.from({ length: 4 }, (_, frame) => waitingSpinnerFrame(frame));
+    expect(new Set(frames.map((frame) => JSON.stringify(frame))).size).toBe(4);
+    expect(waitingSpinnerFrame(4)).toEqual(frames[0]);
+    expect(frames.every((frame) => frame.flat().length === 16 && frame.flat().filter(Boolean).length === 8)).toBe(true);
+    const glyphs = Array.from({ length: 4 }, (_, frame) => waitingSpinnerGlyph(frame));
+    expect(new Set(glyphs).size).toBe(4);
+    expect(glyphs.every((glyph) => [...glyph].length === 2 && terminalCellWidth(glyph) === 2)).toBe(true);
   });
 
   it('keeps scrolling available while a provider turn is running', () => {
-    expect(waitingInputActions('\u001b[A\u001b[5~\u001b[B\u001b[6~')).toEqual([
-      'scroll-up', 'page-up', 'scroll-down', 'page-down',
+    expect(waitingInputActions('\u001b[A\u001b[5~\u001b[B\u001b[6~\u001b[<64;4;8M\u001b[<65;4;8M')).toEqual([
+      'scroll-up', 'page-up', 'scroll-down', 'page-down', 'scroll-up', 'scroll-down',
     ]);
+  });
+
+  it('buffers fragmented Termius escape sequences and UTF-8 characters', () => {
+    const decoder = new TerminalInputDecoder();
+    expect(decoder.push(Buffer.from('\u001b'))).toEqual([]);
+    expect(decoder.push(Buffer.from('[D'))).toEqual(['\u001b[D']);
+    expect(decoder.push(Buffer.from('\u001bOD\u001b[1;5C'))).toEqual(['\u001b[D', '\u001b[C']);
+    const wide = Buffer.from('界');
+    expect(decoder.push(wide.subarray(0, 1))).toEqual([]);
+    expect(decoder.push(wide.subarray(1))).toEqual(['界']);
+    expect(decoder.push(Buffer.from('\u001b'))).toEqual([]);
+    expect(decoder.flush()).toEqual(['\u001b']);
+    expect(decoder.push(Buffer.from('x'))).toEqual(['x']);
+    expect(decoder.push(Buffer.from('\u001by'))).toEqual(['\u001by']);
+  });
+
+  it('holds the visible transcript in place while streamed lines are appended', () => {
+    expect(anchoredScrollOffset(6, 40, 44, 30)).toBe(10);
+    expect(anchoredScrollOffset(0, 40, 44, 30)).toBe(0);
+    expect(anchoredScrollOffset(29, 40, 44, 30)).toBe(30);
   });
 
   it('keeps escape and control-c as cancellation without treating other keys as actions', () => {
