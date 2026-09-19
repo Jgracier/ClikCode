@@ -1182,7 +1182,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     title: string,
     options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
-    settings?: { onBack?: () => void; onEscape?: () => void },
+    settings?: {
+      onBack?: () => void;
+      onEscape?: () => void;
+      refreshedOptions?: () => readonly PickerOption<T>[];
+      refresh?: Promise<unknown>;
+    },
   ): Promise<T | undefined> {
     if (!options.length) return Promise.resolve(undefined);
     return new Promise((resolveSelection) => {
@@ -1191,10 +1196,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       let selected = 0;
       let stopInput: () => void = () => {};
       const capacity = Math.min(options.length, 8) + 2;
+      const currentOptions = (): readonly PickerOption<T>[] => settings?.refreshedOptions?.() ?? options;
       const visibleOptions = (): readonly PickerOption<T>[] => {
-        if (!query) return options;
+        const current = currentOptions();
+        if (!query) return current;
         const needle = query.toLowerCase();
-        return options.filter((option) =>
+        return current.filter((option) =>
           option.label.toLowerCase().includes(needle)
           || (option.detail ?? '').toLowerCase().includes(needle));
       };
@@ -1205,7 +1212,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const confirmation = '\u2192/Enter';
         const hint = query
           ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose \u00b7 \u2190 back \u00b7 Esc exit`
-          : `${options.length} total \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose \u00b7 \u2190 back \u00b7 Esc exit \u00b7 type to filter`;
+          : `${currentOptions().length} total \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose \u00b7 \u2190 back \u00b7 Esc exit \u00b7 type to filter`;
         this.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, hint });
       };
       let finished = false;
@@ -1275,6 +1282,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       input.resume();
       stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
       draw();
+      void settings?.refresh?.then(() => { if (!finished) draw(); }, () => { if (!finished) draw(); });
     });
   }
 

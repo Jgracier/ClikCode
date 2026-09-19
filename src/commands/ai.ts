@@ -1694,7 +1694,12 @@ async function chooseOption<T>(
   title: string,
   options: readonly PickerOption<T>[],
   onAction?: (value: T, action: string) => Promise<void>,
-  settings?: { onBack?: () => void; onEscape?: () => void },
+  settings?: {
+    onBack?: () => void;
+    onEscape?: () => void;
+    refreshedOptions?: () => readonly PickerOption<T>[];
+    refresh?: Promise<unknown>;
+  },
 ): Promise<T | undefined> {
   if (options.length === 0) return undefined;
   if (rl.select) return rl.select(title, options, onAction, settings);
@@ -1843,11 +1848,11 @@ export function harnessCanAddAccount(harness: AiLocalHarnessDefinition): boolean
  * wall of rows and avoiding quota probes for providers the user never views. */
 export function providerAccountPickerOptions(
   harness: AiLocalHarnessDefinition,
-  accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string }>,
+  accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string; usagePending?: boolean }>,
   session: HarnessSession,
 ): PickerOption<ProviderAccountChoice>[] {
   return [
-    ...[...accounts].sort((left, right) => left.account.label.localeCompare(right.account.label)).map(({ account, usage }) => {
+    ...[...accounts].sort((left, right) => left.account.label.localeCompare(right.account.label)).map(({ account, usage, usagePending }) => {
       const actions = [
         ...(harness.logoutArgv && account.authKind === 'vendor-cli' && account.status === 'ready'
           ? [{ label: 'Disconnect', value: 'disconnect' }] : []),
@@ -1856,7 +1861,7 @@ export function providerAccountPickerOptions(
       ];
       return {
         label: account.label,
-        detail: `${usage ? `· ${usage} ` : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
+        detail: `${usage ? `· ${usage} ` : usagePending ? '· checking usage… ' : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
         actions,
       };
@@ -1869,7 +1874,7 @@ export function providerAccountPickerOptions(
 
 /** Composer account choices are scoped to the selected provider. */
 export function accountPickerOptions(
-  accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string }>,
+  accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string; usagePending?: boolean }>,
   session: HarnessSession,
   harness: AiLocalHarnessDefinition,
 ): PickerOption<ProviderAccountChoice>[] {
@@ -1908,20 +1913,28 @@ async function interactiveAccountPicker(
       rl.panel?.(`${harness.displayName} accounts`, `No accounts are connected. Use /accounts login ${harness.command} <label> to add one.`);
       return undefined;
     }
-    const accountsWithUsage = providerAccounts.map((account) => ({
-      account, usage: cachedAccountUsageLabel(account, state),
-    }));
-    void Promise.all(providerAccounts.map((account) => accountUsageLabel(account, state))).catch(() => undefined);
+    let usagePending = true;
+    const accountOptions = (): PickerOption<ProviderAccountChoice>[] => accountPickerOptions(
+      providerAccounts.map((account) => ({
+        account,
+        usage: cachedAccountUsageLabel(account, state),
+        usagePending: usagePending && account.authKind === 'vendor-cli',
+      })),
+      session,
+      harness,
+    );
+    const usageRefresh = Promise.allSettled(providerAccounts.map((account) => accountUsageLabel(account, state)))
+      .then(() => { usagePending = false; });
     let actionPerformed = false;
     let backedOut = false;
     const selected = await chooseOption(
-      rl, `${harness.displayName} accounts`, accountPickerOptions(accountsWithUsage, session, harness),
+      rl, `${harness.displayName} accounts`, accountOptions(),
       async (choice, action) => {
         if (choice.kind !== 'account') return;
         actionPerformed = true;
         await manageAccountAction(rl, choice.accountId, action);
       },
-      { onBack: () => { backedOut = true; } },
+      { onBack: () => { backedOut = true; }, refreshedOptions: accountOptions, refresh: usageRefresh },
     );
     if (backedOut) {
       if (rl instanceof TerminalHarnessPrompter) rl.restoreDraft('/');
