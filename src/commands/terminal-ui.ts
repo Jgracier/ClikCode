@@ -953,6 +953,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
   }
 
+  /** Remove a completed palette/picker as one frame. Painting an empty
+   * composer here left its borders/status rows alive while the selected slash
+   * command ran, which looked like a composer floating above blank space. */
+  private clearInteractiveFrame(): void {
+    this.writeInlineFrame(this.inlinePermanentLines, [], 0, 1, false, true);
+  }
+
   async question(prompt: string, commands: readonly PickerOption<string>[] = [], settings?: { cancellable?: boolean }): Promise<string> {
     if (!input.isTTY) {
       // A single check here used to end the whole session the instant it
@@ -1039,7 +1046,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\r' || key === '\n') {
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
             const command = options[selected].value;
-            this.paint('', [], 0, prompt, 0);
+            this.clearInteractiveFrame();
             return finish(command);
           }
           return finish(value);
@@ -1103,7 +1110,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * arrow keys still navigate whatever is currently visible. This is why the
    * old 'j'/'k'/'q' single-letter aliases are gone: they would collide with
    * typing a real filter query character (searching for "qwen" or "junk"). */
-  select<T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined> {
+  select<T>(
+    title: string,
+    options: readonly PickerOption<T>[],
+    onAction?: (value: T, action: string) => Promise<void>,
+    onExpand?: (value: T) => Promise<T | undefined>,
+  ): Promise<T | undefined> {
     if (!options.length) return Promise.resolve(undefined);
     return new Promise((resolveSelection) => {
       this.selecting = true;
@@ -1134,25 +1146,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.selecting = false;
         stopInput();
         input.setRawMode(false);
-        this.paint('', [], 0, '\u203a ', 0);
+        this.clearInteractiveFrame();
         resolveSelection(value);
       };
-      // Right arrow, not Enter, opens an option's own actions (disconnect,
-      // reauthenticate, ...) -- only when it actually declares any,
-      // otherwise this is a no-op so every existing picker that never sets
-      // `actions` is completely unaffected. Runs a small nested select() for
-      // the action list itself, pausing this picker's own key handling
-      // while it's open (both would otherwise react to the same keypress --
-      // Node lets multiple 'data' listeners stack) and redrawing this
-      // picker's own view once it's done, since the nested call's own
-      // cleanup repaints the plain composer over top of it.
-      const openActions = async (option: PickerOption<T>): Promise<void> => {
-        if (!option.actions?.length) return;
+      // Right arrow opens either a caller-owned child picker (provider ->
+      // accounts) or the option's generic management actions. Only one input
+      // listener owns the terminal at a time; returning from a cancelled child
+      // restores this exact frame rather than leaving an empty composer band.
+      const openChild = async (option: PickerOption<T>): Promise<void> => {
+        if (!onExpand && !option.actions?.length) return;
         stopInput();
-        const actionValue = await this.select(option.label, option.actions.map((action) => ({ label: action.label, value: action.value })));
+        let childValue: T | undefined;
+        if (onExpand) childValue = await onExpand(option.value);
+        else {
+          const actionValue = await this.select(option.label, option.actions!.map((action) => ({ label: action.label, value: action.value })));
+          if (actionValue) await onAction?.(option.value, actionValue);
+        }
         if (finished) return;
-        if (actionValue) await onAction?.(option.value, actionValue);
-        if (finished) return;
+        if (childValue !== undefined) return finish(childValue);
         input.setRawMode(true);
         input.resume();
         stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
@@ -1163,7 +1174,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const scrollAction = waitingInputAction(key);
         if (key === '\u001b[A' || scrollAction === 'scroll-up') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
         else if (key === '\u001b[B' || scrollAction === 'scroll-down') selected = visible.length ? (selected + 1) % visible.length : 0;
-        else if (key === '\u001b[C') { if (visible[selected]) void openActions(visible[selected]); return; }
+        else if (key === '\u001b[C') { if (visible[selected]) void openChild(visible[selected]); return; }
         else if (key === '\r' || key === '\n') { if (visible[selected]) finish(visible[selected].value); return; }
         else if (key === '\u0003') return finish(undefined);
         else if (key === '\u001b') { if (query) { query = ''; selected = 0; } else return finish(undefined); }
