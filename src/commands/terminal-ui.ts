@@ -9,11 +9,14 @@ import {
   composerLayout, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown, renderTableBlock,
   sanitizeTerminalText, splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
 } from './markdown-render.js';
+import { restoreTerminal, terminalModes } from './terminal-restore.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import { nativeModelLabel } from './native-account-data.js';
 import type { LiveTurnInputResult } from './live-turn-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBlock, PickerOption } from './types.js';
+
+export { restoreTerminal };
 
 export type WaitingInputAction = 'cancel-edit' | 'cancel-stop';
 
@@ -67,11 +70,6 @@ export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
-
-/** Terminal modes this process has switched on and not yet switched off. Kept
- * at module level, not on a prompter, so restoreTerminal() can undo them from
- * a crash handler that has no instance to hand. */
-const terminalModes = { bracketedPaste: false, kittyKeyboard: false, rawMode: false };
 
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
@@ -969,6 +967,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // here used to wipe the terminal's entire scrollback on launch.)
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
+    // Any exit path -- process.exit() deep in a command, an uncaught error, a
+    // signal handler elsewhere -- must not leave the shell in raw mode with a
+    // hidden cursor and bracketed paste on.
+    process.on('exit', restoreTerminal);
+    terminalModes.leaveLiveRegion = () => this.eraseLiveRegion();
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {
@@ -1635,6 +1638,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     frame += `\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
     this.frameInFlight = true;
+    terminalModes.painted = true;
     output.write(frame, () => {
       this.inlineWrittenPermanentLines = state.permanent;
       this.inlinePaintedRows = state.dynamic;
@@ -2077,12 +2081,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.clearTransientNotice();
     process.off('SIGWINCH', this.onResize);
     process.off('SIGCONT', this.onContinue);
+    process.off('exit', restoreTerminal);
+    terminalModes.rawMode = false;
     if (input.isTTY) input.setRawMode(false);
     input.pause();
     // The conversation stays in the terminal's scrollback where the user can
     // still read and copy it. Only this UI's own live region (composer, status
     // rows) is removed, and the shell prompt resumes directly beneath the chat.
     output.write(`${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`);
+    terminalModes.painted = false;
+    terminalModes.leaveLiveRegion = undefined;
   }
 
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
