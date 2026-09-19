@@ -60,6 +60,104 @@ export {
 
 let activeFullScreenHarness: FullScreenHarnessPrompter | undefined;
 
+function conversationIdFor(session: HarnessSession): string {
+  return session.conversationId ?? session.id;
+}
+
+function hasConversationContent(session: HarnessSession): boolean {
+  return Boolean(session.nativeSessionId || (session.messages ?? []).length > 0);
+}
+
+export function requiresProviderHandoff(session: HarnessSession, targetHarness: string): boolean {
+  return hasConversationContent(session) && (session.route !== 'local' || session.nativeHarness !== targetHarness);
+}
+
+/** Create a portable child branch. The source keeps its provider-owned
+ * identity; the child carries the ClikCode-owned transcript into its target. */
+export function createHandoffBranch(input: {
+  source: HarnessSession;
+  target: AiLocalHarnessDefinition;
+  accountId: string | null;
+  model: string | null;
+  defaults: HarnessDefaultSettings;
+  now: string;
+  id?: string;
+  sourceDisplayName?: string;
+}): HarnessSession {
+  const sourceCommand = input.source.nativeHarness ?? input.source.route;
+  const id = input.id ?? randomUUID();
+  const base = input.source.name?.replace(/\s+\(from [^)]+\)$/i, '').trim();
+  return {
+    id, conversationId: conversationIdFor(input.source), parentSessionId: input.source.id,
+    handoff: { fromSessionId: input.source.id, fromHarness: sourceCommand, at: input.now },
+    route: 'local', accountId: input.accountId, provider: input.target.provider, model: input.model,
+    effort: input.defaults.effort, permissionMode: input.defaults.permissionMode, accountFailover: input.defaults.accountFailover,
+    workspace: input.source.workspace ?? process.cwd(), nativeHarness: input.target.command,
+    ...(base ? { name: `${base} (from ${input.sourceDisplayName ?? sourceCommand})` } : {}),
+    ...(input.source.messages?.length ? { messages: input.source.messages.map((message) => ({ ...message })) } : {}),
+    createdAt: input.now, updatedAt: input.now, status: 'active',
+  };
+}
+
+/** Flatten conversation trees for terminals that only support a flat picker.
+ * Roots are ordered by their most recently active branch; descendants remain
+ * directly beneath their root so a handoff never looks like a duplicate chat. */
+export function sessionPickerOptions(
+  sessions: readonly HarnessSession[],
+  currentId: string,
+  providerLabel: (session: HarnessSession) => string = sessionProviderLabel,
+): PickerOption<string>[] {
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const groups = new Map<string, HarnessSession[]>();
+  for (const session of sessions) {
+    const root = conversationIdFor(session);
+    const group = groups.get(root) ?? [];
+    group.push(session);
+    groups.set(root, group);
+  }
+  const timestamp = (session: HarnessSession): number => {
+    const value = Date.parse(session.updatedAt);
+    return Number.isNaN(value) ? -Infinity : value;
+  };
+  const orderedGroups = [...groups.values()].sort((left, right) =>
+    Math.max(...right.map(timestamp)) - Math.max(...left.map(timestamp)));
+
+  return orderedGroups.flatMap((group) => {
+    const groupIds = new Set(group.map((session) => session.id));
+    const children = new Map<string, HarnessSession[]>();
+    const roots: HarnessSession[] = [];
+    for (const session of group) {
+      if (session.parentSessionId && groupIds.has(session.parentSessionId)) {
+        const siblings = children.get(session.parentSessionId) ?? [];
+        siblings.push(session);
+        children.set(session.parentSessionId, siblings);
+      } else roots.push(session);
+    }
+    const ordered: Array<{ session: HarnessSession; depth: number }> = [];
+    const visit = (session: HarnessSession, depth: number): void => {
+      ordered.push({ session, depth });
+      for (const child of (children.get(session.id) ?? []).sort((a, b) => timestamp(a) - timestamp(b))) visit(child, depth + 1);
+    };
+    for (const root of roots.sort((a, b) => timestamp(a) - timestamp(b))) visit(root, 0);
+
+    return ordered.map(({ session, depth }) => {
+      const model = session.model && session.nativeHarness === 'claude'
+        ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
+        : session.model;
+      const parent = session.parentSessionId ? byId.get(session.parentSessionId) : undefined;
+      const source = session.handoff?.fromHarness
+        ? (parent ? providerLabel(parent) : session.handoff.fromHarness)
+        : undefined;
+      const branchKind = source ? `handoff from ${source}` : session.parentSessionId ? 'fork' : `${group.length} ${group.length === 1 ? 'branch' : 'branches'}`;
+      return {
+        label: `${depth ? `${'  '.repeat(depth - 1)}↳ ` : ''}${providerLabel(session)} • ${session.name ?? 'Untitled chat'}`,
+        detail: `· ${session.id === currentId ? 'current · ' : ''}${branchKind} · ${model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
+        value: session.id,
+      };
+    });
+  });
+}
+
 /** Pull turns added directly in a vendor CLI back into an already-linked
  * ClikCode conversation. The native CLI remains the only writer of its own
  * files; this only reconciles ClikCode's cached view after an exact-id resume. */
@@ -240,8 +338,8 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
   }
   if (payload.panel === 'help') {
     output.write(`\n${chalk.bold('Commands')}\n\n` + [
-      ['/<provider> [request]', 'switch providers, optionally send immediately'],
-      ['/provider', 'choose from installed providers'],
+      ['/<provider> [request]', 'handoff to a different provider and optionally send'],
+      ['/provider', 'resume here or hand off to another provider'],
       ['/new', 'start a clean conversation'],
       ['/resume', 'choose a saved session'],
       ['/status', 'show the current workspace and settings'],
@@ -512,6 +610,9 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
   const sameHarness = session.nativeHarness === harness.command;
   if (!sameHarness) {
+    if (requiresProviderHandoff(session, harness.command)) {
+      throw new Error(`Use /${harness.command} to hand off this ${sessionProviderLabel(session)} conversation. Native provider changes always create a new branch.`);
+    }
     session.nativeSessionId = undefined;
     session.nativeStartedAt = undefined;
     session.model = null;
@@ -785,8 +886,9 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   }
   const defaults = resolveDefaultSettings(state, provider);
   const now = new Date().toISOString();
+  const id = randomUUID();
   const session: HarnessSession = {
-    id: randomUUID(), route: options.route, accountId: options.route === 'gateway' ? null : account?.id ?? null,
+    id, conversationId: id, route: options.route, accountId: options.route === 'gateway' ? null : account?.id ?? null,
     provider: options.route === 'gateway' ? 'clikdeploy-gateway' : provider,
     model: options.route === 'gateway' ? null : options.model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
     effort: options.route === 'gateway' ? 'platform-managed' : options.effort ?? defaults.effort,
@@ -861,8 +963,9 @@ export async function aiSessionOpenDefault(config: Conf): Promise<void> {
     const defaults = resolveDefaultSettings(state, provider);
     const now = new Date().toISOString();
     const route = previous?.route ?? 'local';
+    const id = randomUUID();
     session = {
-      id: randomUUID(), route, accountId: route === 'gateway' ? null : previous?.accountId ?? null,
+      id, conversationId: id, route, accountId: route === 'gateway' ? null : previous?.accountId ?? null,
       provider: route === 'gateway' ? 'clikdeploy-gateway' : provider,
       model: route === 'gateway' ? null : (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
       effort: route === 'gateway' ? 'platform-managed' : defaults.effort,
@@ -1043,8 +1146,12 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     const now = new Date().toISOString();
     const fork: HarnessSession = {
       ...session, id: randomUUID(), name: words.join(' ').trim() || (session.name ? `${session.name} (fork)` : undefined),
+      conversationId: conversationIdFor(session), parentSessionId: session.id,
       nativeSessionId: undefined, nativeStartedAt: undefined, createdAt: now, updatedAt: now, status: 'active', closedAt: undefined,
     };
+    // A fork is a sibling concept, not another copy of the handoff event that
+    // created its parent. Its parentSessionId is sufficient ancestry.
+    delete fork.handoff;
     state.sessions.push(fork);
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-forked', text: `Conversation forked as ${fork.id.slice(0, 8)}. Use /resume to open it.`, session: fork });
@@ -1266,21 +1373,22 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['use <label-or-id>', 'login <harness> [label]', 'add <harness> [label]', 'remove <label-or-id>', 'failover auto|never'] });
   }
   if (head === 'gateway') {
-    session.route = 'gateway';
-    session.accountId = null;
-    session.provider = 'clikdeploy-gateway';
-    session.nativeHarness = undefined;
-    session.nativeSessionId = undefined;
-    session.nativeStartedAt = undefined;
+    if ((session.messages ?? []).length || session.nativeSessionId) {
+      throw new Error('Use the interactive /provider menu to hand off an existing conversation to ClikDeploy Gateway.');
+    }
+    applyGatewaySessionPolicy(session);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'provider-selected', harness: 'gateway', displayName: 'ClikDeploy Gateway', provider: 'clikdeploy-gateway', account: null, model: 'platform', centralized: true });
   }
   const harness = localHarnessForCommand(head);
   if (harness) {
-    await aiHarnessSelect(harness.command, id);
+    const targetId = requiresProviderHandoff(session, harness.command)
+      ? await newProviderConversation(id, harness.command)
+      : id;
+    if (targetId === id) await aiHarnessSelect(harness.command, targetId);
     const firstPrompt = words.join(' ').trim();
-    if (firstPrompt) await aiSessionSend(id, firstPrompt);
+    if (firstPrompt) await aiSessionSend(targetId, firstPrompt);
     return;
   }
   throw new Error(`unknown slash command: /${head}`);
@@ -1317,15 +1425,20 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
   if (!current) throw new Error(`AI session "${currentId}" was not found`);
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
+  if (current.route === 'local' && current.nativeHarness === harness.command) return current.id;
+  // Refresh the source before freezing its portable ClikCode history into a
+  // child branch. The source native session remains untouched after this.
+  if (await synchronizeNativeTranscript(state, current)) await writeState(state);
   const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
   const defaults = resolveDefaultSettings(state, harness.provider);
   const now = new Date().toISOString();
-  const session: HarnessSession = {
-    id: randomUUID(), route: 'local', accountId: accounts.length === 1 ? accounts[0].id : null,
-    provider: harness.provider, model: state.providerSettings[harness.provider]?.model ?? null, effort: defaults.effort,
-    permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
-    workspace: current.workspace ?? process.cwd(), nativeHarness: harness.command, createdAt: now, updatedAt: now, status: 'active',
-  };
+  const sourceDisplayName = current.nativeHarness
+    ? localHarnessForCommand(current.nativeHarness)?.displayName
+    : sessionProviderLabel(current);
+  const session = createHandoffBranch({
+    source: current, target: harness, accountId: accounts.length === 1 ? accounts[0]!.id : null,
+    model: state.providerSettings[harness.provider]?.model ?? null, defaults, now, sourceDisplayName,
+  });
   state.sessions.push(session);
   await writeState(state);
   await aiHarnessSelect(harnessCommandName, session.id);
@@ -1354,11 +1467,26 @@ async function newGatewayConversation(config: Conf, rl: HarnessPrompter, current
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
   if (!current) throw new Error(`AI session "${currentId}" was not found`);
+  if (current.route === 'gateway') return current.id;
+  if (!hasConversationContent(current) && !current.nativeHarness) {
+    applyGatewaySessionPolicy(current);
+    current.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return current.id;
+  }
+  if (await synchronizeNativeTranscript(state, current)) await writeState(state);
   const now = new Date().toISOString();
+  const id = randomUUID();
+  const sourceHarness = current.nativeHarness ? localHarnessForCommand(current.nativeHarness) : undefined;
+  const sourceLabel = sourceHarness?.displayName ?? sessionProviderLabel(current);
   const session: HarnessSession = {
-    id: randomUUID(), route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null,
+    id, conversationId: conversationIdFor(current), parentSessionId: current.id,
+    handoff: { fromSessionId: current.id, fromHarness: current.nativeHarness ?? current.route, at: now },
+    route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null,
     effort: 'platform-managed', accountFailover: 'never',
-    workspace: current.workspace ?? process.cwd(), createdAt: now, updatedAt: now, status: 'active',
+    workspace: current.workspace ?? process.cwd(), name: current.name ? `${current.name.replace(/\s+\(from [^)]+\)$/i, '')} (from ${sourceLabel})` : undefined,
+    ...(current.messages?.length ? { messages: current.messages.map((message) => ({ ...message })) } : {}),
+    createdAt: now, updatedAt: now, status: 'active',
     gatewayConfirmed: true,
   };
   state.sessions.push(session);
@@ -1386,7 +1514,7 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
   const state = await readState();
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
-  if (!current.nativeHarness) {
+  if (!requiresProviderHandoff(current, selected) && !current.nativeHarness) {
     await aiHarnessSelect(selected, id);
     return id;
   }
@@ -1756,27 +1884,32 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   // internally but the groups themselves were never interleaved. A source
   // with no real timestamp (an unparsed vendor display string) sorts last
   // rather than claiming a false position.
-  const options: Array<PickerOption<string> & { sortKey: number }> = [
-    ...sessions.map((session) => {
-      const model = session.model && session.nativeHarness === 'claude'
-        ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
-        : session.model;
-      const sortKey = Date.parse(session.updatedAt);
-      return {
-        label: `${sessionProviderLabel(session)} • ${session.name ?? 'Untitled chat'}`,
-        detail: `· ${session.id === currentId ? 'current · ' : ''}${model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
-        value: session.id,
-        sortKey: Number.isNaN(sortKey) ? -Infinity : sortKey,
-      };
-    }),
+  const groupedOptions = sessionPickerOptions(sessions, currentId);
+  const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+  const trackedBlocks = new Map<string, { sortKey: number; options: PickerOption<string>[] }>();
+  for (const option of groupedOptions) {
+    const session = sessionsById.get(option.value)!;
+    const root = conversationIdFor(session);
+    const updatedAt = Date.parse(session.updatedAt);
+    const block = trackedBlocks.get(root) ?? { sortKey: -Infinity, options: [] };
+    block.sortKey = Math.max(block.sortKey, Number.isNaN(updatedAt) ? -Infinity : updatedAt);
+    block.options.push(option);
+    trackedBlocks.set(root, block);
+  }
+  const optionBlocks = [
+    ...trackedBlocks.values(),
     ...discovered.map(({ harness, item, accountId }, index) => ({
-      label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
-      detail: `· not yet in ClikCode${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
-      value: `native:${index}`,
       sortKey: item.updatedAtMs ?? -Infinity,
+      options: [{
+        label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
+        detail: `· not yet in ClikCode${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
+        value: `native:${index}`,
+      }],
     })),
-  ];
-  options.sort((left, right) => right.sortKey - left.sortKey);
+  ].sort((left, right) => right.sortKey - left.sortKey);
+  // Conversation trees and unadopted native sessions share one recency order,
+  // while every known branch remains immediately beneath its root.
+  const options = optionBlocks.flatMap((block) => block.options);
   const selected = await chooseOption(rl, 'Resume a session', options);
   if (!selected) return undefined;
   if (!selected.startsWith('native:')) return { id: selected };
@@ -1798,8 +1931,9 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   const messages = transcriptReader
     ? await transcriptReader(match.harness, nativeId, workspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => [])
     : [];
+  const id = randomUUID();
   const adopted: HarnessSession = {
-    id: randomUUID(), route: 'local', accountId: account?.id ?? null, provider: match.harness.provider,
+    id, conversationId: id, route: 'local', accountId: account?.id ?? null, provider: match.harness.provider,
     model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
     createdAt: now, updatedAt: now, status: 'active',
     nativeHarness: match.harness.command, nativeSessionId: nativeId, nativeStartedAt: now,
@@ -1984,7 +2118,7 @@ async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: 
   const session = state.sessions.find((item) => item.id === id);
   const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const selected = await chooseOption(rl, 'Settings', [
-    { label: 'Provider', detail: 'choose a coding harness', value: 'provider' },
+    { label: 'Provider', detail: 'resume here or hand off to another harness', value: 'provider' },
     { label: 'Account', detail: 'switch login/profile', value: 'account' },
     ...(harness?.modelArgvPrefix ? [{ label: 'Model', detail: 'provider default or model ID', value: 'model' }] : []),
     ...(harness && harnessSupportsEffort(harness) ? [{ label: 'Reasoning effort', detail: 'provider-supported levels', value: 'effort' }] : []),
@@ -2055,7 +2189,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (await synchronizeNativeTranscript(state, session)) await writeState(state);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider (including ClikDeploy Gateway)', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
+    '/provider': 'resume here or hand off to another provider', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'approval behavior',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',

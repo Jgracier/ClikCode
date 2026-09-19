@@ -140,6 +140,14 @@ export type NativeUsageProbe = (session: HarnessSession, environment: Readonly<R
 
 export interface HarnessSession {
   id: string;
+  /** Stable ClikCode conversation root. Native harness sessions are branches
+   * beneath this root and are never rewritten into one another. */
+  conversationId?: string;
+  /** The ClikCode branch this session was created from, when it is a fork or
+   * cross-provider handoff. */
+  parentSessionId?: string;
+  /** Describes a portable handoff; the source native session remains intact. */
+  handoff?: { fromSessionId: string; fromHarness: string; at: string };
   route: AiHarnessRoute;
   accountId: string | null;
   provider: string | null;

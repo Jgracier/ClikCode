@@ -39,6 +39,12 @@ function normalizedSessionPermission(session: HarnessSession): Pick<HarnessSessi
     : { permissionMode: normalizedPermissionMode(session.permissionMode) };
 }
 
+function normalizedConversation(session: HarnessSession): Pick<HarnessSession, 'conversationId'> {
+  // Pre-handoff state had one ClikCode session per conversation. Preserve
+  // that exact behavior while giving every existing record a durable root.
+  return { conversationId: session.conversationId || session.id };
+}
+
 
 export function resolveDefaultSettings(state: HarnessState, provider?: string | null): HarnessDefaultSettings {
   const overrides = provider ? state.providerSettings[provider] : undefined;
@@ -93,7 +99,7 @@ export async function readState(): Promise<HarnessState> {
           provider,
           { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
         ])),
-        sessions: (parsed.sessions as HarnessSession[]).map((session) => ({ ...session, ...normalizedSessionPermission(session) })),
+        sessions: (parsed.sessions as HarnessSession[]).map((session) => ({ ...session, ...normalizedConversation(session), ...normalizedSessionPermission(session) })),
       } as HarnessState;
       await writeState(upgraded);
       return upgraded;
@@ -103,6 +109,7 @@ export async function readState(): Promise<HarnessState> {
     // after its known quota window is exhausted.
     const sessions: HarnessSession[] = (parsed.sessions as HarnessSession[]).map((session) => ({
       ...session,
+      ...normalizedConversation(session),
       accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
       // Sessions created before lifecycle state existed were still open at the
       // time of upgrade, so preserve their resumability once.
