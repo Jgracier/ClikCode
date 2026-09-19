@@ -15,7 +15,7 @@ import { ApiClient } from '../api/client.js';
 import { login } from './auth.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
-import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
+import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
 import { spawnPortable as spawn } from './spawn-portable.js';
 import { classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover.js';
 import {
@@ -37,7 +37,7 @@ import {
   accountView, deviceManifest, harnessCommand, harnessStatePath, readState, resolveDefaultSettings, writeState,
 } from './harness-state.js';
 import {
-  accountUsageLabel, nativeModelCatalog, nativeModelLabel, nativeUsageLabel,
+  accountUsageLabel, cachedAccountUsageLabel, nativeModelCatalog, nativeModelCatalogForPicker, nativeModelLabel, nativeUsageLabel,
 } from './native-account-data.js';
 import {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
@@ -1866,26 +1866,14 @@ export function providerAccountPickerOptions(
   ];
 }
 
-/** One flat account list for the composer shortcut. Provider ownership stays
- * visible as metadata, but the user does not have to navigate through a
- * provider before choosing the account they already know they want. */
+/** Composer account choices are scoped to the selected provider. */
 export function accountPickerOptions(
   accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string }>,
   session: HarnessSession,
-  harnesses: readonly AiLocalHarnessDefinition[],
+  harness: AiLocalHarnessDefinition,
 ): PickerOption<ProviderAccountChoice>[] {
-  return accounts.flatMap(({ account, usage }) => {
-    const harness = harnesses.find((item) => item.provider === account.provider);
-    if (!harness) return [];
-    const option = providerAccountPickerOptions(harness, [{ account, usage }], session)
-      .find((item) => item.value.kind === 'account');
-    if (!option) return [];
-    return [{
-      ...option,
-      detail: `· ${harness.displayName} ${option.detail ?? ''}`.trim(),
-    }];
-  }).sort((left, right) => left.label.localeCompare(right.label)
-    || (left.detail ?? '').localeCompare(right.detail ?? ''));
+  return providerAccountPickerOptions(harness, accounts.filter(({ account }) => account.provider === harness.provider), session)
+    .filter((option) => option.value.kind === 'account');
 }
 
 async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id: string, selected: string): Promise<string> {
@@ -1901,7 +1889,6 @@ async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id:
 }
 
 async function interactiveAccountPicker(
-  config: Conf,
   rl: HarnessPrompter,
   id: string,
 ): Promise<string | undefined> {
@@ -1909,24 +1896,24 @@ async function interactiveAccountPicker(
     const state = await readState();
     const session = state.sessions.find((item) => item.id === id);
     if (!session) throw new Error(`AI session "${id}" was not found`);
-    if (!state.accounts.length) {
-      rl.panel?.('Accounts', 'No accounts are connected. Use /accounts login <provider> <label> to add one.');
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
+      : session.provider ? localHarnessForProvider(session.provider) : undefined;
+    if (!harness || session.route === 'gateway') {
+      rl.panel?.('Accounts', 'Choose a local provider before switching accounts.');
       return undefined;
     }
-    if (rl instanceof TerminalHarnessPrompter && state.accounts.some((account) => account.authKind === 'vendor-cli')) {
-      rl.startWaiting('loading account usage…');
+    const providerAccounts = state.accounts.filter((account) => account.provider === harness.provider);
+    if (!providerAccounts.length) {
+      rl.panel?.(`${harness.displayName} accounts`, `No accounts are connected. Use /accounts login ${harness.command} <label> to add one.`);
+      return undefined;
     }
-    let accountsWithUsage: Array<{ account: AiHarnessAccount; usage?: string }>;
-    try {
-      accountsWithUsage = await Promise.all(state.accounts.map(async (account) => ({
-        account, usage: await accountUsageLabel(account, state),
-      })));
-    } finally {
-      if (rl instanceof TerminalHarnessPrompter) rl.stopWaiting();
-    }
+    const accountsWithUsage = providerAccounts.map((account) => ({
+      account, usage: cachedAccountUsageLabel(account, state),
+    }));
+    void Promise.all(providerAccounts.map((account) => accountUsageLabel(account, state))).catch(() => undefined);
     let actionPerformed = false;
     const selected = await chooseOption(
-      rl, 'Choose an account', accountPickerOptions(accountsWithUsage, session, localRouter().AI_LOCAL_HARNESSES),
+      rl, `${harness.displayName} accounts`, accountPickerOptions(accountsWithUsage, session, harness),
       async (choice, action) => {
         if (choice.kind !== 'account') return;
         actionPerformed = true;
@@ -1935,9 +1922,8 @@ async function interactiveAccountPicker(
     );
     if (actionPerformed) continue;
     if (!selected || selected.kind !== 'account') return undefined;
-    const targetId = await selectProviderConversation(config, rl, id, selected.harness);
-    await aiSessionCommand(targetId, `/settings account ${selected.accountId}`);
-    return targetId;
+    await aiSessionCommand(id, `/settings account ${selected.accountId}`);
+    return id;
   }
 }
 
@@ -1945,7 +1931,7 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
   for (;;) {
     const available = await Promise.all(localRouter().AI_LOCAL_HARNESSES
       .filter((harness) => harness.surface === 'terminal' && harness.turn)
-      .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) })));
+      .map(async (harness) => ({ harness, inspection: await inspectNativeHarnessForPicker(harness) })));
     const state = await readState();
     const session = state.sessions.find((item) => item.id === id);
     if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -2309,7 +2295,7 @@ async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
     : session.provider ? localHarnessForProvider(session.provider) : undefined;
-  const catalog = harness ? await nativeModelCatalog(harness, account) : { models: account?.models ?? [] };
+  const catalog = harness ? nativeModelCatalogForPicker(harness, account) : { models: account?.models ?? [] };
   const effective = session.model ?? catalog.configured;
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
@@ -2682,7 +2668,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           if (selected && selected !== id) { id = selected; continue; }
         }
         else if (command === '/account' || command === '/accounts') {
-          const selected = await interactiveAccountPicker(config, rl, id);
+          const selected = await interactiveAccountPicker(rl, id);
           if (selected && selected !== id) { id = selected; continue; }
         }
         else if (command === '/model') await interactiveModelPicker(rl, id);
@@ -3231,11 +3217,23 @@ export async function aiSessionSend(
     session.accountId = fallback.id;
     await checkpoint.persistNow();
   }
-  const invoke = (active: AiHarnessAccount) => streamLocalAiTurn({
-    provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
-    messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
-    ...(signal ? { abortSignal: signal } : {}),
-  });
+  const invoke = (active: AiHarnessAccount) => {
+    // A retry is a new response attempt. Clear any partial text from the
+    // exhausted account, then append each real provider delta directly to the
+    // checkpoint/UI. The router has always exposed onDelta;
+    // omitting it here was why direct-API responses appeared only at the end.
+    checkpoint.response('', 'replace');
+    activeTerminalHarness?.response('', 'replace');
+    return streamLocalAiTurn({
+      provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
+      messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
+      ...(signal ? { abortSignal: signal } : {}),
+      onDelta: (delta: string) => {
+        checkpoint.response(delta, 'append');
+        activeTerminalHarness?.response(delta, 'append');
+      },
+    });
+  };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
   for (;;) {
     try {

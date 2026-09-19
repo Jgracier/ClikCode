@@ -44,9 +44,10 @@ export function updatePendingResponse(
   session: HarnessSession, text: string, mode: 'append' | 'replace', now: string,
 ): void {
   const pending = session.pendingTurn;
-  if (!pending || !text) return;
-  pending.response = mode === 'replace' ? text : `${pending.response ?? ''}${text}`;
-  pending.outputStarted = true;
+  if (!pending || (!text && mode === 'append')) return;
+  if (!text) delete pending.response;
+  else pending.response = mode === 'replace' ? text : `${pending.response ?? ''}${text}`;
+  pending.outputStarted = Boolean(text || pending.activities?.length);
   pending.updatedAt = now;
   session.updatedAt = now;
 }

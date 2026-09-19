@@ -54,6 +54,19 @@ export function nativeModelLabel(
 export const modelCatalogCache = new Map<string, { at: number; result: ModelCatalogResult }>();
 export const MODEL_CATALOG_CACHE_TTL_MS = 300_000;
 
+/** Choice lists use cached/local metadata synchronously and refresh discovery
+ * after their first frame. They must not wait on a vendor subprocess. */
+export function nativeModelCatalogForPicker(
+  harness: AiLocalHarnessDefinition,
+  account?: AiHarnessAccount,
+): ModelCatalogResult {
+  const cacheKey = `${harness.command}:${account?.nativeProfile?.path ?? account?.id ?? 'default'}`;
+  const cached = modelCatalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < MODEL_CATALOG_CACHE_TTL_MS) return cached.result;
+  void nativeModelCatalog(harness, account).catch(() => undefined);
+  return { models: [...new Set(account?.models ?? [])] };
+}
+
 export async function nativeModelCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
@@ -163,6 +176,7 @@ export async function nativeModelCatalogUncached(
 }
 
 export const nativeUsageCache = new Map<string, { at: number; label?: string }>();
+const NATIVE_USAGE_CACHE_TTL_MS = 30_000;
 
 /** Per-harness live usage probe. Each vendor CLI exposes quota/cost through a different
  * surface (or none at all); adding a harness here is the only step needed to light up
@@ -363,7 +377,7 @@ export async function nativeUsageLabel(session: HarnessSession, state: HarnessSt
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const cacheKey = `${session.nativeHarness}:${account?.nativeProfile?.path ?? session.nativeSessionId ?? 'default'}`;
   const cached = nativeUsageCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < 30_000) return cached.label;
+  if (cached && Date.now() - cached.at < NATIVE_USAGE_CACHE_TTL_MS) return cached.label;
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const label = await probe(session, environment).catch(() => undefined);
   nativeUsageCache.set(cacheKey, { at: Date.now(), ...(label ? { label } : {}) });
@@ -386,4 +400,16 @@ export async function accountUsageLabel(account: AiHarnessAccount, state: Harnes
     nativeHarness: harness.command,
   };
   return nativeUsageLabel(pseudoSession, state);
+}
+
+/** Return only already-known usage. Account pickers render from this and warm
+ * a live refresh separately, so an account switch never waits on the network. */
+export function cachedAccountUsageLabel(account: AiHarnessAccount, state: HarnessState): string | undefined {
+  if (account.authKind !== 'vendor-cli') return undefined;
+  const harness = localHarnessForProvider(account.provider);
+  if (!harness || !NATIVE_USAGE_PROBES[harness.command]) return undefined;
+  const related = state.sessions.find((item) => item.accountId === account.id && item.nativeSessionId);
+  const cacheKey = `${harness.command}:${account.nativeProfile?.path ?? related?.nativeSessionId ?? 'default'}`;
+  const cached = nativeUsageCache.get(cacheKey);
+  return cached && Date.now() - cached.at < NATIVE_USAGE_CACHE_TTL_MS ? cached.label : undefined;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, composerRightArrowCommand, editWaitingComposer, inlineConversationPlan, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { commandPaletteMatches, composerRightArrowCommand, editWaitingComposer, inlineConversationPlan, liveConversationLines, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('terminal waiting input', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
@@ -56,6 +56,19 @@ describe('terminal waiting input', () => {
       ['old'], ['old', 'complete block', 'unfinished one', 'unfinished two'], false, 2, 2,
     )).toEqual({
       reset: false, dynamic: ['unfinished one', 'unfinished two'], permanent: ['old', 'complete block'],
+    });
+  });
+
+  it('keeps real live content in the final row on compact mobile viewports', () => {
+    expect(liveConversationLines(['user', '', 'streamed response', ''], true)).toEqual([
+      'user', '', 'streamed response',
+    ]);
+    expect(liveConversationLines(['user', '', '· running tool', '', ''], true)).toEqual([
+      'user', '', '· running tool',
+    ]);
+    expect(liveConversationLines(['user', ''], false)).toEqual(['user', '']);
+    expect(inlineConversationPlan(['user', ''], ['user', '', 'streamed response'], false, 1)).toMatchObject({
+      dynamic: ['streamed response'],
     });
   });
 

@@ -63,6 +63,18 @@ export interface NativeHarnessInspection {
 const inspectionCache = new Map<string, { at: number; result: NativeHarnessInspection }>();
 const INSPECTION_CACHE_TTL_MS = 60_000;
 
+/** Picker-safe inspection: PATH lookup returns quickly. Do not start version
+ * probes here: opening /provider can cover ~20 harnesses, and a burst of that
+ * many background subprocesses still competes with terminal rendering even
+ * though the picker no longer awaits them. */
+export async function inspectNativeHarnessForPicker(spec: NativeHarnessSpec): Promise<NativeHarnessInspection> {
+  if (spec.surface === 'editor-extension') return { installed: false, error: 'editor-extension-only' };
+  const cached = inspectionCache.get(spec.command);
+  if (cached && Date.now() - cached.at < INSPECTION_CACHE_TTL_MS) return cached.result;
+  const installed = await binaryOnPath(spec.binary);
+  return { installed };
+}
+
 /** Inspect availability without installing, logging in, or entering a vendor TUI. */
 export async function inspectNativeHarness(spec: NativeHarnessSpec, timeoutMs = 5_000): Promise<NativeHarnessInspection> {
   if (spec.surface === 'editor-extension') return { installed: false, error: 'editor-extension-only' };
