@@ -53,13 +53,15 @@ export function editWaitingComposer(value: string, cursor: number, key: string):
   return { value, cursor, changed: false };
 }
 
-/** A stable 3x4 field containing exactly twelve small dots. One dot advances
- * per frame; the geometry never rotates, widens, or depends on Braille/font
- * support, so restricted and remote terminals render the same animation. */
-export function waitingSpinnerFrame(frame: number): [string, string, string] {
-  const active = ((frame % 12) + 12) % 12;
-  const dots = Array.from({ length: 12 }, (_, index) => index === active ? '•' : '·');
-  return [dots.slice(0, 4).join(''), dots.slice(4, 8).join(''), dots.slice(8, 12).join('')];
+/** A fixed 3x4 field containing exactly twelve identical, tiny dots. The two
+ * checkerboard phases pulse instead of making one larger dot chase around the
+ * perimeter; only brightness changes, so the cluster never appears to rotate,
+ * jump, or change shape. */
+export function waitingSpinnerFrame(frame: number): [boolean[], boolean[], boolean[]] {
+  const phase = Math.floor(Math.abs(frame) / 2) % 2;
+  return Array.from({ length: 3 }, (_, row) =>
+    Array.from({ length: 4 }, (_, column) => (row + column + phase) % 2 === 0),
+  ) as [boolean[], boolean[], boolean[]];
 }
 
 export function commandPaletteMatches(
@@ -120,9 +122,10 @@ export function upsertActivityEvent(
 }
 
 export function transientAssistantRequired(
-  liveResponse: string, waiting: boolean, _transcriptLength: number, _entries: readonly ActivityEntry[],
+  liveResponse: string, waiting: boolean, transcriptLength: number, entries: readonly ActivityEntry[],
 ): boolean {
-  return Boolean(liveResponse || waiting);
+  return Boolean(liveResponse || (waiting && entries.some((entry) =>
+    entry.anchor === transcriptLength && entry.responseOffset !== undefined)));
 }
 
 /** Preserve the chronology of prose and tool events within one assistant
@@ -436,7 +439,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingLines(): [string, string, string] {
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
     const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
-    const dots = waitingSpinnerFrame(this.waitingFrame).map((row) => chalk.cyan(row)) as [string, string, string];
+    const dots = waitingSpinnerFrame(this.waitingFrame).map((row) => row.map((active) =>
+      active ? chalk.cyanBright('·') : chalk.dim('·')).join('')) as [string, string, string];
     const label = `${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to steer or queue' : ''}`;
     return [dots[0], `${dots[1]}  ${chalk.dim(label)}`, dots[2]];
   }
@@ -522,12 +526,17 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const paletteCapacity = Math.min(requestedPaletteCapacity, Math.max(0, targetHeight - 5));
     const paletteRows = paletteCapacity;
     const noticeRows = this.currentNotice ? 1 : 0;
+    // Keep generation at the response's live edge, directly above the
+    // composer. It is a fixed status band, not transcript content, so a long
+    // streamed answer cannot scroll it away. Very short terminals fall back
+    // to the labelled middle row rather than drawing outside the viewport.
+    const waitingRows = this.waitingLabel ? (targetHeight >= 8 ? 3 : 1) : 0;
     const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
     const composerRows = composerLayout(composer, cursor, composerWidth);
     // Three non-composer footer rows: rule, title rule, and meta. Composer
     // rows expand upward and reduce transcript space instead of scrolling
     // horizontally off-screen.
-    const rows = Math.max(1, targetHeight - 3 - composerRows.rows.length - paletteRows - noticeRows);
+    const rows = Math.max(1, targetHeight - 3 - composerRows.rows.length - paletteRows - noticeRows - waitingRows);
     const conversation: Array<{ text: string }> = [];
     const ensureBlankConversationRow = (): void => {
       if (conversation.length && conversation[conversation.length - 1]?.text !== '') conversation.push({ text: '' });
@@ -537,14 +546,6 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       ensureBlankConversationRow();
       for (const activity of lines) {
         conversation.push({ text: `${chalk.dim('·')} ${visibleSlice(activity, Math.max(1, conversationInner - 2))}` });
-      }
-      ensureBlankConversationRow();
-    };
-    const appendWaitingGroup = (): void => {
-      if (!this.waitingLabel) return;
-      ensureBlankConversationRow();
-      for (const line of this.waitingLines()) {
-        conversation.push({ text: `  ${visibleSlice(line, Math.max(1, conversationInner - 2))}` });
       }
       ensureBlankConversationRow();
     };
@@ -604,10 +605,6 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         }
       };
       const absoluteMessageIndex = messageStart + messageIndex;
-      // Status owns a fixed position immediately before the in-flight
-      // assistant anchor. It is deliberately not another trailing activity:
-      // prose and tools may grow, but can never move ahead of "generating".
-      if (this.waitingLabel && absoluteMessageIndex === persistedMessages.length) appendWaitingGroup();
       const embeddedActivities = this.activityEntries
         .filter((entry) => entry.anchor === absoluteMessageIndex && entry.responseOffset !== undefined)
         .map((entry) => ({ responseOffset: entry.responseOffset!, lines: entry.lines }));
@@ -669,6 +666,11 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       });
       for (let index = windowed.length; index < visibleRows; index++) screenLine();
       screenLine(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
+    }
+    if (waitingRows) {
+      const waitingLines = this.waitingLines();
+      const visibleWaitingLines = waitingRows === 1 ? [waitingLines[1]] : waitingLines;
+      for (const line of visibleWaitingLines) screenLine(`  ${visibleSlice(line, Math.max(1, inner))}`);
     }
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. Keeping it out of the provider/model/directory row makes
