@@ -35,6 +35,8 @@ describe('harness state normalization', () => {
       const state = await readState();
       expect(state.sessions.find((session) => session.id === 'gateway')?.permissionMode).toBeUndefined();
       expect(state.sessions.find((session) => session.id === 'local')?.permissionMode).toBe('ask');
+      expect(state.sessions.find((session) => session.id === 'gateway')?.conversationId).toBe('gateway');
+      expect(state.sessions.find((session) => session.id === 'local')?.conversationId).toBe('local');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
