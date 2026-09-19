@@ -21,29 +21,13 @@ import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBloc
 
 export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
 
-// Keep the terminal contract in one place. SGR mouse reporting supplies
-// unambiguous wheel events on desktop terminals and mobile SSH clients that
-// expose touch scrolling as a wheel. Alternate-scroll remains enabled as a
-// fallback for clients that translate the same gesture to cursor keys.
-const ENTER_TERMINAL_SCREEN = '\u001b[?1049h\u001b[?1000h\u001b[?1006h\u001b[?1007h\u001b[?25h';
-const LEAVE_TERMINAL_SCREEN = '\u001b[?1007l\u001b[?1006l\u001b[?1000l\u001b[?25h\u001b[?1049l';
+// Do not capture the mouse. Desktop terminals can translate a wheel to cursor
+// keys in the alternate screen, and mobile clients remain free to provide
+// native touch scrollback or their own arrow gesture. Enabling mouse tracking
+// here blocks native touch scrolling in clients that do not forward swipes.
+const ENTER_TERMINAL_SCREEN = '\u001b[?1049h\u001b[?1007h\u001b[?25h';
+const LEAVE_TERMINAL_SCREEN = '\u001b[?1007l\u001b[?25h\u001b[?1049l';
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
-
-function mouseWheelAction(key: string): WaitingInputAction | undefined {
-  // SGR: CSI < button ; column ; row M/m. Some terminals include modifier
-  // bits in button, so test the wheel bit and low direction bit rather than
-  // matching only the two unmodified values 64 and 65.
-  const sgr = /^\u001b\[<(\d+);\d+;\d+[mM]$/.exec(key);
-  // URXVT's older decimal mouse form is accepted as a compatibility path.
-  const urxvt = /^\u001b\[(\d+);\d+;\d+M$/.exec(key);
-  // X10/VT200 fallback: CSI M followed by button, column, and row bytes,
-  // each offset by 32. Remote/mobile terminals may accept DECSET 1000 but
-  // ignore DECSET 1006 and consequently use this form.
-  const x10 = /^\u001b\[M([\s\S])[\s\S]{2}$/.exec(key);
-  const button = x10 ? x10[1]!.charCodeAt(0) - 32 : Number((sgr ?? urxvt)?.[1]);
-  if (!Number.isFinite(button) || (button & 64) === 0) return undefined;
-  return (button & 1) === 0 ? 'scroll-up' : 'scroll-down';
-}
 
 function waitingInputAction(key: string): WaitingInputAction | undefined {
   if (key === '\u001b') return 'cancel-edit';
@@ -52,7 +36,7 @@ function waitingInputAction(key: string): WaitingInputAction | undefined {
   if (key === '\u001b[B') return 'scroll-down';
   if (key === '\u001b[5~') return 'page-up';
   if (key === '\u001b[6~') return 'page-down';
-  return mouseWheelAction(key);
+  return undefined;
 }
 
 function normalizeTerminalKey(key: string): string {
@@ -98,17 +82,6 @@ export class TerminalInputDecoder {
       }
       const prefix = this.pending[1];
       if (prefix === '[') {
-        // Legacy X10 mouse reports have a complete-looking CSI M prefix plus
-        // three payload bytes. Do not emit CSI M before those bytes arrive.
-        if (this.pending.startsWith('\u001b[M')) {
-          if (this.pending.length < 6) {
-            if (flush) { keys.push('\u001b'); this.pending = this.pending.slice(1); continue; }
-            break;
-          }
-          keys.push(this.pending.slice(0, 6));
-          this.pending = this.pending.slice(6);
-          continue;
-        }
         let end = 2;
         while (end < this.pending.length && !/[\x40-\x7e]/.test(this.pending[end]!)) end++;
         if (end >= this.pending.length) {
@@ -1051,18 +1024,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
           cursor = value.length;
           return draw();
         }
-        // Plain Up/Down scroll the conversation now, not prompt history: a
-        // swipe gesture or a terminal app's own on-screen scrollbar (common
-        // on mobile SSH clients, which is how this was actually being tried)
-        // sends exactly these two sequences, nothing else -- Page Up/Down
-        // below is real and works from a physical keyboard, but was
-        // unreachable from a touch interface, which is what "I can see the
-        // scrollbar but the chat doesn't move, even using the scrollbar
-        // itself" was: the keys arrived, but at prompt-history recall, which
-        // silently did nothing when there was no history yet to recall.
-        // Prompt history moves to Ctrl+P/Ctrl+N (common readline-style
-        // bindings) so it isn't lost, just no longer on the key that has to
-        // mean "scroll" for a touch interface to be usable at all.
+        // Plain Up/Down scroll the conversation. This covers physical keys,
+        // alternate-screen wheel conversion, and mobile clients' explicit
+        // arrow gestures. Prompt history remains on Ctrl+P/Ctrl+N.
         if (key === '\u001b[A') {
           if (options.length) { selected = (selected - 1 + options.length) % options.length; return draw(); }
           return;

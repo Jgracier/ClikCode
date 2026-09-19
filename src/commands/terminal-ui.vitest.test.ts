@@ -14,11 +14,8 @@ describe('full-screen waiting input', () => {
   });
 
   it('keeps scrolling available while a provider turn is running', () => {
-    expect(waitingInputActions('\u001b[A\u001b[5~\u001b[B\u001b[6~\u001b[<64;4;8M\u001b[<65;4;8M\u001b[<68;4;8M\u001b[<69;4;8M')).toEqual([
-      'scroll-up', 'page-up', 'scroll-down', 'page-down', 'scroll-up', 'scroll-down', 'scroll-up', 'scroll-down',
-    ]);
-    expect(waitingInputActions('\u001b[64;4;8M\u001b[65;4;8M\u001b[M`$\u0028\u001b[Ma$\u0028\u001b[<0;4;8M')).toEqual([
-      'scroll-up', 'scroll-down', 'scroll-up', 'scroll-down',
+    expect(waitingInputActions('\u001b[A\u001b[5~\u001b[B\u001b[6~')).toEqual([
+      'scroll-up', 'page-up', 'scroll-down', 'page-down',
     ]);
   });
 
@@ -34,8 +31,6 @@ describe('full-screen waiting input', () => {
     expect(decoder.flush()).toEqual(['\u001b']);
     expect(decoder.push(Buffer.from('x'))).toEqual(['x']);
     expect(decoder.push(Buffer.from('\u001by'))).toEqual(['\u001by']);
-    expect(decoder.push(Buffer.from('\u001b[M'))).toEqual([]);
-    expect(decoder.push(Buffer.from('`$\u0028'))).toEqual(['\u001b[M`$\u0028']);
   });
 
   it('holds the visible transcript in place while streamed lines are appended', () => {
