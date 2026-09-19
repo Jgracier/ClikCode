@@ -41,7 +41,7 @@ import {
   accountView, deviceManifest, harnessCommand, harnessStatePath, readState, resolveDefaultSettings, writeState,
 } from './harness-state.js';
 import {
-  accountUsageLabel, CLAUDE_ALIAS_LABELS, nativeModelCatalog, nativeUsageLabel,
+  accountUsageLabel, nativeModelCatalog, nativeModelLabel, nativeUsageLabel,
 } from './native-account-data.js';
 import {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
@@ -179,9 +179,7 @@ export function sessionPickerOptions(
     for (const root of roots.sort((a, b) => timestamp(a) - timestamp(b))) visit(root, 0);
 
     return ordered.map(({ session, depth }) => {
-      const model = session.model && session.nativeHarness === 'claude'
-        ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
-        : session.model;
+      const model = nativeModelLabel(session.nativeHarness, session.model);
       const parent = session.parentSessionId ? byId.get(session.parentSessionId) : undefined;
       const source = session.handoff?.fromHarness
         ? (parent ? providerLabel(parent) : session.handoff.fromHarness)
@@ -350,9 +348,7 @@ async function prepareAttachments(paths: readonly string[]): Promise<{ textConte
 }
 
 function renderSessionCard(session: HarnessSession, account?: string): string {
-  const modelLabel = session.model && session.nativeHarness === 'claude'
-    ? CLAUDE_ALIAS_LABELS[session.model] ?? session.model
-    : session.model;
+  const modelLabel = nativeModelLabel(session.nativeHarness, session.model);
   return [
     chalk.bold.cyan('ClikCode'),
     ...(session.name ? [line('chat', session.name)] : []),

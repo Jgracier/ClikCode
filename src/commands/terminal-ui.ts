@@ -13,7 +13,7 @@ import {
   splitIntoBlocks, terminalCellWidth, visibleSlice, wrapWords,
 } from './markdown-render.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
-import { CLAUDE_ALIAS_LABELS } from './native-account-data.js';
+import { nativeModelLabel } from './native-account-data.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, PickerOption } from './types.js';
 
 export type WaitingInputAction = 'cancel' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
@@ -31,6 +31,16 @@ export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[
     if (key === '\u001b[6~') return ['page-down'];
     return [];
   });
+}
+
+export type PalettePaintMode = 'palette' | 'full' | 'composer';
+
+/** A palette changing from visible to hidden must reclaim its reserved rows
+ * immediately with a full frame; an inline composer repaint cannot erase the
+ * old band above it. */
+export function palettePaintMode(optionCount: number, wasOpen: boolean, forceFull = false): PalettePaintMode {
+  if (optionCount > 0) return 'palette';
+  return wasOpen || forceFull ? 'full' : 'composer';
 }
 
 export type InterleavedResponsePart = { kind: 'text'; text: string } | { kind: 'activity'; lines: string[] };
@@ -266,7 +276,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const provider = `${sessionProviderLabel(session)}${this.usageLabel ? `  ${this.usageLabel}` : ''}`;
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     const rawModel = harness?.modelArgvPrefix ? session.model ?? 'automatic' : undefined;
-    const model = rawModel && harness?.command === 'claude' ? CLAUDE_ALIAS_LABELS[rawModel] ?? rawModel : rawModel;
+    const model = nativeModelLabel(harness?.command, rawModel);
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     // The title used to share this line with provider/model/directory, which
     // meant a long title truncated whichever of those came after it — the
@@ -542,7 +552,6 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       let cursor = 0;
       let selected = 0;
       let historyIndex = this.history.length;
-      let showedPalette = false;
       // Reserved once for the whole prompt, not recomputed per keystroke: keeping the
       // footer band a fixed height is what stops the conversation area above it from
       // reflowing (and the cursor from jumping) as the number of matches narrows.
@@ -568,15 +577,21 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       const draw = (forceFullRepaint = false): void => {
         const options = matches();
         if (selected >= options.length) selected = 0;
-        if (options.length || showedPalette) {
+        const paintMode = palettePaintMode(options.length, paletteOpen, forceFullRepaint);
+        if (paintMode === 'palette') {
           this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, footerOnly: paletteOpen });
           paletteOpen = true;
           this.paletteActive = true;
-        } else if (forceFullRepaint) {
+          return;
+        }
+        paletteOpen = false;
+        this.paletteActive = false;
+        if (paintMode === 'full') {
           // No real palette here — pass no palette config at all, otherwise
           // paint() would size a footer band for one anyway (its own
           // capacity default comes from the full slash-command list, not
-          // "is a palette actually showing").
+          // "is a palette actually showing"). Closing always takes this full
+          // path so the conversation immediately reclaims the reserved rows.
           this.paint(value, [], 0, prompt, cursor);
         } else {
           const available = Math.max(8, (output.columns || 100) - 4 - terminalCellWidth(prompt));
@@ -592,10 +607,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
           this.draftSelected = selected;
           this.draftPrompt = prompt;
           this.draftCursor = cursor;
-          paletteOpen = false;
-          this.paletteActive = false;
         }
-        showedPalette = options.length > 0;
       };
       const finish = (answer: string): void => {
         if (finished) return;

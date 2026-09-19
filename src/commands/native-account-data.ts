@@ -34,6 +34,16 @@ export const CLAUDE_ALIAS_LABELS: Readonly<Record<string, string>> = {
   fable: 'Fable 5.1', opus: 'Opus 5', sonnet: 'Sonnet 5', haiku: 'Haiku 4.5',
 };
 
+/** Provider-specific model naming belongs to account metadata, not generic
+ * session pickers or terminal renderers. Unknown models always pass through. */
+export function nativeModelLabel(
+  harnessCommand: string | undefined,
+  model: string | null | undefined,
+): string | undefined {
+  if (!model) return undefined;
+  return harnessCommand === 'claude' ? CLAUDE_ALIAS_LABELS[model] ?? model : model;
+}
+
 // Model lists change even less often than installation status -- 5 minutes
 // is conservative, not aggressive. Without this, every single /model open
 // re-ran a real subprocess (harness.modelDiscoveryArgv) with up to a
