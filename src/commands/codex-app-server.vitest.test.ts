@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codexActivityForItem, codexPermissionSettings, codexSteerParams } from './codex-app-server';
+import { codexActivityForItem, codexPermissionSettings, codexSteerParams, completedAgentMessageUpdate } from './codex-app-server';
 
 describe('Codex app-server protocol mapping', () => {
   it('preserves native ids so tool completion updates the start row', () => {
@@ -25,5 +25,11 @@ describe('Codex app-server protocol mapping', () => {
       threadId: 'thread-1', expectedTurnId: 'turn-1',
       input: [{ type: 'text', text: 'Focus on the failing test.', text_elements: [] }],
     });
+  });
+
+  it('shows a completed message immediately when deltas were absent or incomplete', () => {
+    expect(completedAgentMessageUpdate('', 'Complete response')).toEqual({ text: 'Complete response', mode: 'append' });
+    expect(completedAgentMessageUpdate('Complete ', 'Complete response')).toEqual({ text: 'response', mode: 'append' });
+    expect(completedAgentMessageUpdate('Complete response', 'Complete response')).toBeUndefined();
   });
 });

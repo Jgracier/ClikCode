@@ -15,7 +15,7 @@ export interface CodexAppServerTurnInput {
   environment?: Readonly<Record<string, string>>;
   signal?: AbortSignal;
   onSessionId?: (id: string) => Promise<void> | void;
-  onResponseDelta?: (delta: string) => void;
+  onResponseDelta?: (text: string, mode?: 'append' | 'replace') => void;
   onActivity?: (event: HarnessActivityEvent) => void;
   onPhase?: (phase: string) => void;
   onApproval?: (title: string, detail?: string) => Promise<boolean>;
@@ -28,6 +28,15 @@ export interface CodexAppServerTurnResult {
   nativeSessionId: string;
   isError?: boolean;
   statusCode?: number;
+}
+
+export function completedAgentMessageUpdate(
+  streamed: string, completed: string,
+): { text: string; mode: 'append' } | undefined {
+  if (!streamed) return completed ? { text: completed, mode: 'append' } : undefined;
+  return completed.startsWith(streamed) && completed.length > streamed.length
+    ? { text: completed.slice(streamed.length), mode: 'append' }
+    : undefined;
 }
 
 export function codexSteerParams(threadId: string, turnId: string, text: string): JsonObject {
@@ -132,7 +141,16 @@ export function runCodexAppServerTurn(input: CodexAppServerTurnInput): Promise<C
           if (streamedMessage) input.onResponseDelta?.('\n\n');
           streamedMessage = '';
         }
-        if (item.type === 'agentMessage' && method === 'item/completed' && typeof item.text === 'string') lastAgentMessage = item.text;
+        if (item.type === 'agentMessage' && method === 'item/completed' && typeof item.text === 'string') {
+          lastAgentMessage = item.text;
+          // Deltas are the normal path. Some app-server/provider combinations
+          // can still complete an item without publishing them; surface that
+          // text immediately instead of leaving the UI blank until the turn is
+          // persisted. If only a suffix was missed, append just that suffix.
+          const catchup = completedAgentMessageUpdate(streamedMessage, item.text);
+          if (catchup) input.onResponseDelta?.(catchup.text, catchup.mode);
+          streamedMessage = item.text;
+        }
         const activity = codexActivityForItem(item, method === 'item/completed');
         if (activity) input.onActivity?.(activity);
       } else if (method === 'turn/completed') {

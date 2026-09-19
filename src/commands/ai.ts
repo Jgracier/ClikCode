@@ -1,7 +1,6 @@
 /** Local ClikDeploy AI harness lifecycle, account aliases, and durable session settings. */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { spawn } from 'node:child_process';
 import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { copyFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -17,6 +16,7 @@ import { login } from './auth.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
+import { spawnPortable as spawn } from './spawn-portable.js';
 import { classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover.js';
 import {
   ADOPTED_TRANSCRIPT_READERS, conversationTitle, discoverNativeSessions, FS_SESSION_DISCOVERY, mergeNativeTranscript, type DiscoveredNativeSession,
@@ -1689,9 +1689,15 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
  * attaches them here; select() has no idea what they mean, it just shows
  * them and returns whichever one was chosen. */
 
-async function chooseOption<T>(rl: HarnessPrompter, title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined> {
+async function chooseOption<T>(
+  rl: HarnessPrompter,
+  title: string,
+  options: readonly PickerOption<T>[],
+  onAction?: (value: T, action: string) => Promise<void>,
+  onExpand?: (value: T) => Promise<T | undefined>,
+): Promise<T | undefined> {
   if (options.length === 0) return undefined;
-  if (rl.select) return rl.select(title, options, onAction);
+  if (rl.select) return rl.select(title, options, onAction, onExpand);
   output.write(`\n${chalk.bold(title)}\n`);
   options.forEach((option, index) => {
     output.write(`  ${chalk.cyan(String(index + 1).padStart(2))}  ${option.label}${option.detail ? ` ${chalk.dim(option.detail)}` : ''}\n`);
@@ -1822,7 +1828,7 @@ export function providerPickerOptions(
       label: harness.displayName,
       detail: `${inspection.installed
         ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
-        : harness.npmPackage ? '· install when needed' : '· vendor install required'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''}`,
+        : harness.npmPackage ? '· install when needed' : '· vendor install required'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''} · → accounts`,
       value: { kind: 'provider' as const, harness: harness.command },
     })), ...(hiddenCount > 0 ? [{ label: 'More providers…', detail: `· ${hiddenCount} available to install`, value: { kind: 'more' as const } }] : []),
   ];
@@ -1873,6 +1879,60 @@ async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id:
   return newProviderConversation(id, selected);
 }
 
+/** Account selection is an optional child of provider selection. Enter on a
+ * provider selects the provider; Right Arrow calls this focused chooser. */
+async function interactiveProviderAccountPicker(
+  config: Conf,
+  rl: HarnessPrompter,
+  id: string,
+  harness: AiLocalHarnessDefinition,
+  installed: boolean,
+): Promise<string | undefined> {
+  for (;;) {
+    const accountState = await readState();
+    const current = accountState.sessions.find((item) => item.id === id);
+    if (!current) throw new Error(`AI session "${id}" was not found`);
+    const providerAccounts = accountState.accounts.filter((account) => account.provider === harness.provider);
+    if (rl instanceof TerminalHarnessPrompter && providerAccounts.some((account) => account.authKind === 'vendor-cli')) {
+      rl.startWaiting(`loading ${harness.displayName} account usage…`);
+    }
+    let accountsWithUsage: Array<{ account: AiHarnessAccount; usage?: string }>;
+    try {
+      accountsWithUsage = await Promise.all(providerAccounts.map(async (account) => ({
+        account, usage: await accountUsageLabel(account, accountState),
+      })));
+    } finally {
+      if (rl instanceof TerminalHarnessPrompter) rl.stopWaiting();
+    }
+    let actionPerformed = false;
+    const selected = await chooseOption(
+      rl, `${harness.displayName} accounts`, providerAccountPickerOptions(harness, accountsWithUsage, current),
+      async (choice, action) => {
+        if (choice.kind !== 'account') return;
+        actionPerformed = true;
+        await manageAccountAction(rl, choice.accountId, action);
+      },
+    );
+    if (actionPerformed) continue;
+    if (!selected) return undefined;
+    if (selected.kind === 'account') {
+      const targetId = await selectProviderConversation(config, rl, id, selected.harness);
+      await aiSessionCommand(targetId, `/settings account ${selected.accountId}`);
+      return targetId;
+    }
+    if (!installed) {
+      activeTerminalHarness?.startWaiting(`installing ${harness.displayName}…`);
+      try { await ensureNativeHarness(harness); } finally { activeTerminalHarness?.stopWaiting(); }
+      installed = true;
+    }
+    const accountLabel = await addAccountForHarness(rl, harness);
+    if (!accountLabel) continue;
+    const targetId = await selectProviderConversation(config, rl, id, harness.command);
+    await aiSessionCommand(targetId, `/settings account ${accountLabel}`);
+    return targetId;
+  }
+}
+
 async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
   for (;;) {
     const available = await Promise.all(localRouter().AI_LOCAL_HARNESSES
@@ -1883,62 +1943,37 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
     if (!session) throw new Error(`AI session "${id}" was not found`);
     const gatewayConnected = Boolean(ApiClient.getApiKeyForUrl(config, ApiClient.getApiUrl(config)));
     const configuredProviders = new Set(state.accounts.map((account) => account.provider));
-    let provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected, configuredProviders));
+    let expandedSessionId: string | undefined;
+    const expandProvider = async (choice: ProviderChoice): Promise<ProviderChoice | undefined> => {
+      if (choice.kind !== 'provider') return undefined;
+      const entry = available.find((item) => item.harness.command === choice.harness);
+      if (!entry) return undefined;
+      expandedSessionId = await interactiveProviderAccountPicker(
+        config, rl, id, entry.harness, entry.inspection.installed,
+      );
+      return expandedSessionId ? choice : undefined;
+    };
+    let provider = await chooseOption(
+      rl,
+      'Choose a provider',
+      providerPickerOptions(available, session, gatewayConnected, configuredProviders),
+      undefined,
+      expandProvider,
+    );
+    if (expandedSessionId) return expandedSessionId;
     if (!provider) return undefined;
     if (provider.kind === 'more') {
       const primaryHarnesses = new Set(providerPickerOptions(available, session, gatewayConnected, configuredProviders)
         .flatMap((option) => option.value.kind === 'provider' ? [option.value.harness] : []));
       const more = providerPickerOptions(available, session, gatewayConnected, configuredProviders, true)
         .filter((option) => option.value.kind === 'provider' && !primaryHarnesses.has(option.value.harness));
-      provider = await chooseOption(rl, 'More providers', more);
+      provider = await chooseOption(rl, 'More providers', more, undefined, expandProvider);
+      if (expandedSessionId) return expandedSessionId;
       if (!provider) continue;
     }
     if (provider.kind === 'gateway') return selectProviderConversation(config, rl, id, '__gateway__');
     if (provider.kind !== 'provider') continue;
-    const harness = localHarnessForCommand(provider.harness);
-    if (!harness) throw new Error(`unknown local harness: ${provider.harness}`);
-    for (;;) {
-      const accountState = await readState();
-      const current = accountState.sessions.find((item) => item.id === id);
-      if (!current) throw new Error(`AI session "${id}" was not found`);
-      const providerAccounts = accountState.accounts.filter((account) => account.provider === harness.provider);
-      if (rl instanceof TerminalHarnessPrompter && providerAccounts.some((account) => account.authKind === 'vendor-cli')) {
-        rl.startWaiting(`loading ${harness.displayName} account usage…`);
-      }
-      let accountsWithUsage: Array<{ account: AiHarnessAccount; usage?: string }>;
-      try {
-        accountsWithUsage = await Promise.all(providerAccounts.map(async (account) => ({
-          account, usage: await accountUsageLabel(account, accountState),
-        })));
-      } finally {
-        if (rl instanceof TerminalHarnessPrompter) rl.stopWaiting();
-      }
-      let actionPerformed = false;
-      const selected = await chooseOption(
-        rl, `${harness.displayName} accounts`, providerAccountPickerOptions(harness, accountsWithUsage, current),
-        async (choice, action) => {
-          if (choice.kind !== 'account') return;
-          actionPerformed = true;
-          await manageAccountAction(rl, choice.accountId, action);
-        },
-      );
-      if (actionPerformed) continue;
-      if (!selected) break;
-      if (selected.kind === 'account') {
-        const targetId = await selectProviderConversation(config, rl, id, selected.harness);
-        await aiSessionCommand(targetId, `/settings account ${selected.accountId}`);
-        return targetId;
-      }
-      if (!available.find((item) => item.harness.command === harness.command)?.inspection.installed) {
-        activeTerminalHarness?.startWaiting(`installing ${harness.displayName}…`);
-        try { await ensureNativeHarness(harness); } finally { activeTerminalHarness?.stopWaiting(); }
-      }
-      const accountLabel = await addAccountForHarness(rl, harness);
-      if (!accountLabel) continue;
-      const targetId = await selectProviderConversation(config, rl, id, harness.command);
-      await aiSessionCommand(targetId, `/settings account ${accountLabel}`);
-      return targetId;
-    }
+    return selectProviderConversation(config, rl, id, provider.harness);
   }
 }
 
@@ -3002,9 +3037,8 @@ export async function aiSessionSend(
             if (!event) return;
             checkpoint.activity(event);
             activeTerminalHarness?.phase(renderActivityPhase(event));
-            if (isJsonDefaultMode()) return;
             if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
-            else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
+            else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
           },
         });
         if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
@@ -3022,9 +3056,9 @@ export async function aiSessionSend(
               session.nativeSessionId = nativeSessionId;
               await checkpoint.persistNow();
             },
-            onResponseDelta: (delta) => {
-              checkpoint.response(delta, 'append');
-              activeTerminalHarness?.response(delta, 'append');
+            onResponseDelta: (text, mode = 'append') => {
+              checkpoint.response(text, mode);
+              activeTerminalHarness?.response(text, mode);
             },
             onPhase: (phase) => activeTerminalHarness?.phase(phase),
             onApproval: (title, detail) => activeTerminalHarness?.approval(title, detail) ?? Promise.resolve(false),
@@ -3035,9 +3069,8 @@ export async function aiSessionSend(
             onActivity: (event) => {
               checkpoint.activity(event);
               activeTerminalHarness?.phase(renderActivityPhase(event));
-              if (isJsonDefaultMode()) return;
               if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
-              else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
+              else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
             },
           });
         } else if (transport === 'acp') {
@@ -3339,11 +3372,10 @@ export async function aiGatewaySessionSend(
         // fake here.
         if (event.type === 'status' && typeof event.label === 'string') {
           activeTerminalHarness?.phase(event.label);
-          if (!isJsonDefaultMode()) {
-            const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
-            checkpoint.activity(activityEvent);
-            if (activeTerminalHarness) activeTerminalHarness.activityEvent(activityEvent);
-          }
+          const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
+          checkpoint.activity(activityEvent);
+          if (activeTerminalHarness) activeTerminalHarness.activityEvent(activityEvent);
+          else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(activityEvent)) output.write(`${activity}\n`);
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
       }
