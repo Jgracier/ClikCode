@@ -68,6 +68,13 @@ export type AiHarnessOptionKind = 'boolean' | 'string' | 'enum' | 'string-list' 
 export interface AiHarnessOptionDefinition {
   id: string; label: string; description: string; category: string; kind: AiHarnessOptionKind;
   values?: readonly string[]; dangerous?: boolean; requiresNewSession?: boolean;
+  /** Catalog argv mapping, mirrored so non-argv transports (ACP, app-server)
+   * can honour declared options too. */
+  argv?: readonly string[];
+  argvStyle?: 'value' | 'flag' | 'repeat' | 'csv' | 'config';
+  argvPlacement?: 'root' | 'turn';
+  configKey?: string;
+  appliesTo?: 'start' | 'resume' | 'both';
 }
 
 export interface AiHarnessCapabilityManifest {
@@ -271,8 +278,14 @@ export interface HarnessSession {
    */
   gatewayConfirmed?: true;
   nativeSessionId?: string;
+  /** `nativeSessionId` was minted by ClikCode (structured-CLI `idKind: 'uuid'`)
+   * and the vendor process has not yet confirmed it exists. While set, a retry
+   * re-creates with the same id instead of resuming a session that never was. */
+  nativeSessionPreallocated?: true;
   nativeStartedAt?: string;
   workspace?: string;
+  /** Latest token/context reading reported by the transport for this chat. */
+  lastUsage?: { at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; contextWindow?: number };
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   /** Crash-safe turn journal. It remains separate until completion so a
    * provider retry cannot accidentally submit the same user prompt twice. */
@@ -311,7 +324,7 @@ export interface HarnessState {
   devicePublicKey: Record<string, unknown>;
   accounts: AiHarnessAccount[];
   sessions: HarnessSession[];
-  invocations: Array<{ id: string; accountId: string; provider: string; model: string; at: string; inputTokens?: number; outputTokens?: number; latencyMs: number }>;
+  invocations: Array<{ id: string; accountId: string; provider: string; model: string; at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; sessionId?: string; latencyMs: number }>;
   /** Applies to every provider unless a providerSettings entry overrides it. */
   globalSettings: HarnessDefaultSettings;
   /** Keyed by AiLocalHarnessDefinition.provider; only the fields a user has set. */
