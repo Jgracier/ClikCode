@@ -308,7 +308,10 @@ export function bottomAnchoredLines(lines: readonly string[], height: number): s
   return [...Array.from({ length: Math.max(0, height - lines.length) }, () => ''), ...lines];
 }
 
-/** Absolute viewport geometry for an incremental repaint. Completed prefix
+/** Retained for callers and tests that reason about a bottom-anchored viewport;
+ * the prompter itself now repaints cursor-relative (see inlineFrameDiff).
+ *
+ * Absolute viewport geometry for an incremental repaint. Completed prefix
  * rows stay above the new live region; growth scrolls only enough rows to
  * make that possible. The live region itself always starts at the row that
  * makes its final row equal the terminal's bottom row. */
@@ -351,10 +354,68 @@ export type InlineResponseEvent =
   | { kind: 'steer'; responseOffset: number; sequence?: number; text: string };
 export type ResponseTimelinePart = { kind: 'markdown'; block: MessageBlock } | InlineResponseEvent;
 export type ActivityEntry = { anchor: number; responseOffset?: number; sequence?: number; event?: HarnessActivityEvent; lines: string[] };
+/** `viewport` repaints one screen (a width change re-wraps every row, so what
+ * is on screen is wrong, but re-dumping the transcript on every resize would
+ * flood scrollback). `history` writes the whole windowed transcript once: the
+ * first frame of a process and the first frame of a newly opened session. */
+export type InlineReset = false | 'viewport' | 'history';
 type InlineFrameState = {
-  permanent: string[]; dynamic: string[]; cursorRow: number; cursorColumn: number; reset: boolean; hideCursor: boolean;
+  permanent: string[]; dynamic: string[]; cursorRow: number; cursorColumn: number; reset: InlineReset; hideCursor: boolean;
   targetHeight: number;
 };
+
+/** Cursor-relative repaint of the live region. `previous` is what the last
+ * frame left on screen with the cursor parked on `previousCursorRow` of it;
+ * `appended` are rows entering permanent scrollback directly above the new
+ * live rows. Nothing here addresses an absolute screen row, so the region can
+ * start wherever the shell left the cursor and the terminal scrolls naturally
+ * when the content reaches its bottom edge.
+ *
+ * Rows are compared, not blindly rewritten: a spinner tick touches one row. A
+ * height change erases only from the first differing row down -- never the
+ * viewport -- and rows promoted into scrollback that are already on screen as
+ * the head of the old live region are simply left where they are. */
+export function inlineFrameDiff(
+  previous: readonly string[], previousCursorRow: number, appended: readonly string[], dynamic: readonly string[],
+  cursorRow: number, cursorColumn: number,
+): string {
+  const next = [...appended, ...dynamic];
+  let out = '';
+  let row = Math.max(0, previousCursorRow);
+  const moveTo = (target: number): void => {
+    if (target < row) out += `\u001b[${row - target}A`;
+    else if (target > row) out += `\u001b[${target - row}B`;
+    row = target;
+  };
+  if (next.length === previous.length) {
+    for (const [index, line] of next.entries()) {
+      if (line === previous[index]) continue;
+      moveTo(index);
+      out += `\r\u001b[2K${line}`;
+    }
+  } else {
+    let common = 0;
+    while (common < previous.length && common < next.length && previous[common] === next[common]) common += 1;
+    if (common < previous.length) {
+      moveTo(common);
+      out += '\r\u001b[J';
+      for (let index = common; index < next.length; index++) {
+        if (index > common) { out += '\n'; row += 1; }
+        out += `\r\u001b[2K${next[index]}`;
+      }
+    } else {
+      // Pure growth below unchanged rows: newlines from the old last row are
+      // what let the terminal scroll on its own when the bottom is reached.
+      moveTo(Math.max(0, previous.length - 1));
+      for (let index = common; index < next.length; index++) {
+        if (index > 0) { out += '\n'; row += 1; }
+        out += `\r\u001b[2K${next[index]}`;
+      }
+    }
+  }
+  moveTo(appended.length + Math.max(0, Math.min(cursorRow, Math.max(0, dynamic.length - 1))));
+  return `${out}\u001b[${Math.max(1, cursorColumn)}G`;
+}
 
 
 /** One provider may publish pending/running/progress frames for the same tool.
@@ -525,9 +586,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * scrollback. Only the changing response/composer below them is repainted. */
   private inlinePermanentLines: string[] = [];
   private inlineWrittenPermanentLines: string[] = [];
-  private inlineDynamicRows = 0;
+  /** Exactly the live rows the last flushed frame left on screen, and the row
+   * of them the cursor was parked on. Every repaint is relative to these. */
+  private inlinePaintedRows: string[] = [];
+  private inlinePaintedCursorRow = 0;
+  private inlineStarted = false;
+  private lastColumns = output.columns || 0;
   private commitConversationOnNextPaint = false;
-  private resetInlineScreen = true;
+  private resetInlineScreen: InlineReset = 'history';
   private usageLabel?: string;
   private selecting = false;
   /** True while the slash palette (inside question()) has its own fixed-capacity
@@ -607,8 +673,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   };
   private readonly onResize = (): void => {
     if (!this.closed) {
-      this.resetInlineScreen = true;
-      this.commitConversationOnNextPaint = true;
+      // Only a width change invalidates what is on screen (every row re-wraps).
+      // A height change leaves the rows around the cursor intact, so the
+      // ordinary cursor-relative repaint is still correct -- unless the old
+      // live region no longer fits, when its top is off screen and unreachable.
+      const columns = output.columns || 0;
+      const widthChanged = columns !== this.lastColumns;
+      this.lastColumns = columns;
+      if (widthChanged || this.inlinePaintedRows.length > (output.rows || 30)) {
+        this.resetInlineScreen = this.resetInlineScreen || 'viewport';
+        this.commitConversationOnNextPaint = true;
+      }
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
   };
@@ -629,7 +704,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.currentSession?.id !== session.id) {
       this.activityEntries = [];
       this.inlinePermanentLines = [];
-      this.resetInlineScreen = true;
+      this.resetInlineScreen = 'history';
     }
     if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
@@ -1124,7 +1199,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.inlinePermanentLines, conversationLines, commit, maxDynamicConversation,
       commit ? conversationLines.length : stableConversationBoundary,
     );
-    const reset = this.resetInlineScreen || plan.reset;
+    const reset: InlineReset = this.resetInlineScreen || (plan.reset ? 'viewport' : false);
     const dynamicConversation = plan.dynamic;
     const dynamic = [...dynamicConversation, ...footer];
     const cursorRow = palette?.hideCursor
@@ -1142,7 +1217,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * rather than a private viewport offset, own wheel and touch scroll. */
   private writeInlineFrame(
     permanent: readonly string[], dynamic: readonly string[], cursorRow: number,
-    cursorColumn: number, reset: boolean, hideCursor: boolean, targetHeight = Math.max(5, output.rows || 30),
+    cursorColumn: number, reset: InlineReset, hideCursor: boolean, targetHeight = Math.max(5, output.rows || 30),
   ): void {
     const state: InlineFrameState = {
       permanent: [...permanent], dynamic: [...dynamic], cursorRow, cursorColumn, reset, hideCursor, targetHeight,
@@ -1152,7 +1227,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // that coalesce into this pending slot before the current write drains.
       this.pendingInlineFrame = {
         ...state,
-        reset: state.reset || Boolean(this.pendingInlineFrame?.reset),
+        reset: state.reset === 'history' || this.pendingInlineFrame?.reset === 'history' ? 'history'
+          : state.reset || this.pendingInlineFrame?.reset || false,
       };
       return;
     }
@@ -1162,68 +1238,56 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private flushInlineFrame(state: InlineFrameState): void {
     if (this.closed || this.suspended) return;
     const prefixMatches = this.inlineWrittenPermanentLines.every((line, index) => state.permanent[index] === line);
-    // The live region changing height is a layout change, not new content, so
-    // it is repainted rather than scrolled. Growing it used to scroll the rows
-    // it was about to cover up into scrollback -- duplicating lines already
-    // written there and visibly walking the chat up the screen -- while
-    // shrinking it cleared those rows with nothing to put back, leaving a blank
-    // band. One viewport repaint is correct for both, and leaves the scroll in
-    // bottomAnchoredFrameGeometry to do the one job it is right for: making
-    // room for genuinely new transcript rows.
-    const liveRegionResized = state.dynamic.length !== this.inlineDynamicRows;
-    const reset = state.reset || !prefixMatches || liveRegionResized;
-    const previousPermanent = reset ? [] : this.inlineWrittenPermanentLines;
-    const appendedPermanent = state.permanent.slice(previousPermanent.length);
+    // A change in the live region's height is NOT a reset. It used to be, and
+    // every palette open/close, composer wrap, or waiting-band toggle cleared
+    // and repainted the whole viewport. inlineFrameDiff erases only from the
+    // first row that actually differs and lets growth scroll naturally.
+    const reset: InlineReset = state.reset || (prefixMatches ? false : 'viewport');
     // Synchronized output (DEC 2026): the terminal presents the whole frame at
     // once instead of tearing mid-repaint. Terminals without it ignore the pair.
     let frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l\r`;
-    const emit = (rows: readonly string[]): void => {
-      for (const [index, line] of rows.entries()) {
-        if (index > 0) frame += '\n';
-        frame += `\r\u001b[2K${line}`;
-      }
-    };
-    if (reset) {
+    if (reset === 'viewport' || (reset === 'history' && this.inlineStarted)) {
+      // `2J` clears the viewport only. Scrollback is where the conversation
+      // lives and is never cleared by this UI.
       frame += '\u001b[2J\u001b[H';
-      // Exactly one viewport, bottom-anchored. Emitting the whole retained
-      // prefix would re-dump the transcript into scrollback on every reset.
-      const anchored = bottomAnchoredLines([...appendedPermanent, ...state.dynamic], state.targetHeight);
-      emit(anchored.slice(-state.targetHeight));
+      const rows = reset === 'history'
+        ? [...state.permanent, ...state.dynamic]
+        // Exactly one viewport, bottom-anchored. Emitting the whole retained
+        // prefix would re-dump the transcript into scrollback on every resize.
+        : bottomAnchoredLines([...state.permanent, ...state.dynamic], state.targetHeight).slice(-state.targetHeight);
+      frame += inlineFrameDiff([], 0, rows.slice(0, rows.length - state.dynamic.length), state.dynamic, state.cursorRow, state.cursorColumn);
+    } else if (reset === 'history') {
+      // First frame of the process: begin at the cursor, below whatever the
+      // shell already printed, and write the windowed history once.
+      frame += inlineFrameDiff([], 0, state.permanent, state.dynamic, state.cursorRow, state.cursorColumn);
     } else {
-      const geometry = bottomAnchoredFrameGeometry(
-        state.targetHeight, this.inlineDynamicRows, appendedPermanent.length, state.dynamic.length,
+      frame += inlineFrameDiff(
+        this.inlinePaintedRows, this.inlinePaintedCursorRow,
+        state.permanent.slice(this.inlineWrittenPermanentLines.length), state.dynamic, state.cursorRow, state.cursorColumn,
       );
-      if (geometry.scrollRows) {
-        frame += `\u001b[${state.targetHeight};1H${'\n'.repeat(geometry.scrollRows)}`;
-      }
-      frame += `\u001b[${geometry.clearStartRow};1H\u001b[J`;
-      // Rows promoted out of the live region into scrollback occupy the space
-      // the scroll above just freed, directly on top of the new live region.
-      // Emitting only `dynamic` here scrolled to make room and then never drew
-      // them: submitting a prompt left a blank gap where the prompt should be,
-      // with the composer redrawn under it, which read as the composer row
-      // being duplicated instead of the prompt entering the chat.
-      if (appendedPermanent.length) {
-        frame += `\u001b[${Math.max(1, geometry.clearStartRow - appendedPermanent.length)};1H`;
-        emit(appendedPermanent);
-      }
-      if (state.dynamic.length) {
-        frame += `\u001b[${geometry.dynamicStartRow};1H`;
-        emit(state.dynamic);
-      }
     }
-    const dynamicLastRow = Math.max(0, state.dynamic.length - 1);
-    const cursorScreenRow = Math.max(1, state.targetHeight - dynamicLastRow + Math.min(state.cursorRow, dynamicLastRow));
-    frame += `\u001b[${cursorScreenRow};${Math.max(1, state.cursorColumn)}H\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
+    frame += `\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
     this.frameInFlight = true;
     output.write(frame, () => {
       this.inlineWrittenPermanentLines = state.permanent;
-      this.inlineDynamicRows = state.dynamic.length;
+      this.inlinePaintedRows = state.dynamic;
+      this.inlinePaintedCursorRow = Math.max(0, Math.min(state.cursorRow, Math.max(0, state.dynamic.length - 1)));
+      this.inlineStarted = true;
       this.frameInFlight = false;
       const pending = this.pendingInlineFrame;
       this.pendingInlineFrame = undefined;
       if (pending && !this.closed && !this.suspended) this.flushInlineFrame(pending);
     });
+  }
+
+  /** Cursor-relative erase of everything the last frame painted. The cursor is
+   * left at column one of the region's first row, which is where the next
+   * writer -- a vendor CLI, the shell, or this UI's next frame -- continues. */
+  private eraseLiveRegion(): string {
+    const up = this.inlinePaintedCursorRow;
+    this.inlinePaintedRows = [];
+    this.inlinePaintedCursorRow = 0;
+    return `${up > 0 ? `\u001b[${up}A` : ''}\r\u001b[J`;
   }
 
   /** Remove a completed palette/picker as one frame. Painting an empty
@@ -1594,7 +1658,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.responsePaintTimer = undefined;
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write(`${DISABLE_BRACKETED_PASTE}\u001b[?7h\u001b[?25h\n`);
+    // Remove the composer and footer before handing over, so the vendor's
+    // output continues directly under the conversation instead of being typed
+    // across this UI's status rows.
+    output.write(`${this.eraseLiveRegion()}${DISABLE_BRACKETED_PASTE}\u001b[?7h\u001b[?25h`);
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
@@ -1612,7 +1679,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Re-seed the authoritative transcript at the new width when control
     // returns; native scrollback remains available above the refreshed view.
     this.suspended = false;
-    this.resetInlineScreen = true;
+    // Whatever the vendor printed stays in scrollback and the live region
+    // simply starts again below it. Only a width change invalidates the rows
+    // this UI wrote earlier, and only that needs the viewport repainted.
+    const columns = output.columns || 0;
+    if (columns !== this.lastColumns) this.resetInlineScreen = this.resetInlineScreen || 'viewport';
+    this.lastColumns = columns;
     this.commitConversationOnNextPaint = true;
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
