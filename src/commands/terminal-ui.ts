@@ -64,6 +64,8 @@ function waitingInputAction(key: string): WaitingInputAction | undefined {
  * fences the payload and the whole thing arrives as one key. */
 export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
+export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
+export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const PASTE_START = '\u001b[200~';
 const PASTE_END = '\u001b[201~';
 
@@ -1172,7 +1174,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const reset = state.reset || !prefixMatches || liveRegionResized;
     const previousPermanent = reset ? [] : this.inlineWrittenPermanentLines;
     const appendedPermanent = state.permanent.slice(previousPermanent.length);
-    let frame = '\u001b[?25l\u001b[?7l\r';
+    // Synchronized output (DEC 2026): the terminal presents the whole frame at
+    // once instead of tearing mid-repaint. Terminals without it ignore the pair.
+    let frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l\r`;
     const emit = (rows: readonly string[]): void => {
       for (const [index, line] of rows.entries()) {
         if (index > 0) frame += '\n';
@@ -1210,7 +1214,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     const dynamicLastRow = Math.max(0, state.dynamic.length - 1);
     const cursorScreenRow = Math.max(1, state.targetHeight - dynamicLastRow + Math.min(state.cursorRow, dynamicLastRow));
-    frame += `\u001b[${cursorScreenRow};${Math.max(1, state.cursorColumn)}H\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}`;
+    frame += `\u001b[${cursorScreenRow};${Math.max(1, state.cursorColumn)}H\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
     this.frameInFlight = true;
     output.write(frame, () => {
       this.inlineWrittenPermanentLines = state.permanent;
