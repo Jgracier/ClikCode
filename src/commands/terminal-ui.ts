@@ -16,7 +16,7 @@ import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActiv
 import { nativeModelLabel } from './native-account-data.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, PickerOption } from './types.js';
 
-export type WaitingInputAction = 'cancel' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
+export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
 
 /** Decode only keys that remain meaningful while a provider turn owns the
  * composer. Keeping this separate from cancellation prevents arrow/page keys
@@ -24,13 +24,20 @@ export type WaitingInputAction = 'cancel' | 'scroll-up' | 'scroll-down' | 'page-
 export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[] {
   const keys = String(chunk).match(/\u001b\[[AB]|\u001b\[[56]~|[\s\S]/g) ?? [];
   return keys.flatMap((key): WaitingInputAction[] => {
-    if (key === '\u001b' || key === '\u0003') return ['cancel'];
+    if (key === '\u001b') return ['cancel-edit'];
+    if (key === '\u0003') return ['cancel-stop'];
     if (key === '\u001b[A') return ['scroll-up'];
     if (key === '\u001b[B') return ['scroll-down'];
     if (key === '\u001b[5~') return ['page-up'];
     if (key === '\u001b[6~') return ['page-down'];
     return [];
   });
+}
+
+/** ASCII-only 2x2 dot pattern: opposite corners alternate without relying on
+ * Braille/block glyphs that render as question marks in restricted terminals. */
+export function waitingSpinnerFrame(frame: number): string {
+  return frame % 2 ? '[. o / o .]' : '[o . / . o]';
 }
 
 export function commandPaletteMatches(
@@ -92,6 +99,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
   private pendingFrame?: string;
+  private queuedDraft?: string;
   private suspended = false;
   private activityAnchor = 0;
   /** Lines back from the very end of the conversation. 0 means "showing the
@@ -111,7 +119,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * the footer starts, and the status line gets drawn at both rows. Guarded the
    * same way `selecting` already guards this for select() pickers. */
   private paletteActive = false;
-  private cancelWaiting?: () => void;
+  private cancelWaiting?: (restoreDraft: boolean) => void;
   private waitingCancelled = false;
   private pendingApproval?: { resolve: (accepted: boolean) => void; previousLabel: string };
   private readonly onWaitingInput = (chunk: Buffer | string): void => {
@@ -127,12 +135,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       return;
     }
     for (const action of waitingInputActions(chunk)) {
-      if (action === 'cancel') {
+      if (action === 'cancel-edit' || action === 'cancel-stop') {
         if (this.waitingCancelled) continue;
         this.waitingCancelled = true;
         this.waitingLabel = 'stopping…';
         this.updateWaiting();
-        this.cancelWaiting?.();
+        this.cancelWaiting?.(action === 'cancel-edit');
       } else if (action === 'scroll-up') {
         this.historyScroll += 3;
         this.updateWaiting();
@@ -224,7 +232,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
-  startWaiting(message: string, onCancel?: () => void): void {
+  startWaiting(message: string, onCancel?: (restoreDraft: boolean) => void): void {
     this.stopWaiting(false);
     this.liveResponse = '';
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
@@ -244,6 +252,17 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       this.updateWaiting();
     }, 120);
     this.waitingTimer.unref();
+  }
+
+  /** The caller uses these only after an interrupted turn: before any output,
+   * Escape restores the submitted text; after output begins, the partial turn
+   * is persisted instead. */
+  restoreDraft(value: string): void { this.queuedDraft = value; }
+  liveResponseText(): string { return this.liveResponse; }
+  turnOutputStarted(): boolean {
+    return Boolean(this.liveResponse || this.activityEntries.some((entry) =>
+      entry.anchor === this.activityAnchor && entry.responseOffset !== undefined
+      && (entry.event?.kind === 'tool-start' || entry.event?.kind === 'tool-done')));
   }
 
   stopWaiting(refresh = true): void {
@@ -312,10 +331,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingText(): string {
     // ASCII frames render reliably in restricted fonts and remote terminals;
     // unsupported Braille spinner glyphs visibly flashed as question marks.
-    const frames = ['|', '/', '-', '\\'];
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
     const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
-    return `${frames[this.waitingFrame % frames.length]} ${this.waitingLabel} (${elapsed})`;
+    return `${waitingSpinnerFrame(this.waitingFrame)} ${this.waitingLabel} (${elapsed})`;
   }
 
   private updateWaiting(): void {
@@ -568,8 +586,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
     }
     return new Promise((resolveQuestion, rejectQuestion) => {
-      let value = '';
-      let cursor = 0;
+      let value = this.queuedDraft ?? '';
+      this.queuedDraft = undefined;
+      let cursor = value.length;
       let selected = 0;
       let historyIndex = this.history.length;
       // Reserved once for the whole prompt, not recomputed per keystroke: keeping the
