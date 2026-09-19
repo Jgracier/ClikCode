@@ -8,8 +8,9 @@
 
 import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { captureNativeHarnessOutput, inspectNativeHarness } from './native-harness.js';
+import { atomicWriteFile, stateDirectory } from './session-store.js';
 import type { AiLocalHarnessDefinition } from './types.js';
 
 /** A short, single-line title from a chat's first real message — used both
@@ -97,6 +98,93 @@ async function newestFiles(paths: readonly string[], limit: number): Promise<Arr
     .sort((left, right) => right.mtimeMs - left.mtimeMs).slice(0, limit);
 }
 
+// ---------------------------------------------------------------------------
+// Persistent discovery cache
+// ---------------------------------------------------------------------------
+
+/** What discovery learned about one vendor file. Everything here comes from
+ * the head of an append-only transcript, so it stays true for as long as the
+ * file exists; only a missing title is ever looked up again. */
+interface CachedSessionFacts { id?: string; cwd?: string; title?: string; mtimeMs?: number; size?: number }
+/** One vendor directory's listing, valid while the directory's own mtime is
+ * unchanged (a directory's mtime moves when entries are added or removed). */
+interface CachedDirectory { mtimeMs: number; files: Record<string, CachedSessionFacts> }
+interface DiscoveryCacheFile { v: 1; directories: Record<string, CachedDirectory> }
+
+const DISCOVERY_CACHE_MAX_DIRECTORIES = 400;
+let discoveryCache: { path: string; data: DiscoveryCacheFile; dirty: boolean } | undefined;
+/** Codex session id -> rollout file, filled by discovery so reading a transcript
+ * is a lookup instead of a second walk of the whole tree. */
+const codexPathById = new Map<string, string>();
+
+function discoveryCachePath(): string | undefined {
+  // Tests that never relocated ClikCode's state must not touch the real one.
+  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim() && !process.env.CLIKDEPLOY_AI_HOME?.trim()) return undefined;
+  return join(stateDirectory(), 'cache', 'native-discovery.json');
+}
+
+async function loadDiscoveryCache(): Promise<DiscoveryCacheFile> {
+  const path = discoveryCachePath();
+  if (discoveryCache && discoveryCache.path === (path ?? '')) return discoveryCache.data;
+  let data: DiscoveryCacheFile = { v: 1, directories: {} };
+  if (path) {
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as DiscoveryCacheFile;
+      if (parsed?.v === 1 && parsed.directories && typeof parsed.directories === 'object') data = parsed;
+    } catch { /* fail-open-ok: a missing or damaged cache only costs one full scan. */ }
+  }
+  discoveryCache = { path: path ?? '', data, dirty: false };
+  return data;
+}
+
+async function saveDiscoveryCache(): Promise<void> {
+  const path = discoveryCachePath();
+  if (!path || !discoveryCache?.dirty || discoveryCache.path !== path) return;
+  const entries = Object.entries(discoveryCache.data.directories);
+  if (entries.length > DISCOVERY_CACHE_MAX_DIRECTORIES) {
+    // Date-named vendor directories sort oldest first; drop those.
+    discoveryCache.data.directories = Object.fromEntries(entries.sort(([left], [right]) => right.localeCompare(left)).slice(0, DISCOVERY_CACHE_MAX_DIRECTORIES));
+  }
+  discoveryCache.dirty = false;
+  await atomicWriteFile(path, JSON.stringify(discoveryCache.data)).catch(() => undefined);
+}
+
+export function resetNativeSessionDiscoveryCache(): void {
+  discoveryCache = undefined;
+  codexPathById.clear();
+}
+
+/** Lists `directory`'s files with the cached facts for each, re-reading the
+ * listing only when the directory changed. Returns undefined if it is gone. */
+async function cachedDirectory(directory: string, suffix: string): Promise<CachedDirectory | undefined> {
+  const cache = await loadDiscoveryCache();
+  const info = await stat(directory).catch(() => undefined);
+  if (!info?.isDirectory()) {
+    if (cache.directories[directory]) { delete cache.directories[directory]; discoveryCache!.dirty = true; }
+    return undefined;
+  }
+  const known = cache.directories[directory];
+  if (known && known.mtimeMs === info.mtimeMs) return known;
+  let names: string[];
+  try { names = (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith(suffix)).map((entry) => entry.name); } catch {
+    // fail-open-ok: an unreadable optional vendor history directory has no sessions.
+    return undefined;
+  }
+  const next: CachedDirectory = { mtimeMs: info.mtimeMs, files: Object.fromEntries(names.map((name) => [name, known?.files[name] ?? {}])) };
+  cache.directories[directory] = next;
+  discoveryCache!.dirty = true;
+  return next;
+}
+
+async function sortedSubdirectories(directory: string): Promise<string[]> {
+  try {
+    return (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort().reverse();
+  } catch {
+    // fail-open-ok: a missing or unreadable optional vendor history directory has no sessions.
+    return [];
+  }
+}
+
 /** Both Claude Code and Codex represent a message's content as either a plain
  * string or a list of content blocks ({type:'text', text:'...'}, possibly
  * mixed with non-text blocks like tool calls) — real API message shapes, not
@@ -132,8 +220,8 @@ const ADOPTED_TRANSCRIPT_LIMIT = 200;
 
 /** Claude Code has no CLI command that lists past sessions (`--resume` with no
  * id opens an interactive TUI picker only), but it writes one real, stable
- * `<uuid>.jsonl` file per session under a project folder named by literalizing
- * the cwd path (`/` becomes `-`) — directly observed on disk, not guessed. The
+ * `<uuid>.jsonl` file per session under a project folder named after the cwd
+ * (see claudeProjectDirectoryNames) — directly observed on disk, not guessed. The
  * first line is often `{"type":"ai-title","aiTitle":"..."}`; older sessions
  * without one fall back to the first `type":"user"` message's own text. */
 export type NativeSessionEnvironment = Readonly<Record<string, string>>;
@@ -142,32 +230,62 @@ function nativeDataRoot(environment: NativeSessionEnvironment, variable: string,
   return environment[variable]?.trim() || fallback;
 }
 
-async function discoverClaudeFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
-  const dir = join(nativeDataRoot(environment, 'CLAUDE_CONFIG_DIR', join(homedir(), '.claude')), 'projects', workspace.replace(/\//g, '-'));
-  const files = await walkFilesRecursive(dir, 0, '.jsonl');
-  const recent = await newestFiles(files, 15);
-  const sessions: DiscoveredNativeSession[] = [];
-  for (const file of recent) {
-    const nativeId = file.path.slice(dir.length + 1).replace(/\.jsonl$/, '');
-    const prefix = await readFilePrefix(file.path, 8_000).catch(() => '');
-    let title: string | undefined;
-    for (const line of prefix.split('\n')) {
-      if (!line.trim()) continue;
-      let record: Record<string, unknown>;
-      try { record = JSON.parse(line); } catch { continue; }
-      if (record.type === 'ai-title' && typeof record.aiTitle === 'string') { title = record.aiTitle; break; }
-      const message = record.message as { content?: unknown } | undefined;
-      if (!title && record.type === 'user') {
-        const text = visibleNativeUserText(extractMessageText(message?.content));
-        // Claude Code also injects synthetic wrapper turns (e.g. a
-        // "<local-command-caveat>" note about a slash command's own output) as
-        // literal role:"user" messages — the same reason Codex's fallback below
-        // skips anything starting with "<".
-        if (text) title = conversationTitle(text);
-      }
+/** Claude Code names a project folder by replacing EVERY non-alphanumeric
+ * character of the cwd with `-` -- verified against real folders:
+ * `/home/u/.cache/x` is `-home-u--cache-x` and `/w/.claude/worktrees` is
+ * `-w--claude-worktrees`. Replacing only `/` (the earlier mapping) missed any
+ * workspace with a dot, underscore or space in its path. The earlier mapping
+ * is still tried second in case a build of Claude Code used it. */
+export function claudeProjectDirectoryNames(workspace: string): string[] {
+  return [...new Set([workspace.replace(/[^a-zA-Z0-9]/g, '-'), workspace.replace(/\//g, '-')])];
+}
+
+function claudeProjectDirectories(workspace: string, environment: NativeSessionEnvironment): string[] {
+  const root = join(nativeDataRoot(environment, 'CLAUDE_CONFIG_DIR', join(homedir(), '.claude')), 'projects');
+  return claudeProjectDirectoryNames(workspace).map((name) => join(root, name));
+}
+
+async function claudeSessionTitle(path: string): Promise<string | undefined> {
+  const prefix = await readFilePrefix(path, 8_000).catch(() => '');
+  let title: string | undefined;
+  for (const line of prefix.split('\n')) {
+    if (!line.trim()) continue;
+    let record: Record<string, unknown>;
+    try { record = JSON.parse(line); } catch { continue; }
+    if (record.type === 'ai-title' && typeof record.aiTitle === 'string') return record.aiTitle;
+    const message = record.message as { content?: unknown } | undefined;
+    if (!title && record.type === 'user') {
+      const text = visibleNativeUserText(extractMessageText(message?.content));
+      // Claude Code also injects synthetic wrapper turns (e.g. a
+      // "<local-command-caveat>" note about a slash command's own output) as
+      // literal role:"user" messages — the same reason Codex's fallback below
+      // skips anything starting with "<".
+      if (text) title = conversationTitle(text);
     }
-    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
   }
+  return title;
+}
+
+async function discoverClaudeFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
+  const sessions: DiscoveredNativeSession[] = [];
+  for (const dir of claudeProjectDirectories(workspace, environment)) {
+    const listing = await cachedDirectory(dir, '.jsonl');
+    if (!listing) continue;
+    const recent = await newestFiles(Object.keys(listing.files).map((name) => join(dir, name)), 15);
+    for (const file of recent) {
+      const name = basename(file.path);
+      const facts = listing.files[name] ?? {};
+      // A title can appear after the first scan (the ai-title record is written
+      // once Claude has named the chat), so it is keyed to the file's mtime.
+      if (facts.mtimeMs !== file.mtimeMs) {
+        listing.files[name] = { title: await claudeSessionTitle(file.path), mtimeMs: file.mtimeMs };
+        discoveryCache!.dirty = true;
+      }
+      sessions.push({ nativeId: name.replace(/\.jsonl$/, ''), title: listing.files[name]!.title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
+    }
+    if (sessions.length) break;
+  }
+  await saveDiscoveryCache();
   return sessions;
 }
 
@@ -180,12 +298,13 @@ async function discoverClaudeFsSessions(workspace: string, environment: NativeSe
  * an adoption is a one-time read, not something that should scale with a
  * session's total lifetime size. */
 async function readClaudeFsTranscript(nativeId: string, workspace: string, environment: NativeSessionEnvironment = {}): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
-  const path = join(nativeDataRoot(environment, 'CLAUDE_CONFIG_DIR', join(homedir(), '.claude')), 'projects', workspace.replace(/\//g, '-'), `${nativeId}.jsonl`);
-  let raw: string;
-  try { raw = await readFile(path, 'utf8'); } catch {
+  let raw: string | undefined;
+  for (const dir of claudeProjectDirectories(workspace, environment)) {
     // fail-open-ok: an optional native transcript that disappeared during discovery contributes no messages.
-    return [];
+    raw = await readFile(join(dir, `${nativeId}.jsonl`), 'utf8').catch(() => undefined);
+    if (raw !== undefined) break;
   }
+  if (raw === undefined) return [];
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -207,44 +326,129 @@ async function readClaudeFsTranscript(nativeId: string, workspace: string, envir
  * no title field; the first real user message (skipping synthetic `<...>`
  * wrapper turns Codex injects, like recommended-plugin notices) stands in for
  * one, same convention ClikCode's own conversationTitle already uses. */
-async function discoverCodexFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
-  const root = join(nativeDataRoot(environment, 'CODEX_HOME', join(homedir(), '.codex')), 'sessions');
-  const files = await walkFilesRecursive(root, 4, '.jsonl');
-  const recent = await newestFiles(files, 25);
-  const sessions: DiscoveredNativeSession[] = [];
-  for (const file of recent) {
-    const prefix = await readFilePrefix(file.path, 64_000).catch(() => '');
-    let sessionId: string | undefined;
-    let cwd: string | undefined;
-    let title: string | undefined;
-    for (const line of prefix.split('\n')) {
-      if (!line.trim()) continue;
-      let record: Record<string, unknown>;
-      try { record = JSON.parse(line); } catch { continue; }
-      const payload = record.payload as Record<string, unknown> | undefined;
-      if (record.type === 'session_meta') {
-        sessionId = typeof payload?.session_id === 'string' ? payload.session_id : undefined;
-        cwd = typeof payload?.cwd === 'string' ? payload.cwd : undefined;
-      } else if (!title && record.type === 'response_item' && payload?.role === 'user') {
-        const text = visibleNativeUserText(extractMessageText(payload.content));
-        if (text) title = conversationTitle(text);
+const CODEX_DISCOVERY_LIMIT = 25;
+/** Always look this far back even once the limit is reached: a resumed session
+ * keeps appending to its ORIGINAL date folder, so the newest activity is not
+ * always in the newest folder. */
+const CODEX_MIN_DAY_DIRECTORIES = 7;
+const CODEX_MAX_DAY_DIRECTORIES = 180;
+
+/** Codex has written the session id as `payload.id` and, in newer releases, as
+ * both `payload.id` and `payload.session_id` (verified on 0.155.x rollouts,
+ * which carry both with the same value). Either is accepted. If the meta line
+ * is longer than the scanned prefix it cannot be parsed as JSON, so the fields
+ * are then matched textually and the id falls back to the uuid every rollout
+ * filename ends in. */
+export function parseCodexSessionHead(prefix: string, fileName: string): CachedSessionFacts {
+  const facts: CachedSessionFacts = {};
+  for (const line of prefix.split('\n')) {
+    if (!line.trim()) continue;
+    let record: Record<string, unknown>;
+    try { record = JSON.parse(line); } catch {
+      if (!facts.id && line.includes('"session_meta"')) {
+        const id = /"(?:session_id|id)"\s*:\s*"([^"\\]+)"/.exec(line)?.[1];
+        const cwd = /"cwd"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(line)?.[1];
+        if (id) facts.id = id;
+        if (cwd) { try { facts.cwd = JSON.parse(cwd) as string; } catch { /* leave cwd unknown */ } }
       }
+      continue;
     }
-    if (!sessionId || (workspace && cwd && cwd !== workspace)) continue;
-    sessions.push({ nativeId: sessionId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
+    const payload = record.payload as Record<string, unknown> | undefined;
+    if (record.type === 'session_meta') {
+      const id = typeof payload?.id === 'string' && payload.id ? payload.id
+        : typeof payload?.session_id === 'string' && payload.session_id ? payload.session_id : undefined;
+      if (id) facts.id = id;
+      if (typeof payload?.cwd === 'string') facts.cwd = payload.cwd;
+    } else if (!facts.title && record.type === 'response_item' && payload?.role === 'user') {
+      const text = visibleNativeUserText(extractMessageText(payload.content));
+      if (text) facts.title = conversationTitle(text);
+    }
   }
-  return sessions;
+  if (!facts.id) {
+    const fromName = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(fileName)?.[1];
+    if (fromName) facts.id = fromName;
+  }
+  return facts;
 }
 
-/** Codex's rollout filename ends in the session's own uuid
- * (`rollout-<timestamp>-<uuid>.jsonl`), so the exact file is a direct lookup
- * rather than re-scanning every file's session_meta again. Reads every
- * response_item user/assistant turn from the full file (the discovery pass
- * above only scans a bounded prefix, enough for a title, not a transcript). */
+/** Day folders (`sessions/<year>/<month>/<day>`), newest first, produced lazily
+ * so a caller that stops early never lists the older part of the tree. */
+async function* codexDayDirectories(root: string): AsyncGenerator<string> {
+  for (const year of await sortedSubdirectories(root)) {
+    for (const month of await sortedSubdirectories(join(root, year))) {
+      for (const day of await sortedSubdirectories(join(root, year, month))) yield join(root, year, month, day);
+    }
+  }
+}
+
+async function discoverCodexFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
+  const root = join(nativeDataRoot(environment, 'CODEX_HOME', join(homedir(), '.codex')), 'sessions');
+  const matches: Array<DiscoveredNativeSession & { updatedAtMs: number }> = [];
+  let scanned = 0;
+  for await (const dir of codexDayDirectories(root)) {
+    if (scanned >= CODEX_MAX_DAY_DIRECTORIES) break;
+    if (scanned >= CODEX_MIN_DAY_DIRECTORIES && matches.length >= CODEX_DISCOVERY_LIMIT) break;
+    scanned += 1;
+    const listing = await cachedDirectory(dir, '.jsonl');
+    if (!listing) continue;
+    for (const name of Object.keys(listing.files)) {
+      const path = join(dir, name);
+      let facts = listing.files[name]!;
+      // The head of a rollout never changes; only a still-missing title (a
+      // session listed before its first message) is worth another look.
+      if (!facts.id || !facts.title) {
+        facts = parseCodexSessionHead(await readFilePrefix(path, 64_000).catch(() => ''), name);
+        listing.files[name] = facts;
+        discoveryCache!.dirty = true;
+      }
+      if (!facts.id) continue;
+      codexPathById.set(`${root}\u0000${facts.id}`, path);
+      // Filter by workspace BEFORE ranking: taking the newest 25 of every
+      // project first meant a busy other repo could hide all of this one's chats.
+      if (workspace && facts.cwd && facts.cwd !== workspace) continue;
+      // Only files that survive the filter are stat-ed at all.
+      const info = await stat(path).catch(() => undefined);
+      if (!info) continue;
+      matches.push({ nativeId: facts.id, title: facts.title, updatedAt: new Date(info.mtimeMs).toISOString(), updatedAtMs: info.mtimeMs });
+    }
+  }
+  await saveDiscoveryCache();
+  return matches.sort((left, right) => right.updatedAtMs - left.updatedAtMs).slice(0, CODEX_DISCOVERY_LIMIT);
+}
+
+/** Finds a rollout by id: first the id->path map discovery just filled, then
+ * the persisted listings, and only then a walk -- newest day first, names only
+ * (the filename ends in the session's uuid), stopping at the first hit. */
+async function locateCodexRollout(root: string, nativeId: string): Promise<string | undefined> {
+  const remembered = codexPathById.get(`${root}\u0000${nativeId}`);
+  if (remembered && await stat(remembered).then(() => true, () => false)) return remembered;
+  const cache = await loadDiscoveryCache();
+  for (const [dir, listing] of Object.entries(cache.directories)) {
+    if (!dir.startsWith(root)) continue;
+    for (const [name, facts] of Object.entries(listing.files)) {
+      if (facts.id !== nativeId && !name.endsWith(`${nativeId}.jsonl`)) continue;
+      const path = join(dir, name);
+      if (await stat(path).then(() => true, () => false)) return path;
+    }
+  }
+  for await (const dir of codexDayDirectories(root)) {
+    let names: string[];
+    try { names = await readdir(dir); } catch { continue; }
+    const name = names.find((candidate) => candidate.endsWith(`${nativeId}.jsonl`));
+    if (name) {
+      codexPathById.set(`${root}\u0000${nativeId}`, join(dir, name));
+      return join(dir, name);
+    }
+  }
+  return undefined;
+}
+
+/** Reads every response_item user/assistant turn from the full rollout (the
+ * discovery pass above only scans a bounded prefix, enough for a title, not a
+ * transcript). */
 async function readCodexFsTranscript(nativeId: string, workspace: string, environment: NativeSessionEnvironment = {}): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
   const root = join(nativeDataRoot(environment, 'CODEX_HOME', join(homedir(), '.codex')), 'sessions');
-  const files = await walkFilesRecursive(root, 4, '.jsonl');
-  const path = files.find((file) => file.endsWith(`${nativeId}.jsonl`));
+  const path = await locateCodexRollout(root, nativeId);
   if (!path) return [];
   let raw: string;
   try { raw = await readFile(path, 'utf8'); } catch {
@@ -305,8 +509,10 @@ async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, nativeI
  * mode, but each chat has a real `meta.json` (schemaVersion, title, cwd,
  * updatedAtMs) under `~/.cursor/chats/<project-hash>/<chat-uuid>/` — the
  * chat-uuid directory name is exactly the id its `--resume <chatId>` expects. */
-async function discoverCursorFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
-  const root = join(homedir(), '.cursor', 'chats');
+async function discoverCursorFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
+  // Cursor Agent has no profile variable of its own; an account isolated by a
+  // redirected HOME keeps its chats under that HOME.
+  const root = join(nativeDataRoot(environment, 'HOME', homedir()), '.cursor', 'chats');
   let projectDirs;
   try { projectDirs = await readdir(root, { withFileTypes: true }); } catch {
     // fail-open-ok: a missing or unreadable optional vendor history directory has no sessions.
@@ -322,19 +528,24 @@ async function discoverCursorFsSessions(workspace: string): Promise<DiscoveredNa
       if (chatDir.isDirectory()) metaFiles.push({ chatId: chatDir.name, path: join(projectPath, chatDir.name, 'meta.json') });
     }
   }
+  // Newest first BEFORE the cap. Directory order is arbitrary, so capping first
+  // dropped recent chats at random once a user had more than 200.
+  const chatIdByPath = new Map(metaFiles.map((item) => [item.path, item.chatId]));
+  const recent = await newestFiles(metaFiles.map((item) => item.path), 200);
   const sessions: DiscoveredNativeSession[] = [];
-  for (const { chatId, path } of metaFiles.slice(0, 200)) {
+  for (const { path, mtimeMs } of recent) {
     let meta: Record<string, unknown>;
     try { meta = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
     if (workspace && typeof meta.cwd === 'string' && meta.cwd !== workspace) continue;
+    const updatedAtMs = typeof meta.updatedAtMs === 'number' ? meta.updatedAtMs : mtimeMs;
     sessions.push({
-      nativeId: chatId,
+      nativeId: chatIdByPath.get(path)!,
       title: typeof meta.title === 'string' ? meta.title : undefined,
-      updatedAt: typeof meta.updatedAtMs === 'number' ? new Date(meta.updatedAtMs).toISOString() : undefined,
-      updatedAtMs: typeof meta.updatedAtMs === 'number' ? meta.updatedAtMs : undefined,
+      updatedAt: new Date(updatedAtMs).toISOString(),
+      updatedAtMs,
     });
   }
-  return sessions.sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')).slice(0, 15);
+  return sessions.sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)).slice(0, 15);
 }
 
 /** Pi has no listing command at all (`-r`/`/resume` open an interactive
@@ -503,10 +714,8 @@ function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-l
 
 /** Gemini CLI's `--list-sessions` has no JSON mode — real output is a numbered
  * list, one session per line: "N. Title (relative-time) [uuid-prefix]". The
- * bracketed id is only a shortened prefix (confirmed against Gemini's own
- * docs), not guaranteed to be the full uuid its `--resume` flag can also
- * accept verbatim — the safest resumable value is still whatever the CLI
- * itself printed, so it's used as-is rather than guessed at in full. */
+ * bracketed id is only a shortened prefix; resolveGeminiSessionIds below turns
+ * it into the full uuid when Gemini's own chat files identify it uniquely. */
 function parseDiscoveredSessionsNumberedList(raw: string): DiscoveredNativeSession[] {
   const sessions: DiscoveredNativeSession[] = [];
   for (const line of raw.split(/\r?\n/)) {
@@ -516,6 +725,33 @@ function parseDiscoveredSessionsNumberedList(raw: string): DiscoveredNativeSessi
     sessions.push({ nativeId: idFragment, title: title.trim() || undefined, updatedAt: relativeTime.trim() || undefined });
   }
   return sessions;
+}
+
+/** Gemini CLI stores each chat as `<home>/.gemini/tmp/<project>/chats/session-*.json`
+ * with the full `sessionId` inside. A listed prefix is replaced only when exactly
+ * one stored session starts with it; anything ambiguous or unreadable keeps the
+ * value the CLI printed, which is what it was always using before. */
+export async function resolveGeminiSessionIds(
+  sessions: readonly DiscoveredNativeSession[], environment: NativeSessionEnvironment = {},
+): Promise<DiscoveredNativeSession[]> {
+  const fullUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!sessions.some((session) => !fullUuid.test(session.nativeId))) return [...sessions];
+  const home = environment.GEMINI_CLI_HOME?.trim() || environment.HOME?.trim() || homedir();
+  const root = join(home, '.gemini', 'tmp');
+  const ids = new Set<string>();
+  for (const project of await sortedSubdirectories(root)) {
+    const files = await newestFiles(await walkFilesRecursive(join(root, project, 'chats'), 0, '.json'), 100);
+    for (const file of files) {
+      const head = await readFilePrefix(file.path, 2_000).catch(() => '');
+      const id = /"sessionId"\s*:\s*"([0-9a-f-]{36})"/i.exec(head)?.[1];
+      if (id) ids.add(id.toLowerCase());
+    }
+  }
+  return sessions.map((session) => {
+    if (fullUuid.test(session.nativeId)) return session;
+    const candidates = [...ids].filter((id) => id.startsWith(session.nativeId.toLowerCase()));
+    return candidates.length === 1 ? { ...session, nativeId: candidates[0]! } : session;
+  });
 }
 
 /** Never installs anything for a passive scan (only harnesses already found on
@@ -532,7 +768,7 @@ export async function discoverNativeSessions(
     const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
     const format = harness.session.discoverFormat ?? 'json';
     if (format === 'text') return parseDiscoveredSessionsText(raw);
-    if (format === 'numbered-list') return parseDiscoveredSessionsNumberedList(raw);
+    if (format === 'numbered-list') return await resolveGeminiSessionIds(parseDiscoveredSessionsNumberedList(raw), environment);
     return parseDiscoveredSessionsStructured(raw, format);
   } catch {
     // fail-open-ok: passive discovery must not break the picker when an optional vendor command fails.
