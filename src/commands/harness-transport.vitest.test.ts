@@ -15,6 +15,10 @@ describe('harness turn transports', () => {
     expect(harnessTurnTransport(harness('copilot', 'text'))).toBe('acp');
     expect(harnessTurnTransport(harness('droid', 'json'))).toBe('acp');
     expect(harnessTurnTransport(harness('droid', 'json'), true)).toBe('structured-cli');
+    // Images stay on ACP only when the caller says it forwards them.
+    expect(harnessTurnTransport(harness('droid', 'json'), true, { acpImages: true })).toBe('acp');
+    expect(harnessTurnTransport(harness('cursor'), true, { acpImages: true })).toBe('structured-cli');
+    expect(harnessTurnTransport(harness('codex'), true)).toBe('codex-app-server');
     expect(harnessTurnTransport(harness('cursor'))).toBe('structured-cli');
     expect(harnessTurnTransport(harness('aider', 'text'))).toBe('text-cli');
   });
