@@ -6,7 +6,8 @@ import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import {
-  composerLayout, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown, renderTableBlock,
+  composerLayout, createStreamingBlockParser, LruCache, nextCharacterIndex, previousCharacterIndex,
+  renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock,
   sanitizeTerminalText, splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
 } from './markdown-render.js';
 import { restoreTerminal, terminalModes } from './terminal-restore.js';
@@ -672,8 +673,12 @@ export function transientAssistantRequired(
  * the first complete Markdown block boundary at or after their raw response
  * offset. This preserves chronology without cutting a fence, emphasis span,
  * link, list, quote, or table into independently parsed fragments. */
-export function responseTimeline(content: string, events: readonly InlineResponseEvent[]): ResponseTimelinePart[] {
-  const blocks = splitIntoBlocks(content);
+export function responseTimeline(
+  content: string, events: readonly InlineResponseEvent[], parsedBlocks?: readonly MessageBlock[],
+): ResponseTimelinePart[] {
+  // `parsedBlocks` lets the live message supply its incrementally parsed
+  // blocks; they are identical to splitIntoBlocks(content) by contract.
+  const blocks = parsedBlocks ?? splitIntoBlocks(content);
   const sorted = [...events].sort((left, right) => left.responseOffset - right.responseOffset
     || (left.sequence ?? 0) - (right.sequence ?? 0));
   // No tool row is ever collapsed into a "… N earlier tool calls" count, at
@@ -865,6 +870,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private transientNotice?: string;
   private transientNoticeTimer?: NodeJS.Timeout;
   private turnUsage?: { inputTokens?: number; outputTokens?: number };
+  /** Laid-out rows of settled messages, keyed by everything that shapes them.
+   * A spinner tick or a keystroke repaints with forty cache hits instead of
+   * re-parsing and re-wrapping forty messages. */
+  private readonly messageRowCache = new LruCache<string, readonly string[]>(256);
+  private streamingBlocks = createStreamingBlockParser();
   /** Re-installs the key listener and raw mode after Ctrl+Z / `fg`. */
   private resumeInput?: () => void;
   /** Providers fan out parallel tool calls, so a second request can arrive
@@ -1367,10 +1377,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // Model and user text is sanitized before it is parsed or styled, so
         // the live stream and the persisted copy of a message lay out alike.
         const content = sanitizeTerminalText(rawContent);
+        // Settled content is context-free: a message always starts after a
+        // blank row (or at the top), so its rows depend only on these inputs.
+        const cacheKey = trackStableTail ? undefined : [
+          conversationInner, messageMarker,
+          events.map((event) => `${event.kind}@${event.responseOffset}#${event.sequence ?? ''}=${event.kind === 'activity' ? event.lines.join('\n') : event.text}`).join('\u0001'),
+          content,
+        ].join('\u0000');
+        const cachedRows = cacheKey === undefined ? undefined : this.messageRowCache.get(cacheKey);
+        if (cachedRows) {
+          for (const text of cachedRows) conversation.push({ text });
+          return;
+        }
+        const firstRow = conversation.length;
         let firstLine = true;
         /** Returns how many conversation rows are final even if this block is
          * still growing at the end of a live stream. */
-        const appendBlock = (block: MessageBlock): number => {
+        const appendBlock = (block: MessageBlock, live = false): number => {
           const blockStart = conversation.length;
           const quotePrefix = block.quoteDepth ? chalk.dim('│ '.repeat(block.quoteDepth)) : '';
           const linePrefix = (): string => {
@@ -1413,7 +1436,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           const structural = `${quotePrefix}${listPrefix}`;
           const hangIndent = ' '.repeat(terminalCellWidth(structural));
           const text = block.kind === 'heading' || block.kind === 'paragraph' || block.kind === 'list-item' ? block.text : '';
-          const styled = renderInlineMarkdown(text || ' ');
+          // The block still receiving tokens has a new text on every frame;
+          // caching it only fills the cache with dead prefixes.
+          const styled = (live ? renderInlineMarkdownLive : renderInlineMarkdown)(text || ' ');
           const budget = Math.max(1, conversationInner - terminalCellWidth(structural));
           const wrapped = wrapWords(styled, budget);
           for (const [lineIndex, line] of wrapped.entries()) {
@@ -1425,12 +1450,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           }
           return blockStart;
         };
-        const timeline = responseTimeline(content, events);
+        const timeline = responseTimeline(content, events, trackStableTail ? this.streamingBlocks(content) : undefined);
         let finalMarkdownPart = -1;
         for (const [partIndex, part] of timeline.entries()) if (part.kind === 'markdown') finalMarkdownPart = partIndex;
         for (const [partIndex, part] of timeline.entries()) {
           if (part.kind === 'markdown') {
-            const stableRows = appendBlock(part.block);
+            const stableRows = appendBlock(part.block, trackStableTail && partIndex === finalMarkdownPart);
             if (trackStableTail && partIndex === finalMarkdownPart) lineStableConversationBoundary = stableRows;
           } else if (part.kind === 'activity') appendActivityGroup(part.lines);
           else {
@@ -1447,6 +1472,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
             stableConversationBoundary = conversation.length;
           }
         }
+        if (cacheKey !== undefined) this.messageRowCache.set(cacheKey, conversation.slice(firstRow).map((row) => row.text));
       };
       const absoluteMessageIndex = messageStart + messageIndex;
       // Tool rows describe an assistant turn. They are anchored at the index the

@@ -10,20 +10,44 @@ import { Lexer, marked, type Token, type Tokens } from 'marked';
 import type { MessageBlock } from './types.js';
 
 
-/** A streaming turn repaints the whole visible transcript about thirty times a
- * second, and each repaint re-lexes every message in it. Keying on the exact
- * source text turns the settled messages above the live one into cache hits;
- * only the message that actually changed pays the lexer again. Results are
- * immutable by contract -- no caller mutates what it receives. */
+/** Least-recently-USED, not least-recently-added: a Map iterates in insertion
+ * order, so re-inserting on every hit keeps the entries a repaint actually
+ * touches (the forty messages on screen) and evicts the ones it does not. */
+export class LruCache<K, V> {
+  private readonly entries = new Map<K, V>();
+  constructor(private readonly limit: number) {}
+
+  get(key: K): V | undefined {
+    if (!this.entries.has(key)) return undefined;
+    const value = this.entries.get(key)!;
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value!);
+  }
+
+  has(key: K): boolean { return this.entries.has(key); }
+  get size(): number { return this.entries.size; }
+}
+
+/** A repaint re-lays-out every message on screen. Keying on the exact source
+ * text turns the settled messages into cache hits. Text that is still being
+ * streamed must NOT come through here -- every delta is a brand new key holding
+ * the whole answer so far, which filled the cache with dead prefixes and
+ * evicted the settled messages it exists for; see createStreamingBlockParser
+ * and renderInlineMarkdownLive. Results are immutable by contract. */
 function memoizeByText<T>(compute: (text: string) => T, limit = 256): (text: string) => T {
-  const cache = new Map<string, T>();
+  const cache = new LruCache<string, { value: T }>(limit);
   return (text) => {
-    if (cache.has(text)) return cache.get(text)!;
+    const hit = cache.get(text);
+    if (hit) return hit.value;
     const value = compute(text);
-    cache.set(text, value);
-    // Bounded so a long session cannot retain every revision of every message.
-    // Insertion order makes the oldest key the least recently added.
-    if (cache.size > limit) cache.delete(cache.keys().next().value!);
+    cache.set(text, { value });
     return value;
   };
 }
@@ -123,16 +147,35 @@ const renderInlineMarkdownUncached = (text: string): string => {
   return render(Lexer.lexInline(text, { gfm: true, breaks: false }));
 };
 export const renderInlineMarkdown = memoizeByText(renderInlineMarkdownUncached);
+/** For the block that is still receiving tokens: same output, no cache entry. */
+export const renderInlineMarkdownLive = renderInlineMarkdownUncached;
 
 
 /** Convert the original CommonMark/GFM block tree into the small semantic
  * document model used by the terminal. Code remains distinct from prose so
  * display-only continuation rows can preserve every byte without pretending
  * those visual wraps are source newlines. */
-const splitIntoBlocksUncached = (text: string): MessageBlock[] => {
+interface ParsedBlocks {
+  blocks: MessageBlock[];
+  /** Source offset and block count at the start of the last top-level token,
+   * when a blank line separates it from what came before. Text only ever grows
+   * at the end, and a blank line is what stops a later line from merging into
+   * the previous construct (a setext underline, a lazy continuation, a table
+   * delimiter row), so everything before this point parses the same forever. */
+  stable?: { offset: number; blocks: number };
+  /** Link reference definitions resolve across the whole document, so a text
+   * that has any cannot be parsed in independent pieces. */
+  hasDefinitions: boolean;
+}
+
+const parseBlocks = (text: string): ParsedBlocks => {
   const blocks: MessageBlock[] = [];
+  let hasDefinitions = false;
+  let stable: ParsedBlocks['stable'];
+  let previousType = '';
   const visit = (tokens: Token[], sourceEnd: number, quoteDepth = 0, listDepth = 0): void => {
     for (const token of tokens) {
+      if (token.type === 'def') hasDefinitions = true;
       if (token.type === 'space' || token.type === 'def') continue;
       if (token.type === 'code') {
         blocks.push({ kind: 'code', lines: token.text.split(/\r?\n/), ...(token.lang ? { language: token.lang } : {}), quoteDepth, indent: listDepth, sourceEnd });
@@ -181,9 +224,12 @@ const splitIntoBlocksUncached = (text: string): MessageBlock[] => {
       // delayed until after the following block.
       const previous = blocks[blocks.length - 1];
       if (previous) previous.sourceEnd = sourceEnd;
+      previousType = 'space';
       continue;
     }
     const blockStart = blocks.length;
+    if (previousType === 'space' && blockStart > 0) stable = { offset: sourceStart, blocks: blockStart };
+    previousType = token.type;
     visit([token], sourceEnd);
     // Compound Markdown tokens (notably lists and blockquotes) produce
     // several display blocks but have only one safe outer boundary. Prevent
@@ -197,9 +243,45 @@ const splitIntoBlocksUncached = (text: string): MessageBlock[] => {
     const finalBlock = blocks[blocks.length - 1];
     if (finalBlock && blocks.length > blockStart) finalBlock.blockBoundary = true;
   }
-  return blocks;
+  return { blocks, ...(stable ? { stable } : {}), hasDefinitions };
 };
-export const splitIntoBlocks = memoizeByText(splitIntoBlocksUncached);
+export const splitIntoBlocks = memoizeByText((text: string): MessageBlock[] => parseBlocks(text).blocks);
+
+/** Block parser for one growing message. Re-lexing the whole answer on every
+ * delta is quadratic over a long response; this keeps the blocks before the
+ * last blank-line boundary and lexes only the text after it. The result is
+ * identical to splitIntoBlocks(text) -- the persisted copy of the same answer
+ * goes through that, and the two must lay out alike -- and nothing is cached
+ * under the streaming text itself. */
+export function createStreamingBlockParser(): (text: string) => MessageBlock[] {
+  let stableText = '';
+  let stableBlocks: MessageBlock[] = [];
+  let incremental = true;
+  return (text) => {
+    if (!text.startsWith(stableText)) {
+      // A replacement stream rewrote earlier text: start over.
+      stableText = '';
+      stableBlocks = [];
+      incremental = true;
+    }
+    if (!incremental) return parseBlocks(text).blocks;
+    const offset = stableText.length;
+    const tail = parseBlocks(text.slice(offset));
+    if (tail.hasDefinitions) {
+      incremental = false;
+      stableText = '';
+      stableBlocks = [];
+      return parseBlocks(text).blocks;
+    }
+    const shifted = offset === 0 ? tail.blocks : tail.blocks.map((block) => ({ ...block, sourceEnd: block.sourceEnd + offset }));
+    const blocks = [...stableBlocks, ...shifted];
+    if (tail.stable) {
+      stableBlocks = blocks.slice(0, stableBlocks.length + tail.stable.blocks);
+      stableText = text.slice(0, offset + tail.stable.offset);
+    }
+    return blocks;
+  };
+}
 
 /** Width-bounded GFM table rendering. Equal columns are predictable while
  * per-cell truncation guarantees the table never destabilizes the frame. */
