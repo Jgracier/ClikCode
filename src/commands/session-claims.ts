@@ -10,10 +10,10 @@
  * overlaid onto `session.claim` when state is read. */
 
 import { randomBytes } from 'node:crypto';
-import { link, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
+import { link, open, readFile, readdir, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { atomicWriteFile, ensurePrivateDirectory, pidIsAlive, safeRecordFileName, stateDirectory } from './session-store.js';
+import { atomicWriteFile, ensurePrivateDirectory, pidIsAlive, safeRecordFileName, stateDirectory, withFileLock } from './session-store.js';
 
 /** Matches ai.ts's SESSION_CLAIM_TTL_MS; the heartbeat runs at a third of it. */
 export const SESSION_CLAIM_TTL_MS = 90_000;
@@ -96,21 +96,19 @@ async function readRaw(sessionId: string): Promise<string | undefined> {
   return readFile(claimFilePath(sessionId), 'utf8').catch(() => undefined);
 }
 
-/** Removes `path` only if it still holds exactly `observedRaw`. Rename is
- * atomic, so of any number of contenders one takes the file; if what it took is
- * not what it judged (a fresh claim landed in between) it is put back. */
+/** Removes a claim only if it still holds exactly the bytes that were judged
+ * dead. Every remover goes through one lock and re-checks under it, so a fresh
+ * claim that landed in between is never removed -- without this, a slow
+ * contender could delete the winner's new claim and let a third one in. Live
+ * claims are only ever created by an exclusive link and removed by their owner,
+ * so nothing else can change the file between the check and the unlink. */
 async function removeIfUnchanged(path: string, observedRaw: string): Promise<boolean> {
-  const aside = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.stale`;
-  try {
-    await rename(path, aside);
-  } catch {
-    return false;
-  }
-  const taken = await readFile(aside, 'utf8').catch(() => undefined);
-  const matched = taken === observedRaw;
-  if (!matched) await link(aside, path).catch(() => undefined);
-  await unlink(aside).catch(() => undefined);
-  return matched;
+  return withFileLock(`${path}.steal-lock`, async () => {
+    const current = await readFile(path, 'utf8').catch(() => undefined);
+    if (current !== observedRaw) return false;
+    await unlink(path).catch(() => undefined);
+    return true;
+  });
 }
 
 export async function readSessionClaim(sessionId: string): Promise<SessionClaim | undefined> {
@@ -132,9 +130,9 @@ export async function readSessionClaims(): Promise<Map<string, SessionClaim>> {
  *
  * Succeeds only when no claim exists (create-exclusive), when this process
  * already owns it (refresh), or when the existing claim is no longer held. A
- * dead claim is removed by renaming it to a private name -- atomic, so of any
- * number of contenders exactly one takes it -- and the winner of the following
- * exclusive create owns the conversation. */
+ * dead claim is removed under a lock after re-checking it is still the one
+ * judged, and the winner of the following exclusive create owns the
+ * conversation. */
 export async function acquireSessionClaim(sessionId: string, options: ClaimOptions = {}): Promise<ClaimResult> {
   await ensurePrivateDirectory(claimsDirectory());
   const path = claimFilePath(sessionId);
