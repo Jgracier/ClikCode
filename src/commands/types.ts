@@ -214,6 +214,7 @@ export interface HarnessPrompter {
   select?<T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
   response?(text: string, mode?: 'append' | 'replace'): void;
+  approval?(title: string, detail?: string): Promise<boolean>;
   activityEvent?(event: HarnessActivityEvent): void;
   panel?(title: string, body: string): void;
   close(): void;
