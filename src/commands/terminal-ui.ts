@@ -238,6 +238,14 @@ export function inlineConversationPlan(
   };
 }
 
+/** A live response must end on content, not its decorative separator. On a
+ * short mobile viewport the last replaceable row may be the only row visible. */
+export function liveConversationLines(lines: readonly string[], live: boolean): string[] {
+  const result = [...lines];
+  if (live) while (result[result.length - 1] === '') result.pop();
+  return result;
+}
+
 export type InlineResponseEvent =
   | { kind: 'activity'; responseOffset: number; sequence?: number; lines: string[] }
   | { kind: 'steer'; responseOffset: number; sequence?: number; text: string };
@@ -478,7 +486,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   response(text: string, mode: 'append' | 'replace' = 'append'): void {
-    if (!text) return;
+    // An empty replacement is meaningful when a failed streaming attempt is
+    // about to retry on another account. Appends with no content remain a
+    // no-op, but replace must clear the obsolete partial response.
+    if (!text && mode === 'append') return;
     this.liveResponse = mode === 'replace' ? text : this.liveResponse + text;
     this.schedulePaint();
   }
@@ -850,7 +861,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ensureBlankConversationRow();
       appendActivity(messageStart + messageIndex + 1);
     }
-    const conversationLines = conversation.map((row) => row.text);
+    const conversationLines = liveConversationLines(
+      conversation.map((row) => row.text), hasTransientAssistant,
+    );
     const meta = this.statusText();
     const footer: string[] = [];
     if (noticeRows && this.currentNotice) footer.push(`  ${chalk.yellow(visibleSlice(this.currentNotice, inner))}`);

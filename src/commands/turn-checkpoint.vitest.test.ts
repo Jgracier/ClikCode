@@ -41,6 +41,17 @@ describe('durable turn checkpoints', () => {
     ]);
   });
 
+  it('clears a failed attempt before a failover response starts', () => {
+    const target = session();
+    beginPendingTurn(target, 'Continue', '2026-01-02T00:00:00.000Z');
+    updatePendingResponse(target, 'obsolete partial', 'append', '2026-01-02T00:00:01.000Z');
+    updatePendingResponse(target, '', 'replace', '2026-01-02T00:00:02.000Z');
+    expect(target.pendingTurn?.response).toBeUndefined();
+    expect(target.pendingTurn?.outputStarted).toBe(false);
+    updatePendingResponse(target, 'replacement', 'replace', '2026-01-02T00:00:03.000Z');
+    expect(target.pendingTurn?.response).toBe('replacement');
+  });
+
   it('retains bounded tool activity when a provider fails before prose', () => {
     const target = session();
     beginPendingTurn(target, 'Fix it', '2026-01-02T00:00:00.000Z');
