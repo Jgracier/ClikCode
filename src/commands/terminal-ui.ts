@@ -1,10 +1,6 @@
-/** The full-screen terminal renderer -- one paint()/select()/question() loop
- * shared by every harness and the Gateway path alike. A single frame string
- * per repaint (never multiple writes mid-frame), a fixed-capacity footer
- * band computed once per prompt rather than per keystroke, and DEC autowrap
- * disabled for the whole frame -- all three exist because getting any one
- * of them wrong reproduces a real scroll/flicker/duplication bug this class
- * has already been through. */
+/** Shared terminal renderer for every harness and the Gateway path. Persisted
+ * conversation lines are emitted once into native scrollback; one atomic live
+ * region contains only the changing response, controls, and composer. */
 
 import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
@@ -21,12 +17,6 @@ import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBloc
 
 export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
 
-// Do not capture the mouse. Desktop terminals can translate a wheel to cursor
-// keys in the alternate screen, and mobile clients remain free to provide
-// native touch scrollback or their own arrow gesture. Enabling mouse tracking
-// here blocks native touch scrolling in clients that do not forward swipes.
-const ENTER_TERMINAL_SCREEN = '\u001b[?1049h\u001b[?1007h\u001b[?25h';
-const LEAVE_TERMINAL_SCREEN = '\u001b[?1007l\u001b[?25h\u001b[?1049l';
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
 
 function waitingInputAction(key: string): WaitingInputAction | undefined {
@@ -210,10 +200,24 @@ export function rightLabeledRule(width: number, label?: string): string {
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
 }
 
-/** Keep the same historical lines visible while a live response grows. */
-export function anchoredScrollOffset(current: number, previousLength: number, nextLength: number, maximum: number): number {
-  const preserved = current > 0 && nextLength > previousLength ? current + nextLength - previousLength : current;
-  return Math.max(0, Math.min(preserved, maximum));
+export function inlineConversationPlan(
+  permanent: readonly string[], current: readonly string[], commit: boolean, maxDynamic: number,
+): { reset: boolean; dynamic: string[]; permanent: string[] } {
+  const prefixMatches = permanent.every((line, index) => current[index] === line);
+  // A transient state can briefly omit the pending assistant between
+  // stopWaiting() and the authoritative persisted render. Never erase real
+  // scrollback for that intermediate frame; the next commit reconciles it.
+  if (!prefixMatches && !commit) {
+    return { reset: false, dynamic: [], permanent: [...permanent] };
+  }
+  const previous = prefixMatches ? [...permanent] : [];
+  const nextPermanent = commit ? [...current] : previous;
+  const uncommitted = commit ? [] : current.slice(previous.length);
+  return {
+    reset: !prefixMatches,
+    dynamic: uncommitted.slice(-Math.max(0, maxDynamic)),
+    permanent: nextPermanent,
+  };
 }
 
 export type InlineResponseEvent =
@@ -221,6 +225,9 @@ export type InlineResponseEvent =
   | { kind: 'steer'; responseOffset: number; sequence?: number; text: string };
 export type ResponseTimelinePart = { kind: 'markdown'; block: MessageBlock } | InlineResponseEvent;
 export type ActivityEntry = { anchor: number; responseOffset?: number; sequence?: number; event?: HarnessActivityEvent; lines: string[] };
+type InlineFrameState = {
+  permanent: string[]; dynamic: string[]; cursorRow: number; cursorColumn: number; reset: boolean; hideCursor: boolean;
+};
 
 const MAX_ACTIVITY_BURST = 4;
 
@@ -313,7 +320,7 @@ export function responseTimeline(content: string, events: readonly InlineRespons
   return parts;
 }
 
-export class FullScreenHarnessPrompter implements HarnessPrompter {
+export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
   private history: string[] = [];
   private currentSession?: HarnessSession;
@@ -334,7 +341,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
-  private pendingFrame?: string;
+  private pendingInlineFrame?: InlineFrameState;
   private queuedDraft?: string;
   private waitingDraft = '';
   private waitingCursor = 0;
@@ -345,13 +352,13 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private readonly waitingSubmissionWrites = new Set<Promise<void>>();
   private suspended = false;
   private activityAnchor = 0;
-  /** Lines back from the very end of the conversation. 0 means "showing the
-   * latest" (the default, and where every repaint clamps back to if the
-   * conversation is shorter than this). Deliberately a line count, not a
-   * message index: paging by whole screens needs to know how many wrapped
-   * lines actually fit, which messages alone don't tell you. */
-  private historyScroll = 0;
-  private renderedConversationLength = 0;
+  /** Persisted conversation lines already emitted into the terminal's native
+   * scrollback. Only the changing response/composer below them is repainted. */
+  private inlinePermanentLines: string[] = [];
+  private inlineWrittenPermanentLines: string[] = [];
+  private inlineCursorRow = 0;
+  private commitConversationOnNextPaint = false;
+  private resetInlineScreen = true;
   private usageLabel?: string;
   private selecting = false;
   /** True while the slash palette (inside question()) has its own fixed-capacity
@@ -366,23 +373,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private cancelWaiting?: (restoreDraft: boolean) => void;
   private waitingCancelled = false;
   private pendingApproval?: { resolve: (accepted: boolean) => void; previousLabel: string };
-  /** Apply every transcript-scrolling input through one offset. This is used
-   * by the idle composer and the live-turn composer, including while an
-   * approval prompt is visible. */
-  private scrollHistory(action: WaitingInputAction | undefined): boolean {
-    const page = Math.max(3, (output.rows || 24) - 6);
-    if (action === 'scroll-up') this.historyScroll += 3;
-    else if (action === 'scroll-down') this.historyScroll = Math.max(0, this.historyScroll - 3);
-    else if (action === 'page-up') this.historyScroll += page;
-    else if (action === 'page-down') this.historyScroll = Math.max(0, this.historyScroll - page);
-    else return false;
-    return true;
-  }
   private readonly onWaitingKey = (key: string): void => {
-    if (this.scrollHistory(waitingInputAction(key))) {
-      this.updateWaiting();
-      return;
-    }
     if (this.pendingApproval) {
       const answer = key.toLowerCase();
       if (answer === 'y' || answer === 'n' || answer === '\r' || answer === '\n' || answer === '\u001b' || answer === '\u0003') {
@@ -437,19 +428,23 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     }
   };
   private readonly onResize = (): void => {
-    if (!this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    if (!this.closed) {
+      this.resetInlineScreen = true;
+      this.commitConversationOnNextPaint = true;
+      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    }
   };
 
   constructor() {
-    output.write(ENTER_TERMINAL_SCREEN);
+    output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {
     if (this.currentSession?.id !== session.id) {
       this.activityEntries = [];
-      this.historyScroll = 0;
-      this.renderedConversationLength = 0;
+      this.inlinePermanentLines = [];
+      this.resetInlineScreen = true;
     }
     if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
@@ -460,6 +455,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     this.liveResponse = '';
+    this.commitConversationOnNextPaint = true;
     this.paint('', [], 0, '› ', 0);
   }
 
@@ -629,7 +625,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   /** Token deltas, spinner ticks, tool events, phases, and usage refreshes can
    * all arrive in the same few milliseconds. One shared scheduler collapses
    * those signals into a single atomic frame instead of queueing competing
-   * full-screen writes that briefly expose half-updated cursor/footer state. */
+   * terminal writes that briefly expose half-updated cursor/footer state. */
   private schedulePaint(delay = 32): void {
     if (this.responsePaintTimer || this.closed || this.suspended || this.selecting || this.paletteActive) return;
     this.responsePaintTimer = setTimeout(() => {
@@ -721,10 +717,6 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // this exact frame so it can never create a physical terminal scroll.
     const maxComposerRows = Math.max(1, targetHeight - 3 - paletteRows - noticeRows - waitingRows);
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
-    // Three non-composer footer rows: rule, title rule, and meta. Composer
-    // rows expand upward and reduce transcript space instead of scrolling
-    // horizontally off-screen.
-    const rows = Math.max(0, targetHeight - 3 - composerRows.rows.length - paletteRows - noticeRows - waitingRows);
     const conversation: Array<{ text: string }> = [];
     const ensureBlankConversationRow = (): void => {
       if (conversation.length && conversation[conversation.length - 1]?.text !== '') conversation.push({ text: '' });
@@ -830,41 +822,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       ensureBlankConversationRow();
       appendActivity(messageStart + messageIndex + 1);
     }
-    // Clamped here (not just where scroll changes) because the available
-    // content shifts underneath the same scroll value on every repaint: a
-    // new message arriving grows `conversation`, a session switch can shrink
-    // it out from under a scroll position that made sense for the old one.
-    const maxScroll = Math.max(0, conversation.length - rows);
-    this.historyScroll = anchoredScrollOffset(
-      this.historyScroll, this.renderedConversationLength, conversation.length, maxScroll,
-    );
-    this.renderedConversationLength = conversation.length;
-    const windowStart = Math.max(0, conversation.length - rows - this.historyScroll);
-    const shown = conversation.slice(windowStart, windowStart + rows);
-    if (this.historyScroll > 0 && shown.length) {
-      shown[0] = { text: `  ${chalk.dim(`── ${this.historyScroll} line${this.historyScroll === 1 ? '' : 's'} below · PgDn to catch up ──`)}` };
-    }
+    const conversationLines = conversation.map((row) => row.text);
     const meta = this.statusText();
-    // DEC autowrap must stay off while an absolute-positioned frame is written.
-    // A provider-supplied label can otherwise occupy two physical terminal rows
-    // while the renderer still counts one, shifting every subsequent footer-only
-    // repaint and leaving stale option rows above the composer.
-    let frame = '\u001b[?25l\u001b[?7l';
-    const screenLine = (text = ''): void => { frame += `\r\u001b[2K${text}\n`; };
-    frame += '\u001b[H';
-    if (shown.length) for (const row of shown) screenLine(row.text);
-    else if (rows > 0) {
-      const emptyMessageRow = rows >= 3 ? 1 : 0;
-      for (let index = 0; index < rows; index++) {
-        screenLine(index === emptyMessageRow ? `  ${chalk.dim('Start a conversation. Type / to open the command palette.')}` : '');
-      }
-    }
-    const renderedConversationRows = shown.length || rows;
-    const padding = Math.max(0, rows - renderedConversationRows);
-    for (let index = 0; index < padding; index++) screenLine();
-    if (noticeRows && this.currentNotice) screenLine(`  ${chalk.yellow(visibleSlice(this.currentNotice, inner))}`);
+    const footer: string[] = [];
+    if (noticeRows && this.currentNotice) footer.push(`  ${chalk.yellow(visibleSlice(this.currentNotice, inner))}`);
     if (paletteCapacity) {
-      screenLine(rule);
+      footer.push(rule);
       const visibleRows = paletteCapacity - 2;
       const start = Math.max(0, Math.min(selected - Math.floor(visibleRows / 2), options.length - visibleRows));
       const windowed = options.slice(start, start + visibleRows);
@@ -875,20 +838,21 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         const label = visibleSlice(option.label, available);
         const remaining = available - terminalCellWidth(label);
         const detail = option.detail && remaining > 3 ? visibleSlice(option.detail, remaining - 2) : '';
-        screenLine(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
+        footer.push(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
       });
-      for (let index = windowed.length; index < visibleRows; index++) screenLine();
-      screenLine(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
+      for (let index = windowed.length; index < visibleRows; index++) footer.push('');
+      footer.push(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
     if (waitingRows) {
-      screenLine(`  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
+      footer.push(`  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. Keeping it out of the provider/model/directory row makes
     // the two quota windows easy to scan without adding another footer row.
-    screenLine(chalk.dim(rightLabeledRule(width, this.usageLabel)));
+    footer.push(chalk.dim(rightLabeledRule(width, this.usageLabel)));
+    const composerStart = footer.length;
     for (const [index, row] of composerRows.rows.entries()) {
-      screenLine(`  ${index === 0 ? chalk.white(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
+      footer.push(`  ${index === 0 ? chalk.white(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
     }
     // The rule below the composer carries the chat's title at its right
     // edge instead of a plain dashed line -- dashes fill from the left up to
@@ -896,33 +860,71 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // rule rather than needing a line of its own. Provider/model/directory
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
-    screenLine(chalk.dim(rightLabeledRule(width, this.titleText())));
-    // Meta is the true last line and therefore has no trailing newline; adding
-    // one at the terminal's bottom row would scroll the otherwise fixed frame.
-    frame += `\r\x1b[2K  ${chalk.dim(visibleSlice(meta, inner))}\x1b[?7h`;
-    if (!palette?.hideCursor) {
-      const cursorRow = Math.max(1, targetHeight - 2 - (composerRows.rows.length - 1 - composerRows.cursorRow));
-      const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
-      frame += `\x1b[${cursorRow};${cursorColumn}H\x1b[?25h`;
-    }
-    this.writeFrame(frame);
+    footer.push(chalk.dim(rightLabeledRule(width, this.titleText())));
+    footer.push(`  ${chalk.dim(visibleSlice(meta, inner))}`);
+
+    const commit = this.commitConversationOnNextPaint;
+    const maxDynamicConversation = Math.max(0, targetHeight - footer.length);
+    const plan = inlineConversationPlan(this.inlinePermanentLines, conversationLines, commit, maxDynamicConversation);
+    const reset = this.resetInlineScreen || plan.reset;
+    const dynamicConversation = plan.dynamic;
+    const dynamic = [...dynamicConversation, ...footer];
+    const cursorRow = palette?.hideCursor
+      ? Math.max(0, dynamic.length - 1)
+      : dynamicConversation.length + composerStart + composerRows.cursorRow;
+    const cursorColumn = palette?.hideCursor ? 1 : 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
+    this.inlinePermanentLines = plan.permanent;
+    this.commitConversationOnNextPaint = false;
+    this.resetInlineScreen = false;
+    this.writeInlineFrame(plan.permanent, dynamic, cursorRow, cursorColumn, reset, Boolean(palette?.hideCursor));
   }
 
-  /** A slow terminal may still be flushing the previous complete frame when
-   * the next token/spinner update arrives. Retain only the newest replacement
-   * frame so obsolete elapsed-time and partial-prose states never backlog. */
-  private writeFrame(frame: string): void {
-    if (this.closed || this.suspended) return;
+  /** Native-scrollback renderer. Persisted chat is emitted once; only the
+   * live response and footer are erased and replaced. This lets the terminal,
+   * rather than a private viewport offset, own wheel and touch scroll. */
+  private writeInlineFrame(
+    permanent: readonly string[], dynamic: readonly string[], cursorRow: number,
+    cursorColumn: number, reset: boolean, hideCursor: boolean,
+  ): void {
+    const state: InlineFrameState = {
+      permanent: [...permanent], dynamic: [...dynamic], cursorRow, cursorColumn, reset, hideCursor,
+    };
     if (this.frameInFlight) {
-      this.pendingFrame = frame;
+      this.pendingInlineFrame = state;
       return;
     }
+    this.flushInlineFrame(state);
+  }
+
+  private flushInlineFrame(state: InlineFrameState): void {
+    if (this.closed || this.suspended) return;
+    const prefixMatches = this.inlineWrittenPermanentLines.every((line, index) => state.permanent[index] === line);
+    const reset = state.reset || !prefixMatches;
+    const previousPermanent = reset ? [] : this.inlineWrittenPermanentLines;
+    const appendedPermanent = state.permanent.slice(previousPermanent.length);
+    let frame = '\u001b[?25l\u001b[?7l\r';
+    if (reset) frame += '\u001b[2J\u001b[H';
+    else {
+      if (this.inlineCursorRow > 0) frame += `\u001b[${this.inlineCursorRow}A`;
+      frame += '\u001b[J';
+    }
+    const lines = [...appendedPermanent, ...state.dynamic];
+    for (const [index, line] of lines.entries()) {
+      frame += `\r\u001b[2K${line}`;
+      if (index < lines.length - 1) frame += '\n';
+    }
+    const dynamicLastRow = Math.max(0, state.dynamic.length - 1);
+    const rowsUp = Math.max(0, dynamicLastRow - state.cursorRow);
+    if (rowsUp) frame += `\u001b[${rowsUp}A`;
+    frame += `\r\u001b[${Math.max(1, state.cursorColumn)}G\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}`;
     this.frameInFlight = true;
     output.write(frame, () => {
+      this.inlineWrittenPermanentLines = state.permanent;
+      this.inlineCursorRow = Math.max(0, Math.min(state.cursorRow, dynamicLastRow));
       this.frameInFlight = false;
-      const pending = this.pendingFrame;
-      this.pendingFrame = undefined;
-      if (pending && !this.closed && !this.suspended) this.writeFrame(pending);
+      const pending = this.pendingInlineFrame;
+      this.pendingInlineFrame = undefined;
+      if (pending && !this.closed && !this.suspended) this.flushInlineFrame(pending);
     });
   }
 
@@ -1007,8 +1009,6 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       };
       const handleKey = (key: string): void => {
         const options = matches();
-        const scrollAction = options.length ? undefined : waitingInputAction(key);
-        if (this.scrollHistory(scrollAction)) return draw();
         if (key === '\u0003' || key === '\u0004') return finish('/exit');
         if (key === '\u001b' && settings?.cancellable) return cancel();
         if (key === '\r' || key === '\n') {
@@ -1024,9 +1024,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
           cursor = value.length;
           return draw();
         }
-        // Plain Up/Down scroll the conversation. This covers physical keys,
-        // alternate-screen wheel conversion, and mobile clients' explicit
-        // arrow gestures. Prompt history remains on Ctrl+P/Ctrl+N.
+        // Up/Down navigate palette options. Outside a palette the terminal
+        // owns scrolling; prompt history remains on Ctrl+P/Ctrl+N.
         if (key === '\u001b[A') {
           if (options.length) { selected = (selected - 1 + options.length) % options.length; return draw(); }
           return;
@@ -1158,14 +1157,14 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.pendingFrame = undefined;
+    this.pendingInlineFrame = undefined;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     this.stopWaiting(false);
     process.off('SIGWINCH', this.onResize);
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write(LEAVE_TERMINAL_SCREEN);
+    output.write('\u001b[?7h\u001b[?25h\n');
   }
 
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
@@ -1173,12 +1172,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * place once that process exits. */
   async suspend(): Promise<void> {
     this.suspended = true;
-    this.pendingFrame = undefined;
+    this.pendingInlineFrame = undefined;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write(LEAVE_TERMINAL_SCREEN);
+    output.write('\u001b[?7h\u001b[?25h\n');
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
@@ -1192,20 +1191,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
 
   resume(): void {
     if (this.closed) return;
-    // \x1b[2J explicitly clears the whole alt-screen buffer before painting
-    // -- suspend() hands control to the real terminal for a login prompt,
-    // and the terminal's actual dimensions can genuinely change in that
-    // window (most plausibly a mobile SSH client's on-screen keyboard
-    // appearing/disappearing). Every other repaint in this file only clears
-    // the exact lines it's about to rewrite (screenLine's \x1b[2K on each
-    // line as the cursor advances), which is fine when the frame height is
-    // stable between paints, but would leave old content below a shorter
-    // new frame -- e.g. an old meta/status line -- never revisited. That's
-    // the concrete "meta line duplicates after switching providers" report
-    // this fixes: switching to a provider needing login is exactly the
-    // path that goes through suspend/resume.
+    // A vendor login can resize a mobile terminal while it owns the TTY.
+    // Re-seed the authoritative transcript at the new width when control
+    // returns; native scrollback remains available above the refreshed view.
     this.suspended = false;
-    output.write(`${ENTER_TERMINAL_SCREEN}\u001b[2J`);
+    this.resetInlineScreen = true;
+    this.commitConversationOnNextPaint = true;
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }

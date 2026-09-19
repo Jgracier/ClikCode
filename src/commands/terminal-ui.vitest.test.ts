@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { anchoredScrollOffset, commandPaletteMatches, editWaitingComposer, responseTimeline, rightLabeledRule, TerminalInputDecoder, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { commandPaletteMatches, editWaitingComposer, inlineConversationPlan, responseTimeline, rightLabeledRule, TerminalInputDecoder, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
-describe('full-screen waiting input', () => {
+describe('terminal waiting input', () => {
   it('packs four animation phases of a logical 4x4 grid into two Braille cells', () => {
     const frames = Array.from({ length: 4 }, (_, frame) => waitingSpinnerFrame(frame));
     expect(new Set(frames.map((frame) => JSON.stringify(frame))).size).toBe(4);
@@ -33,10 +33,19 @@ describe('full-screen waiting input', () => {
     expect(decoder.push(Buffer.from('\u001by'))).toEqual(['\u001by']);
   });
 
-  it('holds the visible transcript in place while streamed lines are appended', () => {
-    expect(anchoredScrollOffset(6, 40, 44, 30)).toBe(10);
-    expect(anchoredScrollOffset(0, 40, 44, 30)).toBe(0);
-    expect(anchoredScrollOffset(29, 40, 44, 30)).toBe(30);
+  it('commits transcript lines once and keeps only the live tail replaceable', () => {
+    expect(inlineConversationPlan([], ['old one', 'old two'], true, 20)).toEqual({
+      reset: false, dynamic: [], permanent: ['old one', 'old two'],
+    });
+    expect(inlineConversationPlan(['old one', 'old two'], ['old one', 'old two', 'live a', 'live b'], false, 1)).toEqual({
+      reset: false, dynamic: ['live b'], permanent: ['old one', 'old two'],
+    });
+    expect(inlineConversationPlan(['old one', 'old two'], ['replacement'], true, 20)).toEqual({
+      reset: true, dynamic: [], permanent: ['replacement'],
+    });
+    expect(inlineConversationPlan(['old one', 'old two'], ['temporary mismatch'], false, 20)).toEqual({
+      reset: false, dynamic: [], permanent: ['old one', 'old two'],
+    });
   });
 
   it('keeps escape and control-c as cancellation without treating other keys as actions', () => {
