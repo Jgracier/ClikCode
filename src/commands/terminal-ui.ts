@@ -207,6 +207,10 @@ export function composerRightArrowCommand(
   return !value && !hasPaletteOptions ? command : undefined;
 }
 
+export function pickerConfirmsSelection(key: string, leftArrowSelect = false): boolean {
+  return key === '\r' || key === '\n' || (leftArrowSelect && key === '\u001b[D');
+}
+
 /** Fill a terminal-width rule from the left and pin a short label to its
  * right edge. Both composer borders use this same layout: usage above and
  * the conversation title below. */
@@ -244,6 +248,20 @@ export function liveConversationLines(lines: readonly string[], live: boolean): 
   const result = [...lines];
   if (live) while (result[result.length - 1] === '') result.pop();
   return result;
+}
+
+/** Keep the persisted history window stable while transient assistant and
+ * queued rows are appended. Applying the history cap to the combined array
+ * drops its first persisted row, breaks the native-scrollback prefix, and
+ * causes every live frame to be rejected until the final commit. */
+export function conversationMessageWindow<T>(
+  persisted: readonly T[], transient: T | undefined, queued: readonly T[], historyLimit = 40,
+): { messages: T[]; messageStart: number } {
+  const history = persisted.slice(-Math.max(0, historyLimit));
+  return {
+    messages: [...history, ...(transient === undefined ? [] : [transient]), ...queued],
+    messageStart: persisted.length - history.length,
+  };
 }
 
 export type InlineResponseEvent =
@@ -708,22 +726,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const hasTransientAssistant = transientAssistantRequired(
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
     ) || Boolean(pending?.steers?.length);
-    const baseMessages = hasTransientAssistant
-      ? [...persistedMessages, { role: 'assistant' as const, content: this.liveResponse }]
-      : persistedMessages;
+    const transientAssistant = hasTransientAssistant
+      ? { role: 'assistant' as const, content: this.liveResponse }
+      : undefined;
     const storedQueued = session.queuedTurns ?? [];
     const queuedMessages = [
       ...storedQueued.map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
       ...this.waitingSubmissions.filter((item) => item.state !== 'steered')
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
     ];
-    const allMessages: Array<{ role: 'user' | 'assistant'; content: string; queueState?: string }> = [...baseMessages, ...queuedMessages];
     // 40, not 6: matches the same replay/adoption cap used elsewhere
     // (failoverPrompt, ADOPTED_TRANSCRIPT_LIMIT) and — now that the
     // conversation area supports scrolling — gives Page Up somewhere real to
-    // go instead of a pool too small to scroll through at all.
-    const messages = allMessages.slice(-40);
-    const messageStart = allMessages.length - messages.length;
+    // go instead of a pool too small to scroll through at all. Transient and
+    // queued rows sit outside that cap so they cannot shift the persisted
+    // prefix while a turn is streaming.
+    const { messages, messageStart } = conversationMessageWindow<{
+      role: 'user' | 'assistant'; content: string; queueState?: string;
+    }>(persistedMessages, transientAssistant, queuedMessages);
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.
@@ -1145,6 +1165,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     title: string,
     options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
+    settings?: { leftArrowSelect?: boolean },
   ): Promise<T | undefined> {
     if (!options.length) return Promise.resolve(undefined);
     return new Promise((resolveSelection) => {
@@ -1164,9 +1185,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const visible = visibleOptions();
         if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
         const renderOptions = visible.map((option) => ({ label: option.label, detail: option.detail, value: '' }));
+        const confirmation = settings?.leftArrowSelect ? '\u2190/Enter' : 'Enter';
         const hint = query
-          ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} \u00b7 \u2191\u2193 move \u00b7 Enter choose \u00b7 Esc clear`
-          : `${options.length} total \u00b7 \u2191\u2193 move \u00b7 Enter choose \u00b7 Esc cancel \u00b7 type to filter`;
+          ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose \u00b7 Esc clear`
+          : `${options.length} total \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose \u00b7 Esc cancel \u00b7 type to filter`;
         this.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, hint });
       };
       let finished = false;
@@ -1199,7 +1221,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\u001b[A' || scrollAction === 'scroll-up') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
         else if (key === '\u001b[B' || scrollAction === 'scroll-down') selected = visible.length ? (selected + 1) % visible.length : 0;
         else if (key === '\u001b[C') { if (visible[selected]) void openActions(visible[selected]); return; }
-        else if (key === '\r' || key === '\n') { if (visible[selected]) finish(visible[selected].value); return; }
+        else if (pickerConfirmsSelection(key, settings?.leftArrowSelect)) { if (visible[selected]) finish(visible[selected].value); return; }
         else if (key === '\u0003') return finish(undefined);
         else if (key === '\u001b') { if (query) { query = ''; selected = 0; } else return finish(undefined); }
         else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; }

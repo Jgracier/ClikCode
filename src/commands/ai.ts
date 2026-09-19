@@ -1694,9 +1694,10 @@ async function chooseOption<T>(
   title: string,
   options: readonly PickerOption<T>[],
   onAction?: (value: T, action: string) => Promise<void>,
+  settings?: { leftArrowSelect?: boolean },
 ): Promise<T | undefined> {
   if (options.length === 0) return undefined;
-  if (rl.select) return rl.select(title, options, onAction);
+  if (rl.select) return rl.select(title, options, onAction, settings);
   output.write(`\n${chalk.bold(title)}\n`);
   options.forEach((option, index) => {
     output.write(`  ${chalk.cyan(String(index + 1).padStart(2))}  ${option.label}${option.detail ? ` ${chalk.dim(option.detail)}` : ''}\n`);
@@ -1919,6 +1920,7 @@ async function interactiveAccountPicker(
         actionPerformed = true;
         await manageAccountAction(rl, choice.accountId, action);
       },
+      { leftArrowSelect: true },
     );
     if (actionPerformed) continue;
     if (!selected || selected.kind !== 'account') return undefined;

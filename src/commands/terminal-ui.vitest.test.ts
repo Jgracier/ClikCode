@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, composerRightArrowCommand, editWaitingComposer, inlineConversationPlan, liveConversationLines, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { commandPaletteMatches, composerRightArrowCommand, conversationMessageWindow, editWaitingComposer, inlineConversationPlan, liveConversationLines, pickerConfirmsSelection, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('terminal waiting input', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
@@ -89,6 +89,21 @@ describe('terminal waiting input', () => {
     expect(composerRightArrowCommand('', false, '/account')).toBe('/account');
     expect(composerRightArrowCommand('draft', false, '/account')).toBeUndefined();
     expect(composerRightArrowCommand('', true, '/account')).toBeUndefined();
+  });
+
+  it('uses Left Arrow as confirmation only for the account picker', () => {
+    expect(pickerConfirmsSelection('\r')).toBe(true);
+    expect(pickerConfirmsSelection('\u001b[D')).toBe(false);
+    expect(pickerConfirmsSelection('\u001b[D', true)).toBe(true);
+  });
+
+  it('does not shift the persisted transcript window when live rows arrive', () => {
+    const persisted = Array.from({ length: 45 }, (_, index) => `message ${index}`);
+    const window = conversationMessageWindow(persisted, 'live response', ['queued']);
+    expect(window.messageStart).toBe(5);
+    expect(window.messages[0]).toBe('message 5');
+    expect(window.messages.at(-2)).toBe('live response');
+    expect(window.messages.at(-1)).toBe('queued');
   });
 });
 
