@@ -366,15 +366,16 @@ describe('local harness catalog', () => {
 
   it('builds the ACP spawn contract from declarations only', () => {
     expect(harnessAcpLaunch(localHarnessForCommand('droid')!, { model: 'gpt-5', effort: 'high', permissionMode: 'auto' }))
-      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp', '--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'] });
+      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp', '--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: ['--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], optionPlacement: 'after', experimental: false });
     expect(harnessAcpLaunch(localHarnessForCommand('copilot')!, { model: 'gpt-5', effort: 'high', permissionMode: 'bypass' }))
-      .toEqual({ binary: 'copilot', argv: ['--model', 'gpt-5', '--effort', 'high', '--allow-all', '--acp', '--stdio'] });
+      .toMatchObject({ binary: 'copilot', argv: ['--model', 'gpt-5', '--effort', 'high', '--allow-all', '--acp', '--stdio'] });
     expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { effort: 'low', permissionMode: 'auto' }))
-      .toEqual({ binary: 'cline', argv: ['--thinking', 'low', '--auto-approve', 'true', '--acp'] });
-    expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { permissionMode: 'ask' })).toEqual({ binary: 'cline', argv: ['--acp'] });
+      .toMatchObject({ binary: 'cline', argv: ['--thinking', 'low', '--auto-approve', 'true', '--acp'] });
+    expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { permissionMode: 'ask' })).toMatchObject({ binary: 'cline', argv: ['--acp'], optionArgv: [] });
     expect(harnessAcpLaunch(localHarnessForCommand('hermes')!, { permissionMode: 'bypass', effort: 'max' }))
-      .toEqual({ binary: 'hermes', argv: ['--reasoning', 'max', '--yolo', 'acp'] });
-    expect(harnessAcpLaunch(localHarnessForCommand('vibe')!)).toEqual({ binary: 'vibe-acp', argv: [] });
+      .toMatchObject({ binary: 'hermes', argv: ['--reasoning', 'max', '--yolo', 'acp'] });
+    expect(harnessAcpLaunch(localHarnessForCommand('vibe')!)).toMatchObject({ binary: 'vibe-acp', argv: [] });
+    expect(harnessAcpLaunch(localHarnessForCommand('gemini')!)).toMatchObject({ argv: ['--experimental-acp'], experimental: true });
     expect(harnessAcpLaunch(localHarnessForCommand('claude')!)).toBeUndefined();
   });
 
@@ -479,7 +480,7 @@ describe('custom ACP harnesses', () => {
     expect(harnessCanRunTurns(harness)).toBe(true);
     expect(harnessIntegrationLevel(harness)).toBe('structured');
     expect(harnessAcpLaunch(customAcpHarness({ command: 'codex-acp', binary: 'npx', argv: ['-y', '@zed-industries/codex-acp'] })))
-      .toEqual({ binary: 'npx', argv: ['-y', '@zed-industries/codex-acp'] });
+      .toMatchObject({ binary: 'npx', argv: ['-y', '@zed-industries/codex-acp'] });
     expect(localHarnessCapabilityManifest(harness).options).toEqual([]);
     expect(() => customAcpHarness({ command: 'bad name; rm', binary: 'x', argv: [] })).toThrow('simple lowercase name');
     expect(() => customAcpHarness({ command: 'ok', binary: ' ', argv: [] })).toThrow('needs a binary');
