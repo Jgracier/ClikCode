@@ -76,11 +76,13 @@ describe('durable turn checkpoints', () => {
   it('preserves native steering inside the active turn transcript', () => {
     const target = session();
     beginPendingTurn(target, 'Initial request', '2026-01-02T00:00:00.000Z');
-    recordPendingSteer(target, 'Prioritize tests', '2026-01-02T00:00:01.000Z', '2026-01-02T00:00:01.000Z');
-    updatePendingResponse(target, 'Done', 'append', '2026-01-02T00:00:02.000Z');
-    expect(sessionTranscriptMessages(target).slice(-2)).toEqual([
-      { role: 'user', content: 'Initial request\n\nSteering update while this turn was running:\nPrioritize tests' },
-      { role: 'assistant', content: 'Done' },
+    updatePendingResponse(target, 'Before. After.', 'append', '2026-01-02T00:00:01.000Z');
+    recordPendingSteer(target, 'Prioritize tests', '2026-01-02T00:00:01.000Z', 8, '2026-01-02T00:00:01.000Z');
+    expect(sessionTranscriptMessages(target).slice(-4)).toEqual([
+      { role: 'user', content: 'Initial request' },
+      { role: 'assistant', content: 'Before. ' },
+      { role: 'user', content: 'Prioritize tests' },
+      { role: 'assistant', content: 'After.' },
     ]);
   });
 

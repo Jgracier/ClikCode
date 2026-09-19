@@ -9,14 +9,14 @@
 import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import {
-  composerLayout, formatParagraph, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown, renderTableBlock,
+  composerLayout, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown, renderTableBlock,
   splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
 } from './markdown-render.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import { nativeModelLabel } from './native-account-data.js';
 import type { LiveTurnInputResult } from './live-turn-input.js';
-import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, PickerOption } from './types.js';
+import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBlock, PickerOption } from './types.js';
 
 export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
 
@@ -53,15 +53,14 @@ export function editWaitingComposer(value: string, cursor: number, key: string):
   return { value, cursor, changed: false };
 }
 
-/** A fixed 3x4 field containing exactly twelve identical, tiny dots. The two
- * checkerboard phases pulse instead of making one larger dot chase around the
- * perimeter; only brightness changes, so the cluster never appears to rotate,
- * jump, or change shape. */
-export function waitingSpinnerFrame(frame: number): [boolean[], boolean[], boolean[]] {
+/** A fixed 4x4 field of identical tiny dots. Alternating diagonals breathe in
+ * two phases; only brightness changes, so the compact square never rotates,
+ * jumps, or changes shape. */
+export function waitingSpinnerFrame(frame: number): [boolean[], boolean[], boolean[], boolean[]] {
   const phase = Math.floor(Math.abs(frame) / 2) % 2;
-  return Array.from({ length: 3 }, (_, row) =>
+  return Array.from({ length: 4 }, (_, row) =>
     Array.from({ length: 4 }, (_, column) => (row + column + phase) % 2 === 0),
-  ) as [boolean[], boolean[], boolean[]];
+  ) as [boolean[], boolean[], boolean[], boolean[]];
 }
 
 export function commandPaletteMatches(
@@ -81,16 +80,19 @@ export function rightLabeledRule(width: number, label?: string): string {
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
 }
 
-export type InterleavedResponsePart = { kind: 'text'; text: string } | { kind: 'activity'; lines: string[] };
-export type ActivityEntry = { anchor: number; responseOffset?: number; event?: HarnessActivityEvent; lines: string[] };
+export type InlineResponseEvent =
+  | { kind: 'activity'; responseOffset: number; sequence?: number; lines: string[] }
+  | { kind: 'steer'; responseOffset: number; sequence?: number; text: string };
+export type ResponseTimelinePart = { kind: 'markdown'; block: MessageBlock } | InlineResponseEvent;
+export type ActivityEntry = { anchor: number; responseOffset?: number; sequence?: number; event?: HarnessActivityEvent; lines: string[] };
 
 const MAX_ACTIVITY_BURST = 4;
 
 /** One provider may publish pending/running/progress frames for the same tool.
- * They describe one lifecycle, not separate calls. Upsert by native id (or a
- * conservative label+offset fallback) so progress cannot flood the chat. */
+ * They describe one lifecycle, not separate calls. Upsert by native id, or by
+ * the latest still-open matching label when a protocol omits ids. */
 export function upsertActivityEvent(
-  entries: readonly ActivityEntry[], anchor: number, responseOffset: number | undefined, event: HarnessActivityEvent,
+  entries: readonly ActivityEntry[], anchor: number, responseOffset: number | undefined, event: HarnessActivityEvent, sequence?: number,
 ): ActivityEntry[] {
   if (event.kind === 'thinking') return [...entries];
   const normalized: HarnessActivityEvent = {
@@ -102,7 +104,7 @@ export function upsertActivityEvent(
       const entry = entries[index]!;
       if (entry.anchor !== anchor || entry.event?.kind !== 'tool-start') continue;
       if (normalized.id ? entry.event.id === normalized.id
-        : entry.event.label === normalized.label && entry.responseOffset === responseOffset) return index;
+        : entry.event.label === normalized.label) return index;
     }
     return -1;
   })();
@@ -116,7 +118,10 @@ export function upsertActivityEvent(
     };
     next[matchIndex] = { ...prior, event: effective, lines: renderActivityLine(effective).map((line) => line.trim()) };
   } else {
-    next.push({ anchor, ...(responseOffset === undefined ? {} : { responseOffset }), event: normalized, lines: renderActivityLine(normalized).map((line) => line.trim()) });
+    next.push({
+      anchor, ...(responseOffset === undefined ? {} : { responseOffset }), ...(sequence === undefined ? {} : { sequence }),
+      event: normalized, lines: renderActivityLine(normalized).map((line) => line.trim()),
+    });
   }
   return next.slice(-50);
 }
@@ -128,28 +133,47 @@ export function transientAssistantRequired(
     entry.anchor === transcriptLength && entry.responseOffset !== undefined)));
 }
 
-/** Preserve the chronology of prose and tool events within one assistant
- * message. Provider protocols send them as separate event streams, so the
- * response offset captured at arrival is the stable join key. */
-export function interleaveResponseContent(
-  content: string,
-  activities: ReadonlyArray<{ responseOffset: number; lines: string[] }>,
-): InterleavedResponsePart[] {
-  const parts: InterleavedResponsePart[] = [];
-  let offset = 0;
-  const sorted = [...activities].sort((left, right) => left.responseOffset - right.responseOffset);
+/** Parse the response exactly once, then attach tools and steering messages to
+ * the first complete Markdown block boundary at or after their raw response
+ * offset. This preserves chronology without cutting a fence, emphasis span,
+ * link, list, quote, or table into independently parsed fragments. */
+export function responseTimeline(content: string, events: readonly InlineResponseEvent[]): ResponseTimelinePart[] {
+  const blocks = splitIntoBlocks(content);
+  const groupedEvents: InlineResponseEvent[] = [];
+  const sorted = [...events].sort((left, right) => left.responseOffset - right.responseOffset
+    || (left.sequence ?? 0) - (right.sequence ?? 0));
   for (let index = 0; index < sorted.length;) {
-    const responseOffset = sorted[index]!.responseOffset;
-    const group: typeof sorted = [];
-    while (index < sorted.length && sorted[index]!.responseOffset === responseOffset) group.push(sorted[index++]!);
-    const nextOffset = Math.max(offset, Math.min(content.length, responseOffset));
-    if (nextOffset > offset) parts.push({ kind: 'text', text: content.slice(offset, nextOffset) });
-    const hidden = Math.max(0, group.length - MAX_ACTIVITY_BURST);
-    if (hidden) parts.push({ kind: 'activity', lines: [`… ${hidden} earlier tool ${hidden === 1 ? 'call' : 'calls'}`] });
-    for (const activity of group.slice(-MAX_ACTIVITY_BURST)) parts.push({ kind: 'activity', lines: activity.lines });
-    offset = nextOffset;
+    const offset = sorted[index]!.responseOffset;
+    const group: InlineResponseEvent[] = [];
+    while (index < sorted.length && sorted[index]!.responseOffset === offset) group.push(sorted[index++]!);
+    const activities = group.filter((event): event is Extract<InlineResponseEvent, { kind: 'activity' }> => event.kind === 'activity');
+    const hidden = Math.max(0, activities.length - MAX_ACTIVITY_BURST);
+    const retained = new Set(activities.slice(-MAX_ACTIVITY_BURST));
+    let summarized = false;
+    for (const event of group) {
+      if (event.kind !== 'activity' || retained.has(event)) groupedEvents.push(event);
+      else if (!summarized) {
+        groupedEvents.push({
+          kind: 'activity', responseOffset: offset, sequence: event.sequence,
+          lines: [`… ${hidden} earlier tool ${hidden === 1 ? 'call' : 'calls'}`],
+        });
+        summarized = true;
+      }
+    }
   }
-  if (offset < content.length || !activities.length) parts.push({ kind: 'text', text: content.slice(offset) });
+  const parts: ResponseTimelinePart[] = [];
+  let eventIndex = 0;
+  const appendEventsThrough = (boundary: number): void => {
+    while (eventIndex < groupedEvents.length && groupedEvents[eventIndex]!.responseOffset <= boundary) {
+      parts.push(groupedEvents[eventIndex++]!);
+    }
+  };
+  appendEventsThrough(0);
+  for (const block of blocks) {
+    parts.push({ kind: 'markdown', block });
+    appendEventsThrough(block.sourceEnd);
+  }
+  appendEventsThrough(Number.POSITIVE_INFINITY);
   return parts;
 }
 
@@ -178,8 +202,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingDraft = '';
   private waitingCursor = 0;
   private waitingSubmit?: (text: string) => Promise<LiveTurnInputResult>;
-  private waitingSubmissions: Array<{ localId: number; text: string; state: 'sending' | 'queued' | 'steered' | 'error' }> = [];
+  private waitingSubmissions: Array<{ localId: number; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' }> = [];
   private waitingSubmissionId = 0;
+  private timelineSequence = 0;
   private readonly waitingSubmissionWrites = new Set<Promise<void>>();
   private suspended = false;
   private activityAnchor = 0;
@@ -242,7 +267,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         this.waitingDraft = '';
         this.waitingCursor = 0;
         const localId = ++this.waitingSubmissionId;
-        this.waitingSubmissions.push({ localId, text, state: 'sending' });
+        this.waitingSubmissions.push({
+          localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
+        });
         this.updateWaiting();
         const write = this.waitingSubmit(text).then((result) => {
           const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
@@ -307,17 +334,18 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const last = this.activityEntries[this.activityEntries.length - 1];
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
     this.activityEntries = [...this.activityEntries.slice(-49), {
-      anchor: this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0,
+      anchor: this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0,
       ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
+      ...(this.waitingLabel ? { sequence: ++this.timelineSequence } : {}),
       lines: [normalized],
     }];
     this.schedulePaint();
   }
 
   activityEvent(event: HarnessActivityEvent): void {
-    const anchor = this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
+    const anchor = this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
     const responseOffset = this.waitingLabel ? this.liveResponse.length : undefined;
-    this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event);
+    this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
     this.schedulePaint();
   }
 
@@ -335,7 +363,16 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   ): void {
     this.stopWaiting(false);
     this.liveResponse = '';
-    this.activityAnchor = this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
+    // A running turn always renders as stable messages, its submitted user
+    // prompt, then one live assistant slot. Keep that slot fixed for the
+    // whole turn: deriving it from sessionTranscriptMessages made the anchor
+    // grow after the first response delta, so later tools jumped below the
+    // assistant reply and appeared to arrive from nowhere.
+    // The caller paints the submitted user prompt before entering waiting
+    // mode, so the live assistant occupies the next array index exactly.
+    // Internal commands that do not display their synthetic prompt also append
+    // the transient assistant at this same index.
+    this.activityAnchor = this.currentSession?.messages?.length ?? 0;
     this.waitingLabel = message;
     this.cancelWaiting = onCancel;
     this.waitingSubmit = onSubmit;
@@ -436,13 +473,13 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * for 5m 31s" style -- so a long turn reads as "still working, N seconds in"
    * rather than the same static label sitting there with no sense of how long
    * it's actually been (only the spinner glyph itself changing periodically). */
-  private waitingLines(): [string, string, string] {
+  private waitingLines(): [string, string, string, string] {
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
     const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
     const dots = waitingSpinnerFrame(this.waitingFrame).map((row) => row.map((active) =>
-      active ? chalk.cyanBright('·') : chalk.dim('·')).join('')) as [string, string, string];
+      active ? chalk.cyanBright('·') : chalk.dim('·')).join('')) as [string, string, string, string];
     const label = `${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to steer or queue' : ''}`;
-    return [dots[0], `${dots[1]}  ${chalk.dim(label)}`, dots[2]];
+    return [dots[0], `${dots[1]}  ${chalk.dim(label)}`, dots[2], dots[3]];
   }
 
   private updateWaiting(): void {
@@ -495,21 +532,26 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // share it) are unaffected.
     const conversationInner = width - 2;
     const rule = chalk.dim('─'.repeat(width));
-    const persistedMessages = sessionTranscriptMessages(session);
+    const stableMessages = session.messages ?? [];
+    const pending = this.waitingLabel ? session.pendingTurn : undefined;
+    const persistedMessages = pending
+      ? [...stableMessages, { role: 'user' as const, content: pending.prompt }]
+      : sessionTranscriptMessages(session);
     // Tool events often arrive before the first prose token. They still belong
     // to the in-flight assistant message. Render an empty temporary assistant
     // anchor immediately; otherwise the tools remain invisible and then all
     // appear at once when the first sentence arrives.
     const hasTransientAssistant = transientAssistantRequired(
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
-    );
+    ) || Boolean(pending?.steers?.length);
     const baseMessages = hasTransientAssistant
       ? [...persistedMessages, { role: 'assistant' as const, content: this.liveResponse }]
       : persistedMessages;
     const storedQueued = session.queuedTurns ?? [];
     const queuedMessages = [
       ...storedQueued.map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
-      ...this.waitingSubmissions.map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
+      ...this.waitingSubmissions.filter((item) => item.state !== 'steered')
+        .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
     ];
     const allMessages: Array<{ role: 'user' | 'assistant'; content: string; queueState?: string }> = [...baseMessages, ...queuedMessages];
     // 40, not 6: matches the same replay/adoption cap used elsewhere
@@ -530,7 +572,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // composer. It is a fixed status band, not transcript content, so a long
     // streamed answer cannot scroll it away. Very short terminals fall back
     // to the labelled middle row rather than drawing outside the viewport.
-    const waitingRows = this.waitingLabel ? (targetHeight >= 8 ? 3 : 1) : 0;
+    const waitingRows = this.waitingLabel ? (targetHeight >= 9 ? 4 : 1) : 0;
     const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
     const composerRows = composerLayout(composer, cursor, composerWidth);
     // Three non-composer footer rows: rule, title rule, and meta. Composer
@@ -558,60 +600,81 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     appendActivity(messageStart);
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
-      let firstLine = true;
-      const appendMessageText = (content: string): void => {
-        for (const block of splitIntoBlocks(content)) {
+      const appendMarkdownContent = (content: string, messageMarker: string, events: readonly InlineResponseEvent[] = []): void => {
+        let firstLine = true;
+        const appendBlock = (block: MessageBlock): void => {
+          const quotePrefix = block.quoteDepth ? chalk.dim('│ '.repeat(block.quoteDepth)) : '';
+          const linePrefix = (): string => {
+            const prefix = firstLine ? `${messageMarker} ` : '  ';
+            firstLine = false;
+            return prefix;
+          };
           if (block.kind === 'code') {
+            const structural = `${quotePrefix}${'  '.repeat(block.indent)}`;
             for (const codeLine of [...(block.language ? [chalk.dim(`[${block.language}]`)] : []), ...block.lines]) {
-              const segments = wrapCodeLine(codeLine, Math.max(1, conversationInner - 4));
+              const segments = wrapCodeLine(codeLine, Math.max(1, conversationInner - terminalCellWidth(structural) - 2));
               for (const [segmentIndex, segment] of segments.entries()) {
-                const prefix = firstLine ? `${marker} ` : '  ';
                 const continuation = segmentIndex ? chalk.dim('↳ ') : '  ';
-                conversation.push({ text: `${prefix}${continuation}${chalk.cyan(segment)}` });
-                firstLine = false;
+                conversation.push({ text: `${linePrefix()}${structural}${continuation}${chalk.cyan(segment)}` });
               }
             }
-            continue;
+            return;
           }
           if (block.kind === 'table') {
-            for (const tableLine of renderTableBlock(block.header, block.rows, conversationInner)) {
-              const prefix = firstLine ? `${marker} ` : '  ';
-              conversation.push({ text: `${prefix}${tableLine}` });
-              firstLine = false;
+            const available = Math.max(1, conversationInner - terminalCellWidth(quotePrefix));
+            for (const tableLine of renderTableBlock(block.header, block.rows, available, block.align)) {
+              conversation.push({ text: `${linePrefix()}${quotePrefix}${tableLine}` });
             }
-            continue;
+            return;
           }
-          const { prefix: bulletPrefix, hangIndent, text, bold, rule } = formatParagraph(block.paragraph || ' ');
-          if (rule) {
-            const prefix = firstLine ? `${marker} ` : '  ';
-            conversation.push({ text: `${prefix}${chalk.dim('─'.repeat(Math.max(1, conversationInner)))}` });
-            firstLine = false;
-            continue;
+          if (block.kind === 'rule') {
+            const available = Math.max(1, conversationInner - terminalCellWidth(quotePrefix));
+            conversation.push({ text: `${linePrefix()}${quotePrefix}${chalk.dim('─'.repeat(available))}` });
+            return;
           }
-          const styled = renderInlineMarkdown(text);
-          const budget = Math.max(1, conversationInner - terminalCellWidth(bulletPrefix || hangIndent));
-          // conversationInner is already the full per-line budget after the
-          // 2-column marker/indent prefix; wrapWords breaks at spaces (falling
-          // back to a hard break only for a single word wider than the whole
-          // line) instead of the flat character-count slice this replaced,
-          // which split words wherever the count happened to land.
+          const listPrefix = block.kind === 'list-item'
+            ? `${'  '.repeat(block.depth)}${block.task ? chalk.cyan(block.checked ? '☑' : '☐') : block.ordered ? chalk.dim(`${block.number}.`) : chalk.dim('•')} `
+            : block.kind === 'paragraph' ? '  '.repeat(block.indent) : '';
+          const structural = `${quotePrefix}${listPrefix}`;
+          const hangIndent = ' '.repeat(terminalCellWidth(structural));
+          const text = block.kind === 'heading' || block.kind === 'paragraph' || block.kind === 'list-item' ? block.text : '';
+          const styled = renderInlineMarkdown(text || ' ');
+          const budget = Math.max(1, conversationInner - terminalCellWidth(structural));
           const wrapped = wrapWords(styled, budget);
           for (const [lineIndex, line] of wrapped.entries()) {
-            const prefix = firstLine ? `${marker} ` : '  ';
-            const structural = lineIndex === 0 ? bulletPrefix : hangIndent;
-            conversation.push({ text: `${prefix}${structural}${bold ? chalk.bold(line) : line}` });
-            firstLine = false;
+            const indentation = lineIndex === 0 ? structural : hangIndent;
+            const rendered = block.kind === 'heading'
+              ? block.level <= 2 ? chalk.cyanBright(chalk.bold(line)) : chalk.bold(line)
+              : line;
+            conversation.push({ text: `${linePrefix()}${indentation}${rendered}` });
+          }
+        };
+        for (const part of responseTimeline(content, events)) {
+          if (part.kind === 'markdown') appendBlock(part.block);
+          else if (part.kind === 'activity') appendActivityGroup(part.lines);
+          else {
+            ensureBlankConversationRow();
+            appendMarkdownContent(part.text, chalk.white('›'));
+            conversation.push({ text: `  ${chalk.dim('↳ steered into active turn')}` });
+            ensureBlankConversationRow();
           }
         }
       };
       const absoluteMessageIndex = messageStart + messageIndex;
-      const embeddedActivities = this.activityEntries
+      const embeddedEvents: InlineResponseEvent[] = this.activityEntries
         .filter((entry) => entry.anchor === absoluteMessageIndex && entry.responseOffset !== undefined)
-        .map((entry) => ({ responseOffset: entry.responseOffset!, lines: entry.lines }));
-      for (const part of interleaveResponseContent(message.content, embeddedActivities)) {
-        if (part.kind === 'text') appendMessageText(part.text);
-        else appendActivityGroup(part.lines);
+        .map((entry) => ({ kind: 'activity', responseOffset: entry.responseOffset!, sequence: entry.sequence, lines: entry.lines }));
+      if (absoluteMessageIndex === persistedMessages.length) {
+        const durableSteers = pending?.steers ?? [];
+        embeddedEvents.push(...durableSteers.map((item) => ({
+          kind: 'steer' as const, responseOffset: item.responseOffset ?? 0, text: item.text,
+        })));
+        const durableTexts = new Set(durableSteers.map((item) => item.text));
+        embeddedEvents.push(...this.waitingSubmissions.filter((item) => item.state === 'steered'
+          && !durableTexts.has(item.text))
+          .map((item) => ({ kind: 'steer' as const, responseOffset: item.responseOffset, sequence: item.sequence, text: item.text })));
       }
+      appendMarkdownContent(message.content, marker, embeddedEvents);
       if (message.queueState) {
         const status = message.queueState === 'steered' ? 'steered into active turn'
           : message.queueState === 'sending' ? 'submitting…'

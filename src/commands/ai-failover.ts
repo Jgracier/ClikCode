@@ -1,5 +1,23 @@
 export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'other';
 
+/** Usage probes deliberately return display labels so provider-specific
+ * response shapes stay out of routing. Interpret only explicit percentage
+ * windows here; token/cost labels and unavailable probes remain unknown. Any
+ * exhausted window is enough to make an account unusable for a new turn. */
+export function usageLabelIsExhausted(label: string | undefined): boolean {
+  return (usageLabelRemainingPercent(label) ?? 1) <= 0;
+}
+
+/** Most constrained remaining window; higher is better for routing headroom.
+ * The legacy `used` form remains readable during cache/version migration. */
+export function usageLabelRemainingPercent(label: string | undefined): number | undefined {
+  if (!label) return undefined;
+  const left = [...label.matchAll(/(\d+(?:\.\d+)?)%\s*left/gi)].map((match) => Number(match[1]));
+  if (left.length) return Math.min(...left);
+  const used = [...label.matchAll(/(\d+(?:\.\d+)?)%\s*used/gi)].map((match) => Number(match[1]));
+  return used.length ? 100 - Math.max(...used) : undefined;
+}
+
 /** Classify only signals strong enough to justify changing credentials. */
 export function classifyAccountFailure(error: unknown): AccountFailureKind {
   const status = (error as { statusCode?: unknown; response?: { status?: unknown } } | null)?.statusCode

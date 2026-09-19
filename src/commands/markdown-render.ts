@@ -7,7 +7,7 @@
 
 import chalk from 'chalk';
 import { Lexer, marked, type Token, type Tokens } from 'marked';
-import type { FormattedParagraph, MessageBlock } from './types.js';
+import type { MessageBlock } from './types.js';
 
 
 /** Applies `style` to each word of `text` individually, leaving whitespace
@@ -47,56 +47,77 @@ export function renderInlineMarkdown(text: string): string {
 }
 
 
-/** Fenced code blocks are pulled out as their own non-reflowed unit before
- * the normal per-paragraph pipeline ever sees them -- word-wrapping code
- * would change what it means (a wrapped shell command or JSON blob reads
- * differently than the original), so those lines get hard-truncated instead
- * of wrapped when rendered, same principle as visibleSlice elsewhere in
- * this file. */
+/** Convert the original CommonMark/GFM block tree into the small semantic
+ * document model used by the terminal. Code remains distinct from prose so
+ * display-only continuation rows can preserve every byte without pretending
+ * those visual wraps are source newlines. */
 export function splitIntoBlocks(text: string): MessageBlock[] {
   const blocks: MessageBlock[] = [];
-  const textBlock = (paragraph: string, prefix = ''): void => {
-    const lines = paragraph.split(/\r?\n/);
-    for (const line of lines) blocks.push({ kind: 'text', paragraph: `${prefix}${line}` });
-  };
-  const visit = (tokens: Token[], quoteDepth = 0, listDepth = 0): void => {
+  const visit = (tokens: Token[], sourceEnd: number, quoteDepth = 0, listDepth = 0): void => {
     for (const token of tokens) {
-      const quote = quoteDepth ? `${'> '.repeat(quoteDepth)}` : '';
       if (token.type === 'space' || token.type === 'def') continue;
       if (token.type === 'code') {
-        blocks.push({ kind: 'code', lines: token.text.split(/\r?\n/), ...(token.lang ? { language: token.lang } : {}) });
+        blocks.push({ kind: 'code', lines: token.text.split(/\r?\n/), ...(token.lang ? { language: token.lang } : {}), quoteDepth, indent: listDepth, sourceEnd });
       } else if (token.type === 'heading') {
-        textBlock(`${'#'.repeat(token.depth)} ${token.text}`, quote);
+        blocks.push({ kind: 'heading', text: token.text, level: token.depth, quoteDepth, sourceEnd });
       } else if (token.type === 'hr') {
-        textBlock('---', quote);
+        blocks.push({ kind: 'rule', quoteDepth, sourceEnd });
       } else if (token.type === 'paragraph' || token.type === 'text' || token.type === 'html') {
-        textBlock(token.text, quote);
+        blocks.push({ kind: 'paragraph', text: token.text, quoteDepth, indent: listDepth, sourceEnd });
       } else if (token.type === 'blockquote') {
-        visit(token.tokens ?? [], quoteDepth + 1, listDepth);
+        visit(token.tokens ?? [], sourceEnd, quoteDepth + 1, listDepth);
       } else if (token.type === 'table') {
         const table = token as Tokens.Table;
-        blocks.push({ kind: 'table', header: table.header.map((cell) => cell.text), rows: table.rows.map((row) => row.map((cell) => cell.text)) });
+        blocks.push({
+          kind: 'table', header: table.header.map((cell) => cell.text), rows: table.rows.map((row) => row.map((cell) => cell.text)),
+          align: table.align, quoteDepth, sourceEnd,
+        });
       } else if (token.type === 'list') {
         const list = token as Tokens.List;
         list.items.forEach((item: Tokens.ListItem, index: number) => {
-          const marker = list.ordered ? `${Number(list.start || 1) + index}.` : item.task ? `- [${item.checked ? 'x' : ' '}]` : '-';
-          const indentation = '  '.repeat(listDepth);
           const content = (item.tokens ?? []).filter((child: Token) => child.type !== 'list');
           const nested = (item.tokens ?? []).filter((child: Token) => child.type === 'list');
           const first = content.map((child: Token) => 'text' in child && typeof child.text === 'string' ? child.text : '').filter(Boolean).join(' ');
-          textBlock(`${indentation}${marker} ${first}`, quote);
-          visit(nested, quoteDepth, listDepth + 1);
+          blocks.push({
+            kind: 'list-item', text: first, depth: listDepth, ordered: list.ordered,
+            ...(list.ordered ? { number: Number(list.start || 1) + index } : {}),
+            task: item.task, ...(item.task ? { checked: item.checked } : {}), quoteDepth, sourceEnd,
+          });
+          visit(nested, sourceEnd, quoteDepth, listDepth + 1);
         });
       }
     }
   };
-  visit(marked.lexer(text, { gfm: true, breaks: false }));
+  let sourceEnd = 0;
+  for (const token of marked.lexer(text, { gfm: true, breaks: false })) {
+    const sourceStart = sourceEnd;
+    sourceEnd += token.raw.length;
+    if (token.type === 'space') {
+      // Blank lines are safe insertion points even though they do not render
+      // a block. Extend the preceding block through that whitespace so a tool
+      // emitted between paragraphs stays between paragraphs instead of being
+      // delayed until after the following block.
+      const previous = blocks[blocks.length - 1];
+      if (previous) previous.sourceEnd = sourceEnd;
+      continue;
+    }
+    const blockStart = blocks.length;
+    visit([token], sourceEnd);
+    // Compound Markdown tokens (notably lists and blockquotes) produce
+    // several display blocks but have only one safe outer boundary. Prevent
+    // an event whose offset is inside that construct from being emitted after
+    // its first child and visually splitting the Markdown structure.
+    for (let index = blockStart; index < blocks.length - 1; index++) blocks[index]!.sourceEnd = sourceStart;
+  }
   return blocks;
 }
 
 /** Width-bounded GFM table rendering. Equal columns are predictable while
  * per-cell truncation guarantees the table never destabilizes the frame. */
-export function renderTableBlock(header: readonly string[], rows: readonly (readonly string[])[], width: number): string[] {
+export function renderTableBlock(
+  header: readonly string[], rows: readonly (readonly string[])[], width: number,
+  align: readonly ('left' | 'center' | 'right' | null)[] = [],
+): string[] {
   const columns = Math.max(1, header.length, ...rows.map((row) => row.length));
   const borders = columns + 1;
   const padding = columns * 2;
@@ -104,51 +125,13 @@ export function renderTableBlock(header: readonly string[], rows: readonly (read
   const row = (cells: readonly string[], heading = false): string => `│${Array.from({ length: columns }, (_, index) => {
     const rendered = renderInlineMarkdown(cells[index] ?? '');
     const clipped = visibleSlice(rendered, cellWidth);
-    const padded = `${clipped}${' '.repeat(Math.max(0, cellWidth - terminalCellWidth(clipped)))}`;
+    const remaining = Math.max(0, cellWidth - terminalCellWidth(clipped));
+    const left = align[index] === 'right' ? remaining : align[index] === 'center' ? Math.floor(remaining / 2) : 0;
+    const padded = `${' '.repeat(left)}${clipped}${' '.repeat(remaining - left)}`;
     return ` ${heading ? chalk.bold(padded) : padded} `;
   }).join('│')}│`;
   const separator = `├${Array.from({ length: columns }, () => '─'.repeat(cellWidth + 2)).join('┼')}┤`;
   return [row(header, true), separator, ...rows.map((cells) => row(cells))].map((line) => visibleSlice(line, width));
-}
-
-/** Every harness's assistant text is plain markdown-convention prose
- * regardless of vendor, so this -- unlike HarnessActivityEvent's per-vendor
- * JSON parsing -- applies identically no matter which harness produced the
- * paragraph: a header renders bold, a list item gets a dim glyph and a
- * hanging indent for any wrapped continuation lines, and anything else
- * passes through untouched. Deliberately paragraph-level, not span-level --
- * inline styling (bold *within* a sentence) would need wrapWords to track
- * open ANSI codes across a wrap boundary, which stripMarkdown already
- * discards to plain text; a header or list marker is always at the start of
- * its own paragraph, so no such boundary problem exists here. */
-
-export function formatParagraph(paragraph: string): FormattedParagraph {
-  if (/^([-*_])\1{2,}\s*$/.test(paragraph.trim())) return { prefix: '', hangIndent: '', text: '', bold: false, rule: true };
-  const header = /^#{1,6}\s+(.*)$/.exec(paragraph);
-  if (header) return { prefix: '', hangIndent: '', text: header[1], bold: true, rule: false };
-  const quote = /^>\s?(.*)$/.exec(paragraph);
-  // Only the marker is dim, not chalk.dim() around the whole line -- bold
-  // and dim share the same SGR "normal intensity" reset code (22), so
-  // concatenating a dim-wrapped string around a separately-bold-wrapped
-  // inline span (from renderInlineMarkdown, applied after this returns)
-  // would let the bold span's own reset code end the dim early for the
-  // rest of the line. Chalk only fixes that automatically for styles
-  // nested as actual JS calls (chalk.dim(chalk.bold(x))), not for
-  // pre-rendered strings spliced together afterward, which is what happens
-  // here -- so this sidesteps the collision instead of triggering it.
-  if (quote) return { prefix: `${chalk.dim('│')} `, hangIndent: '  ', text: quote[1], bold: false, rule: false };
-  const bullet = /^([-*+])\s+(.*)$/.exec(paragraph);
-  if (bullet) return { prefix: `${chalk.dim('•')} `, hangIndent: ' '.repeat(2), text: bullet[2], bold: false, rule: false };
-  const numbered = /^(\d+[.)])\s+(.*)$/.exec(paragraph);
-  // hangIndent is a plain space string matching the *visible* width of
-  // `prefix` (marker plus its trailing space) exactly -- not a rounded
-  // approximation -- so a wrapped continuation line lines up under the
-  // first line's text instead of drifting a column off, which an earlier
-  // "round up to a 2-space unit" version of this got wrong for any
-  // odd-length marker (e.g. a 2-character "2." plus its space is 3 wide,
-  // not the 4 that formula produced).
-  if (numbered) return { prefix: `${chalk.dim(numbered[1])} `, hangIndent: ' '.repeat(numbered[1].length + 1), text: numbered[2], bold: false, rule: false };
-  return { prefix: '', hangIndent: '', text: paragraph, bold: false, rule: false };
 }
 
 export function visibleSlice(value: string, width: number): string {

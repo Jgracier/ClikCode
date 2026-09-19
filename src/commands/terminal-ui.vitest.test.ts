@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, editWaitingComposer, interleaveResponseContent, rightLabeledRule, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
+import { commandPaletteMatches, editWaitingComposer, responseTimeline, rightLabeledRule, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
 
 describe('full-screen waiting input', () => {
-  it('pulses twelve tiny dots without changing the tight 3x4 shape', () => {
+  it('pulses a compact 4x4 square without changing its shape', () => {
     const first = waitingSpinnerFrame(0);
     const held = waitingSpinnerFrame(1);
     const alternate = waitingSpinnerFrame(2);
@@ -11,10 +11,11 @@ describe('full-screen waiting input', () => {
       [true, false, true, false],
       [false, true, false, true],
       [true, false, true, false],
+      [false, true, false, true],
     ]);
     expect(held).toEqual(first);
     expect(alternate.flat()).toEqual(first.flat().map((active) => !active));
-    expect(first.flat()).toHaveLength(12);
+    expect(first.flat()).toHaveLength(16);
   });
 
   it('keeps scrolling available while a provider turn is running', () => {
@@ -39,15 +40,27 @@ describe('full-screen waiting input', () => {
 
 describe('streamed response chronology', () => {
   it('keeps tool activity at the response offset where it occurred', () => {
-    expect(interleaveResponseContent('I will inspect it. The issue is fixed.', [
-      { responseOffset: 19, lines: ['tool read file'] },
-      { responseOffset: 19, lines: ['done read file'] },
+    expect(responseTimeline('I will inspect it.\n\nThe issue is fixed.', [
+      { kind: 'activity', responseOffset: 19, lines: ['tool read file'] },
+      { kind: 'activity', responseOffset: 19, lines: ['done read file'] },
     ])).toEqual([
-      { kind: 'text', text: 'I will inspect it. ' },
-      { kind: 'activity', lines: ['tool read file'] },
-      { kind: 'activity', lines: ['done read file'] },
-      { kind: 'text', text: 'The issue is fixed.' },
+      { kind: 'markdown', block: { kind: 'paragraph', text: 'I will inspect it.', quoteDepth: 0, indent: 0, sourceEnd: 20 } },
+      { kind: 'activity', responseOffset: 19, lines: ['tool read file'] },
+      { kind: 'activity', responseOffset: 19, lines: ['done read file'] },
+      { kind: 'markdown', block: { kind: 'paragraph', text: 'The issue is fixed.', quoteDepth: 0, indent: 0, sourceEnd: 39 } },
     ]);
+  });
+
+  it('waits for a complete compound Markdown block before inserting live events', () => {
+    const markdown = '- parent\n  - child\n- sibling\n\nAfter.';
+    const parts = responseTimeline(markdown, [
+      { kind: 'steer', responseOffset: 12, sequence: 1, text: 'Check the nested item' },
+      { kind: 'activity', responseOffset: 12, sequence: 2, lines: ['tool inspect'] },
+    ]);
+    expect(parts.map((part) => part.kind)).toEqual([
+      'markdown', 'markdown', 'markdown', 'steer', 'activity', 'markdown',
+    ]);
+    expect(parts[3]).toMatchObject({ kind: 'steer', text: 'Check the nested item' });
   });
 
   it('updates repeated tool progress in place and ignores reasoning as chat activity', () => {
@@ -63,17 +76,24 @@ describe('streamed response chronology', () => {
     expect(withThinking).toEqual(completed);
   });
 
+  it('pairs an id-less tool completion even when prose advanced its response offset', () => {
+    const started = upsertActivityEvent([], 3, 4, { kind: 'tool-start', label: 'files updated' });
+    const completed = upsertActivityEvent(started, 3, 19, { kind: 'tool-done', label: 'files updated' });
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({ responseOffset: 4, event: { kind: 'tool-done', label: 'files updated' } });
+  });
+
   it('collapses a tool-only burst instead of letting it dominate the viewport', () => {
-    const parts = interleaveResponseContent('Done.', Array.from({ length: 7 }, (_, index) => ({
-      responseOffset: 0, lines: [`done tool ${index + 1}`],
+    const parts = responseTimeline('Done.', Array.from({ length: 7 }, (_, index) => ({
+      kind: 'activity' as const, responseOffset: 0, lines: [`done tool ${index + 1}`],
     })));
     expect(parts).toEqual([
-      { kind: 'activity', lines: ['… 3 earlier tool calls'] },
-      { kind: 'activity', lines: ['done tool 4'] },
-      { kind: 'activity', lines: ['done tool 5'] },
-      { kind: 'activity', lines: ['done tool 6'] },
-      { kind: 'activity', lines: ['done tool 7'] },
-      { kind: 'text', text: 'Done.' },
+      { kind: 'activity', responseOffset: 0, lines: ['… 3 earlier tool calls'] },
+      { kind: 'activity', responseOffset: 0, lines: ['done tool 4'] },
+      { kind: 'activity', responseOffset: 0, lines: ['done tool 5'] },
+      { kind: 'activity', responseOffset: 0, lines: ['done tool 6'] },
+      { kind: 'activity', responseOffset: 0, lines: ['done tool 7'] },
+      { kind: 'markdown', block: { kind: 'paragraph', text: 'Done.', quoteDepth: 0, indent: 0, sourceEnd: 5 } },
     ]);
   });
 
@@ -96,8 +116,8 @@ describe('command palette layout', () => {
 
 describe('composer border labels', () => {
   it('right-aligns usage and title labels without changing the border width', () => {
-    expect(rightLabeledRule(40, '5h 12% used · weekly 34% used')).toBe('─'.repeat(10) + ' 5h 12% used · weekly 34% used');
-    expect(terminalCellWidth(rightLabeledRule(40, '5h 12% used · weekly 34% used'))).toBe(40);
+    expect(rightLabeledRule(40, '5h 88% left · weekly 66% left')).toBe('─'.repeat(10) + ' 5h 88% left · weekly 66% left');
+    expect(terminalCellWidth(rightLabeledRule(40, '5h 88% left · weekly 66% left'))).toBe(40);
     expect(rightLabeledRule(30, 'Fix session persistence')).toBe('─'.repeat(6) + ' Fix session persistence');
   });
 

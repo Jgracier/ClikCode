@@ -17,20 +17,16 @@ import { login } from './auth.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
-import { classifyAccountFailure, failoverPrompt } from './ai-failover.js';
+import { classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover.js';
 import {
   ADOPTED_TRANSCRIPT_READERS, conversationTitle, discoverNativeSessions, FS_SESSION_DISCOVERY, mergeNativeTranscript, type DiscoveredNativeSession,
 } from './native-session-discovery.js';
 import type {
   AiHarnessAccount, AiHarnessAuthKind, AiHarnessCapabilityManifest, AiHarnessOptionDefinition,
   AiHarnessOptionKind, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition, AiRouterRuntime,
-  FormattedParagraph, HarnessActivityEvent, HarnessDefaultSettings, HarnessPrompter, HarnessSession,
-  HarnessState, MessageBlock, ModelCatalogResult, NativeUsageProbe, PickerOption,
+  HarnessActivityEvent, HarnessDefaultSettings, HarnessPrompter, HarnessSession,
+  HarnessState, ModelCatalogResult, PickerOption,
 } from './types.js';
-import {
-  composerViewport, formatParagraph, nextCharacterIndex, previousCharacterIndex,
-  renderInlineMarkdown, splitIntoBlocks, styleWords, terminalCellWidth, visibleSlice, wrapWords,
-} from './markdown-render.js';
 import {
   capDiffLines, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   isCodeChangeLabel, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
@@ -86,6 +82,37 @@ function interruptedTurnFailoverPrompt(session: HarnessSession): string {
     sessionTranscriptMessages(session),
     'Continue the interrupted latest request. Inspect the current workspace first and finish the remaining work without repeating completed steps.',
   );
+}
+
+async function nextUsableFailoverAccount(
+  state: HarnessState,
+  current: AiHarnessAccount,
+  matchesTransport: (candidate: AiHarnessAccount) => boolean,
+  attempted: ReadonlySet<string>,
+): Promise<AiHarnessAccount | undefined> {
+  const candidates = state.accounts.filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
+    && candidate.provider === current.provider && candidate.status === 'ready'
+    && matchesTransport(candidate));
+  const usable: Array<{ account: AiHarnessAccount; remaining?: number }> = [];
+  for (const candidate of candidates) {
+    // Native Codex/Claude profiles expose real usage windows. Do not launch a
+    // doomed retry merely because the last turn has not yet marked the local
+    // account record exhausted. Providers without a probe stay eligible and
+    // are classified reactively if their turn rejects for quota.
+    const usage = await accountUsageLabel(candidate, state);
+    if (usageLabelIsExhausted(usage)) {
+      candidate.quotaState = 'exhausted';
+      candidate.quotaRetryAt = undefined;
+      continue;
+    }
+    const remaining = usageLabelRemainingPercent(usage);
+    if (remaining !== undefined) candidate.quotaState = 'available';
+    else if (candidate.quotaState === 'exhausted') continue;
+    usable.push({ account: candidate, ...(remaining === undefined ? {} : { remaining }) });
+  }
+  // Prefer measured headroom. Unknown providers remain valid fallbacks, but
+  // never outrank an account whose usage probe confirms capacity.
+  return usable.sort((left, right) => (right.remaining ?? Number.NEGATIVE_INFINITY) - (left.remaining ?? Number.NEGATIVE_INFINITY))[0]?.account;
 }
 
 export function requiresProviderHandoff(session: HarnessSession, targetHarness: string): boolean {
@@ -283,7 +310,10 @@ class DurableTurnCheckpoint {
   }
 
   async steer(submission: LiveTurnSubmission): Promise<void> {
-    recordPendingSteer(this.session, submission.text, submission.submittedAt, new Date().toISOString());
+    recordPendingSteer(
+      this.session, submission.text, submission.submittedAt,
+      this.session.pendingTurn?.response?.length ?? 0, new Date().toISOString(),
+    );
     await this.persistNow();
   }
 
@@ -2871,7 +2901,31 @@ export async function aiSessionSend(
     const baseMessages = sessionTranscriptMessages(session);
     const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
     run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+    let switchedFrom: string | undefined;
+    const attemptedAccounts = new Set<string>();
     try {
+    if (session.accountFailover === 'on-quota-exhausted' && account.quotaState === 'exhausted') {
+      const currentRemaining = usageLabelRemainingPercent(await accountUsageLabel(account, state));
+      if (currentRemaining !== undefined && currentRemaining > 0) account.quotaState = 'available';
+      else {
+        attemptedAccounts.add(account.id);
+        const fallback = await nextUsableFailoverAccount(
+          state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
+        );
+        if (!fallback) {
+          await writeState(state);
+          throw new Error('all usage exhausted');
+        }
+        switchedFrom = account.label;
+        activeFullScreenHarness?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
+        activeFullScreenHarness?.phase(`switching to ${fallback.label}`);
+        account = fallback;
+        session.accountId = fallback.id;
+        session.nativeSessionId = undefined;
+        session.nativeStartedAt = undefined;
+        await checkpoint.persistNow();
+      }
+    }
     // A fresh native thread (no nativeSessionId yet) with prior ClikCode
     // messages already on the session means this conversation is continuing
     // under a different native identity than whatever produced those messages
@@ -2885,7 +2939,6 @@ export async function aiSessionSend(
     if (!session.nativeSessionId && baseMessages.length > 0) {
       turnText = failoverPrompt(baseMessages, turnText);
     }
-    let switchedFrom: string | undefined;
     // Bounded to one attempt: this is a reactive fallback for exactly the
     // case aiHarnessSelect's own proactive check can't catch -- a harness
     // with no statusArgv (nothing to scriptably ask "am I logged in?"
@@ -3080,16 +3133,18 @@ export async function aiSessionSend(
         if (failureKind !== 'quota-exhausted') throw failure;
         account.quotaState = 'exhausted';
         account.quotaRetryAt = undefined;
+        attemptedAccounts.add(account.id);
         await writeState(state);
         // Same-provider failover for the native-CLI path: switching accounts means
         // switching vendor config roots, so the in-flight native conversation can't
         // continue under the old identity — start a fresh one under the fallback.
-        const fallback = session.accountFailover === 'on-quota-exhausted'
-          ? state.accounts.find((item) => item.id !== account!.id && item.provider === account!.provider
-              && item.authKind === 'vendor-cli' && item.status === 'ready' && item.quotaState !== 'exhausted')
-          : undefined;
+        if (session.accountFailover !== 'on-quota-exhausted') throw failure;
+        const fallback = await nextUsableFailoverAccount(
+          state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
+        );
         if (!fallback) {
-          throw new Error(`${harness.displayName}: ${result.text}. Switch providers with /provider or choose another ${harness.command} account with /accounts use <label>.`);
+          await writeState(state);
+          throw new Error('all usage exhausted');
         }
         switchedFrom = account.label;
         // Announced before the retry, not after it returns: switching accounts
@@ -3131,41 +3186,65 @@ export async function aiSessionSend(
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+  let switchedFrom: string | undefined;
+  const attemptedAccounts = new Set<string>();
   try {
+  if (session.accountFailover === 'on-quota-exhausted' && account.quotaState === 'exhausted') {
+    attemptedAccounts.add(account.id);
+    const fallback = await nextUsableFailoverAccount(
+      state, account, (item) => item.authKind === 'api-key' && item.models.includes(model), attemptedAccounts,
+    );
+    if (!fallback) {
+      await writeState(state);
+      throw new Error('all usage exhausted');
+    }
+    switchedFrom = account.id;
+    activeFullScreenHarness?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
+    activeFullScreenHarness?.phase(`switching to ${fallback.label}`);
+    account = fallback;
+    session.accountId = fallback.id;
+    await checkpoint.persistNow();
+  }
   const invoke = (active: AiHarnessAccount) => streamLocalAiTurn({
     provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
     messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
     ...(signal ? { abortSignal: signal } : {}),
   });
-  let turn;
-  let switchedFrom: string | undefined;
-  try {
-    turn = await invoke(account);
-  } catch (error) {
-    const failureKind = classifyAccountFailure(error);
-    if (failureKind === 'authentication-required') {
-      account.status = 'needs_login';
+  let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
+  for (;;) {
+    try {
+      turn = await invoke(account);
+      break;
+    } catch (error) {
+      const failureKind = classifyAccountFailure(error);
+      if (failureKind === 'authentication-required') {
+        account.status = 'needs_login';
+        await writeState(state);
+      }
+      if (session.accountFailover !== 'on-quota-exhausted' || failureKind !== 'quota-exhausted') throw error;
+      const exhaustedAccount = account;
+      exhaustedAccount.quotaState = 'exhausted';
+      exhaustedAccount.quotaRetryAt = undefined;
+      attemptedAccounts.add(exhaustedAccount.id);
+      // Preserve every failed candidate before looking for the next one. A
+      // chain of stale account records therefore terminates instead of merely
+      // moving the same failure to one alternate and abandoning the router.
       await writeState(state);
+      const fallback = await nextUsableFailoverAccount(
+        state, exhaustedAccount,
+        (item) => item.authKind === 'api-key' && item.models.includes(model),
+        attemptedAccounts,
+      );
+      if (!fallback) {
+        await writeState(state);
+        throw new Error('all usage exhausted');
+      }
+      switchedFrom ??= exhaustedAccount.id;
+      activeFullScreenHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
+      activeFullScreenHarness?.phase(`retrying on ${fallback.label}`);
+      account = fallback;
+      session.accountId = fallback.id;
     }
-    if (session.accountFailover !== 'on-quota-exhausted' || failureKind !== 'quota-exhausted') throw error;
-    const exhaustedAccount = account;
-    if (!exhaustedAccount) throw error;
-    exhaustedAccount.quotaState = 'exhausted';
-    exhaustedAccount.quotaRetryAt = undefined;
-    // Preserve the quota signal even if there is no alternate account or its
-    // retry fails. It is a local scheduling fact, never a provider secret.
-    await writeState(state);
-    const fallback = state.accounts.find((item) =>
-      item.id !== exhaustedAccount.id && item.provider === exhaustedAccount.provider && item.status === 'ready' && item.quotaState !== 'exhausted'
-      && item.authKind === 'api-key' && item.models.includes(model),
-    );
-    if (!fallback) throw error;
-    switchedFrom = exhaustedAccount.id;
-    activeFullScreenHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
-    activeFullScreenHarness?.phase(`retrying on ${fallback.label}`);
-    turn = await invoke(fallback);
-    account = fallback;
-    session.accountId = fallback.id;
   }
   const invocation = {
     id: randomUUID(), accountId: account.id, provider: session.provider ?? account.provider, model,
