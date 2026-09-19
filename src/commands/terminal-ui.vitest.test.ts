@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, editWaitingComposer, inlineConversationPlan, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { commandPaletteMatches, composerRightArrowCommand, editWaitingComposer, inlineConversationPlan, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('terminal waiting input', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
@@ -70,6 +70,12 @@ describe('terminal waiting input', () => {
     draft = editWaitingComposer(draft.value, draft.cursor, '!');
     expect(draft).toEqual({ value: 'nex!t', cursor: 4, changed: true });
     expect(editWaitingComposer(draft.value, draft.cursor, '\u007f')).toEqual({ value: 'next', cursor: 3, changed: true });
+  });
+
+  it('opens accounts from Right Arrow only when the composer is empty', () => {
+    expect(composerRightArrowCommand('', false, '/account')).toBe('/account');
+    expect(composerRightArrowCommand('draft', false, '/account')).toBeUndefined();
+    expect(composerRightArrowCommand('', true, '/account')).toBeUndefined();
   });
 });
 

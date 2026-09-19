@@ -201,6 +201,12 @@ export function commandPaletteMatches(
     : [];
 }
 
+export function composerRightArrowCommand(
+  value: string, hasPaletteOptions: boolean, command?: string,
+): string | undefined {
+  return !value && !hasPaletteOptions ? command : undefined;
+}
+
 /** Fill a terminal-width rule from the left and pin a short label to its
  * right edge. Both composer borders use this same layout: usage above and
  * the conversation title below. */
@@ -960,7 +966,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.writeInlineFrame(this.inlinePermanentLines, [], 0, 1, false, true);
   }
 
-  async question(prompt: string, commands: readonly PickerOption<string>[] = [], settings?: { cancellable?: boolean }): Promise<string> {
+  async question(
+    prompt: string,
+    commands: readonly PickerOption<string>[] = [],
+    settings?: { cancellable?: boolean; rightArrowCommand?: string },
+  ): Promise<string> {
     if (!input.isTTY) {
       // A single check here used to end the whole session the instant it
       // failed once -- fatal specifically after a long suspend/resume
@@ -1069,7 +1079,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\u0010' && !options.length) { if (historyIndex > 0) { historyIndex--; value = this.history[historyIndex] ?? ''; cursor = value.length; } return draw(); }
         if (key === '\u000e' && !options.length) { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; return draw(); }
         if (key === '\u001b[D') { cursor = previousCharacterIndex(value, cursor); return draw(); }
-        if (key === '\u001b[C') { cursor = nextCharacterIndex(value, cursor); return draw(); }
+        if (key === '\u001b[C') {
+          const shortcut = composerRightArrowCommand(value, options.length > 0, settings?.rightArrowCommand);
+          if (shortcut) {
+            this.clearInteractiveFrame();
+            return finish(shortcut);
+          }
+          cursor = nextCharacterIndex(value, cursor);
+          return draw();
+        }
         // Already handled above when the transcript owns navigation. While a
         // command palette is open, consume these rather than editing text.
         if (key === '\u001b[5~' || key === '\u001b[6~') return;
@@ -1114,7 +1132,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     title: string,
     options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
-    onExpand?: (value: T) => Promise<T | undefined>,
   ): Promise<T | undefined> {
     if (!options.length) return Promise.resolve(undefined);
     return new Promise((resolveSelection) => {
@@ -1149,21 +1166,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.clearInteractiveFrame();
         resolveSelection(value);
       };
-      // Right arrow opens either a caller-owned child picker (provider ->
-      // accounts) or the option's generic management actions. Only one input
+      // Right arrow opens an option's management actions. Only one input
       // listener owns the terminal at a time; returning from a cancelled child
       // restores this exact frame rather than leaving an empty composer band.
-      const openChild = async (option: PickerOption<T>): Promise<void> => {
-        if (!onExpand && !option.actions?.length) return;
+      const openActions = async (option: PickerOption<T>): Promise<void> => {
+        if (!option.actions?.length) return;
         stopInput();
-        let childValue: T | undefined;
-        if (onExpand) childValue = await onExpand(option.value);
-        else {
-          const actionValue = await this.select(option.label, option.actions!.map((action) => ({ label: action.label, value: action.value })));
-          if (actionValue) await onAction?.(option.value, actionValue);
-        }
+        const actionValue = await this.select(option.label, option.actions.map((action) => ({ label: action.label, value: action.value })));
+        if (actionValue) await onAction?.(option.value, actionValue);
         if (finished) return;
-        if (childValue !== undefined) return finish(childValue);
         input.setRawMode(true);
         input.resume();
         stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
@@ -1174,7 +1185,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const scrollAction = waitingInputAction(key);
         if (key === '\u001b[A' || scrollAction === 'scroll-up') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
         else if (key === '\u001b[B' || scrollAction === 'scroll-down') selected = visible.length ? (selected + 1) % visible.length : 0;
-        else if (key === '\u001b[C') { if (visible[selected]) void openChild(visible[selected]); return; }
+        else if (key === '\u001b[C') { if (visible[selected]) void openActions(visible[selected]); return; }
         else if (key === '\r' || key === '\n') { if (visible[selected]) finish(visible[selected].value); return; }
         else if (key === '\u0003') return finish(undefined);
         else if (key === '\u001b') { if (query) { query = ''; selected = 0; } else return finish(undefined); }

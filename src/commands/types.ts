@@ -229,12 +229,15 @@ export interface HarnessState {
 }
 
 export interface HarnessPrompter {
-  question(prompt: string, commands?: readonly PickerOption<string>[], settings?: { cancellable?: boolean }): Promise<string>;
+  question(
+    prompt: string,
+    commands?: readonly PickerOption<string>[],
+    settings?: { cancellable?: boolean; rightArrowCommand?: string },
+  ): Promise<string>;
   select?<T>(
     title: string,
     options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
-    onExpand?: (value: T) => Promise<T | undefined>,
   ): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
   response?(text: string, mode?: 'append' | 'replace'): void;
