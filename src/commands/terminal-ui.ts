@@ -66,6 +66,33 @@ export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
+const EXIT_CONFIRM_MS = 2000;
+
+/** Terminal modes this process has switched on and not yet switched off. Kept
+ * at module level, not on a prompter, so restoreTerminal() can undo them from
+ * a crash handler that has no instance to hand. */
+const terminalModes = { bracketedPaste: false, kittyKeyboard: false, rawMode: false };
+
+/** Sequences for entering an interactive read. The kitty flag is pushed at most
+ * once however many reads start, so one pop always restores the user's own. */
+function enterInputModes(): string {
+  let sequence = ENABLE_BRACKETED_PASTE;
+  terminalModes.bracketedPaste = true;
+  terminalModes.rawMode = true;
+  if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
+    sequence += PUSH_KITTY_KEYBOARD;
+    terminalModes.kittyKeyboard = true;
+  }
+  return sequence;
+}
+
+function leaveInputModes(): string {
+  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}`;
+  terminalModes.kittyKeyboard = false;
+  terminalModes.bracketedPaste = false;
+  return sequence;
+}
+
 const PASTE_START = '\u001b[200~';
 const PASTE_END = '\u001b[201~';
 
@@ -80,7 +107,57 @@ export function pastedText(key: string): string | undefined {
     : undefined;
 }
 
+/** Kitty keyboard protocol, "disambiguate escape codes" flag only. It is what
+ * makes Shift+Enter distinguishable from Enter. It also re-encodes Esc and
+ * every Ctrl/Alt chord as `CSI code ; modifiers u`, which normalizeTerminalKey
+ * folds back into the legacy bytes the rest of this file matches on. */
+export const PUSH_KITTY_KEYBOARD = '\u001b[>1u';
+export const POP_KITTY_KEYBOARD = '\u001b[<u';
+/** One internal spelling for "insert a newline" however the terminal said it:
+ * Alt+Enter, Shift+Enter via CSI u, or xterm's modifyOtherKeys form. */
+export const NEWLINE_KEY = '\u001b\r';
+
+/** Pushing the flag is only safe where it is understood: an unaware terminal
+ * may echo the sequence, and inside tmux the pop never reaches the outer
+ * terminal, leaving the user's shell receiving CSI-u for Ctrl+C. */
+export function kittyKeyboardSafe(environment: NodeJS.ProcessEnv = process.env): boolean {
+  if (environmentFlag(environment.CLIKCODE_NO_KITTY_KEYBOARD)) return false;
+  if (environment.TMUX || environment.STY || /^(?:screen|tmux)/.test(environment.TERM ?? '')) return false;
+  const program = (environment.TERM_PROGRAM ?? '').toLowerCase();
+  return Boolean(environment.KITTY_WINDOW_ID || environment.GHOSTTY_RESOURCES_DIR || environment.WEZTERM_PANE
+    || /^(?:xterm-kitty|xterm-ghostty|foot|alacritty|wezterm)/.test(environment.TERM ?? '')
+    || program === 'wezterm' || program === 'ghostty' || program === 'kitty');
+}
+
+/** `CSI code ; modifiers u` and `CSI 27 ; modifiers ; code ~` back to the bytes
+ * a legacy terminal would have sent, or undefined to leave the key alone. */
+function legacyKeyFromModified(code: number, modifierField: number): string | undefined {
+  // Bit 0 shift, 1 alt, 2 ctrl. Caps/num lock (64/128) say nothing about intent.
+  const modifiers = Math.max(0, modifierField - 1) & 0b111;
+  const shift = Boolean(modifiers & 1);
+  const alt = Boolean(modifiers & 2);
+  const ctrl = Boolean(modifiers & 4);
+  if (code === 13) return shift || alt || ctrl ? NEWLINE_KEY : '\r';
+  if (code === 27) return '\u001b';
+  if (code === 9) return shift ? '\u001b[Z' : '\t';
+  if (code === 127 || code === 8) return alt || ctrl ? '\u001b\u007f' : '\u007f';
+  if (code < 32 || code > 0x10ffff) return undefined;
+  const character = String.fromCodePoint(code);
+  if (ctrl && alt) return undefined;
+  if (ctrl) {
+    if (code === 32) return '\u0000';
+    const lower = character.toLowerCase();
+    return /^[a-z\[\\\]^_]$/.test(lower) ? String.fromCharCode(lower.charCodeAt(0) & 0x1f) : undefined;
+  }
+  if (alt) return `\u001b${character}`;
+  return shift ? character.toUpperCase() : character;
+}
+
 function normalizeTerminalKey(key: string): string {
+  const csiU = /^\u001b\[(\d+)(?::\d*)*(?:;(\d+)(?::\d+)?)?(?:;[\d:]*)?u$/.exec(key);
+  if (csiU) return legacyKeyFromModified(Number(csiU[1]), Number(csiU[2] ?? 1)) ?? key;
+  const otherKeys = /^\u001b\[27;(\d+);(\d+)~$/.exec(key);
+  if (otherKeys) return legacyKeyFromModified(Number(otherKeys[2]), Number(otherKeys[1])) ?? key;
   const cursor = /^\u001b(?:O|\[(?:1(?:;\d+)?)?)([ABCD])$/.exec(key);
   if (cursor) return `\u001b[${cursor[1]}`;
   const page = /^\u001b\[([56])(?:;\d+)?~$/.exec(key);
@@ -155,13 +232,20 @@ export class TerminalInputDecoder {
         this.pending = this.pending.slice(3);
         continue;
       }
-      if ((prefix.codePointAt(0) ?? 0) < 0x20 || prefix === '\u007f') {
+      if (prefix === '\r' || prefix === '\n' || prefix === '\u007f' || prefix === '\b') {
+        // Alt+Enter inserts a newline and Alt+Backspace deletes a word. Both
+        // arrive as ESC plus a control byte in one chunk.
+        keys.push(prefix === '\r' || prefix === '\n' ? NEWLINE_KEY : '\u001b\u007f');
+        this.pending = this.pending.slice(2);
+        continue;
+      }
+      if ((prefix.codePointAt(0) ?? 0) < 0x20) {
         keys.push('\u001b');
         this.pending = this.pending.slice(1);
         continue;
       }
-      // Alt-key bindings are not used by ClikCode; preserve the pair as one ignored sequence
-      // so neither half becomes cancellation or composer text.
+      // Alt+letter stays one key (Alt+B / Alt+F move by word; the rest are
+      // ignored) so neither half becomes cancellation or composer text.
       keys.push(this.pending.slice(0, 2));
       this.pending = this.pending.slice(2);
     }
@@ -202,31 +286,96 @@ export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[
   });
 }
 
+function previousWordIndex(value: string, cursor: number): number {
+  let index = cursor;
+  while (index > 0 && /\s/.test(value[index - 1]!)) index -= 1;
+  while (index > 0 && !/\s/.test(value[index - 1]!)) index -= 1;
+  return index;
+}
+
+function nextWordIndex(value: string, cursor: number): number {
+  let index = cursor;
+  while (index < value.length && /\s/.test(value[index]!)) index += 1;
+  while (index < value.length && !/\s/.test(value[index]!)) index += 1;
+  return index;
+}
+
+const lineStartIndex = (value: string, cursor: number): number => value.lastIndexOf('\n', cursor - 1) + 1;
+const lineEndIndex = (value: string, cursor: number): number => {
+  const end = value.indexOf('\n', cursor);
+  return end === -1 ? value.length : end;
+};
+
+/** Move one logical line up or down keeping the display column. Undefined at
+ * the first/last line, which is the caller's cue to fall through to history. */
+export function composerVerticalMove(value: string, cursor: number, direction: -1 | 1): number | undefined {
+  const start = lineStartIndex(value, cursor);
+  const column = terminalCellWidth(value.slice(start, cursor));
+  let targetStart: number;
+  if (direction < 0) {
+    if (start === 0) return undefined;
+    targetStart = lineStartIndex(value, start - 1);
+  } else {
+    const end = lineEndIndex(value, cursor);
+    if (end >= value.length) return undefined;
+    targetStart = end + 1;
+  }
+  const targetEnd = lineEndIndex(value, targetStart);
+  let index = targetStart;
+  while (index < targetEnd) {
+    const next = nextCharacterIndex(value, index);
+    if (terminalCellWidth(value.slice(targetStart, next)) > column) break;
+    index = next;
+  }
+  return index;
+}
+
+/** A trailing backslash turns Enter into a line break, the one newline
+ * spelling that works in every terminal and over every SSH client. */
+export function backslashNewline(value: string, cursor: number): { value: string; cursor: number } | undefined {
+  if (cursor <= 0 || value[cursor - 1] !== '\\') return undefined;
+  return { value: `${value.slice(0, cursor - 1)}\n${value.slice(cursor)}`, cursor };
+}
+
+/** Every text-editing key, shared by the prompt composer and the composer that
+ * stays live during a turn. `changed: false` means the key is not an edit and
+ * the caller may give it another meaning (history, submit, exit). */
 export function editWaitingComposer(value: string, cursor: number, key: string): { value: string; cursor: number; changed: boolean } {
   const pasted = pastedText(key);
-  if (pasted !== undefined) {
-    return { value: value.slice(0, cursor) + pasted + value.slice(cursor), cursor: cursor + pasted.length, changed: true };
-  }
+  const insert = (text: string) => ({ value: value.slice(0, cursor) + text + value.slice(cursor), cursor: cursor + text.length, changed: true });
+  const remove = (from: number, to: number) => ({ value: value.slice(0, from) + value.slice(to), cursor: from, changed: true });
+  if (pasted !== undefined) return insert(pasted);
+  if (key === NEWLINE_KEY || key === '\n') return insert('\n');
   if (key === '\u001b[D') return { value, cursor: previousCharacterIndex(value, cursor), changed: true };
   if (key === '\u001b[C') return { value, cursor: nextCharacterIndex(value, cursor), changed: true };
+  if (key === '\u001b[A' || key === '\u001b[B') {
+    const moved = composerVerticalMove(value, cursor, key === '\u001b[A' ? -1 : 1);
+    return moved === undefined ? { value, cursor, changed: false } : { value, cursor: moved, changed: true };
+  }
+  if (key === '\u001bb') return { value, cursor: previousWordIndex(value, cursor), changed: true };
+  if (key === '\u001bf') return { value, cursor: nextWordIndex(value, cursor), changed: true };
   if (key === '\u007f' || key === '\b') {
     if (cursor <= 0) return { value, cursor, changed: true };
-    const previous = previousCharacterIndex(value, cursor);
-    return { value: value.slice(0, previous) + value.slice(cursor), cursor: previous, changed: true };
+    return remove(previousCharacterIndex(value, cursor), cursor);
   }
-  if (key === '\u0015') return { value: '', cursor: 0, changed: true };
-  if (key === '\u0001') return { value, cursor: 0, changed: true };
-  if (key === '\u0005') return { value, cursor: value.length, changed: true };
-  if (key === '\u001b[3~') {
+  if (key === '\u0017' || key === '\u001b\u007f') return remove(previousWordIndex(value, cursor), cursor);
+  // Kill to the start / end of the current line. On an empty remainder Ctrl+K
+  // joins the next line, as it does in readline and emacs.
+  if (key === '\u0015') return remove(lineStartIndex(value, cursor), cursor);
+  if (key === '\u000b') {
+    const end = lineEndIndex(value, cursor);
+    return remove(cursor, end === cursor ? Math.min(value.length, cursor + 1) : end);
+  }
+  if (key === '\u0001') return { value, cursor: lineStartIndex(value, cursor), changed: true };
+  if (key === '\u0005') return { value, cursor: lineEndIndex(value, cursor), changed: true };
+  if (key === '\u001b[3~' || key === '\u0004') {
     if (cursor >= value.length) return { value, cursor, changed: true };
-    const next = nextCharacterIndex(value, cursor);
-    return { value: value.slice(0, cursor) + value.slice(next), cursor, changed: true };
+    return remove(cursor, nextCharacterIndex(value, cursor));
   }
-  if (!key.startsWith('\u001b') && !/[\u0000-\u001f]/.test(key)) {
-    return { value: value.slice(0, cursor) + key + value.slice(cursor), cursor: cursor + key.length, changed: true };
-  }
+  if (!key.startsWith('\u001b') && !/[\u0000-\u001f\u007f]/.test(key)) return insert(key);
   return { value, cursor, changed: false };
 }
+export const editComposer = editWaitingComposer;
 
 /** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
  * the same compact shape without changing its dimensions. */
@@ -641,6 +790,18 @@ export function approvalBlockRows(
   return [...title.slice(0, Math.max(1, maxRows - 1)), ...body, answer];
 }
 
+const compactCount = (count: number): string => (count < 1000 ? String(count)
+  : count < 1_000_000 ? `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k` : `${(count / 1_000_000).toFixed(1)}M`);
+
+/** `↑ 1.2k ↓ 340 tokens`, or an empty string before the harness reports any. */
+export function formatTurnUsage(usage?: { inputTokens?: number; outputTokens?: number }): string {
+  const parts = [
+    ...(usage?.inputTokens ? [`↑ ${compactCount(usage.inputTokens)}`] : []),
+    ...(usage?.outputTokens ? [`↓ ${compactCount(usage.outputTokens)}`] : []),
+  ];
+  return parts.length ? `${parts.join(' ')} tokens` : '';
+}
+
 export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
   private history: string[] = [];
@@ -702,6 +863,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingCancelled = false;
   private pendingApproval?: ApprovalRequest & { shownAt: number; needsFocus: boolean; focused: boolean };
   private approvalGuardTimer?: NodeJS.Timeout;
+  /** A short-lived hint (the Ctrl+C exit warning) that takes the notice row. */
+  private transientNotice?: string;
+  private transientNoticeTimer?: NodeJS.Timeout;
+  private turnUsage?: { inputTokens?: number; outputTokens?: number };
+  /** Re-installs the key listener and raw mode after Ctrl+Z / `fg`. */
+  private resumeInput?: () => void;
   /** Providers fan out parallel tool calls, so a second request can arrive
    * while the first is still on screen. Queueing asks them one at a time;
    * resolving the extras false meant silently denying a tool the user was
@@ -735,7 +902,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.waitingLabel = 'stopping…';
       this.updateWaiting();
       this.cancelWaiting?.(action === 'cancel-edit');
-    } else if (key === '\r' || key === '\n') {
+    } else if (key === '\u001a') {
+      this.suspendToShell();
+    } else if (key === '\r') {
+      const continued = this.waitingSubmit ? backslashNewline(this.waitingDraft, this.waitingCursor) : undefined;
+      if (continued) {
+        this.waitingDraft = continued.value;
+        this.waitingCursor = continued.cursor;
+        this.updateWaiting();
+        return;
+      }
       const text = this.waitingDraft.trim();
       if (!text || !this.waitingSubmit) return;
       this.waitingDraft = '';
@@ -883,11 +1059,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingCancelled = false;
     this.waitingFrame = 0;
     this.waitingStartedAt = Date.now();
+    this.turnUsage = undefined;
     if (input.isTTY) {
-      input.setRawMode(true);
-      input.resume();
-      output.write(ENABLE_BRACKETED_PASTE);
-      this.stopWaitingInput = listenForTerminalKeys(this.onWaitingKey);
+      const listen = (): void => {
+        input.setRawMode(true);
+        input.resume();
+        output.write(enterInputModes());
+        this.stopWaitingInput = listenForTerminalKeys(this.onWaitingKey);
+      };
+      listen();
+      this.resumeInput = () => { this.stopWaitingInput?.(); listen(); };
     }
     this.paint('', [], 0, '› ', 0);
     this.waitingTimer = setInterval(() => {
@@ -916,6 +1097,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingTimer = undefined;
     this.stopWaitingInput?.();
     this.stopWaitingInput = undefined;
+    if (this.waitingLabel) this.resumeInput = undefined;
     if (input.isTTY) input.setRawMode(false);
     this.cancelWaiting = undefined;
     this.waitingSubmit = undefined;
@@ -975,6 +1157,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     for (const item of outstanding) item?.resolve(false);
   }
 
+  /** Optional: token counts for the turn in flight, shown beside the elapsed
+   * time. Cleared by the next startWaiting(). */
+  setTurnUsage(usage: { inputTokens?: number; outputTokens?: number }): void {
+    this.turnUsage = { ...this.turnUsage, ...usage };
+    this.updateWaiting();
+  }
+
   usage(label?: string): void {
     if (this.usageLabel === label) return;
     this.usageLabel = label;
@@ -1019,7 +1208,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // next one. The per-submission row below the composer already reports which
     // of the two actually happened, so the invitation just says what is always
     // true and lets the outcome speak for itself.
-    const label = `${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to send' : ''}`;
+    const tokens = formatTurnUsage(this.turnUsage);
+    const label = `${this.waitingLabel} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
+      + `${this.cancelWaiting && !this.pendingApproval ? ' · esc to interrupt' : ''}`
+      + `${this.waitingSubmit ? ' · type and press Enter to send' : ''}`;
     return `${chalk.cyanBright(waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame))}  ${chalk.dim(label)}`;
   }
 
@@ -1114,7 +1306,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // rows left after one composer row and its three fixed footer rows.
     const waitingRows = this.waitingLabel && targetHeight >= 5 ? 1 : 0;
     let optionalRows = Math.max(0, targetHeight - 4 - waitingRows);
-    const noticeRows = this.currentNotice && optionalRows > 0 ? 1 : 0;
+    const notice = this.transientNotice ?? this.currentNotice;
+    const noticeRows = notice && optionalRows > 0 ? 1 : 0;
     optionalRows -= noticeRows;
     const availablePaletteRows = Math.min(requestedPaletteCapacity, optionalRows);
     const paletteCapacity = availablePaletteRows >= 3 ? availablePaletteRows : 0;
@@ -1306,7 +1499,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     );
     const meta = this.statusText();
     const footer: string[] = [];
-    if (noticeRows && this.currentNotice) footer.push(`  ${chalk.yellow(visibleSlice(this.currentNotice, inner))}`);
+    if (noticeRows && notice) footer.push(`  ${chalk.yellow(visibleSlice(notice, inner))}`);
     if (paletteCapacity) {
       footer.push(rule);
       const visibleRows = paletteCapacity - 2;
@@ -1345,7 +1538,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     footer.push(chalk.dim(rightLabeledRule(width, this.titleText())));
     footer.push(`  ${chalk.dim(visibleSlice(meta, inner))}`);
 
-    const commit = this.commitConversationOnNextPaint;
+    // A width change mid-turn re-wraps rows that are already permanent, so the
+    // old prefix can never match again. Committing the half-streamed answer to
+    // force a match froze it, and every later frame was then rejected as a
+    // mismatch -- the answer vanished until the turn ended. Re-plan from an
+    // empty prefix instead: stable rows are promoted again as they overflow,
+    // and the viewport reset below repaints one screen either way.
+    const replanLiveTurn = this.resetInlineScreen === 'viewport' && hasTransientAssistant;
+    if (replanLiveTurn) this.inlinePermanentLines = [];
+    const commit = this.commitConversationOnNextPaint && !replanLiveTurn;
     const maxDynamicConversation = Math.max(0, targetHeight - footer.length);
     // With no queued row on screen there is nothing provisional, so the whole
     // conversation is committable.
@@ -1446,6 +1647,54 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
   }
 
+  private showTransientNotice(text: string, durationMs: number, redraw: () => void): void {
+    this.clearTransientNotice();
+    this.transientNotice = text;
+    this.transientNoticeTimer = setTimeout(() => {
+      this.transientNoticeTimer = undefined;
+      this.transientNotice = undefined;
+      if (!this.closed && !this.suspended) redraw();
+    }, durationMs);
+    this.transientNoticeTimer.unref();
+  }
+
+  private clearTransientNotice(): void {
+    if (this.transientNoticeTimer) clearTimeout(this.transientNoticeTimer);
+    this.transientNoticeTimer = undefined;
+    this.transientNotice = undefined;
+  }
+
+  /** Ctrl+Z. Raw mode swallows the terminal's own job control, so do what it
+   * would have done: give the terminal back exactly as close() would, stop
+   * this process, and rebuild the live region below whatever the shell printed
+   * once `fg` continues it. */
+  private suspendToShell(): void {
+    if (this.suspended || this.closed) return;
+    this.suspended = true;
+    if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
+    this.responsePaintTimer = undefined;
+    this.pendingInlineFrame = undefined;
+    if (input.isTTY) input.setRawMode(false);
+    terminalModes.rawMode = false;
+    output.write(`${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`);
+    process.once('SIGCONT', this.onContinue);
+    process.kill(process.pid, 'SIGTSTP');
+  }
+
+  private readonly onContinue = (): void => {
+    if (this.closed) return;
+    this.suspended = false;
+    const columns = output.columns || 0;
+    if (columns !== this.lastColumns) {
+      this.resetInlineScreen = this.resetInlineScreen || 'viewport';
+      this.commitConversationOnNextPaint = true;
+    }
+    this.lastColumns = columns;
+    this.resumeInput?.();
+    if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
+    else this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+  };
+
   /** Cursor-relative erase of everything the last frame painted. The cursor is
    * left at column one of the region's first row, which is where the next
    * writer -- a vendor CLI, the shell, or this UI's next frame -- continues. */
@@ -1524,7 +1773,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         input.setRawMode(false);
-        output.write(`${DISABLE_BRACKETED_PASTE}\u001b[?25h`);
+        output.write(`${leaveInputModes()}\u001b[?25h`);
+        this.resumeInput = undefined;
+        this.clearTransientNotice();
         if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
         resolveQuestion(answer);
       };
@@ -1543,7 +1794,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         input.setRawMode(false);
-        output.write(`${DISABLE_BRACKETED_PASTE}\u001b[?25h`);
+        output.write(`${leaveInputModes()}\u001b[?25h`);
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
       const handleKey = (key: string): void => {
@@ -1557,7 +1808,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           selected = 0;
           return draw();
         }
-        if (key === '\u0003' || key === '\u0004') return finish('/exit');
+        if (key === '\u001a') return this.suspendToShell();
+        if (key === '\u0003') {
+          // Ctrl+C clears a draft first. Leaving takes a second press, because
+          // the same key also interrupts a turn and is pressed by reflex.
+          if (value) { value = ''; cursor = 0; selected = 0; historyIndex = this.history.length; return draw(); }
+          if (Date.now() - exitArmedAt <= EXIT_CONFIRM_MS) return finish('/exit');
+          exitArmedAt = Date.now();
+          this.showTransientNotice('Press Ctrl+C again to exit', EXIT_CONFIRM_MS, draw);
+          return draw();
+        }
+        if (exitArmedAt) { exitArmedAt = 0; this.clearTransientNotice(); }
+        // Ctrl+D is end-of-input only on an empty draft; otherwise it deletes
+        // forward like every other line editor.
+        if (key === '\u0004' && !value) return finish('/exit');
         if (key === '\u001b' && settings?.cancellable) return cancel();
         if (key === '\u001b' && options.length) {
           value = '';
@@ -1565,7 +1829,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           selected = 0;
           return draw();
         }
-        if (key === '\r' || key === '\n') {
+        if (key === '\r') {
+          const continued = options.length ? undefined : backslashNewline(value, cursor);
+          if (continued) { value = continued.value; cursor = continued.cursor; return draw(); }
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
             const command = options[selected].value;
             // Deliberately NOT cleared here. Blanking the region on submit
@@ -1582,18 +1848,27 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           cursor = value.length;
           return draw();
         }
-        // Up/Down navigate palette options. Outside a palette the terminal
-        // owns scrolling; prompt history remains on Ctrl+P/Ctrl+N.
-        if (key === '\u001b[A') {
-          if (options.length) { selected = (selected - 1 + options.length) % options.length; return draw(); }
-          return;
+        // Up/Down navigate palette options; otherwise they move through a
+        // multi-line draft and fall through to input history from its first
+        // and last line. (Wheel/touch scrolling belongs to the terminal and
+        // never arrives as these keys.) Ctrl+P/Ctrl+N always mean history.
+        const historyStep = (direction: -1 | 1): void => {
+          if (direction < 0 && historyIndex > 0) historyIndex -= 1;
+          else if (direction > 0) historyIndex = Math.min(this.history.length, historyIndex + 1);
+          else return;
+          value = this.history[historyIndex] ?? '';
+          cursor = value.length;
+        };
+        if (key === '\u001b[A' || key === '\u001b[B') {
+          const direction = key === '\u001b[A' ? -1 : 1;
+          if (options.length) { selected = (selected + direction + options.length) % options.length; return draw(); }
+          const moved = composerVerticalMove(value, cursor, direction);
+          if (moved !== undefined) cursor = moved;
+          else historyStep(direction);
+          return draw();
         }
-        if (key === '\u001b[B') {
-          if (options.length) { selected = (selected + 1) % options.length; return draw(); }
-          return;
-        }
-        if (key === '\u0010' && !options.length) { if (historyIndex > 0) { historyIndex--; value = this.history[historyIndex] ?? ''; cursor = value.length; } return draw(); }
-        if (key === '\u000e' && !options.length) { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; return draw(); }
+        if (key === '\u0010' && !options.length) { historyStep(-1); return draw(); }
+        if (key === '\u000e' && !options.length) { historyStep(1); return draw(); }
         if (key === '\u001b[D') {
           if (options.length) { value = ''; cursor = 0; selected = 0; }
           else cursor = previousCharacterIndex(value, cursor);
@@ -1619,28 +1894,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // Already handled above when the transcript owns navigation. While a
         // command palette is open, consume these rather than editing text.
         if (key === '\u001b[5~' || key === '\u001b[6~') return;
-        if (key === '\u007f' || key === '\b') {
-          if (cursor > 0) { const previous = previousCharacterIndex(value, cursor); value = value.slice(0, previous) + value.slice(cursor); cursor = previous; }
-          return draw();
-        }
-        if (key === '\u0015') { value = ''; cursor = 0; return draw(); }
-        if (key === '\u0001') { cursor = 0; return draw(); }
-        if (key === '\u0005') { cursor = value.length; return draw(); }
-        if (key === '\u001b[3~') {
-          if (cursor < value.length) value = value.slice(0, cursor) + value.slice(nextCharacterIndex(value, cursor));
-          return draw();
-        }
-        if (!key.startsWith('\u001b') && !/[\u0000-\u001f]/.test(key)) {
-          value = value.slice(0, cursor) + key + value.slice(cursor);
-          cursor += key.length;
-          selected = 0;
-          draw();
-        }
+        // Everything else is text editing, shared with the waiting composer.
+        const edited = editComposer(value, cursor, key);
+        if (!edited.changed) return;
+        if (edited.value !== value) selected = 0;
+        value = edited.value;
+        cursor = edited.cursor;
+        draw();
       };
-      input.setRawMode(true);
-      input.resume();
-      output.write(ENABLE_BRACKETED_PASTE);
-      stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
+      let exitArmedAt = 0;
+      const listen = (): void => {
+        input.setRawMode(true);
+        input.resume();
+        output.write(enterInputModes());
+        stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
+      };
+      this.resumeInput = () => { stopInput(); if (!finished) listen(); };
+      listen();
       draw();
     });
   }
@@ -1804,13 +2074,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     this.stopWaiting(false);
+    this.clearTransientNotice();
     process.off('SIGWINCH', this.onResize);
+    process.off('SIGCONT', this.onContinue);
     if (input.isTTY) input.setRawMode(false);
     input.pause();
     // The conversation stays in the terminal's scrollback where the user can
     // still read and copy it. Only this UI's own live region (composer, status
     // rows) is removed, and the shell prompt resumes directly beneath the chat.
-    output.write(`${this.eraseLiveRegion()}${DISABLE_BRACKETED_PASTE}\u001b[?7h\u001b[?25h`);
+    output.write(`${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`);
   }
 
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
@@ -1826,7 +2098,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Remove the composer and footer before handing over, so the vendor's
     // output continues directly under the conversation instead of being typed
     // across this UI's status rows.
-    output.write(`${this.eraseLiveRegion()}${DISABLE_BRACKETED_PASTE}\u001b[?7h\u001b[?25h`);
+    output.write(`${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`);
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
