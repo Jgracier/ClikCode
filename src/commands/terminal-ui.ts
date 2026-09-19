@@ -36,7 +36,11 @@ function mouseWheelAction(key: string): WaitingInputAction | undefined {
   const sgr = /^\u001b\[<(\d+);\d+;\d+[mM]$/.exec(key);
   // URXVT's older decimal mouse form is accepted as a compatibility path.
   const urxvt = /^\u001b\[(\d+);\d+;\d+M$/.exec(key);
-  const button = Number((sgr ?? urxvt)?.[1]);
+  // X10/VT200 fallback: CSI M followed by button, column, and row bytes,
+  // each offset by 32. Remote/mobile terminals may accept DECSET 1000 but
+  // ignore DECSET 1006 and consequently use this form.
+  const x10 = /^\u001b\[M([\s\S])[\s\S]{2}$/.exec(key);
+  const button = x10 ? x10[1]!.charCodeAt(0) - 32 : Number((sgr ?? urxvt)?.[1]);
   if (!Number.isFinite(button) || (button & 64) === 0) return undefined;
   return (button & 1) === 0 ? 'scroll-up' : 'scroll-down';
 }
@@ -94,6 +98,17 @@ export class TerminalInputDecoder {
       }
       const prefix = this.pending[1];
       if (prefix === '[') {
+        // Legacy X10 mouse reports have a complete-looking CSI M prefix plus
+        // three payload bytes. Do not emit CSI M before those bytes arrive.
+        if (this.pending.startsWith('\u001b[M')) {
+          if (this.pending.length < 6) {
+            if (flush) { keys.push('\u001b'); this.pending = this.pending.slice(1); continue; }
+            break;
+          }
+          keys.push(this.pending.slice(0, 6));
+          this.pending = this.pending.slice(6);
+          continue;
+        }
         let end = 2;
         while (end < this.pending.length && !/[\x40-\x7e]/.test(this.pending[end]!)) end++;
         if (end >= this.pending.length) {
