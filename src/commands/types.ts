@@ -232,4 +232,4 @@ export interface FormattedParagraph {
   rule: boolean;
 }
 
-export interface PickerOption<T> { label: string; detail?: string; value: T; actions?: readonly { label: string; value: string }[] }
+export interface PickerOption<T> { label: string; detail?: string; searchText?: string; value: T; actions?: readonly { label: string; value: string }[] }

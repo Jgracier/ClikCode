@@ -421,11 +421,10 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
   if (payload.panel === 'help') {
     output.write(`\n${chalk.bold('Commands')}\n\n` + [
       ['/<provider> [request]', 'handoff to a different provider and optionally send'],
-      ['/provider', 'resume here or hand off to another provider'],
+      ['/provider', 'choose a provider or one of its accounts'],
       ['/new', 'start a clean conversation'],
       ['/resume', 'choose a saved session'],
       ['/status', 'show the current workspace and settings'],
-      ['/account', 'choose, view, or add an account'],
       ['/model <name>', 'choose or view a model'],
       ['/effort <level>', 'set reasoning effort'],
       ['/permissions', 'choose approval behavior'],
@@ -448,7 +447,7 @@ function emitHarnessOutput(payload: Record<string, unknown>): void {
   if (payload.panel === 'settings' && payload.session) {
     const session = payload.session as HarnessSession;
     const account = typeof payload.account === 'string' ? payload.account : undefined;
-    output.write(`\n${chalk.bold('Current setup')}\n${renderSessionCard(session, account)}\n\n${chalk.dim('Change with /model, /effort, /account, or /switch.')}\n\n`);
+    output.write(`\n${chalk.bold('Current setup')}\n${renderSessionCard(session, account)}\n\n${chalk.dim('Change with /model, /effort, /provider, or /switch.')}\n\n`);
     return;
   }
   if (payload.panel === 'accounts' && Array.isArray(payload.accounts)) {
@@ -1606,22 +1605,62 @@ async function newGatewayConversation(config: Conf, rl: HarnessPrompter, current
   return session.id;
 }
 
-async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
-  const available = await Promise.all(localRouter().AI_LOCAL_HARNESSES
-    .filter((harness) => harness.surface === 'terminal' && harness.turn)
-    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) })));
-  const gatewayConnected = Boolean(ApiClient.getApiKeyForUrl(config, ApiClient.getApiUrl(config)));
-  const selected = await chooseOption(rl, 'Choose a provider', [
-    { label: 'ClikDeploy Gateway', detail: gatewayConnected ? '· connected' : '· sign in with OAuth', value: '__gateway__' },
-    ...available.map(({ harness, inspection }) => ({
+export type ProviderAccountChoice =
+  | { kind: 'gateway' }
+  | { kind: 'provider'; harness: string }
+  | { kind: 'account'; harness: string; accountId: string }
+  | { kind: 'add-account'; harness: string };
+
+/** One provider-centric menu replaces the old disconnected provider and
+ * account pickers. Provider rows remain directly selectable, while their
+ * accounts and add action are visually nested immediately underneath. */
+export function providerAccountPickerOptions(
+  available: ReadonlyArray<{ harness: AiLocalHarnessDefinition; inspection: { installed: boolean; version?: string } }>,
+  accounts: readonly AiHarnessAccount[],
+  session: HarnessSession,
+  gatewayConnected: boolean,
+): PickerOption<ProviderAccountChoice>[] {
+  const options: PickerOption<ProviderAccountChoice>[] = [{
+    label: 'ClikDeploy Gateway',
+    detail: `· ${gatewayConnected ? 'connected' : 'sign in with OAuth'}${session.route === 'gateway' ? ' · current' : ''}`,
+    value: { kind: 'gateway' },
+  }];
+  for (const { harness, inspection } of available) {
+    const currentProvider = session.route === 'local' && session.nativeHarness === harness.command;
+    options.push({
       label: harness.displayName,
-      detail: inspection.installed
+      detail: `${inspection.installed
         ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
-        : harness.npmPackage ? '· install on selection' : '· vendor install required',
-      value: harness.command,
-    })),
-  ]);
-  if (!selected) return undefined;
+        : harness.npmPackage ? '· install on selection' : '· vendor install required'}${currentProvider ? ' · current provider' : ''}`,
+      value: { kind: 'provider', harness: harness.command },
+    });
+    const providerAccounts = accounts
+      .filter((account) => account.provider === harness.provider)
+      .sort((left, right) => left.label.localeCompare(right.label));
+    for (const account of providerAccounts) {
+      const actions = [
+        ...(harness.logoutArgv && account.authKind === 'vendor-cli' && account.status === 'ready'
+          ? [{ label: 'Disconnect', value: 'disconnect' }] : []),
+        ...(harness.loginArgv && account.authKind === 'vendor-cli' && account.status !== 'ready'
+          ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
+      ];
+      options.push({
+        label: `  ↳ ${account.label}`,
+        detail: `${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current account' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
+        searchText: harness.displayName,
+        value: { kind: 'account', harness: harness.command, accountId: account.id },
+        actions,
+      });
+    }
+    options.push({
+      label: '  + Add account…', detail: `· ${harness.displayName}`,
+      value: { kind: 'add-account', harness: harness.command },
+    });
+  }
+  return options;
+}
+
+async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id: string, selected: string): Promise<string> {
   if (selected === '__gateway__') return newGatewayConversation(config, rl, id);
   const state = await readState();
   const current = state.sessions.find((item) => item.id === id);
@@ -1631,6 +1670,47 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
     return id;
   }
   return newProviderConversation(id, selected);
+}
+
+async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
+  for (;;) {
+    const available = await Promise.all(localRouter().AI_LOCAL_HARNESSES
+      .filter((harness) => harness.surface === 'terminal' && harness.turn)
+      .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) })));
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    if (!session) throw new Error(`AI session "${id}" was not found`);
+    const gatewayConnected = Boolean(ApiClient.getApiKeyForUrl(config, ApiClient.getApiUrl(config)));
+    let actionPerformed = false;
+    const selected = await chooseOption(
+      rl, 'Choose a provider or account', providerAccountPickerOptions(available, state.accounts, session, gatewayConnected),
+      async (choice, action) => {
+        if (choice.kind !== 'account') return;
+        actionPerformed = true;
+        await manageAccountAction(rl, choice.accountId, action);
+      },
+    );
+    if (actionPerformed) continue;
+    if (!selected) return undefined;
+    if (selected.kind === 'gateway') return selectProviderConversation(config, rl, id, '__gateway__');
+    if (selected.kind === 'provider') return selectProviderConversation(config, rl, id, selected.harness);
+    if (selected.kind === 'account') {
+      const targetId = await selectProviderConversation(config, rl, id, selected.harness);
+      await aiSessionCommand(targetId, `/settings account ${selected.accountId}`);
+      return targetId;
+    }
+    const harness = localHarnessForCommand(selected.harness);
+    if (!harness) throw new Error(`unknown local harness: ${selected.harness}`);
+    if (!available.find((item) => item.harness.command === harness.command)?.inspection.installed) {
+      activeFullScreenHarness?.startWaiting(`installing ${harness.displayName}…`);
+      try { await ensureNativeHarness(harness); } finally { activeFullScreenHarness?.stopWaiting(); }
+    }
+    const accountLabel = await addAccountForHarness(rl, harness);
+    if (!accountLabel) return id;
+    const targetId = await selectProviderConversation(config, rl, id, harness.command);
+    await aiSessionCommand(targetId, `/settings account ${accountLabel}`);
+    return targetId;
+  }
 }
 
 function harnessAutoPreference(command: string): number {
@@ -1678,11 +1758,6 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
   return false;
 }
 
-/** Shared by both the /account picker's "Add another account…" entry and
- * /add-account's direct path: suggest a name, take it or a typed override,
- * run the vendor login, then make the new account the current one for this
- * session. The two entry points differ only in how `harness` gets chosen --
- * everything after that is identical. */
 /** Well-known SDK/CLI environment variable names each vendor's own tooling
  * already looks for -- not invented here, just the standard name suggested
  * as a starting point for the env var prompt below. Falls back to a
@@ -1703,13 +1778,13 @@ const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
   antigravity: 'GEMINI_API_KEY',
 };
 
-async function addApiKeyAccount(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+async function addApiKeyAccount(rl: HarnessPrompter, harness: AiLocalHarnessDefinition): Promise<string | undefined> {
   const suggested = PROVIDER_API_KEY_ENV[harness.provider] ?? `${harness.provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
   let entered: string;
   try {
     entered = (await rl.question(`Environment variable holding the key ${chalk.dim(`[${suggested}]`)} › `, [], { cancellable: true })).trim();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_CANCELLED') return;
+    if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_CANCELLED') return undefined;
     throw error;
   }
   const envName = (entered || suggested).toUpperCase();
@@ -1737,11 +1812,12 @@ async function addApiKeyAccount(rl: HarnessPrompter, id: string, harness: AiLoca
   const state = await readState();
   const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
   const label = `${harness.displayName} (${envName})`;
-  await aiAccountAdd({ provider: harness.provider, label: state.accounts.some((account) => account.label === label) ? `${label} ${existingForProvider + 1}` : label, auth: 'api-key', credentialRef: `env:${envName}` });
-  await aiSessionCommand(id, `/settings account ${label}`);
+  const finalLabel = state.accounts.some((account) => account.label === label) ? `${label} ${existingForProvider + 1}` : label;
+  await aiAccountAdd({ provider: harness.provider, label: finalLabel, auth: 'api-key', credentialRef: `env:${envName}` });
+  return finalLabel;
 }
 
-async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: AiLocalHarnessDefinition): Promise<void> {
+async function addAccountForHarness(rl: HarnessPrompter, harness: AiLocalHarnessDefinition): Promise<string | undefined> {
   // Vendor login is the only path this offered before -- but Claude Code
   // (and others) also declare api-key as a supported local auth kind, with
   // no way to actually set one up short of the fully manual, headless-only
@@ -1773,10 +1849,9 @@ async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: Ai
         { label: 'API key', detail: 'reference an environment variable, never typed here', value: 'api-key' as const },
       ])
     : choices[0];
-  if (!authKind) return;
+  if (!authKind) return undefined;
   if (authKind === 'api-key') {
-    await addApiKeyAccount(rl, id, harness);
-    return;
+    return addApiKeyAccount(rl, harness);
   }
   // No name prompt: aiAccountLogin picks a numbered placeholder up front and
   // replaces it with something derived from the harness's own credentials
@@ -1806,121 +1881,33 @@ async function addAccountForHarness(rl: HarnessPrompter, id: string, harness: Ai
   } else {
     label = await aiAccountLogin(harness.command);
   }
-  await aiSessionCommand(id, `/settings account ${label}`);
+  return label;
 }
 
-/** The direct path: skips the harness picker entirely when the current
- * session already has a provider, since asking "which provider?" again is
- * exactly the extra step this command exists to cut -- you're already in
- * one. Only falls back to picking a harness for a session that has none
- * yet (a brand-new chat with nothing chosen), where there's genuinely no
- * "current provider" to default to. */
-async function interactiveAddAccount(rl: HarnessPrompter, id: string): Promise<void> {
+async function manageAccountAction(rl: HarnessPrompter, accountId: string, action: string): Promise<void> {
   const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session) throw new Error(`AI session "${id}" was not found`);
-  const current = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-  if (current) {
-    await addAccountForHarness(rl, id, current);
-    return;
-  }
-  const installed = (await Promise.all(localRouter().AI_LOCAL_HARNESSES
-    .filter((harness) => harness.surface === 'terminal' && harness.turn)
-    .map(async (harness) => ({ harness, inspection: await inspectNativeHarness(harness, 1_200) }))))
-    .filter((item) => item.inspection.installed);
-  const harnessCommand = await chooseOption(rl, 'Add an account for', installed.map(({ harness }) => ({
-    label: harness.displayName, value: harness.command,
-  })));
-  if (!harnessCommand) return;
-  await addAccountForHarness(rl, id, localHarnessForCommand(harnessCommand)!);
-}
-
-/** /provider switches providers; /account switches accounts -- so once a
- * session already has a provider, this only ever shows accounts for that
- * one provider, never a cross-provider list to pick through. A session
- * with no provider yet (nothing to filter to) falls back to every ready
- * account, sorted so accounts sharing a provider stay adjacent -- the
- * closest thing to "grouped" without inventing a non-selectable header row
- * this picker has no concept of. */
-/** Disconnect/reauthenticate only ever offered per harness capability, same
- * principle as everywhere else in this file that normalizes against a
- * vendor's declared catalog fields instead of assuming every harness works
- * the same way: Disconnect needs a real logoutArgv to actually run (Claude
- * Code has one; several harnesses don't), reauthenticate needs loginArgv.
- * Disconnect signs the account out (status -> needs_login) rather than
- * deleting it, specifically so it stays visible here afterward with
- * somewhere to reauthenticate it back to ready from -- deleting it here
- * would have made "reauthenticate a disconnected account" unreachable. */
-async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promise<void> {
-  for (;;) {
-    const state = await readState();
-    const session = state.sessions.find((item) => item.id === id);
-    if (!session) throw new Error(`AI session "${id}" was not found`);
-    const currentHarness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-    const vendorAccounts = state.accounts.filter((account) => account.authKind === 'vendor-cli');
-    const accounts = (currentHarness ? vendorAccounts.filter((account) => account.provider === currentHarness.provider) : vendorAccounts)
-      .sort((left, right) => left.provider.localeCompare(right.provider) || left.label.localeCompare(right.label));
-    // No usage preview here on purpose: it used to await accountUsageLabel
-    // (a real network call per account) before this picker could show
-    // anything at all -- the exact "a slash option takes a few seconds to
-    // render" complaint, just in a second picker beyond /provider. Usage is
-    // already visible in the persistent status line the moment an account
-    // is actually active; a list you're choosing *from* doesn't need to
-    // block on it too.
-    let actionPerformed = false;
-    const selected = await chooseOption(rl, currentHarness ? `Choose a ${currentHarness.displayName} account` : 'Choose an account', [
-      ...accounts.map((account) => {
-        const harness = localHarnessForProvider(account.provider);
-        const actions = [
-          ...(harness?.logoutArgv && account.status === 'ready' ? [{ label: 'Disconnect', value: 'disconnect' }] : []),
-          ...(harness?.loginArgv && account.status !== 'ready' ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
-        ];
-        return {
-          label: account.label,
-          // Provider only shown in the detail when the list actually spans
-          // more than one (i.e. no currentHarness to have already filtered
-          // to it) -- otherwise it's the exact redundant "provider name
-          // shown again right next to itself" this replaced.
-          detail: `${currentHarness ? '' : `· ${harness?.displayName ?? account.provider} `}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
-          value: account.label,
-          actions,
-        };
-      }),
-      { label: 'Add another account…', detail: 'vendor login', value: '__add__' },
-    ], async (label, action) => {
-      actionPerformed = true;
-      const account = state.accounts.find((item) => item.label === label);
-      const harness = account ? localHarnessForProvider(account.provider) : undefined;
-      if (!account || !harness) return;
-      const environment = nativeProfileEnvironment(account.nativeProfile);
-      if (action === 'disconnect' && harness.logoutArgv) {
-        await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
-        account.status = 'needs_login';
-        await writeState(state);
-      } else if (action === 'reauthenticate' && harness.loginArgv) {
-        if (harness.loginCapturable && rl instanceof FullScreenHarnessPrompter) {
-          rl.startWaiting(`signing in to ${harness.displayName}…`);
-          try { await loginNativeHarness(harness, environment); } finally { rl.stopWaiting(); }
-        } else if (rl instanceof FullScreenHarnessPrompter) {
-          await rl.suspend();
-          try {
-            announceBareInteractiveLogin(harness);
-            await loginNativeHarness(harness, environment);
-          } finally { await rl.resume(); }
-        } else {
-          await loginNativeHarness(harness, environment);
-        }
-        await syncAccountIdentityAfterLogin(harness, account, state);
-      }
-    });
-    if (actionPerformed) continue;
-    if (!selected) return;
-    if (selected !== '__add__') {
-      await aiSessionCommand(id, `/settings account ${selected}`);
-      return;
+  const account = state.accounts.find((item) => item.id === accountId);
+  const harness = account ? localHarnessForProvider(account.provider) : undefined;
+  if (!account || !harness || account.authKind !== 'vendor-cli') return;
+  const environment = nativeProfileEnvironment(account.nativeProfile);
+  if (action === 'disconnect' && harness.logoutArgv) {
+    await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
+    account.status = 'needs_login';
+    await writeState(state);
+  } else if (action === 'reauthenticate' && harness.loginArgv) {
+    if (harness.loginCapturable && rl instanceof FullScreenHarnessPrompter) {
+      rl.startWaiting(`signing in to ${harness.displayName}…`);
+      try { await loginNativeHarness(harness, environment); } finally { rl.stopWaiting(); }
+    } else if (rl instanceof FullScreenHarnessPrompter) {
+      await rl.suspend();
+      try {
+        announceBareInteractiveLogin(harness);
+        await loginNativeHarness(harness, environment);
+      } finally { await rl.resume(); }
+    } else {
+      await loginNativeHarness(harness, environment);
     }
-    await interactiveAddAccount(rl, id);
-    return;
+    await syncAccountIdentityAfterLogin(harness, account, state);
   }
 }
 
@@ -2230,8 +2217,7 @@ async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: 
   const session = state.sessions.find((item) => item.id === id);
   const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const selected = await chooseOption(rl, 'Settings', [
-    { label: 'Provider', detail: 'resume here or hand off to another harness', value: 'provider' },
-    { label: 'Account', detail: 'switch login/profile', value: 'account' },
+    { label: 'Provider & account', detail: 'choose a harness, login, or add an account', value: 'provider' },
     ...(harness?.modelArgvPrefix ? [{ label: 'Model', detail: 'provider default or model ID', value: 'model' }] : []),
     ...(harness && harnessSupportsEffort(harness) ? [{ label: 'Reasoning effort', detail: 'provider-supported levels', value: 'effort' }] : []),
     ...(harness?.permissionModes?.length ? [{ label: 'Permissions', detail: 'provider-supported approval behavior', value: 'permissions' }] : []),
@@ -2241,7 +2227,6 @@ async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: 
     { label: 'Show current setup', value: 'status' },
   ] as const);
   if (selected === 'provider') return interactiveEnginePicker(config, rl, id);
-  else if (selected === 'account') await interactiveAccountPicker(rl, id);
   else if (selected === 'model') await interactiveModelPicker(rl, id);
   else if (selected === 'effort') await interactiveEffortPicker(rl, id);
   else if (selected === 'permissions') await interactivePermissionPicker(rl, id);
@@ -2301,7 +2286,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (await synchronizeNativeTranscript(state, session)) await writeState(state);
   const commandDetails: Record<string, string> = {
-    '/provider': 'resume here or hand off to another provider', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
+    '/provider': 'choose a provider or one of its accounts', '/settings': 'configure this workspace',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'approval behavior',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
@@ -2431,7 +2416,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           const selected = await interactiveEnginePicker(config, rl, id);
           if (selected && selected !== id) { id = selected; continue; }
         }
-        else if (command === '/account' || command === '/accounts') await interactiveAccountPicker(rl, id);
+        else if (command === '/account' || command === '/accounts') {
+          const selected = await interactiveEnginePicker(config, rl, id);
+          if (selected && selected !== id) { id = selected; continue; }
+        }
         else if (command === '/model') await interactiveModelPicker(rl, id);
         else if (command === '/effort') await interactiveEffortPicker(rl, id);
         else if (command === '/permissions') await interactivePermissionPicker(rl, id);
