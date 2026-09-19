@@ -392,7 +392,13 @@ export function sessionProviderLabel(session: HarnessSession): string {
  * for Antigravity's ADC-based isolation) would have had to be added to all
  * nine individually, with a real risk of missing one and silently falling
  * back to shared, unisolated auth for just that one call path. */
-export function nativeProfileEnvironment(nativeProfile: AiHarnessAccount['nativeProfile']): Record<string, string> {
+export function nativeProfileEnvironment(
+  nativeProfile: AiHarnessAccount['nativeProfile'], platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
   if (!nativeProfile) return {};
-  return { [nativeProfile.env]: nativeProfile.path, ...nativeProfile.extraEnv };
+  return {
+    [nativeProfile.env]: nativeProfile.path,
+    ...(platform === 'win32' && nativeProfile.env === 'HOME' ? { USERPROFILE: nativeProfile.path } : {}),
+    ...nativeProfile.extraEnv,
+  };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent, renderActivityLine } from './native-harness-protocol';
+import { nativeProfileEnvironment, nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent, renderActivityLine } from './native-harness-protocol';
 import type { AiLocalHarnessDefinition } from './types';
 
 const codex = {
@@ -15,6 +15,16 @@ const codex = {
     responseFields: ['text'],
   },
 } satisfies AiLocalHarnessDefinition;
+
+describe('native profile environments', () => {
+  it('isolates HOME-based profiles through USERPROFILE on native Windows', () => {
+    const profile = { env: 'HOME', path: 'C:\\profiles\\one', extraEnv: { TOKEN: 'x' } };
+    expect(nativeProfileEnvironment(profile, 'win32')).toEqual({
+      HOME: 'C:\\profiles\\one', USERPROFILE: 'C:\\profiles\\one', TOKEN: 'x',
+    });
+    expect(nativeProfileEnvironment(profile, 'darwin')).toEqual({ HOME: 'C:\\profiles\\one', TOKEN: 'x' });
+  });
+});
 
 describe('native harness turn results', () => {
   it('keeps a valid final answer successful after a failed internal sub-command', () => {

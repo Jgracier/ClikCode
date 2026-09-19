@@ -44,7 +44,7 @@ import {
   aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin, syncAccountIdentityAfterLogin,
   nativeAccountContext, setEmitHarnessOutput,
 } from './account-management.js';
-import { TerminalHarnessPrompter } from './terminal-ui.js';
+import { TerminalHarnessPrompter, terminalUiSupported } from './terminal-ui.js';
 import { runCodexAppServerTurn } from './codex-app-server.js';
 import { runAcpTurn } from './acp-client.js';
 import { harnessTurnTransport } from './harness-transport.js';
@@ -473,6 +473,10 @@ export function decodeAttachmentPath(input: string): string {
   return process.platform === 'win32' ? value : value.replace(/\\(.)/g, '$1');
 }
 
+export function expandHomePath(value: string, home = homedir()): string {
+  return value === '~' ? home : /^~[\\/]/.test(value) ? join(home, value.slice(2)) : value;
+}
+
 /** Resolve a standalone input only when it clearly looks like a file
  * reference and names an existing regular file. This preserves slash
  * commands while allowing absolute image paths such as /home/me/photo.png. */
@@ -491,7 +495,7 @@ export async function resolveStandaloneAttachment(
     || explicitlyQuoted
     || IMAGE_EXTENSIONS.has(extname(decoded).toLowerCase());
   if (!looksLikePath) return undefined;
-  const expanded = decoded === '~' ? homedir() : decoded.startsWith('~/') ? join(homedir(), decoded.slice(2)) : decoded;
+  const expanded = expandHomePath(decoded);
   const path = isAbsolute(expanded) ? resolve(expanded) : resolve(workspace, expanded);
   try {
     return (await stat(path)).isFile() ? path : undefined;
@@ -1180,7 +1184,7 @@ export async function aiPermissions(mode?: string): Promise<void> {
     else await aiSettingsSetGlobal('permissions', normalizedMode);
     return;
   }
-  if (!input.isTTY || !output.isTTY) throw new Error('interactive input is required; use `clikcode permissions ask|bypass|auto`');
+  if (!terminalUiSupported()) throw new Error('an ANSI-capable interactive terminal is required; use `clikcode permissions ask|bypass|auto`');
   const rl = new TerminalHarnessPrompter();
   activeTerminalHarness = rl;
   try {
@@ -1379,7 +1383,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     } else {
       const unquoted = decodeAttachmentPath(action);
       const workspace = session.workspace ?? process.cwd();
-      const expanded = unquoted === '~' ? homedir() : unquoted.startsWith('~/') ? join(homedir(), unquoted.slice(2)) : unquoted;
+      const expanded = expandHomePath(unquoted);
       const path = isAbsolute(expanded) ? resolve(expanded) : resolve(workspace, expanded);
       await queueAttachment(session, path);
     }
@@ -2494,12 +2498,12 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   // nothing else is watching. /exit and /quit remain the ways to leave.
   const ignoreHangup = (): void => {};
   const ignoreInterrupt = (): void => {};
-  process.on('SIGHUP', ignoreHangup);
+  if (process.platform !== 'win32') process.on('SIGHUP', ignoreHangup);
   process.on('SIGINT', ignoreInterrupt);
   try {
     await aiSessionInteractiveInner(config, id);
   } finally {
-    process.off('SIGHUP', ignoreHangup);
+    if (process.platform !== 'win32') process.off('SIGHUP', ignoreHangup);
     process.off('SIGINT', ignoreInterrupt);
   }
 }
@@ -2535,7 +2539,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // common time either is actually needed — has somewhere to show its
   // "installing…" spinner and a real terminal to suspend into for a vendor
   // login prompt, instead of running headless before the UI exists.
-  const rl: HarnessPrompter = input.isTTY && output.isTTY
+  const rl: HarnessPrompter = terminalUiSupported()
     ? new TerminalHarnessPrompter()
     : createInterface({
       input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,

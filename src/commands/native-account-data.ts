@@ -5,7 +5,7 @@
  * Nothing here is guessed -- every hardcoded value and every probe was
  * checked against a real installed CLI or a real API response. */
 
-import { spawn } from 'node:child_process';
+import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -185,7 +185,7 @@ export async function captureOpencodeSessionSummary(sessionId: string): Promise<
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      terminatePortable(child);
       resolveSummary(value);
     };
     child.stdout!.setEncoding('utf8');
@@ -254,7 +254,7 @@ export async function codexUsageProbe(_session: HarnessSession, environment: Rea
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      terminatePortable(child);
       resolveUsage(value);
     };
     const send = (message: Record<string, unknown>): void => {

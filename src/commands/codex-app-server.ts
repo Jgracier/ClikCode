@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
 import type { AiHarnessPermissionMode, HarnessActivityEvent } from './types.js';
 
 type JsonObject = Record<string, unknown>;
@@ -99,7 +99,7 @@ export function runCodexAppServerTurn(input: CodexAppServerTurnInput): Promise<C
       settled = true;
       input.onSteerReady?.(undefined);
       input.signal?.removeEventListener('abort', abort);
-      child.kill('SIGTERM');
+      terminatePortable(child);
       if (error) reject(error);
       else if (!threadId || !(lastAgentMessage || streamedMessage).trim()) reject(new Error('Codex returned no assistant text'));
       else resolve({ text: (lastAgentMessage || streamedMessage).trim(), nativeSessionId: threadId });

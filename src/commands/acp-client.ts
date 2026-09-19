@@ -2,8 +2,8 @@
  * this one lifecycle/stream/approval implementation instead of accumulating
  * another vendor-shaped JSON parser. The existing CLI adapter remains the
  * compatibility fallback for products without ACP. */
-import { spawn } from 'node:child_process';
 import type { AiHarnessPermissionMode, HarnessActivityEvent } from './types.js';
+import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
 
 type Json = Record<string, any>;
 
@@ -96,7 +96,7 @@ export function runAcpTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
       if (settled) return;
       settled = true;
       input.signal?.removeEventListener('abort', abort);
-      child.kill('SIGTERM');
+      terminatePortable(child);
       if (error) {
         Object.assign(error, { acpSafeToFallback: !promptStarted });
         reject(error);

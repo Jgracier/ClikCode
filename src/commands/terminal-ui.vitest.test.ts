@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, editWaitingComposer, inlineConversationPlan, responseTimeline, rightLabeledRule, TerminalInputDecoder, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { commandPaletteMatches, editWaitingComposer, inlineConversationPlan, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('terminal waiting input', () => {
+  it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
+    expect(terminalUiSupported(true, true, { TERM: 'xterm-256color' })).toBe(true);
+    expect(terminalUiSupported(true, true, { WT_SESSION: '1' })).toBe(true);
+    expect(terminalUiSupported(true, true, { TERM: 'dumb' })).toBe(false);
+    expect(terminalUiSupported(false, true, { TERM: 'xterm' })).toBe(false);
+  });
   it('packs four animation phases of a logical 4x4 grid into two Braille cells', () => {
     const frames = Array.from({ length: 4 }, (_, frame) => waitingSpinnerFrame(frame));
     expect(new Set(frames.map((frame) => JSON.stringify(frame))).size).toBe(4);
