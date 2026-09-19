@@ -429,6 +429,36 @@ function claudeStreamUsage(lineText: string): string | undefined {
   return usageWindowsLabel(percent(windows.five_hour), percent(windows.seven_day));
 }
 
+/** Vendors describe a quota window by its length, not by a name. 300 minutes
+ * and 10080 minutes are the two everyone actually uses, and naming them the
+ * way the endpoint probe already does keeps one wording for one account no
+ * matter which path produced the reading. */
+export function usageWindowName(minutes: number): string {
+  if (minutes === 10_080) return 'weekly';
+  if (minutes === 1_440) return 'daily';
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+/** Codex pushes account/rateLimits/updated on its app-server connection during
+ * a turn, unprompted (confirmed live). Reading it there replaces codexUsageProbe
+ * spawning an ENTIRE SECOND `codex app-server` process -- handshake, a 250ms
+ * settle, one request, teardown -- on every refresh, per account, per terminal.
+ * usedPercent here is already a percent, unlike Claude's 0..1 fraction. */
+export function codexRateLimitsLabel(rateLimits: unknown): string | undefined {
+  const windows = rateLimits as {
+    primary?: { usedPercent?: unknown; windowDurationMins?: unknown };
+    secondary?: { usedPercent?: unknown; windowDurationMins?: unknown };
+  } | undefined;
+  const part = (window?: { usedPercent?: unknown; windowDurationMins?: unknown }): string | undefined => {
+    if (typeof window?.usedPercent !== 'number' || typeof window.windowDurationMins !== 'number') return undefined;
+    const left = Math.max(0, Math.min(100, Math.round(100 - window.usedPercent)));
+    return `${usageWindowName(window.windowDurationMins)} ${left}% left`;
+  };
+  const parts = [part(windows?.primary), part(windows?.secondary)].filter((value): value is string => Boolean(value));
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
 /** Harnesses that report their own quota on their turn stream. */
 export const NATIVE_STREAM_USAGE: Readonly<Partial<Record<string, (lineText: string) => string | undefined>>> = {
   claude: claudeStreamUsage,
@@ -453,7 +483,12 @@ async function publishUsageReading(cacheKey: string, accountId: string | null | 
  * run a turn yet has no stream to read. */
 export async function recordNativeStreamUsage(session: HarnessSession, lineText: string): Promise<string | undefined> {
   const read = session.nativeHarness ? NATIVE_STREAM_USAGE[session.nativeHarness] : undefined;
-  const label = read?.(lineText);
+  return recordDerivedUsage(session, read?.(lineText));
+}
+
+/** Publish a reading the harness gave us for free during a turn, from whichever
+ * transport it arrived on -- a stdout line, or an app-server notification. */
+export async function recordDerivedUsage(session: HarnessSession, label: string | undefined): Promise<string | undefined> {
   if (!label) return undefined;
   const cacheKey = `${session.nativeHarness}:${session.nativeSessionId ?? 'default'}`;
   await publishUsageReading(cacheKey, session.accountId, label).catch(() => undefined);
