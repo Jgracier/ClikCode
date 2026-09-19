@@ -294,6 +294,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('local-provider', 'Local provider', 'Local OSS runtime used with OSS mode', 'model', ['--local-provider'], 'enum', { values: ['lmstudio', 'ollama'] }),
       flag('oss', 'Open-source model', 'Use a configured local open-source provider', 'model', ['--oss']),
       flag('search', 'Web search', 'Enable the native web-search tool', 'tools', ['--search'], { argvPlacement: 'root' }),
+      flag('network-access', 'Network access', 'Allow outbound network from Codex workspace-write commands (required for GitHub in Ask mode)', 'safety', ['--config', 'sandbox_workspace_write.network_access=true'], { argvPlacement: 'root' }),
       flag('worktree', 'Managed worktree', 'Run in a new managed Git worktree', 'session', ['--worktree'], { requiresNewSession: true }),
       flag('ephemeral', 'Ephemeral session', 'Do not persist native session files', 'session', ['--ephemeral'], { requiresNewSession: true }),
       flag('ignore-user-config', 'Ignore user config', 'Do not load CODEX_HOME/config.toml', 'safety', ['--ignore-user-config']),

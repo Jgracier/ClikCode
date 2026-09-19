@@ -2593,11 +2593,8 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
               if (!event) return;
               activeFullScreenHarness?.phase(renderActivityPhase(event));
               if (isJsonDefaultMode()) return;
-              const activityLines = renderActivityLine(event);
-              for (const activity of activityLines) {
-                if (activeFullScreenHarness) activeFullScreenHarness.activity(activity.trim());
-                else output.write(`${activity}\n`);
-              }
+              if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(event);
+              else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
             },
           },
         );
@@ -2838,7 +2835,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
           activeFullScreenHarness?.phase(event.label);
           if (!isJsonDefaultMode()) {
             const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
-            for (const line of renderActivityLine(activityEvent)) activeFullScreenHarness?.activity(line.trim());
+            if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(activityEvent);
           }
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');

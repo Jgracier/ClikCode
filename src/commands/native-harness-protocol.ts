@@ -254,6 +254,12 @@ export function capDiffLines(text: string, max: number): { lines: string[]; trun
   return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
 }
 
+function cappedActivityOutput(text: string): string[] | undefined {
+  if (!text.trim()) return undefined;
+  const capped = capDiffLines(text.trim(), 3);
+  return [...capped.lines, ...(capped.truncated ? [`… ${capped.truncated} more line${capped.truncated === 1 ? '' : 's'}`] : [])];
+}
+
 export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: string): HarnessActivityEvent | undefined {
   let value: Record<string, unknown>;
   try {
@@ -288,7 +294,15 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
   }
   if (/command_execution/.test(itemType) && /started|completed/.test(type)) {
     const command = String(item?.command ?? item?.command_line ?? '').trim();
-    return command ? { kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: command } : undefined;
+    if (!command) return undefined;
+    const rawOutput = typeof item?.aggregated_output === 'string' ? item.aggregated_output
+      : typeof item?.output === 'string' ? item.output : '';
+    const output = cappedActivityOutput(rawOutput);
+    return {
+      kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: command,
+      ...(typeof item?.id === 'string' ? { id: item.id } : {}),
+      ...(output?.length ? { output } : {}),
+    };
   }
   if (/file_change/.test(itemType) && /completed/.test(type)) return { kind: 'tool-done', label: 'files updated' };
   if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
@@ -314,6 +328,7 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
         const added = capDiffLines(input.new_string, 4);
         return {
           kind: 'tool-start', label: name,
+          ...(typeof tool.id === 'string' ? { id: tool.id } : {}),
           diff: {
             removed: [...removed.lines, ...(removed.truncated ? [`… ${removed.truncated} more line${removed.truncated === 1 ? '' : 's'}`] : [])],
             added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])],
@@ -322,9 +337,23 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
       }
       if (name === 'Write' && typeof input?.content === 'string') {
         const added = capDiffLines(input.content, 4);
-        return { kind: 'tool-start', label: name, diff: { removed: [], added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])] } };
+        return { kind: 'tool-start', label: name, ...(typeof tool.id === 'string' ? { id: tool.id } : {}), diff: { removed: [], added: [...added.lines, ...(added.truncated ? [`… ${added.truncated} more line${added.truncated === 1 ? '' : 's'}`] : [])] } };
       }
-      return { kind: 'tool-start', label: name };
+      return { kind: 'tool-start', label: name, ...(typeof tool.id === 'string' ? { id: tool.id } : {}) };
+    }
+    if (type === 'user') {
+      const message = value.message as { content?: Array<Record<string, unknown>> } | undefined;
+      const result = message?.content?.find((part) => part.type === 'tool_result');
+      if (!result) return undefined;
+      const content = typeof result.content === 'string' ? result.content : Array.isArray(result.content)
+        ? result.content.flatMap((part) => part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string'
+          ? [String((part as Record<string, unknown>).text)] : []).join('\n') : '';
+      const output = cappedActivityOutput(content);
+      return {
+        kind: 'tool-done', label: 'tool',
+        ...(typeof result.tool_use_id === 'string' ? { id: result.tool_use_id } : {}),
+        ...(output?.length ? { output } : {}),
+      };
     }
   }
   // opencode's own envelope is a different shape entirely: a top-level `type`
@@ -384,7 +413,7 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   const isCodeChange = Boolean(event.diff) || isCodeChangeLabel(event.label);
   const glyph = isCodeChange ? chalk.magenta('edit') : (event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool'));
   const summary = `  ${glyph} ${chalk.dim(event.label)}`;
-  if (!event.diff) return [summary];
+  if (!event.diff) return [summary, ...(event.output ?? []).map((line) => `    ${chalk.dim(line)}`)];
   const diffLines = [
     ...event.diff.removed.map((line) => `    ${chalk.red(`- ${line}`)}`),
     ...event.diff.added.map((line) => `    ${chalk.green(`+ ${line}`)}`),
