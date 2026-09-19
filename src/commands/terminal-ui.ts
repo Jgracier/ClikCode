@@ -33,6 +33,27 @@ export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[
   });
 }
 
+export type InterleavedResponsePart = { kind: 'text'; text: string } | { kind: 'activity'; lines: string[] };
+
+/** Preserve the chronology of prose and tool events within one assistant
+ * message. Provider protocols send them as separate event streams, so the
+ * response offset captured at arrival is the stable join key. */
+export function interleaveResponseContent(
+  content: string,
+  activities: ReadonlyArray<{ responseOffset: number; lines: string[] }>,
+): InterleavedResponsePart[] {
+  const parts: InterleavedResponsePart[] = [];
+  let offset = 0;
+  for (const activity of [...activities].sort((left, right) => left.responseOffset - right.responseOffset)) {
+    const nextOffset = Math.max(offset, Math.min(content.length, activity.responseOffset));
+    if (nextOffset > offset) parts.push({ kind: 'text', text: content.slice(offset, nextOffset) });
+    parts.push({ kind: 'activity', lines: activity.lines });
+    offset = nextOffset;
+  }
+  if (offset < content.length || !activities.length) parts.push({ kind: 'text', text: content.slice(offset) });
+  return parts;
+}
+
 export class FullScreenHarnessPrompter implements HarnessPrompter {
   private closed = false;
   private history: string[] = [];
@@ -49,7 +70,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingFrame = 0;
   private waitingLabel = '';
   private waitingStartedAt = 0;
-  private activityEntries: Array<{ anchor: number; event?: HarnessActivityEvent; lines: string[] }> = [];
+  private activityEntries: Array<{ anchor: number; responseOffset?: number; event?: HarnessActivityEvent; lines: string[] }> = [];
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private activityAnchor = 0;
@@ -135,16 +156,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   response(text: string, mode: 'append' | 'replace' = 'append'): void {
     if (!text) return;
     this.liveResponse = mode === 'replace' ? text : this.liveResponse + text;
-    // Cursor can emit character-sized chunks. Coalesce them into a bounded
-    // repaint rate so streaming cannot reintroduce terminal flicker/stale rows.
-    if (this.responsePaintTimer || this.selecting || this.paletteActive) return;
-    this.responsePaintTimer = setTimeout(() => {
-      this.responsePaintTimer = undefined;
-      if (!this.closed && !this.selecting && !this.paletteActive) {
-        this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
-      }
-    }, 32);
-    this.responsePaintTimer.unref();
+    this.schedulePaint();
   }
 
   activity(message: string): void {
@@ -153,9 +165,10 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
     this.activityEntries = [...this.activityEntries.slice(-49), {
       anchor: this.currentSession?.messages?.length ?? 0,
+      ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
       lines: [normalized],
     }];
-    if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    this.schedulePaint();
   }
 
   activityEvent(event: HarnessActivityEvent): void {
@@ -174,9 +187,14 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       match.event = effective;
       match.lines = lines;
     } else {
-      this.activityEntries = [...this.activityEntries.slice(-49), { anchor, event: effective, lines }];
+      this.activityEntries = [...this.activityEntries.slice(-49), {
+        anchor,
+        ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
+        event: effective,
+        lines,
+      }];
     }
-    if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    this.schedulePaint();
   }
 
   panel(title: string, body: string): void {
@@ -204,7 +222,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     this.waitingTimer = setInterval(() => {
       this.waitingFrame++;
       this.updateWaiting();
-    }, 90);
+    }, 120);
     this.waitingTimer.unref();
   }
 
@@ -238,7 +256,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   usage(label?: string): void {
     if (this.usageLabel === label) return;
     this.usageLabel = label;
-    if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    this.schedulePaint();
   }
 
   private statusText(): string {
@@ -272,7 +290,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * rather than the same static label sitting there with no sense of how long
    * it's actually been (only the spinner glyph itself changing every 90ms). */
   private waitingText(): string {
-    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    // ASCII frames render reliably in restricted fonts and remote terminals;
+    // unsupported Braille spinner glyphs visibly flashed as question marks.
+    const frames = ['|', '/', '-', '\\'];
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
     const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
     return `${frames[this.waitingFrame % frames.length]} ${this.waitingLabel} (${elapsed})`;
@@ -280,11 +300,22 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
 
   private updateWaiting(): void {
     if (!this.waitingLabel || this.closed || this.selecting || this.paletteActive) return;
-    // Spinner ticks, stream updates, activity changes, and scrolling all use
-    // the same atomic frame. The former direct absolute-row write could race a
-    // frame whose conversation height had just changed, leaving a duplicate
-    // status/footer line at the old row until the turn completed.
-    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    this.schedulePaint();
+  }
+
+  /** Token deltas, spinner ticks, tool events, phases, and usage refreshes can
+   * all arrive in the same few milliseconds. One shared scheduler collapses
+   * those signals into a single atomic frame instead of queueing competing
+   * full-screen writes that briefly expose half-updated cursor/footer state. */
+  private schedulePaint(delay = 32): void {
+    if (this.responsePaintTimer || this.closed || this.selecting || this.paletteActive) return;
+    this.responsePaintTimer = setTimeout(() => {
+      this.responsePaintTimer = undefined;
+      if (!this.closed && !this.selecting && !this.paletteActive) {
+        this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+      }
+    }, delay);
+    this.responsePaintTimer.unref();
   }
 
   /** `palette` fixes the reserved footer band to `capacity` rows for the whole time a
@@ -302,6 +333,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; footerOnly?: boolean; hint?: string; hideCursor?: boolean }): void {
     const session = this.currentSession;
     if (!session) return;
+    if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
+    this.responsePaintTimer = undefined;
     this.draft = composer;
     this.draftOptions = options;
     this.draftSelected = selected;
@@ -333,7 +366,10 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // go instead of a pool too small to scroll through at all.
     const messages = allMessages.slice(-40);
     const messageStart = allMessages.length - messages.length;
-    const targetHeight = Math.max(4, (output.rows || 30) - 1);
+    // The final status row is written without a trailing newline, so using
+    // the complete terminal height is safe and important: leaving one row
+    // unpainted allowed an obsolete status line to remain visibly duplicated.
+    const targetHeight = Math.max(5, output.rows || 30);
     const requestedPaletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
     const paletteCapacity = Math.min(requestedPaletteCapacity, Math.max(0, targetHeight - 5));
     const footerOnly = palette?.footerOnly ?? false;
@@ -347,7 +383,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const rows = Math.max(1, targetHeight - 3 - composerRows.rows.length - paletteRows - noticeRows);
     const conversation: Array<{ text: string }> = [];
     const appendActivity = (anchor: number): void => {
-      for (const entry of this.activityEntries.filter((item) => item.anchor === anchor)) {
+      for (const entry of this.activityEntries.filter((item) => item.anchor === anchor && item.responseOffset === undefined)) {
         for (const activity of entry.lines) conversation.push({ text: `${chalk.dim('·')} ${visibleSlice(activity, Math.max(1, conversationInner - 2))}` });
       }
       if (this.waitingLabel && anchor === this.activityAnchor) conversation.push({ text: `${chalk.cyan('●')} ${chalk.dim(this.waitingText())}` });
@@ -356,39 +392,49 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
       let firstLine = true;
-      for (const block of splitIntoBlocks(message.content)) {
-        if (block.kind === 'code') {
-          // Not word-wrapped -- re-flowing code would change what it means.
-          // Hard-truncated instead, same as visibleSlice does for a single
-          // overlong token elsewhere in this file.
-          for (const codeLine of block.lines) {
+      const appendMessageText = (content: string): void => {
+        for (const block of splitIntoBlocks(content)) {
+          if (block.kind === 'code') {
+            // Not word-wrapped -- re-flowing code would change what it means.
+            // Hard-truncated instead, same as visibleSlice does for a single
+            // overlong token elsewhere in this file.
+            for (const codeLine of block.lines) {
+              const prefix = firstLine ? `${marker} ` : '  ';
+              conversation.push({ text: `${prefix}  ${chalk.cyan(visibleSlice(codeLine, Math.max(1, conversationInner - 2)))}` });
+              firstLine = false;
+            }
+            continue;
+          }
+          const { prefix: bulletPrefix, hangIndent, text, bold, rule } = formatParagraph(block.paragraph || ' ');
+          if (rule) {
             const prefix = firstLine ? `${marker} ` : '  ';
-            conversation.push({ text: `${prefix}  ${chalk.cyan(visibleSlice(codeLine, Math.max(1, conversationInner - 2)))}` });
+            conversation.push({ text: `${prefix}${chalk.dim('─'.repeat(Math.max(1, conversationInner)))}` });
+            firstLine = false;
+            continue;
+          }
+          const styled = renderInlineMarkdown(text);
+          const budget = Math.max(1, conversationInner - terminalCellWidth(bulletPrefix || hangIndent));
+          // conversationInner is already the full per-line budget after the
+          // 2-column marker/indent prefix; wrapWords breaks at spaces (falling
+          // back to a hard break only for a single word wider than the whole
+          // line) instead of the flat character-count slice this replaced,
+          // which split words wherever the count happened to land.
+          const wrapped = wrapWords(styled, budget);
+          for (const [lineIndex, line] of wrapped.entries()) {
+            const prefix = firstLine ? `${marker} ` : '  ';
+            const structural = lineIndex === 0 ? bulletPrefix : hangIndent;
+            conversation.push({ text: `${prefix}${structural}${bold ? chalk.bold(line) : line}` });
             firstLine = false;
           }
-          continue;
         }
-        const { prefix: bulletPrefix, hangIndent, text, bold, rule } = formatParagraph(block.paragraph || ' ');
-        if (rule) {
-          const prefix = firstLine ? `${marker} ` : '  ';
-          conversation.push({ text: `${prefix}${chalk.dim('─'.repeat(Math.max(1, conversationInner)))}` });
-          firstLine = false;
-          continue;
-        }
-        const styled = renderInlineMarkdown(text);
-        const budget = Math.max(1, conversationInner - terminalCellWidth(bulletPrefix || hangIndent));
-        // conversationInner is already the full per-line budget after the
-        // 2-column marker/indent prefix; wrapWords breaks at spaces (falling
-        // back to a hard break only for a single word wider than the whole
-        // line) instead of the flat character-count slice this replaced,
-        // which split words wherever the count happened to land.
-        const wrapped = wrapWords(styled, budget);
-        for (const [lineIndex, line] of wrapped.entries()) {
-          const prefix = firstLine ? `${marker} ` : '  ';
-          const structural = lineIndex === 0 ? bulletPrefix : hangIndent;
-          conversation.push({ text: `${prefix}${structural}${bold ? chalk.bold(line) : line}` });
-          firstLine = false;
-        }
+      };
+      const absoluteMessageIndex = messageStart + messageIndex;
+      const embeddedActivities = this.activityEntries
+        .filter((entry) => entry.anchor === absoluteMessageIndex && entry.responseOffset !== undefined)
+        .map((entry) => ({ responseOffset: entry.responseOffset!, lines: entry.lines }));
+      for (const part of interleaveResponseContent(message.content, embeddedActivities)) {
+        if (part.kind === 'text') appendMessageText(part.text);
+        else for (const activity of part.lines) conversation.push({ text: `${chalk.dim('·')} ${visibleSlice(activity, Math.max(1, conversationInner - 2))}` });
       }
       conversation.push({ text: '' });
       appendActivity(messageStart + messageIndex + 1);
