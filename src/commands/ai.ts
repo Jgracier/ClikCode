@@ -500,6 +500,8 @@ export async function resolveStandaloneAttachment(
   try {
     return (await stat(path)).isFile() ? path : undefined;
   } catch {
+    // fail-open-ok: this asks "is there a file at this path?". An unstattable path is not
+    // an attachment, which is exactly what undefined means to the caller here.
     return undefined;
   }
 }

@@ -61,5 +61,9 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
 export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText: string): NativeResponseUpdate | undefined {
   const parser = parsers[harness.command];
   if (!parser) return undefined;
-  try { return parser(JSON.parse(lineText) as Json); } catch { return undefined; }
+  try { return parser(JSON.parse(lineText) as Json); } catch {
+    // fail-open-ok: harness stdout interleaves plain log lines with JSON events. A line that
+    // does not parse carries no response update, which is what undefined reports.
+    return undefined;
+  }
 }
