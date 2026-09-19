@@ -59,6 +59,51 @@ export function rightLabeledRule(width: number, label?: string): string {
 }
 
 export type InterleavedResponsePart = { kind: 'text'; text: string } | { kind: 'activity'; lines: string[] };
+export type ActivityEntry = { anchor: number; responseOffset?: number; event?: HarnessActivityEvent; lines: string[] };
+
+const MAX_ACTIVITY_BURST = 4;
+
+/** One provider may publish pending/running/progress frames for the same tool.
+ * They describe one lifecycle, not separate calls. Upsert by native id (or a
+ * conservative label+offset fallback) so progress cannot flood the chat. */
+export function upsertActivityEvent(
+  entries: readonly ActivityEntry[], anchor: number, responseOffset: number | undefined, event: HarnessActivityEvent,
+): ActivityEntry[] {
+  if (event.kind === 'thinking') return [...entries];
+  const normalized: HarnessActivityEvent = {
+    ...event,
+    label: visibleSlice(event.label.replace(/\s+/g, ' ').trim() || 'tool', 120),
+  };
+  const matchIndex = (() => {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      if (entry.anchor !== anchor || entry.event?.kind !== 'tool-start') continue;
+      if (normalized.id ? entry.event.id === normalized.id
+        : entry.event.label === normalized.label && entry.responseOffset === responseOffset) return index;
+    }
+    return -1;
+  })();
+  const next = [...entries];
+  if (matchIndex >= 0) {
+    const prior = next[matchIndex]!;
+    const effective = {
+      ...normalized,
+      ...(normalized.label === 'tool' ? { label: prior.event!.label } : {}),
+      ...(normalized.diff ? {} : prior.event?.diff ? { diff: prior.event.diff } : {}),
+    };
+    next[matchIndex] = { ...prior, event: effective, lines: renderActivityLine(effective).map((line) => line.trim()) };
+  } else {
+    next.push({ anchor, ...(responseOffset === undefined ? {} : { responseOffset }), event: normalized, lines: renderActivityLine(normalized).map((line) => line.trim()) });
+  }
+  return next.slice(-50);
+}
+
+export function transientAssistantRequired(
+  liveResponse: string, waiting: boolean, transcriptLength: number, entries: readonly ActivityEntry[],
+): boolean {
+  return Boolean(liveResponse || (waiting && entries.some((entry) =>
+    entry.anchor === transcriptLength && entry.responseOffset !== undefined)));
+}
 
 /** Preserve the chronology of prose and tool events within one assistant
  * message. Provider protocols send them as separate event streams, so the
@@ -69,10 +114,16 @@ export function interleaveResponseContent(
 ): InterleavedResponsePart[] {
   const parts: InterleavedResponsePart[] = [];
   let offset = 0;
-  for (const activity of [...activities].sort((left, right) => left.responseOffset - right.responseOffset)) {
-    const nextOffset = Math.max(offset, Math.min(content.length, activity.responseOffset));
+  const sorted = [...activities].sort((left, right) => left.responseOffset - right.responseOffset);
+  for (let index = 0; index < sorted.length;) {
+    const responseOffset = sorted[index]!.responseOffset;
+    const group: typeof sorted = [];
+    while (index < sorted.length && sorted[index]!.responseOffset === responseOffset) group.push(sorted[index++]!);
+    const nextOffset = Math.max(offset, Math.min(content.length, responseOffset));
     if (nextOffset > offset) parts.push({ kind: 'text', text: content.slice(offset, nextOffset) });
-    parts.push({ kind: 'activity', lines: activity.lines });
+    const hidden = Math.max(0, group.length - MAX_ACTIVITY_BURST);
+    if (hidden) parts.push({ kind: 'activity', lines: [`… ${hidden} earlier tool ${hidden === 1 ? 'call' : 'calls'}`] });
+    for (const activity of group.slice(-MAX_ACTIVITY_BURST)) parts.push({ kind: 'activity', lines: activity.lines });
     offset = nextOffset;
   }
   if (offset < content.length || !activities.length) parts.push({ kind: 'text', text: content.slice(offset) });
@@ -95,7 +146,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingFrame = 0;
   private waitingLabel = '';
   private waitingStartedAt = 0;
-  private activityEntries: Array<{ anchor: number; responseOffset?: number; event?: HarnessActivityEvent; lines: string[] }> = [];
+  private activityEntries: ActivityEntry[] = [];
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
@@ -193,7 +244,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const last = this.activityEntries[this.activityEntries.length - 1];
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
     this.activityEntries = [...this.activityEntries.slice(-49), {
-      anchor: this.currentSession?.messages?.length ?? 0,
+      anchor: this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0,
       ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
       lines: [normalized],
     }];
@@ -201,42 +252,23 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   }
 
   activityEvent(event: HarnessActivityEvent): void {
-    const anchor = this.currentSession?.messages?.length ?? 0;
-    const match = event.kind === 'tool-done'
-      ? [...this.activityEntries].reverse().find((entry) => entry.anchor === anchor && entry.event?.kind === 'tool-start'
-        && (event.id ? entry.event.id === event.id : entry.event.label === event.label))
-      : undefined;
-    const effective = match ? {
-      ...event,
-      ...(event.label === 'tool' ? { label: match.event!.label } : {}),
-      ...(event.diff ? {} : match.event?.diff ? { diff: match.event.diff } : {}),
-    } : event;
-    const lines = renderActivityLine(effective).map((line) => line.trim());
-    if (match) {
-      match.event = effective;
-      match.lines = lines;
-    } else {
-      this.activityEntries = [...this.activityEntries.slice(-49), {
-        anchor,
-        ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
-        event: effective,
-        lines,
-      }];
-    }
+    const anchor = this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
+    const responseOffset = this.waitingLabel ? this.liveResponse.length : undefined;
+    this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event);
     this.schedulePaint();
   }
 
   panel(title: string, body: string): void {
     const lines = body.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    this.activityEntries = [{ anchor: this.currentSession?.messages?.length ?? 0, lines: [chalk.bold(title), ...lines].slice(-6) }];
-    this.activityAnchor = this.currentSession?.messages?.length ?? 0;
+    this.activityEntries = [{ anchor: this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0, lines: [chalk.bold(title), ...lines].slice(-6) }];
+    this.activityAnchor = this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
   startWaiting(message: string, onCancel?: (restoreDraft: boolean) => void): void {
     this.stopWaiting(false);
     this.liveResponse = '';
-    this.activityAnchor = this.currentSession?.messages?.length ?? 0;
+    this.activityAnchor = this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
     this.waitingLabel = message;
     this.cancelWaiting = onCancel;
     this.waitingCancelled = false;
@@ -387,7 +419,14 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const conversationInner = width - 2;
     const rule = chalk.dim('─'.repeat(width));
     const persistedMessages = sessionTranscriptMessages(session);
-    const allMessages = this.liveResponse
+    // Tool events often arrive before the first prose token. They still belong
+    // to the in-flight assistant message. Render an empty temporary assistant
+    // anchor immediately; otherwise the tools remain invisible and then all
+    // appear at once when the first sentence arrives.
+    const hasTransientAssistant = transientAssistantRequired(
+      this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
+    );
+    const allMessages = hasTransientAssistant
       ? [...persistedMessages, { role: 'assistant' as const, content: this.liveResponse }]
       : persistedMessages;
     // 40, not 6: matches the same replay/adoption cap used elsewhere

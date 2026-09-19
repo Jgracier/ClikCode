@@ -221,7 +221,12 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
       ...(output?.length ? { output } : {}),
     };
   }
-  if (/file_change/.test(itemType) && /completed/.test(type)) return { kind: 'tool-done', label: 'files updated' };
+  if (/file_change/.test(itemType) && /started|completed/.test(type)) {
+    return {
+      kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: 'files updated',
+      ...(typeof item?.id === 'string' ? { id: item.id } : {}),
+    };
+  }
   if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
     const name = String(item?.name ?? item?.server ?? 'tool');
     return {
@@ -333,12 +338,12 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   const isCodeChange = Boolean(event.diff) || isCodeChangeLabel(event.label);
   const glyph = isCodeChange ? chalk.magenta('edit') : (event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool'));
   const summary = `  ${glyph} ${chalk.dim(event.label)}`;
-  if (!event.diff) return [summary, ...(event.output ?? []).map((line) => `    ${chalk.dim(line)}`)];
-  const diffLines = [
+  const detailLines = !event.diff ? (event.output ?? []).map((line) => `    ${chalk.dim(line)}`) : [
     ...event.diff.removed.map((line) => `    ${chalk.red(`- ${line}`)}`),
     ...event.diff.added.map((line) => `    ${chalk.green(`+ ${line}`)}`),
   ];
-  return [summary, ...diffLines];
+  const visible = detailLines.slice(0, 2);
+  return [summary, ...visible, ...(detailLines.length > visible.length ? [`    ${chalk.dim(`… ${detailLines.length - visible.length} more`)}`] : [])];
 }
 
 /** Same idea for the spinner's own label: while a tool is actively running,
