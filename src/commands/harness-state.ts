@@ -1,18 +1,45 @@
-/** Local ClikCode state persistence -- the on-disk harness-state.json
- * lifecycle (read/write/migrate/backup), the device signing identity, and
- * the resolved per-provider default settings. No terminal UI, no CLI
- * command wiring -- just "what's on disk and how do we safely change it." */
+/** Local ClikCode state persistence -- what is on disk and how it is safely
+ * changed. No terminal UI, no CLI command wiring.
+ *
+ * Layout under the state directory (version 2):
+ *
+ *   index.json            accounts, settings, session METADATA, recent invocations
+ *   sessions/<id>.json    one conversation's transcript and pending turn
+ *   claims/<id>.json      which terminal is driving a conversation (session-claims.ts)
+ *   secrets.json          loopback bearer token and any device private key (0600)
+ *
+ * Version 1 kept all of that in one `harness-state.json` that was re-read,
+ * re-serialized and rewritten in full for every streamed checkpoint, so the
+ * cost of one keystroke's worth of output grew with total history forever.
+ * `readState`/`writeState` keep their original contract -- callers still see
+ * one in-memory `HarnessState` with materialized messages -- but a write now
+ * touches only the records that actually changed. */
 
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
-import { copyFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import type { FileHandle } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { chmod, copyFile, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount, HarnessDefaultSettings, HarnessSession, HarnessState } from './types.js';
+import {
+  atomicWriteFile, cloneData, deleteSessionTranscript, readSessionTranscript, resetSessionStoreCache,
+  sameData, stateDirectory, transcriptOf, transcriptParentOf, withStateLock, writeSessionTranscript,
+  type SessionTranscript,
+} from './session-store.js';
+import {
+  acquireSessionClaim, claimIsHeld, heartbeatSessionClaim, readSessionClaims, releaseSessionClaim, type SessionClaim,
+} from './session-claims.js';
 
-export const HARNESS_STATE_VERSION = 1;
+export { forkTranscript, writeSessionCheckpoint, StateLockTimeoutError, type SessionTranscript, type TranscriptRef } from './session-store.js';
+export {
+  acquireSessionClaim, claimIsHeld, heartbeatSessionClaim, readSessionClaim, readSessionClaims, releaseSessionClaim,
+  type ClaimOptions, type ClaimResult, type SessionClaim,
+} from './session-claims.js';
+
+/** On-disk layout version. 1 = single harness-state.json, 2 = split layout. */
+export const HARNESS_STATE_VERSION = 2;
 export const LOCAL_HARNESS_PROTOCOL = 1;
-
+/** Individual invocation records kept; older ones fold into per-day totals. */
+export const INVOCATION_KEEP = 1000;
 
 /** Defaults a brand-new session is built from. Provider-specific overrides win
  * over the global defaults, which win over the hardcoded fallback — replacing
@@ -46,7 +73,6 @@ function normalizedConversation(session: HarnessSession): Pick<HarnessSession, '
   return { conversationId: session.conversationId || session.id };
 }
 
-
 export function resolveDefaultSettings(state: HarnessState, provider?: string | null): HarnessDefaultSettings {
   const overrides = provider ? state.providerSettings[provider] : undefined;
   return {
@@ -56,6 +82,10 @@ export function resolveDefaultSettings(state: HarnessState, provider?: string | 
   };
 }
 
+/** Not called on first run any more: nothing in ClikCode signs with the device
+ * key, so minting and storing a private key only created a secret to protect.
+ * Kept for the day a signing protocol exists; an already-stored key is still
+ * read from secrets.json. */
 export function newDeviceSigningIdentity(): Pick<HarnessState, 'devicePrivateKeyPem' | 'devicePublicKey'> {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   return {
@@ -64,144 +94,24 @@ export function newDeviceSigningIdentity(): Pick<HarnessState, 'devicePrivateKey
   };
 }
 
-/** The snapshot a state object was last known to agree with on disk. Writes
- * diff against it so a process only ever persists what it actually changed. */
-const STATE_BASELINE = Symbol('clikcode.stateBaseline');
-type BaselinedState = HarnessState & { [STATE_BASELINE]?: HarnessState };
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
 
-function rememberBaseline(state: HarnessState, baseline: HarnessState): HarnessState {
-  // Non-enumerable so it never reaches JSON.stringify, equality checks, or disk.
-  Object.defineProperty(state, STATE_BASELINE, {
-    value: JSON.parse(JSON.stringify(baseline)) as HarnessState,
-    configurable: true, writable: true, enumerable: false,
-  });
-  return state;
-}
-
-type Identified = { id: string };
-
-/** Entity-level three-way merge. Records this process did not touch are taken
- * from disk, so a stale snapshot can never erase another terminal's work.
- * Removing a record is still expressed: present in the baseline and absent
- * from the working copy means a deliberate delete. */
-function mergeById<T extends Identified>(baseline: readonly T[], working: readonly T[], disk: readonly T[]): T[] {
-  const before = new Map(baseline.map((item) => [item.id, JSON.stringify(item)]));
-  const workingIds = new Set(working.map((item) => item.id));
-  const merged = new Map(disk.map((item) => [item.id, item]));
-  for (const id of before.keys()) if (!workingIds.has(id)) merged.delete(id);
-  for (const item of working) {
-    const previous = before.get(item.id);
-    if (previous === undefined || previous !== JSON.stringify(item)) merged.set(item.id, item);
-  }
-  return [...merged.values()];
-}
-
-/** Same rule, per key, for the settings maps. */
-function mergeRecord<T extends object>(baseline: T, working: T, disk: T): T {
-  const before = (baseline ?? {}) as Record<string, unknown>;
-  const after = (working ?? {}) as Record<string, unknown>;
-  const result = { ...((disk ?? {}) as Record<string, unknown>) };
-  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
-    if (after[key] === undefined) delete result[key];
-    else result[key] = after[key];
-  }
-  return result as T;
-}
-
-export function mergeHarnessState(baseline: HarnessState, working: HarnessState, disk: HarnessState): HarnessState {
-  const scalar = <K extends keyof HarnessState>(key: K): HarnessState[K] =>
-    JSON.stringify(baseline[key]) !== JSON.stringify(working[key]) ? working[key] : disk[key];
-  return {
-    ...disk,
-    version: working.version,
-    installationId: disk.installationId || working.installationId,
-    localApiToken: scalar('localApiToken'),
-    devicePrivateKeyPem: scalar('devicePrivateKeyPem'),
-    devicePublicKey: scalar('devicePublicKey'),
-    accounts: mergeById(baseline.accounts ?? [], working.accounts ?? [], disk.accounts ?? []),
-    sessions: mergeById(baseline.sessions ?? [], working.sessions ?? [], disk.sessions ?? []),
-    invocations: mergeById(baseline.invocations ?? [], working.invocations ?? [], disk.invocations ?? []),
-    globalSettings: mergeRecord(baseline.globalSettings, working.globalSettings, disk.globalSettings),
-    providerSettings: mergeRecord(baseline.providerSettings, working.providerSettings, disk.providerSettings),
-  };
-}
-
-/** Serializes writes inside this process; the lock file serializes them across
- * terminals. Both are needed: the merge below reads the file and writes it
- * back, and that pair has to be atomic. */
-let writeQueue: Promise<unknown> = Promise.resolve();
-const LOCK_STALE_MS = 10_000;
-const LOCK_WAIT_MS = 5_000;
-
-async function withStateLock<T>(run: () => Promise<T>): Promise<T> {
-  const result = writeQueue.then(() => withFileLock(run));
-  writeQueue = result.catch(() => undefined);
-  return result;
-}
-
-async function withFileLock<T>(run: () => Promise<T>): Promise<T> {
-  const lockPath = `${harnessStatePath()}.lock`;
-  await mkdir(join(lockPath, '..'), { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  let handle: FileHandle | undefined;
-  while (!handle) {
-    try {
-      handle = await open(lockPath, 'wx', 0o600);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      const age = await stat(lockPath).then((info) => Date.now() - info.mtimeMs).catch(() => Number.POSITIVE_INFINITY);
-      if (age > LOCK_STALE_MS) {
-        await unlink(lockPath).catch(() => undefined);
-        continue;
-      }
-      // Never hang a chat on a lock. The merge still protects the common case,
-      // so proceeding is strictly better than refusing to save the turn.
-      if (Date.now() > deadline) break;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    if (handle) {
-      await handle.close().catch(() => undefined);
-      await unlink(lockPath).catch(() => undefined);
-    }
-  }
-}
-
-/** The merge base for a write.
- *
- * Only a genuinely absent file means "nothing to merge against". Any other
- * failure must NOT fall back to the caller's copy: that would overwrite the
- * whole file and erase every other terminal's work, the precise bug the merge
- * exists to prevent. A damaged primary falls back to the backup written beside
- * it, which is a valid base; if neither can be read the write refuses rather
- * than clobbering. */
-async function readStateFromDisk(): Promise<HarnessState | undefined> {
-  const path = harnessStatePath();
-  try {
-    return JSON.parse(await readFile(path, 'utf8')) as HarnessState;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    try {
-      return JSON.parse(await readFile(`${path}.bak`, 'utf8')) as HarnessState;
-    } catch (backupError) {
-      if ((backupError as NodeJS.ErrnoException).code === 'ENOENT') throw error;
-      throw backupError;
-    }
-  }
-}
-
+/** Path of the version-1 single-file state. Callers use its directory as the
+ * state root; since version 2 nothing is stored at this exact path (a file
+ * found here is migrated and renamed aside). It held secrets, so it was never
+ * "non-secret state" as an earlier comment claimed. */
 export function harnessStatePath(): string {
-  // The caller may relocate non-secret state for testing or portable installs.
-  // Provider tokens never live in this file; only opaque local credential refs do.
-  const clikCode = process.argv[1]?.includes('clikcode') || process.argv[1]?.includes('index-clikcode');
-  const base = process.env.CLIKCODE_HOME?.trim()
-    || process.env.CLIKDEPLOY_AI_HOME?.trim()
-    || (clikCode ? join(homedir(), '.clikcode') : join(homedir(), '.clikdeploy', 'ai'));
-  return join(base, 'harness-state.json');
+  return join(stateDirectory(), 'harness-state.json');
+}
+
+export function harnessIndexPath(): string {
+  return join(stateDirectory(), 'index.json');
+}
+
+export function harnessSecretsPath(): string {
+  return join(stateDirectory(), 'secrets.json');
 }
 
 export function harnessCommand(): string {
@@ -210,126 +120,761 @@ export function harnessCommand(): string {
     : 'clikdeploy ai';
 }
 
-export async function readState(): Promise<HarnessState> {
-  const path = harnessStatePath();
+// ---------------------------------------------------------------------------
+// Secrets
+// ---------------------------------------------------------------------------
+
+interface HarnessSecrets { localApiToken?: string; devicePrivateKeyPem?: string }
+
+async function readSecretsFile(): Promise<HarnessSecrets> {
+  const path = harnessSecretsPath();
   try {
-    const parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<HarnessState>;
-    if (parsed.version !== HARNESS_STATE_VERSION || !Array.isArray(parsed.accounts) || !Array.isArray(parsed.sessions)) {
-      throw new Error('unsupported local AI harness state');
-    }
-    // State written by the metadata-only preview gets a secret lazily on its
-    // first secure start, preserving account aliases without exposing a window
-    // where they are served unauthenticated.
-    if (!parsed.localApiToken || !parsed.devicePrivateKeyPem || !parsed.devicePublicKey) {
-      const upgraded = {
-        ...parsed,
-        ...(parsed.localApiToken ? {} : { localApiToken: randomBytes(32).toString('base64url') }),
-        ...(!parsed.devicePrivateKeyPem || !parsed.devicePublicKey ? newDeviceSigningIdentity() : {}),
-        globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings, permissionMode: normalizedPermissionMode(parsed.globalSettings?.permissionMode) },
-        providerSettings: Object.fromEntries(Object.entries(parsed.providerSettings && typeof parsed.providerSettings === 'object' ? parsed.providerSettings : {}).map(([provider, settings]) => [
-          provider,
-          { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
-        ])),
-        sessions: (parsed.sessions as HarnessSession[]).map((session) => ({ ...session, ...normalizedConversation(session), ...normalizedSessionPermission(session) })),
-      } as HarnessState;
-      rememberBaseline(upgraded, parsed as HarnessState);
-      await writeState(upgraded);
-      return upgraded;
-    }
-    // Older previews did not include a failover preference. Migrate those
-    // sessions to the safe default so a local account does not remain stuck
-    // after its known quota window is exhausted.
-    const sessions: HarnessSession[] = (parsed.sessions as HarnessSession[]).map((session) => ({
-      ...session,
-      ...normalizedConversation(session),
-      accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
-      // Sessions created before lifecycle state existed were still open at the
-      // time of upgrade, so preserve their resumability once.
-      status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
-      ...normalizedSessionPermission(session),
-    }));
-    // Older builds invented a 60-second quota reset. A real limit remains
-    // exhausted until the user explicitly retries that account or the provider
-    // publishes a trustworthy reset signal.
-    const accounts = (parsed.accounts as AiHarnessAccount[]).map(({ quotaRetryAt: _obsoleteRetryAt, ...account }) => account);
-    const normalized = {
-      ...(parsed as HarnessState), accounts, sessions, invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [],
-      globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...parsed.globalSettings, permissionMode: normalizedPermissionMode(parsed.globalSettings?.permissionMode) },
-      providerSettings: Object.fromEntries(Object.entries(parsed.providerSettings && typeof parsed.providerSettings === 'object' ? parsed.providerSettings : {}).map(([provider, settings]) => [
-        provider,
-        { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
-      ])),
-    };
-    rememberBaseline(normalized, parsed as HarnessState);
-    if (JSON.stringify(normalized) !== JSON.stringify(parsed)) await writeState(normalized);
-    // A migration write refreshes the baseline to the migrated shape; when no
-    // migration ran the baseline is already the parsed file.
-    return rememberBaseline(normalized, normalized);
+    const info = await stat(path);
+    if ((info.mode & 0o077) !== 0) await chmod(path, 0o600).catch(() => undefined);
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as HarnessSecrets;
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      // Atomic replacement prevents partial writes; the private backup also
-      // recovers valid state if the primary was edited or damaged externally.
-      try {
-        const backup = JSON.parse(await readFile(`${path}.bak`, 'utf8')) as Partial<HarnessState>;
-        if (backup.version !== HARNESS_STATE_VERSION || !Array.isArray(backup.accounts) || !Array.isArray(backup.sessions)) throw error;
-        const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.recovery`;
-        await writeFile(temporary, `${JSON.stringify(backup, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-        await rename(temporary, path);
-        return readState();
-      } catch (backupError) {
-        if ((backupError as NodeJS.ErrnoException).code !== 'ENOENT' && backupError !== error) throw backupError;
-        throw error;
-      }
-    }
-    const fresh: HarnessState = {
-      version: HARNESS_STATE_VERSION,
-      installationId: randomUUID(),
-      localApiToken: randomBytes(32).toString('base64url'),
-      ...newDeviceSigningIdentity(),
-      accounts: [],
-      sessions: [],
-      invocations: [],
-      globalSettings: { ...HARNESS_DEFAULT_SETTINGS },
-      providerSettings: {},
-    };
-    // The device identity and its loopback bearer must survive the first
-    // process exit; otherwise a gateway registration could be valid only for
-    // the process that happened to create it.
-    await writeState(fresh);
-    return rememberBaseline(fresh, fresh);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw error;
   }
 }
 
-async function persistState(state: HarnessState): Promise<void> {
+async function writeSecretsFile(secrets: HarnessSecrets): Promise<void> {
+  await atomicWriteFile(harnessSecretsPath(), `${JSON.stringify(cloneData(secrets), null, 2)}\n`);
+}
+
+/** Bearer secret for the loopback protocol, created on first use. */
+export async function readLocalApiToken(): Promise<string> {
+  const existing = (await readSecretsFile()).localApiToken;
+  if (existing) return existing;
+  return withStateLock(async () => {
+    const current = await readSecretsFile();
+    if (current.localApiToken) return current.localApiToken;
+    const localApiToken = randomBytes(32).toString('base64url');
+    await writeSecretsFile({ ...current, localApiToken });
+    return localApiToken;
+  });
+}
+
+/** A device private key stored by an earlier release, if any. Never generated. */
+export async function readDevicePrivateKeyPem(): Promise<string | undefined> {
+  return (await readSecretsFile()).devicePrivateKeyPem || undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Index
+// ---------------------------------------------------------------------------
+
+type Invocation = HarnessState['invocations'][number];
+type SessionMeta = Omit<HarnessSession, 'messages' | 'pendingTurn' | 'claim'>;
+
+export interface InvocationRollup {
+  day: string; accountId: string; provider: string; model: string;
+  calls: number; inputTokens: number; outputTokens: number; latencyMs: number;
+}
+
+interface StateIndex {
+  version: number;
+  installationId: string;
+  devicePublicKey?: Record<string, unknown>;
+  accounts: AiHarnessAccount[];
+  sessions: SessionMeta[];
+  invocations: Invocation[];
+  invocationRollups: Record<string, InvocationRollup>;
+  /** Newest `at` ever folded into a rollup; guards a re-import from double counting. */
+  rolledThrough?: string;
+  globalSettings: HarnessDefaultSettings;
+  providerSettings: HarnessState['providerSettings'];
+}
+
+export class HarnessStateVersionError extends Error {
+  constructor(found: number) {
+    super(`Local ClikCode state is version ${found}, written by a newer ClikCode than this one (supports up to ${HARNESS_STATE_VERSION}). `
+      + 'It can be read but not changed from here. Update ClikCode to continue.');
+    this.name = 'HarnessStateVersionError';
+  }
+}
+
+export const HARNESS_STATE_STATS = { indexWrites: 0 };
+
+/** Parsed index keyed by the exact bytes it came from. Comparing bytes rather
+ * than mtime means a merge base can never be stale, and an unchanged index
+ * (every streamed checkpoint) is never re-parsed. Treated as immutable. */
+let indexCache: { directory: string; raw: string; index: StateIndex } | undefined;
+
+function parseIndex(raw: string): StateIndex {
+  const parsed = JSON.parse(raw) as Partial<StateIndex>;
+  if (typeof parsed?.version !== 'number' || !Array.isArray(parsed.accounts) || !Array.isArray(parsed.sessions)) {
+    throw new Error('unsupported local AI harness state');
+  }
+  return {
+    ...parsed,
+    invocations: Array.isArray(parsed.invocations) ? parsed.invocations : [],
+    invocationRollups: parsed.invocationRollups && typeof parsed.invocationRollups === 'object' ? parsed.invocationRollups : {},
+  } as StateIndex;
+}
+
+/** The merge base for a write, and the source for a read.
+ *
+ * Only a genuinely absent file means "nothing there". Any other failure must
+ * NOT fall back to the caller's copy: that would replace the registry and erase
+ * every other terminal's work. A damaged primary falls back to the backup
+ * written beside it; if neither can be read the operation refuses. */
+async function loadIndex(): Promise<StateIndex | undefined> {
+  const path = harnessIndexPath();
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  if (indexCache && indexCache.directory === stateDirectory() && indexCache.raw === raw) return indexCache.index;
+  try {
+    const index = parseIndex(raw);
+    indexCache = { directory: stateDirectory(), raw, index };
+    return index;
+  } catch (error) {
+    try {
+      return parseIndex(await readFile(`${path}.bak`, 'utf8'));
+    } catch (backupError) {
+      if ((backupError as NodeJS.ErrnoException).code === 'ENOENT') throw error;
+      throw backupError;
+    }
+  }
+}
+
+async function storeIndex(index: StateIndex, options: { backup: boolean }): Promise<void> {
+  const path = harnessIndexPath();
+  const raw = `${JSON.stringify(index)}\n`;
+  await atomicWriteFile(path, raw);
+  HARNESS_STATE_STATS.indexWrites += 1;
+  indexCache = { directory: stateDirectory(), raw, index: cloneData(index) };
+  if (options.backup) await copyFile(path, `${path}.bak`).catch(() => undefined);
+}
+
+export function resetHarnessStateCaches(): void {
+  indexCache = undefined;
+  resetSessionStoreCache();
+}
+
+// ---------------------------------------------------------------------------
+// Invocation retention
+// ---------------------------------------------------------------------------
+
+function rollupKey(invocation: Invocation): string {
+  return [String(invocation.at).slice(0, 10), invocation.accountId, invocation.provider, invocation.model].join('|');
+}
+
+/** Keeps the newest INVOCATION_KEEP records and folds the rest into per-day,
+ * per-account, per-model totals, so usage totals stay exact while the file
+ * stops growing with every request ever made. */
+function capInvocations(index: StateIndex): void {
+  if (index.invocations.length <= INVOCATION_KEEP) return;
+  const ordered = index.invocations
+    .map((invocation, position) => ({ invocation, position }))
+    .sort((left, right) => String(left.invocation.at).localeCompare(String(right.invocation.at)) || left.position - right.position);
+  const overflow = ordered.slice(0, ordered.length - INVOCATION_KEEP);
+  const rolled = new Set(overflow.map((entry) => entry.invocation));
+  const rollups = { ...index.invocationRollups };
+  for (const { invocation } of overflow) {
+    const key = rollupKey(invocation);
+    const previous = rollups[key] ?? {
+      day: String(invocation.at).slice(0, 10), accountId: invocation.accountId, provider: invocation.provider, model: invocation.model,
+      calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0,
+    };
+    rollups[key] = {
+      ...previous,
+      calls: previous.calls + 1,
+      inputTokens: previous.inputTokens + (invocation.inputTokens ?? 0),
+      outputTokens: previous.outputTokens + (invocation.outputTokens ?? 0),
+      latencyMs: previous.latencyMs + (invocation.latencyMs ?? 0),
+    };
+    if (!index.rolledThrough || String(invocation.at) > index.rolledThrough) index.rolledThrough = String(invocation.at);
+  }
+  index.invocationRollups = rollups;
+  index.invocations = index.invocations.filter((invocation) => !rolled.has(invocation));
+}
+
+const STATE_ROLLUPS = Symbol('clikcode.invocationRollups');
+
+/** Per-day totals of invocations older than the newest INVOCATION_KEEP. */
+export function invocationRollups(state: HarnessState): InvocationRollup[] {
+  return Object.values((state as HarnessState & { [STATE_ROLLUPS]?: Record<string, InvocationRollup> })[STATE_ROLLUPS] ?? {});
+}
+
+export interface InvocationTotals { calls: number; inputTokens: number; outputTokens: number; latencyMs: number }
+
+/** All-time totals: the retained records plus everything rolled up. `match`
+ * narrows by account/provider/model (the dimensions a rollup preserves). */
+export function invocationTotals(
+  state: HarnessState,
+  match: (entry: { accountId: string; provider: string; model: string }) => boolean = () => true,
+): InvocationTotals {
+  const totals: InvocationTotals = { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+  for (const invocation of state.invocations ?? []) {
+    if (!match(invocation)) continue;
+    totals.calls += 1;
+    totals.inputTokens += invocation.inputTokens ?? 0;
+    totals.outputTokens += invocation.outputTokens ?? 0;
+    totals.latencyMs += invocation.latencyMs ?? 0;
+  }
+  for (const rollup of invocationRollups(state)) {
+    if (!match(rollup)) continue;
+    totals.calls += rollup.calls;
+    totals.inputTokens += rollup.inputTokens;
+    totals.outputTokens += rollup.outputTokens;
+    totals.latencyMs += rollup.latencyMs;
+  }
+  return totals;
+}
+
+// ---------------------------------------------------------------------------
+// Merge
+// ---------------------------------------------------------------------------
+
+type Identified = { id: string };
+
+/** Three-way merge of one record's fields: a field this process changed wins,
+ * every other field comes from disk. Merging whole records let one stale field
+ * in a long-lived snapshot revert another terminal's update to the same record. */
+function mergeFields<T extends object>(baseline: T | undefined, working: T, disk: T | undefined): T {
+  if (!disk) return working;
+  const before = (baseline ?? {}) as Record<string, unknown>;
+  const after = (working ?? {}) as Record<string, unknown>;
+  const result = { ...(disk as Record<string, unknown>) };
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (sameData(before[key], after[key])) continue;
+    if (after[key] === undefined) delete result[key];
+    else result[key] = after[key];
+  }
+  return result as T;
+}
+
+function mergeAccount(baseline: AiHarnessAccount | undefined, working: AiHarnessAccount, disk: AiHarnessAccount | undefined): AiHarnessAccount {
+  const merged = mergeFields(baseline, working, disk);
+  if (!disk) return merged;
+  // The profile is several independent facts (path, env, extraEnv), not one.
+  if (working.nativeProfile && disk.nativeProfile) {
+    merged.nativeProfile = mergeFields(baseline?.nativeProfile, working.nativeProfile, disk.nativeProfile);
+  }
+  // A usage reading is a timestamped observation: the newest one is the truth
+  // no matter which terminal happened to write last.
+  if (working.usage && disk.usage) {
+    merged.usage = (Date.parse(working.usage.at) || 0) >= (Date.parse(disk.usage.at) || 0) ? working.usage : disk.usage;
+  }
+  return merged;
+}
+
+/** Entity-level three-way merge. Records this process did not touch are taken
+ * from disk, so a stale snapshot can never erase another terminal's work.
+ * Removing a record is still expressed: present in the baseline and absent
+ * from the working copy means a deliberate delete. */
+function mergeById<T extends Identified>(
+  baseline: readonly T[], working: readonly T[], disk: readonly T[],
+  mergeRecordFields: (baseline: T | undefined, working: T, disk: T | undefined) => T = (_before, after) => after,
+): T[] {
+  const before = new Map(baseline.map((item) => [item.id, item]));
+  const workingIds = new Set(working.map((item) => item.id));
+  const merged = new Map(disk.map((item) => [item.id, item]));
+  for (const id of before.keys()) if (!workingIds.has(id)) merged.delete(id);
+  for (const item of working) {
+    const previous = before.get(item.id);
+    if (previous === undefined) merged.set(item.id, item);
+    else if (!sameData(previous, item)) merged.set(item.id, mergeRecordFields(previous, item, merged.get(item.id)));
+  }
+  return [...merged.values()];
+}
+
+/** Same rule, per key, for the settings maps. */
+function mergeRecord<T extends object>(baseline: T, working: T, disk: T): T {
+  return mergeFields(baseline ?? ({} as T), working ?? ({} as T), disk ?? ({} as T));
+}
+
+function splitSession(session: HarnessSession): { meta: SessionMeta; transcript: SessionTranscript; claim: HarnessSession['claim'] } {
+  const { messages: _messages, pendingTurn: _pendingTurn, claim, ...meta } = session;
+  return { meta, transcript: transcriptOf(session), claim };
+}
+
+/** Whole-state three-way merge, kept for callers that hold three full states.
+ * Claims are never merged from snapshots; see session-claims.ts. */
+export function mergeHarnessState(baseline: HarnessState, working: HarnessState, disk: HarnessState): HarnessState {
+  const scalar = <K extends keyof HarnessState>(key: K): HarnessState[K] =>
+    !sameData(baseline[key], working[key]) ? working[key] : disk[key];
+  return {
+    ...disk,
+    // The on-disk version describes the on-disk layout; a writer's idea of the
+    // version is never stamped over it.
+    version: disk.version,
+    installationId: disk.installationId || working.installationId,
+    localApiToken: scalar('localApiToken'),
+    devicePrivateKeyPem: scalar('devicePrivateKeyPem'),
+    devicePublicKey: scalar('devicePublicKey'),
+    accounts: mergeById(baseline.accounts ?? [], working.accounts ?? [], disk.accounts ?? [], mergeAccount),
+    sessions: mergeById(baseline.sessions ?? [], working.sessions ?? [], disk.sessions ?? [], mergeFields),
+    invocations: mergeById(baseline.invocations ?? [], working.invocations ?? [], disk.invocations ?? []),
+    globalSettings: mergeRecord(baseline.globalSettings, working.globalSettings, disk.globalSettings),
+    providerSettings: mergeRecord(baseline.providerSettings, working.providerSettings, disk.providerSettings),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Baseline
+// ---------------------------------------------------------------------------
+
+interface BaselineSession { meta: SessionMeta; transcript: SessionTranscript; claim?: HarnessSession['claim'] }
+interface StateBaselineData {
+  installationId: string;
+  devicePublicKey?: Record<string, unknown>;
+  localApiToken?: string;
+  devicePrivateKeyPem?: string;
+  accounts: AiHarnessAccount[];
+  invocations: Invocation[];
+  globalSettings: HarnessDefaultSettings;
+  providerSettings: HarnessState['providerSettings'];
+  sessions: Map<string, BaselineSession>;
+}
+
+/** The snapshot a state object was last known to agree with on disk. Writes
+ * diff against it so a process only ever persists what it actually changed. */
+const STATE_BASELINE = Symbol('clikcode.stateBaseline');
+type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineData };
+
+function hidden<T extends object>(target: T, key: PropertyKey, value: unknown): T {
+  // Non-enumerable so it never reaches JSON.stringify, spreads, equality
+  // checks, or any panel that prints state.
+  Object.defineProperty(target, key, { value, configurable: true, writable: true, enumerable: false });
+  return target;
+}
+
+/** `reuse` carries over entries for sessions known to be unchanged, so the
+ * per-checkpoint cost follows what changed rather than total history. */
+function rememberBaseline(state: HarnessState, reuse?: { from: StateBaselineData; dirty: ReadonlySet<string> }): HarnessState {
+  const sessions = new Map<string, BaselineSession>();
+  for (const session of state.sessions ?? []) {
+    const kept = reuse && !reuse.dirty.has(session.id) ? reuse.from.sessions.get(session.id) : undefined;
+    const { meta, transcript, claim } = splitSession(session);
+    sessions.set(session.id, {
+      meta: cloneData(meta),
+      transcript: kept ? kept.transcript : cloneData(transcript),
+      ...(claim ? { claim: cloneData(claim) } : {}),
+    });
+  }
+  const baseline: StateBaselineData = {
+    installationId: state.installationId,
+    devicePublicKey: cloneData(state.devicePublicKey),
+    localApiToken: state.localApiToken,
+    devicePrivateKeyPem: state.devicePrivateKeyPem,
+    accounts: cloneData(state.accounts ?? []),
+    invocations: cloneData(state.invocations ?? []),
+    globalSettings: cloneData(state.globalSettings),
+    providerSettings: cloneData(state.providerSettings),
+    sessions,
+  };
+  return hidden(state, STATE_BASELINE, baseline);
+}
+
+// ---------------------------------------------------------------------------
+// Migration ladder
+// ---------------------------------------------------------------------------
+
+function isoStamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(() => true, () => false);
+}
+
+async function readLegacyFile(): Promise<HarnessState> {
   const path = harnessStatePath();
-  await mkdir(join(path, '..'), { recursive: true, mode: 0o700 });
-  // An interrupted write must leave the last complete account/session registry
-  // available rather than corrupting every centralized session on next launch.
-  const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await rename(temporary, path);
-  await copyFile(path, `${path}.bak`).catch(() => undefined);
+  let parsed: Partial<HarnessState>;
+  try {
+    parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<HarnessState>;
+  } catch (error) {
+    // Version 1 recovered a damaged primary from the private backup beside it.
+    try {
+      parsed = JSON.parse(await readFile(`${path}.bak`, 'utf8')) as Partial<HarnessState>;
+    } catch {
+      throw error;
+    }
+  }
+  if (parsed.version !== 1 || !Array.isArray(parsed.accounts) || !Array.isArray(parsed.sessions)) {
+    throw new Error('unsupported local AI harness state');
+  }
+  return parsed as HarnessState;
+}
+
+/** Step 1 -> 2: the single file becomes the split layout.
+ *
+ * Crash-safe by ordering: transcripts, claims and secrets are written first,
+ * `index.json` last -- its existence is the commit point. The result is
+ * re-read from disk and compared with the source before the legacy file is
+ * renamed aside (never deleted). Running it again -- after a crash at any
+ * point, or because an older build still running in another terminal wrote a
+ * new legacy file -- imports only what the split layout does not already have
+ * newer, so it is idempotent. Caller holds the state lock. */
+async function migrateSingleFileToSplitLayout(): Promise<void> {
+  const legacy = await readLegacyFile();
+  const existing = await loadIndex();
+  if (existing && existing.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(existing.version);
+  const index: StateIndex = existing ? cloneData(existing) : {
+    version: HARNESS_STATE_VERSION,
+    installationId: legacy.installationId || randomUUID(),
+    ...(legacy.devicePublicKey ? { devicePublicKey: legacy.devicePublicKey } : {}),
+    accounts: [], sessions: [], invocations: [], invocationRollups: {},
+    globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...legacy.globalSettings },
+    providerSettings: legacy.providerSettings && typeof legacy.providerSettings === 'object' ? legacy.providerSettings : {},
+  };
+  index.version = HARNESS_STATE_VERSION;
+
+  const knownSessions = new Map(index.sessions.map((session) => [session.id, session]));
+  const imported: HarnessSession[] = [];
+  for (const session of legacy.sessions) {
+    const present = knownSessions.get(session.id);
+    if (present && !(String(session.updatedAt) > String(present.updatedAt))) continue;
+    const { meta, transcript } = splitSession(session);
+    await writeSessionTranscript(session.id, transcript);
+    if (present) index.sessions[index.sessions.indexOf(present)] = meta;
+    else index.sessions.push(meta);
+    imported.push(session);
+  }
+  for (const session of legacy.sessions) {
+    const claim = session.claim;
+    if (!claim || !claimIsHeld({ ...claim, sessionId: session.id, nonce: '' })) continue;
+    await acquireSessionClaim(session.id, { pid: claim.pid, host: claim.host, heartbeatAt: claim.heartbeatAt }).catch(() => undefined);
+  }
+  const knownAccounts = new Set(index.accounts.map((account) => account.id));
+  for (const account of legacy.accounts) if (!knownAccounts.has(account.id)) index.accounts.push(account);
+  const knownInvocations = new Set(index.invocations.map((invocation) => invocation.id));
+  for (const invocation of Array.isArray(legacy.invocations) ? legacy.invocations : []) {
+    if (knownInvocations.has(invocation.id)) continue;
+    // Anything at or before this point was already counted into a rollup.
+    if (index.rolledThrough && !(String(invocation.at) > index.rolledThrough)) continue;
+    index.invocations.push(invocation);
+  }
+  const expectedTotals = totalsOf(index.invocations, index.invocationRollups);
+  capInvocations(index);
+
+  const secrets = await readSecretsFile();
+  const nextSecrets: HarnessSecrets = {
+    localApiToken: secrets.localApiToken || legacy.localApiToken || undefined,
+    devicePrivateKeyPem: secrets.devicePrivateKeyPem || legacy.devicePrivateKeyPem || undefined,
+  };
+  if (!sameData(secrets, nextSecrets)) await writeSecretsFile(nextSecrets);
+
+  const hadIndex = !!existing;
+  await storeIndex(index, { backup: true });
+
+  // Verify from disk, not from memory.
+  resetHarnessStateCaches();
+  const problems: string[] = [];
+  const written = await loadIndex();
+  if (!written) problems.push('index.json is missing');
+  else {
+    const writtenSessions = new Map(written.sessions.map((session) => [session.id, session]));
+    for (const session of imported) {
+      const { meta, transcript } = splitSession(session);
+      if (!sameData(writtenSessions.get(session.id), meta)) problems.push(`session ${session.id} metadata`);
+      if (!sameData(await readSessionTranscript(session.id), transcript)) problems.push(`session ${session.id} transcript`);
+    }
+    for (const account of legacy.accounts) {
+      if (!written.accounts.some((item) => item.id === account.id)) problems.push(`account ${account.id}`);
+      else if (!hadIndex && !sameData(written.accounts.find((item) => item.id === account.id), account)) problems.push(`account ${account.id} fields`);
+    }
+    if (!sameData(totalsOf(written.invocations, written.invocationRollups), expectedTotals)) problems.push('invocation totals');
+    const writtenSecrets = await readSecretsFile();
+    if (legacy.localApiToken && !writtenSecrets.localApiToken) problems.push('local API token');
+    if (legacy.devicePrivateKeyPem && !writtenSecrets.devicePrivateKeyPem) problems.push('device key');
+  }
+  if (problems.length) {
+    // Leave the legacy file authoritative so the next start retries cleanly.
+    if (!hadIndex) await unlink(harnessIndexPath()).catch(() => undefined);
+    resetHarnessStateCaches();
+    throw new Error(`ClikCode state migration could not be verified (${problems.slice(0, 5).join(', ')}). The original ${harnessStatePath()} was left untouched.`);
+  }
+
+  const stamp = isoStamp();
+  const legacyPath = harnessStatePath();
+  const aside = join(stateDirectory(), `harness-state.legacy-${stamp}.json`);
+  if (await exists(legacyPath)) {
+    await rename(legacyPath, aside);
+    await chmod(aside, 0o600).catch(() => undefined);
+  }
+  if (await exists(`${legacyPath}.bak`)) {
+    await rename(`${legacyPath}.bak`, `${aside}.bak`);
+    await chmod(`${aside}.bak`, 0o600).catch(() => undefined);
+  }
+}
+
+function totalsOf(invocations: readonly Invocation[], rollups: Record<string, InvocationRollup>): InvocationTotals {
+  const state = hidden({ invocations } as unknown as HarnessState, STATE_ROLLUPS, rollups);
+  return invocationTotals(state);
+}
+
+/** One function per step, keyed by the version it upgrades FROM. */
+const MIGRATIONS: Record<number, () => Promise<void>> = {
+  1: migrateSingleFileToSplitLayout,
+};
+
+async function createFreshLayout(): Promise<void> {
+  const index: StateIndex = {
+    version: HARNESS_STATE_VERSION,
+    installationId: randomUUID(),
+    accounts: [], sessions: [], invocations: [], invocationRollups: {},
+    globalSettings: { ...HARNESS_DEFAULT_SETTINGS },
+    providerSettings: {},
+  };
+  await storeIndex(index, { backup: true });
+}
+
+/** Brings whatever is on disk up to the current layout. Two `stat`s on the
+ * common path; everything else happens once, under the state lock. */
+async function ensureLayout(): Promise<void> {
+  const [hasIndex, hasLegacy] = await Promise.all([exists(harnessIndexPath()), exists(harnessStatePath())]);
+  if (hasIndex && !hasLegacy) return;
+  await withStateLock(() => ensureLayoutLocked());
+}
+
+async function ensureLayoutLocked(): Promise<void> {
+  const [hasIndex, hasLegacy] = await Promise.all([exists(harnessIndexPath()), exists(harnessStatePath())]);
+  if (hasLegacy) {
+    const index = hasIndex ? await loadIndex() : undefined;
+    // A newer layout owns this directory; do not fold anything into it.
+    if (index && index.version > HARNESS_STATE_VERSION) return;
+    await MIGRATIONS[1]!();
+    return;
+  }
+  if (!hasIndex) await createFreshLayout();
+}
+
+// ---------------------------------------------------------------------------
+// Read
+// ---------------------------------------------------------------------------
+
+function sessionClaimView(claim: SessionClaim): NonNullable<HarnessSession['claim']> {
+  return { pid: claim.pid, host: claim.host, startedAt: claim.startedAt, heartbeatAt: claim.heartbeatAt };
+}
+
+async function assembleState(index: StateIndex, secrets: HarnessSecrets): Promise<HarnessState> {
+  const claims = await readSessionClaims();
+  const sessions = await Promise.all(index.sessions.map(async (meta): Promise<HarnessSession> => {
+    const transcript = await readSessionTranscript(meta.id);
+    const claim = claims.get(meta.id);
+    return {
+      ...cloneData(meta as HarnessSession),
+      ...transcript,
+      ...(claim ? { claim: sessionClaimView(claim) } : {}),
+    };
+  }));
+  const state = {
+    version: index.version,
+    installationId: index.installationId,
+    devicePublicKey: cloneData(index.devicePublicKey ?? {}),
+    accounts: cloneData(index.accounts),
+    sessions,
+    invocations: cloneData(index.invocations),
+    globalSettings: cloneData(index.globalSettings),
+    providerSettings: cloneData(index.providerSettings ?? {}),
+  } as HarnessState;
+  return attachHidden(state, secrets, index.invocationRollups);
+}
+
+function attachHidden(state: HarnessState, secrets: HarnessSecrets, rollups: Record<string, InvocationRollup>): HarnessState {
+  // Secrets are reachable as properties for the code that needs them, but are
+  // not enumerable: they never appear in a serialized or printed state.
+  hidden(state, 'localApiToken', secrets.localApiToken ?? '');
+  hidden(state, 'devicePrivateKeyPem', secrets.devicePrivateKeyPem ?? '');
+  hidden(state, STATE_ROLLUPS, rollups);
+  return state;
+}
+
+function normalizedState(raw: HarnessState): HarnessState {
+  // Older previews did not include a failover preference. Migrate those
+  // sessions to the safe default so a local account does not remain stuck
+  // after its known quota window is exhausted.
+  const sessions: HarnessSession[] = raw.sessions.map((session) => ({
+    ...session,
+    ...normalizedConversation(session),
+    accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
+    // Sessions created before lifecycle state existed were still open at the
+    // time of upgrade, so preserve their resumability once.
+    status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
+    ...normalizedSessionPermission(session),
+  }));
+  // Older builds invented a 60-second quota reset. A real limit remains
+  // exhausted until the user explicitly retries that account or the provider
+  // publishes a trustworthy reset signal.
+  const accounts = raw.accounts.map(({ quotaRetryAt: _obsoleteRetryAt, ...account }) => account);
+  const normalized = {
+    ...raw, accounts, sessions, invocations: Array.isArray(raw.invocations) ? raw.invocations : [],
+    globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...raw.globalSettings, permissionMode: normalizedPermissionMode(raw.globalSettings?.permissionMode) },
+    providerSettings: Object.fromEntries(Object.entries(raw.providerSettings && typeof raw.providerSettings === 'object' ? raw.providerSettings : {}).map(([provider, settings]) => [
+      provider,
+      { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
+    ])),
+  } as HarnessState;
+  return attachHidden(normalized, { localApiToken: raw.localApiToken, devicePrivateKeyPem: raw.devicePrivateKeyPem },
+    (raw as HarnessState & { [STATE_ROLLUPS]?: Record<string, InvocationRollup> })[STATE_ROLLUPS] ?? {});
+}
+
+export async function readState(): Promise<HarnessState> {
+  await ensureLayout();
+  let index = await loadIndex();
+  if (!index) {
+    // Removed between the check and the read (tests, manual cleanup).
+    await withStateLock(() => ensureLayoutLocked());
+    index = await loadIndex();
+    if (!index) throw new Error('local AI harness state could not be created');
+  }
+  let secrets = await readSecretsFile();
+  // The loopback bearer must survive the first process exit; otherwise a
+  // runtime registration would be valid only for the process that created it.
+  if (!secrets.localApiToken && index.version <= HARNESS_STATE_VERSION) {
+    await readLocalApiToken();
+    secrets = await readSecretsFile();
+  }
+  const raw = await assembleState(index, secrets);
+  rememberBaseline(raw);
+  const normalized = normalizedState(raw);
+  hidden(normalized, STATE_BASELINE, (raw as BaselinedState)[STATE_BASELINE]);
+  // A newer layout is shown as faithfully as possible and never written to.
+  if (index.version > HARNESS_STATE_VERSION) return normalized;
+  if (!sameData(normalized, raw)) await writeState(normalized);
+  return normalized;
+}
+
+// ---------------------------------------------------------------------------
+// Write
+// ---------------------------------------------------------------------------
+
+function indexFromWorking(state: HarnessState, disk: StateIndex | undefined): StateIndex {
+  return {
+    version: HARNESS_STATE_VERSION,
+    installationId: state.installationId || disk?.installationId || randomUUID(),
+    ...(state.devicePublicKey && Object.keys(state.devicePublicKey).length ? { devicePublicKey: state.devicePublicKey } : {}),
+    accounts: state.accounts ?? [],
+    sessions: (state.sessions ?? []).map((session) => splitSession(session).meta),
+    invocations: state.invocations ?? [],
+    // Rollups are derived on disk under the lock and never come from a snapshot.
+    invocationRollups: disk?.invocationRollups ?? {},
+    ...(disk?.rolledThrough ? { rolledThrough: disk.rolledThrough } : {}),
+    globalSettings: state.globalSettings,
+    providerSettings: state.providerSettings ?? {},
+  };
+}
+
+function mergedIndex(baseline: StateBaselineData, state: HarnessState, disk: StateIndex): StateIndex {
+  const changed = <T>(before: T, after: T, onDisk: T): T => (!sameData(before, after) ? after : onDisk);
+  const devicePublicKey = changed(baseline.devicePublicKey, state.devicePublicKey, disk.devicePublicKey);
+  const { devicePublicKey: _previousKey, ...rest } = disk;
+  return {
+    ...rest,
+    // Never stamp this writer's version over what is on disk.
+    version: disk.version,
+    installationId: disk.installationId || state.installationId,
+    ...(devicePublicKey && Object.keys(devicePublicKey).length ? { devicePublicKey } : {}),
+    accounts: mergeById(baseline.accounts, state.accounts ?? [], disk.accounts ?? [], mergeAccount),
+    sessions: mergeById(
+      [...baseline.sessions.values()].map((entry) => entry.meta),
+      (state.sessions ?? []).map((session) => splitSession(session).meta),
+      disk.sessions ?? [], mergeFields,
+    ),
+    invocations: mergeById(baseline.invocations, state.invocations ?? [], disk.invocations ?? []),
+    globalSettings: mergeRecord(baseline.globalSettings, state.globalSettings, disk.globalSettings),
+    providerSettings: mergeRecord(baseline.providerSettings, state.providerSettings, disk.providerSettings),
+  };
+}
+
+/** Claims are owned by session-claims.ts. A caller that still expresses one by
+ * editing `session.claim` and writing state is translated into the real
+ * operation -- and only ever for this process's own claim, only ever forwards
+ * in time. A snapshot can therefore no longer rewind a heartbeat. */
+async function applyClaimIntent(state: HarnessState, baseline: StateBaselineData | undefined): Promise<void> {
+  const host = hostname();
+  const present = new Set<string>();
+  for (const session of state.sessions ?? []) {
+    present.add(session.id);
+    const before = baseline?.sessions.get(session.id)?.claim;
+    const after = session.claim;
+    if (sameData(before, after)) continue;
+    const mine = (claim: HarnessSession['claim']): boolean => !!claim && claim.pid === process.pid && claim.host === host;
+    if (mine(after)) {
+      const refreshed = await heartbeatSessionClaim(session.id, { heartbeatAt: after!.heartbeatAt });
+      if (!refreshed) await acquireSessionClaim(session.id, { heartbeatAt: after!.heartbeatAt });
+    } else if (!after && mine(before)) {
+      await releaseSessionClaim(session.id);
+    }
+  }
+  for (const [id, entry] of baseline?.sessions ?? []) {
+    if (!present.has(id) && entry.claim?.pid === process.pid && entry.claim.host === host) await releaseSessionClaim(id);
+  }
 }
 
 /** Applies this process's changes to whatever is on disk now, rather than
- * making the file equal the caller's copy.
+ * making the files equal the caller's copy.
  *
  * Callers legitimately hold one state object across a whole turn -- the turn
- * checkpoint rewrites its snapshot every 250ms while a response streams -- so
- * a blind overwrite meant any second terminal's messages, accounts, and
- * settings were erased several times a second. Diffing against the snapshot
- * the caller last agreed with means untouched records are taken from disk and
- * only real changes are written. */
+ * checkpoint rewrites its snapshot every 250ms while a response streams. Each
+ * record is diffed against the snapshot the caller last agreed with: untouched
+ * records are left alone on disk, a changed transcript rewrites that one
+ * session file, and the index is rewritten only if its merged content differs
+ * from what is already there. A streamed checkpoint is therefore one small
+ * file write regardless of how much history exists. */
 export async function writeState(state: HarnessState): Promise<void> {
+  const baseline = (state as BaselinedState)[STATE_BASELINE];
+  const dirty = new Set<string>();
   await withStateLock(async () => {
-    const baseline = (state as BaselinedState)[STATE_BASELINE];
-    const disk = baseline ? await readStateFromDisk() : undefined;
-    const merged = baseline && disk ? mergeHarnessState(baseline, state, disk) : state;
-    await persistState(merged);
-    // Later writes from this same object must diff from what it looks like
-    // now, not from the original read.
-    rememberBaseline(state, state);
+    // A legacy file that appeared (or was never migrated) is folded in first so
+    // this write merges against everything that exists.
+    if (await exists(harnessStatePath())) await ensureLayoutLocked();
+    const disk = await loadIndex();
+    if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
+
+    const next = baseline && disk ? mergedIndex(baseline, state, disk) : indexFromWorking(state, disk);
+    next.version = HARNESS_STATE_VERSION;
+    capInvocations(next);
+
+    // 1. Transcripts first: a session must never be listed before it is readable.
+    const diskSessionIds = new Set((disk?.sessions ?? []).map((session) => session.id));
+    for (const session of state.sessions ?? []) {
+      const transcript = transcriptOf(session);
+      const before = baseline?.sessions.get(session.id);
+      let changed: boolean;
+      if (before && diskSessionIds.has(session.id)) changed = !sameData(before.transcript, transcript);
+      // New here, or removed elsewhere and re-added by this change: compare
+      // with what is actually stored so nothing is written needlessly or lost.
+      else changed = !sameData(await readSessionTranscript(session.id), transcript);
+      if (!changed) continue;
+      await writeSessionTranscript(session.id, transcript, { parentSessionId: transcriptParentOf(session) });
+      dirty.add(session.id);
+    }
+
+    // 2. The index, only when its content really differs.
+    if (!disk || !sameData(next, disk)) await storeIndex(next, { backup: true });
+
+    // 3. Deliberate deletions last, children materialized before the parent goes.
+    const remaining = new Set(next.sessions.map((session) => session.id));
+    for (const id of baseline?.sessions.keys() ?? []) {
+      if (!remaining.has(id)) await deleteSessionTranscript(id);
+    }
+
+    // 4. Secrets, only when this caller changed them.
+    const tokenChanged = baseline ? state.localApiToken !== baseline.localApiToken : !!state.localApiToken;
+    const keyChanged = baseline ? state.devicePrivateKeyPem !== baseline.devicePrivateKeyPem : !!state.devicePrivateKeyPem;
+    if (tokenChanged || keyChanged) {
+      const secrets = await readSecretsFile();
+      const updated: HarnessSecrets = {
+        localApiToken: tokenChanged ? state.localApiToken || undefined : secrets.localApiToken,
+        devicePrivateKeyPem: keyChanged ? state.devicePrivateKeyPem || undefined : secrets.devicePrivateKeyPem,
+      };
+      if (!sameData(secrets, updated)) await writeSecretsFile(updated);
+    }
   });
+  await applyClaimIntent(state, baseline);
+  // Later writes from this same object must diff from what it looks like now,
+  // not from the original read.
+  rememberBaseline(state, baseline ? { from: baseline, dirty } : undefined);
 }
 
 export function accountView(account: AiHarnessAccount): Omit<AiHarnessAccount, 'credentialRef'> {
