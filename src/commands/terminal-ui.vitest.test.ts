@@ -192,20 +192,24 @@ describe('streamed response chronology', () => {
     expect(state.phase).toBe('thinking');
   });
 
-  it('collapses a tool-only burst instead of letting it dominate the viewport', () => {
+  it('keeps a whole tool-only burst rather than collapsing it to a count', () => {
+    // The count row changed every time another tool ran, and a row that can
+    // still change cannot enter native scrollback -- so it pinned itself above
+    // the composer for the rest of the turn. Height is bounded where it
+    // actually matters: renderActivityLine caps one tool's own output preview,
+    // and inlineConversationPlan promotes overflow out of the live region.
     const parts = responseTimeline('Done.', Array.from({ length: 7 }, (_, index) => ({
       kind: 'activity' as const, responseOffset: 0, lines: [`done tool ${index + 1}`],
     })));
     expect(parts).toEqual([
-      { kind: 'activity', responseOffset: 0, lines: ['… 4 earlier tool calls'] },
-      { kind: 'activity', responseOffset: 0, lines: ['done tool 5'] },
-      { kind: 'activity', responseOffset: 0, lines: ['done tool 6'] },
-      { kind: 'activity', responseOffset: 0, lines: ['done tool 7'] },
+      ...Array.from({ length: 7 }, (_, index) => ({
+        kind: 'activity', responseOffset: 0, lines: [`done tool ${index + 1}`],
+      })),
       { kind: 'markdown', block: { kind: 'paragraph', text: 'Done.', quoteDepth: 0, indent: 0, sourceEnd: 5, blockBoundary: true } },
     ]);
   });
 
-  it('collapses staggered tools by their effective Markdown position and row budget', () => {
+  it('keeps staggered tools at their effective Markdown position, all of them', () => {
     const parts = responseTimeline('One long paragraph.', [
       { kind: 'activity', responseOffset: 2, lines: ['tool 1', 'detail 1'] },
       { kind: 'activity', responseOffset: 4, lines: ['tool 2', 'detail 2'] },
@@ -213,7 +217,7 @@ describe('streamed response chronology', () => {
       { kind: 'activity', responseOffset: 8, lines: ['tool 4', 'detail 4'] },
     ]);
     expect(parts.slice(1)).toEqual([
-      { kind: 'activity', responseOffset: 2, lines: ['… 1 earlier tool call'] },
+      { kind: 'activity', responseOffset: 2, lines: ['tool 1', 'detail 1'] },
       { kind: 'activity', responseOffset: 4, lines: ['tool 2', 'detail 2'] },
       { kind: 'activity', responseOffset: 6, lines: ['tool 3', 'detail 3'] },
       { kind: 'activity', responseOffset: 8, lines: ['tool 4', 'detail 4'] },
