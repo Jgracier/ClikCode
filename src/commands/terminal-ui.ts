@@ -21,14 +21,34 @@ import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBloc
 
 export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
 
+// Keep the terminal contract in one place. SGR mouse reporting supplies
+// unambiguous wheel events on desktop terminals and mobile SSH clients that
+// expose touch scrolling as a wheel. Alternate-scroll remains enabled as a
+// fallback for clients that translate the same gesture to cursor keys.
+const ENTER_TERMINAL_SCREEN = '\u001b[?1049h\u001b[?1000h\u001b[?1006h\u001b[?1007h\u001b[?25h';
+const LEAVE_TERMINAL_SCREEN = '\u001b[?1007l\u001b[?1006l\u001b[?1000l\u001b[?25h\u001b[?1049l';
+const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
+
+function mouseWheelAction(key: string): WaitingInputAction | undefined {
+  // SGR: CSI < button ; column ; row M/m. Some terminals include modifier
+  // bits in button, so test the wheel bit and low direction bit rather than
+  // matching only the two unmodified values 64 and 65.
+  const sgr = /^\u001b\[<(\d+);\d+;\d+[mM]$/.exec(key);
+  // URXVT's older decimal mouse form is accepted as a compatibility path.
+  const urxvt = /^\u001b\[(\d+);\d+;\d+M$/.exec(key);
+  const button = Number((sgr ?? urxvt)?.[1]);
+  if (!Number.isFinite(button) || (button & 64) === 0) return undefined;
+  return (button & 1) === 0 ? 'scroll-up' : 'scroll-down';
+}
+
 function waitingInputAction(key: string): WaitingInputAction | undefined {
   if (key === '\u001b') return 'cancel-edit';
   if (key === '\u0003') return 'cancel-stop';
-  if (key === '\u001b[A' || /^\u001b\[<64;\d+;\d+[mM]$/.test(key)) return 'scroll-up';
-  if (key === '\u001b[B' || /^\u001b\[<65;\d+;\d+[mM]$/.test(key)) return 'scroll-down';
+  if (key === '\u001b[A') return 'scroll-up';
+  if (key === '\u001b[B') return 'scroll-down';
   if (key === '\u001b[5~') return 'page-up';
   if (key === '\u001b[6~') return 'page-down';
-  return undefined;
+  return mouseWheelAction(key);
 }
 
 function normalizeTerminalKey(key: string): string {
@@ -115,7 +135,9 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
     if (flushTimer) clearTimeout(flushTimer);
     deliver(decoder.push(chunk));
     if (decoder.hasPending()) {
-      flushTimer = setTimeout(() => deliver(decoder.flush()), 50);
+      // A lone Escape must eventually be delivered, but mobile SSH links can
+      // split a cursor/mouse sequence across packets by more than one frame.
+      flushTimer = setTimeout(() => deliver(decoder.flush()), ESCAPE_SEQUENCE_TIMEOUT_MS);
       flushTimer.unref();
     }
   };
@@ -356,7 +378,23 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private cancelWaiting?: (restoreDraft: boolean) => void;
   private waitingCancelled = false;
   private pendingApproval?: { resolve: (accepted: boolean) => void; previousLabel: string };
+  /** Apply every transcript-scrolling input through one offset. This is used
+   * by the idle composer and the live-turn composer, including while an
+   * approval prompt is visible. */
+  private scrollHistory(action: WaitingInputAction | undefined): boolean {
+    const page = Math.max(3, (output.rows || 24) - 6);
+    if (action === 'scroll-up') this.historyScroll += 3;
+    else if (action === 'scroll-down') this.historyScroll = Math.max(0, this.historyScroll - 3);
+    else if (action === 'page-up') this.historyScroll += page;
+    else if (action === 'page-down') this.historyScroll = Math.max(0, this.historyScroll - page);
+    else return false;
+    return true;
+  }
   private readonly onWaitingKey = (key: string): void => {
+    if (this.scrollHistory(waitingInputAction(key))) {
+      this.updateWaiting();
+      return;
+    }
     if (this.pendingApproval) {
       const answer = key.toLowerCase();
       if (answer === 'y' || answer === 'n' || answer === '\r' || answer === '\n' || answer === '\u001b' || answer === '\u0003') {
@@ -375,18 +413,6 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       this.waitingLabel = 'stopping…';
       this.updateWaiting();
       this.cancelWaiting?.(action === 'cancel-edit');
-    } else if (action === 'scroll-up') {
-      this.historyScroll += 3;
-      this.updateWaiting();
-    } else if (action === 'scroll-down') {
-      this.historyScroll = Math.max(0, this.historyScroll - 3);
-      this.updateWaiting();
-    } else if (action === 'page-up') {
-      this.historyScroll += 10;
-      this.updateWaiting();
-    } else if (action === 'page-down') {
-      this.historyScroll = Math.max(0, this.historyScroll - 10);
-      this.updateWaiting();
     } else if (key === '\r' || key === '\n') {
       const text = this.waitingDraft.trim();
       if (!text || !this.waitingSubmit) return;
@@ -427,10 +453,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   };
 
   constructor() {
-    // Alternate-scroll mode maps a wheel/touch scroll in the alternate screen
-    // to cursor keys without enabling click tracking (which would interfere
-    // with selection and copy in mobile terminals such as Termius).
-    output.write('\u001b[?1049h\u001b[?1007h\u001b[?25h');
+    output.write(ENTER_TERMINAL_SCREEN);
     process.on('SIGWINCH', this.onResize);
   }
 
@@ -997,10 +1020,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       const handleKey = (key: string): void => {
         const options = matches();
         const scrollAction = options.length ? undefined : waitingInputAction(key);
-        if (scrollAction === 'scroll-up') { this.historyScroll += 3; return draw(); }
-        if (scrollAction === 'scroll-down') { this.historyScroll = Math.max(0, this.historyScroll - 3); return draw(); }
-        if (scrollAction === 'page-up') { this.historyScroll += 10; return draw(); }
-        if (scrollAction === 'page-down') { this.historyScroll = Math.max(0, this.historyScroll - 10); return draw(); }
+        if (this.scrollHistory(scrollAction)) return draw();
         if (key === '\u0003' || key === '\u0004') return finish('/exit');
         if (key === '\u001b' && settings?.cancellable) return cancel();
         if (key === '\r' || key === '\n') {
@@ -1040,8 +1060,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         if (key === '\u000e' && !options.length) { historyIndex = Math.min(this.history.length, historyIndex + 1); value = this.history[historyIndex] ?? ''; cursor = value.length; return draw(); }
         if (key === '\u001b[D') { cursor = previousCharacterIndex(value, cursor); return draw(); }
         if (key === '\u001b[C') { cursor = nextCharacterIndex(value, cursor); return draw(); }
-        // Page Up/Down scroll by a full page instead of 3 lines, for a real
-        // keyboard's own dedicated keys.
+        // Already handled above when the transcript owns navigation. While a
+        // command palette is open, consume these rather than editing text.
         if (key === '\u001b[5~' || key === '\u001b[6~') return;
         if (key === '\u007f' || key === '\b') {
           if (cursor > 0) { const previous = previousCharacterIndex(value, cursor); value = value.slice(0, previous) + value.slice(cursor); cursor = previous; }
@@ -1166,7 +1186,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     process.off('SIGWINCH', this.onResize);
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write('\u001b[?1007l\u001b[?25h\u001b[?1049l');
+    output.write(LEAVE_TERMINAL_SCREEN);
   }
 
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
@@ -1179,7 +1199,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     this.responsePaintTimer = undefined;
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    output.write('\u001b[?1007l\u001b[?25h\u001b[?1049l');
+    output.write(LEAVE_TERMINAL_SCREEN);
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
@@ -1206,7 +1226,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // this fixes: switching to a provider needing login is exactly the
     // path that goes through suspend/resume.
     this.suspended = false;
-    output.write('\u001b[?1049h\u001b[?1007h\u001b[2J');
+    output.write(`${ENTER_TERMINAL_SCREEN}\u001b[2J`);
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
