@@ -135,7 +135,7 @@ export interface HarnessActivityEvent {
    * blocks) -- never synthesized from a "files updated" style event that
    * doesn't actually include the changed content. Each side is already
    * capped to a few lines before this is built; the activity trail below is
-   * a 5-line rolling window (see FullScreenHarnessPrompter.activity), not a
+   * a 5-line rolling window (see TerminalHarnessPrompter.activity), not a
    * scrollback viewer, so an uncapped diff would just silently lose its
    * earlier lines to the window sliding past them, not show a real "more"
    * indicator -- capping here means the +N truncation notice is honest. */

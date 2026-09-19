@@ -44,7 +44,7 @@ import {
   aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin, syncAccountIdentityAfterLogin,
   nativeAccountContext, setEmitHarnessOutput,
 } from './account-management.js';
-import { FullScreenHarnessPrompter } from './terminal-ui.js';
+import { TerminalHarnessPrompter } from './terminal-ui.js';
 import { runCodexAppServerTurn } from './codex-app-server.js';
 import { runAcpTurn } from './acp-client.js';
 import { harnessTurnTransport } from './harness-transport.js';
@@ -59,10 +59,7 @@ export {
 };
 
 
-
-
-
-let activeFullScreenHarness: FullScreenHarnessPrompter | undefined;
+let activeTerminalHarness: TerminalHarnessPrompter | undefined;
 
 interface TurnRunOptions {
   liveInput?: LiveTurnInputBroker;
@@ -569,11 +566,11 @@ async function acquireRuntimeLock(lockPath: string, runtimePath: string): Promis
 /** Keep automation structured while making the foreground harness feel like a CLI, not an API dump. */
 function emitHarnessOutput(payload: Record<string, unknown>): void {
   if (isJsonDefaultMode()) return emitJson(payload);
-  if (activeFullScreenHarness) {
+  if (activeTerminalHarness) {
     // State-changing commands are reflected by the persistent status line. Raw
     // panels here would be written into the composer and corrupt the TUI.
     if (payload.panel === 'settings' && payload.session) {
-      activeFullScreenHarness.render(
+      activeTerminalHarness.render(
         payload.session as HarnessSession,
         typeof payload.account === 'string' ? payload.account : undefined,
       );
@@ -848,7 +845,7 @@ export async function aiStop(): Promise<void> {
 }
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
- * it first if needed, and — only inside the interactive full-screen session,
+ * it first if needed, and — only inside the interactive terminal session,
  * where suspending the alt-screen for a vendor login prompt makes sense —
  * signs in if the vendor CLI reports (or a fresh install implies) that it
  * isn't authenticated yet. The goal: every harness either works immediately
@@ -861,8 +858,8 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (!harness.turn) throw new Error(`${harness.displayName} does not publish a non-interactive CLI contract required by the centralized ClikCode UI.`);
   const freshInstall = !(await inspectNativeHarness(harness)).installed;
   if (freshInstall) {
-    activeFullScreenHarness?.startWaiting(`installing ${harness.displayName}…`);
-    try { await ensureNativeHarness(harness); } finally { activeFullScreenHarness?.stopWaiting(); }
+    activeTerminalHarness?.startWaiting(`installing ${harness.displayName}…`);
+    try { await ensureNativeHarness(harness); } finally { activeTerminalHarness?.stopWaiting(); }
   }
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
@@ -925,20 +922,20 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     } else session.accountId = null;
   }
   let account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  if (activeFullScreenHarness && harness.loginArgv) {
+  if (activeTerminalHarness && harness.loginArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
       if (harness.loginCapturable) {
-        activeFullScreenHarness.startWaiting(`signing in to ${harness.displayName}…`);
-        try { await loginNativeHarness(harness, environment); } finally { activeFullScreenHarness.stopWaiting(); }
+        activeTerminalHarness.startWaiting(`signing in to ${harness.displayName}…`);
+        try { await loginNativeHarness(harness, environment); } finally { activeTerminalHarness.stopWaiting(); }
       } else {
-        activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-        await activeFullScreenHarness.suspend();
+        activeTerminalHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+        await activeTerminalHarness.suspend();
         try {
           announceBareInteractiveLogin(harness);
           await loginNativeHarness(harness, environment);
         } finally {
-          activeFullScreenHarness.resume();
+          activeTerminalHarness.resume();
         }
       }
       // Same identity check /account's "add another account" flow uses --
@@ -1184,8 +1181,8 @@ export async function aiPermissions(mode?: string): Promise<void> {
     return;
   }
   if (!input.isTTY || !output.isTTY) throw new Error('interactive input is required; use `clikcode permissions ask|bypass|auto`');
-  const rl = new FullScreenHarnessPrompter();
-  activeFullScreenHarness = rl;
+  const rl = new TerminalHarnessPrompter();
+  activeTerminalHarness = rl;
   try {
     if (session) {
       const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
@@ -1198,7 +1195,7 @@ export async function aiPermissions(mode?: string): Promise<void> {
       if (selected) await aiSettingsSetGlobal('permissions', selected);
     }
   } finally {
-    activeFullScreenHarness = undefined;
+    activeTerminalHarness = undefined;
     rl.close();
   }
 }
@@ -1738,11 +1735,11 @@ async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<vo
     { label: 'Continue with GitHub', value: 'github' as const },
   ]);
   if (!provider) throw new Error('ClikDeploy Gateway sign-in was cancelled.');
-  if (rl instanceof FullScreenHarnessPrompter) await rl.suspend();
+  if (rl instanceof TerminalHarnessPrompter) await rl.suspend();
   try {
     await login(config, { google: provider === 'google', github: provider === 'github', embedded: true });
   } finally {
-    if (rl instanceof FullScreenHarnessPrompter) rl.resume();
+    if (rl instanceof TerminalHarnessPrompter) rl.resume();
   }
   if (!ApiClient.getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a Gateway credential.');
 }
@@ -1899,7 +1896,7 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
       const current = accountState.sessions.find((item) => item.id === id);
       if (!current) throw new Error(`AI session "${id}" was not found`);
       const providerAccounts = accountState.accounts.filter((account) => account.provider === harness.provider);
-      if (rl instanceof FullScreenHarnessPrompter && providerAccounts.some((account) => account.authKind === 'vendor-cli')) {
+      if (rl instanceof TerminalHarnessPrompter && providerAccounts.some((account) => account.authKind === 'vendor-cli')) {
         rl.startWaiting(`loading ${harness.displayName} account usage…`);
       }
       let accountsWithUsage: Array<{ account: AiHarnessAccount; usage?: string }>;
@@ -1908,7 +1905,7 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
           account, usage: await accountUsageLabel(account, accountState),
         })));
       } finally {
-        if (rl instanceof FullScreenHarnessPrompter) rl.stopWaiting();
+        if (rl instanceof TerminalHarnessPrompter) rl.stopWaiting();
       }
       let actionPerformed = false;
       const selected = await chooseOption(
@@ -1927,8 +1924,8 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
         return targetId;
       }
       if (!available.find((item) => item.harness.command === harness.command)?.inspection.installed) {
-        activeFullScreenHarness?.startWaiting(`installing ${harness.displayName}…`);
-        try { await ensureNativeHarness(harness); } finally { activeFullScreenHarness?.stopWaiting(); }
+        activeTerminalHarness?.startWaiting(`installing ${harness.displayName}…`);
+        try { await ensureNativeHarness(harness); } finally { activeTerminalHarness?.stopWaiting(); }
       }
       const accountLabel = await addAccountForHarness(rl, harness);
       if (!accountLabel) continue;
@@ -2096,10 +2093,10 @@ async function addAccountForHarness(rl: HarnessPrompter, harness: AiLocalHarness
   // raw-mode/alt-screen state is still active competing for the same
   // terminal.
   let label: string;
-  if (harness.loginCapturable && rl instanceof FullScreenHarnessPrompter) {
+  if (harness.loginCapturable && rl instanceof TerminalHarnessPrompter) {
     rl.startWaiting(`signing in to ${harness.displayName}…`);
     try { label = await aiAccountLogin(harness.command); } finally { rl.stopWaiting(); }
-  } else if (rl instanceof FullScreenHarnessPrompter) {
+  } else if (rl instanceof TerminalHarnessPrompter) {
     await rl.suspend();
     try {
       announceBareInteractiveLogin(harness);
@@ -2122,10 +2119,10 @@ async function manageAccountAction(rl: HarnessPrompter, accountId: string, actio
     account.status = 'needs_login';
     await writeState(state);
   } else if (action === 'reauthenticate' && harness.loginArgv) {
-    if (harness.loginCapturable && rl instanceof FullScreenHarnessPrompter) {
+    if (harness.loginCapturable && rl instanceof TerminalHarnessPrompter) {
       rl.startWaiting(`signing in to ${harness.displayName}…`);
       try { await loginNativeHarness(harness, environment); } finally { rl.stopWaiting(); }
-    } else if (rl instanceof FullScreenHarnessPrompter) {
+    } else if (rl instanceof TerminalHarnessPrompter) {
       await rl.suspend();
       try {
         announceBareInteractiveLogin(harness);
@@ -2539,7 +2536,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // "installing…" spinner and a real terminal to suspend into for a vendor
   // login prompt, instead of running headless before the UI exists.
   const rl: HarnessPrompter = input.isTTY && output.isTTY
-    ? new FullScreenHarnessPrompter()
+    ? new TerminalHarnessPrompter()
     : createInterface({
       input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,
       completer: (value: string) => {
@@ -2548,7 +2545,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         return [matches.length ? matches : fallbackCommands, value] as [string[], string];
       },
     });
-  if (rl instanceof FullScreenHarnessPrompter) activeFullScreenHarness = rl;
+  if (rl instanceof TerminalHarnessPrompter) activeTerminalHarness = rl;
   rl.render?.(session);
   if (!session.nativeHarness && session.route !== 'gateway') {
     const auto = await autoSelectSessionHarness(id);
@@ -2587,9 +2584,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   if (rl.render) rl.render(session, initialAccount);
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
   const refreshUsage = (target: HarnessSession, targetState: HarnessState): void => {
-    if (!(rl instanceof FullScreenHarnessPrompter)) return;
+    if (!(rl instanceof TerminalHarnessPrompter)) return;
     void nativeUsageLabel(target, targetState).then((label) => {
-      if (activeFullScreenHarness === rl) rl.usage(label);
+      if (activeTerminalHarness === rl) rl.usage(label);
     }).catch(() => { /* Usage is optional provider metadata. */ });
   };
   refreshUsage(session, state);
@@ -2599,7 +2596,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // stale for however long that gap was, well past nativeUsageLabel's own
   // 30s cache window (which bounds *how often this can update*, not
   // *whether anything ever asks it to*). This is what actually asks.
-  const usageInterval = rl instanceof FullScreenHarnessPrompter ? setInterval(() => {
+  const usageInterval = rl instanceof TerminalHarnessPrompter ? setInterval(() => {
     void readState().then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
       if (latest) refreshUsage(latest, latestState);
@@ -2755,7 +2752,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             const result = await captureNativeHarnessOutput(selectedHarness, manager.listArgv, environment);
             rl.panel?.(manager.label, result || 'No entries.');
             if (rl.render) await rl.question('Press Enter to return › ');
-          } else if (manager.manageArgv && rl instanceof FullScreenHarnessPrompter) {
+          } else if (manager.manageArgv && rl instanceof TerminalHarnessPrompter) {
             await rl.suspend();
             try { await runNativeHarnessCommand(selectedHarness, manager.manageArgv, environment); }
             finally { rl.resume(); }
@@ -2772,12 +2769,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             : `Review the uncommitted changes in this workspace. Identify concrete bugs, regressions, security issues, and missing tests. Prioritize findings and cite file paths.${extra ? ` Additional focus: ${extra}` : ''}`;
           const turnController = new AbortController();
           const liveInput = new LiveTurnInputBroker();
-          activeFullScreenHarness?.startWaiting('thinking', () => turnController.abort(), (text) => liveInput.submit(text));
+          activeTerminalHarness?.startWaiting('thinking', () => turnController.abort(), (text) => liveInput.submit(text));
           try { await aiGatewaySessionSend(config, id, task, turnController.signal, { liveInput }); }
           finally {
             liveInput.close();
-            await activeFullScreenHarness?.flushWaitingSubmissions();
-            activeFullScreenHarness?.stopWaiting();
+            await activeTerminalHarness?.flushWaitingSubmissions();
+            activeTerminalHarness?.stopWaiting();
           }
         }
         else if (standaloneAttachment) {
@@ -2820,32 +2817,32 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             const turnController = new AbortController();
             const liveInput = new LiveTurnInputBroker();
             interruptedSubmission = { text: line, restoreOnEscape: false };
-            activeFullScreenHarness?.startWaiting('thinking', (restoreDraft) => {
+            activeTerminalHarness?.startWaiting('thinking', (restoreDraft) => {
               interruptedSubmission!.restoreOnEscape = restoreDraft;
               turnController.abort();
             }, (text) => liveInput.submit(text));
             try { await aiGatewaySessionSend(config, id, line, turnController.signal, { liveInput, queuedTurnId }); }
             finally {
               liveInput.close();
-              await activeFullScreenHarness?.flushWaitingSubmissions();
-              activeFullScreenHarness?.stopWaiting();
+              await activeTerminalHarness?.flushWaitingSubmissions();
+              activeTerminalHarness?.stopWaiting();
             }
             continue;
           }
           else output.write(`${chalk.dim(`${active ? sessionProviderLabel(active) : 'Provider'} · working…`)}\n`);
           try { await aiGatewaySessionSend(config, id, line, undefined, { queuedTurnId }); }
-          finally { activeFullScreenHarness?.stopWaiting(); }
+          finally { activeTerminalHarness?.stopWaiting(); }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
-        if (cancelled && interruptedSubmission && activeFullScreenHarness) {
-          const outputStarted = activeFullScreenHarness.turnOutputStarted();
-          const partialResponse = activeFullScreenHarness.liveResponseText();
+        if (cancelled && interruptedSubmission && activeTerminalHarness) {
+          const outputStarted = activeTerminalHarness.turnOutputStarted();
+          const partialResponse = activeTerminalHarness.liveResponseText();
           if (outputStarted) await preserveInterruptedTurn(id, interruptedSubmission.text, partialResponse, true);
           else {
             await discardInterruptedTurn(id, interruptedSubmission.text);
-            if (interruptedSubmission.restoreOnEscape) activeFullScreenHarness.restoreDraft(interruptedSubmission.text);
+            if (interruptedSubmission.restoreOnEscape) activeTerminalHarness.restoreDraft(interruptedSubmission.text);
           }
           notice = outputStarted ? 'Stopped' : interruptedSubmission.restoreOnEscape ? 'Stopped · draft restored' : 'Stopped';
         } else if (rl.render) notice = cancelled ? 'Stopped' : `Error: ${message}`;
@@ -2854,7 +2851,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     }
   } finally {
     if (usageInterval) clearInterval(usageInterval);
-    if (activeFullScreenHarness === rl) activeFullScreenHarness = undefined;
+    if (activeTerminalHarness === rl) activeTerminalHarness = undefined;
     rl.close();
   }
 }
@@ -2917,8 +2914,8 @@ export async function aiSessionSend(
           throw new Error('all usage exhausted');
         }
         switchedFrom = account.label;
-        activeFullScreenHarness?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
-        activeFullScreenHarness?.phase(`switching to ${fallback.label}`);
+        activeTerminalHarness?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
+        activeTerminalHarness?.phase(`switching to ${fallback.label}`);
         account = fallback;
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
@@ -2991,16 +2988,16 @@ export async function aiSessionSend(
             const responseUpdate = nativeResponseUpdate(harness, lineText);
             if (responseUpdate) {
               checkpoint.response(responseUpdate.text, responseUpdate.mode);
-              activeFullScreenHarness?.response(responseUpdate.text, responseUpdate.mode);
+              activeTerminalHarness?.response(responseUpdate.text, responseUpdate.mode);
             }
             const textPhase = nativeActivityPhase(harness, lineText);
-            if (textPhase) activeFullScreenHarness?.phase(textPhase);
+            if (textPhase) activeTerminalHarness?.phase(textPhase);
             const event = parseNativeActivityEvent(harness, lineText);
             if (!event) return;
             checkpoint.activity(event);
-            activeFullScreenHarness?.phase(renderActivityPhase(event));
+            activeTerminalHarness?.phase(renderActivityPhase(event));
             if (isJsonDefaultMode()) return;
-            if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(event);
+            if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
             else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
           },
         });
@@ -3021,19 +3018,19 @@ export async function aiSessionSend(
             },
             onResponseDelta: (delta) => {
               checkpoint.response(delta, 'append');
-              activeFullScreenHarness?.response(delta, 'append');
+              activeTerminalHarness?.response(delta, 'append');
             },
-            onPhase: (phase) => activeFullScreenHarness?.phase(phase),
-            onApproval: (title, detail) => activeFullScreenHarness?.approval(title, detail) ?? Promise.resolve(false),
+            onPhase: (phase) => activeTerminalHarness?.phase(phase),
+            onApproval: (title, detail) => activeTerminalHarness?.approval(title, detail) ?? Promise.resolve(false),
             onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText) => {
               await handler(steerText);
               await checkpoint.steer({ id: randomUUID(), text: steerText, submittedAt: new Date().toISOString() });
             } : undefined),
             onActivity: (event) => {
               checkpoint.activity(event);
-              activeFullScreenHarness?.phase(renderActivityPhase(event));
+              activeTerminalHarness?.phase(renderActivityPhase(event));
               if (isJsonDefaultMode()) return;
-              if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(event);
+              if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
               else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
             },
           });
@@ -3049,17 +3046,17 @@ export async function aiSessionSend(
             },
               onResponseDelta: (delta) => {
                 checkpoint.response(delta, 'append');
-                activeFullScreenHarness?.response(delta, 'append');
+                activeTerminalHarness?.response(delta, 'append');
               },
               onActivity: (event) => {
                 checkpoint.activity(event);
-                activeFullScreenHarness?.activityEvent(event);
+                activeTerminalHarness?.activityEvent(event);
               },
-              onApproval: (title, detail) => activeFullScreenHarness?.approval(title, detail) ?? Promise.resolve(false),
+              onApproval: (title, detail) => activeTerminalHarness?.approval(title, detail) ?? Promise.resolve(false),
             });
           } catch (error) {
             if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback) throw error;
-            activeFullScreenHarness?.phase('using structured CLI fallback');
+            activeTerminalHarness?.phase('using structured CLI fallback');
             result = await runStructuredCliTurn();
           }
         } else {
@@ -3095,18 +3092,18 @@ export async function aiSessionSend(
           // N: {...}" message with no attempt to actually fix it. Same
           // suspend/login/resume mechanism aiHarnessSelect uses, triggered
           // here instead of only at provider-switch time.
-          if (!authRetried && activeFullScreenHarness && harness.loginArgv) {
+          if (!authRetried && activeTerminalHarness && harness.loginArgv) {
             authRetried = true;
             if (harness.loginCapturable) {
-              activeFullScreenHarness.startWaiting(`signing in to ${harness.displayName}…`);
-              try { await loginNativeHarness(harness, environment); } finally { activeFullScreenHarness.stopWaiting(); }
+              activeTerminalHarness.startWaiting(`signing in to ${harness.displayName}…`);
+              try { await loginNativeHarness(harness, environment); } finally { activeTerminalHarness.stopWaiting(); }
             } else {
-              activeFullScreenHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-              await activeFullScreenHarness.suspend();
+              activeTerminalHarness.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+              await activeTerminalHarness.suspend();
               try {
                 await loginNativeHarness(harness, environment);
               } finally {
-                activeFullScreenHarness.resume();
+                activeTerminalHarness.resume();
               }
             }
             account = await syncAccountIdentityAfterLogin(harness, account, state);
@@ -3151,8 +3148,8 @@ export async function aiSessionSend(
         // happens inside one continuous await chain, so without this the whole
         // thing looks instantaneous and the reply just silently comes from a
         // different account with nothing to explain the (brief) extra wait.
-        activeFullScreenHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
-        activeFullScreenHarness?.phase(`retrying on ${fallback.label}`);
+        activeTerminalHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
+        activeTerminalHarness?.phase(`retrying on ${fallback.label}`);
         account = fallback;
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
@@ -3173,7 +3170,7 @@ export async function aiSessionSend(
       // final response are reflected in ClikCode before the turn is saved.
       await synchronizeNativeTranscript(state, session);
       await writeState(state);
-      if (!activeFullScreenHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+      if (!activeTerminalHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
       return;
     }
     } finally {
@@ -3199,8 +3196,8 @@ export async function aiSessionSend(
       throw new Error('all usage exhausted');
     }
     switchedFrom = account.id;
-    activeFullScreenHarness?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
-    activeFullScreenHarness?.phase(`switching to ${fallback.label}`);
+    activeTerminalHarness?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
+    activeTerminalHarness?.phase(`switching to ${fallback.label}`);
     account = fallback;
     session.accountId = fallback.id;
     await checkpoint.persistNow();
@@ -3240,8 +3237,8 @@ export async function aiSessionSend(
         throw new Error('all usage exhausted');
       }
       switchedFrom ??= exhaustedAccount.id;
-      activeFullScreenHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
-      activeFullScreenHarness?.phase(`retrying on ${fallback.label}`);
+      activeTerminalHarness?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
+      activeTerminalHarness?.phase(`retrying on ${fallback.label}`);
       account = fallback;
       session.accountId = fallback.id;
     }
@@ -3251,16 +3248,16 @@ export async function aiSessionSend(
     at: new Date().toISOString(), inputTokens: turn.usage.inputTokens,
     outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt,
   };
-  if (activeFullScreenHarness && Array.isArray(turn.toolCalls)) {
+  if (activeTerminalHarness && Array.isArray(turn.toolCalls)) {
     for (const call of turn.toolCalls) {
       const name = call && typeof call.name === 'string' ? call.name : 'tool';
-      activeFullScreenHarness.activity(`${chalk.green('done')} ${chalk.dim(name)}`);
+      activeTerminalHarness.activity(`${chalk.green('done')} ${chalk.dim(name)}`);
     }
   }
   state.invocations.push(invocation);
   session.attachments = [];
   await checkpoint.complete(turn.text);
-  if (!activeFullScreenHarness) emitHarnessOutput({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+  if (!activeTerminalHarness) emitHarnessOutput({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
   } finally {
     await checkpoint.flush();
   }
@@ -3298,7 +3295,7 @@ export async function aiGatewaySessionSend(
   const decoder = new TextDecoder();
   let buffer = '';
   let reply = '';
-  const streamToTerminal = !isJsonDefaultMode() && !activeFullScreenHarness;
+  const streamToTerminal = !isJsonDefaultMode() && !activeTerminalHarness;
   let wroteDelta = false;
   for (;;) {
     const { done, value } = await reader.read();
@@ -3312,8 +3309,8 @@ export async function aiGatewaySessionSend(
         const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; label?: string; kind?: 'thinking' | 'tool-start'; tool?: string };
         if (event.type === 'delta' && typeof event.text === 'string') {
           checkpoint.response(event.text, 'append');
-          activeFullScreenHarness?.phase('generating response');
-          activeFullScreenHarness?.response(event.text, 'append');
+          activeTerminalHarness?.phase('generating response');
+          activeTerminalHarness?.response(event.text, 'append');
           reply += event.text;
           if (streamToTerminal) { output.write(event.text); wroteDelta = true; }
         }
@@ -3335,11 +3332,11 @@ export async function aiGatewaySessionSend(
         // it) — a real gap in what the agent loop reports, not something to
         // fake here.
         if (event.type === 'status' && typeof event.label === 'string') {
-          activeFullScreenHarness?.phase(event.label);
+          activeTerminalHarness?.phase(event.label);
           if (!isJsonDefaultMode()) {
             const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
             checkpoint.activity(activityEvent);
-            if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(activityEvent);
+            if (activeTerminalHarness) activeTerminalHarness.activityEvent(activityEvent);
           }
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
@@ -3353,7 +3350,7 @@ export async function aiGatewaySessionSend(
   session.attachments = [];
   await checkpoint.complete(reply);
   if (wroteDelta) output.write('\n\n');
-  else if (!activeFullScreenHarness) emitHarnessOutput({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
+  else if (!activeTerminalHarness) emitHarnessOutput({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
   } finally {
     await checkpoint.flush();
   }
