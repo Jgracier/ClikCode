@@ -25,7 +25,7 @@ import { isDebugMode } from '../utils/debug-mode.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { bindGlobalFlags } from '../utils/global-flags.js';
 import { emitJson } from '../utils/structured-output.js';
-import { acquireLifecycleLock, type LifecycleLock } from '../utils/lifecycle-lock.js';
+import type { LifecycleLock } from '../utils/lifecycle-lock.js';
 
 export const CLI_VERSION: string = (() => {
   try {
@@ -175,10 +175,14 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
     );
   }
 
-  program.hook('preAction', (_thisCommand, actionCommand) => {
+  program.hook('preAction', async (_thisCommand, actionCommand) => {
     if (options.lifecycleLock === false) return;
     if (!isMutatingLifecycleCommand(getCommandPath(actionCommand))) return;
     if (activeLifecycleLock) return;
+    // Loaded on demand: entrypoints that opt out (ClikCode) never evaluate the
+    // module, and apps/clikcode/scripts/build.mjs stubs it out of that bundle.
+    // Commander chains a promise-returning hook ahead of the action.
+    const { acquireLifecycleLock } = await import('../utils/lifecycle-lock.js');
     activeLifecycleLock = acquireLifecycleLock('lifecycle');
   });
 
