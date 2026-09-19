@@ -10,6 +10,7 @@ export {
   AI_LOCAL_HARNESS_CAPABILITIES,
   harnessSupportsEffort,
   harnessSupportsImages,
+  harnessIntegrationLevel,
   harnessSupportsPermissionMode,
   localHarnessForCommand,
   localHarnessCapabilityManifest,

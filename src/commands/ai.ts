@@ -50,6 +50,11 @@ import {
 } from './account-management.js';
 import { FullScreenHarnessPrompter } from './terminal-ui.js';
 import { runCodexAppServerTurn } from './codex-app-server.js';
+import { acpArgvForHarness, runAcpTurn } from './acp-client.js';
+import {
+  beginPendingTurn, discardPendingTurn, finishPendingTurn, recordPendingActivity,
+  sessionTranscriptMessages, updatePendingResponse,
+} from './turn-checkpoint.js';
 export {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
   aiAccountStatus, aiDoctor,
@@ -66,7 +71,14 @@ function conversationIdFor(session: HarnessSession): string {
 }
 
 function hasConversationContent(session: HarnessSession): boolean {
-  return Boolean(session.nativeSessionId || (session.messages ?? []).length > 0);
+  return Boolean(session.nativeSessionId || session.pendingTurn || (session.messages ?? []).length > 0);
+}
+
+function interruptedTurnFailoverPrompt(session: HarnessSession): string {
+  return failoverPrompt(
+    sessionTranscriptMessages(session),
+    'Continue the interrupted latest request. Inspect the current workspace first and finish the remaining work without repeating completed steps.',
+  );
 }
 
 export function requiresProviderHandoff(session: HarnessSession, targetHarness: string): boolean {
@@ -133,7 +145,9 @@ export function createHandoffBranch(input: {
     effort: input.defaults.effort, permissionMode: input.defaults.permissionMode, accountFailover: input.defaults.accountFailover,
     workspace: input.source.workspace ?? process.cwd(), nativeHarness: input.target.command,
     ...(base ? { name: base } : {}),
-    ...(input.source.messages?.length ? { messages: input.source.messages.map((message) => ({ ...message })) } : {}),
+    ...(sessionTranscriptMessages(input.source).length
+      ? { messages: sessionTranscriptMessages(input.source).map((message) => ({ ...message })) }
+      : {}),
     createdAt: input.now, updatedAt: input.now, status: 'active',
   };
 }
@@ -165,16 +179,28 @@ export function sessionPickerOptions(
 
   return orderedGroups.map((group) => {
     const history = [...group].sort((left, right) => createdTimestamp(left) - createdTimestamp(right));
+    const byId = new Map(history.map((session) => [session.id, session]));
+    const depthFor = (session: HarnessSession): number => {
+      let depth = 0;
+      let parentId = session.parentSessionId;
+      const seen = new Set<string>();
+      while (parentId && byId.has(parentId) && !seen.has(parentId)) {
+        seen.add(parentId);
+        depth += 1;
+        parentId = byId.get(parentId)?.parentSessionId;
+      }
+      return depth;
+    };
     const active = group.filter((session) => session.status === 'active');
     const latest = [...(active.length ? active : group)].sort((left, right) => timestamp(right) - timestamp(left))[0]!;
     const title = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || 'Untitled chat';
     const model = nativeModelLabel(latest.nativeHarness, latest.model);
     return {
       label: title,
-      detail: `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''} · ${model ?? 'automatic'} · ${new Date(latest.updatedAt).toLocaleString()}${history.length > 1 ? ` · → ${history.length} provider sessions` : ''}`,
+      detail: `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''} · ${model ?? 'automatic'} · ${new Date(latest.updatedAt).toLocaleString()}${history.length > 1 ? ` · → ${history.length} history entries` : ''}`,
       value: latest.id,
-      actions: history.length > 1 ? history.map((session, index) => ({
-        label: `${providerLabel(session)} · ${session.id === latest.id ? 'latest' : index === 0 ? 'original' : 'continued'} · ${new Date(session.updatedAt).toLocaleString()}`,
+      actions: history.length > 1 ? history.map((session) => ({
+        label: `${'  '.repeat(depthFor(session))}${providerLabel(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${new Date(session.updatedAt).toLocaleString()}`,
         value: session.id,
       })) : undefined,
     };
@@ -195,11 +221,87 @@ async function preserveInterruptedTurn(id: string, prompt: string, partialRespon
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return;
-  session.messages = interruptedTurnMessages(session.messages ?? [], prompt, partialResponse, outputStarted);
+  if (session.pendingTurn?.prompt === prompt) {
+    if (partialResponse) updatePendingResponse(session, partialResponse, 'replace', new Date().toISOString());
+    finishPendingTurn(session, partialResponse || undefined, new Date().toISOString());
+  } else session.messages = interruptedTurnMessages(session.messages ?? [], prompt, partialResponse, outputStarted);
   session.name ??= conversationTitle(prompt);
   session.attachments = [];
   session.updatedAt = new Date().toISOString();
   await writeState(state);
+}
+
+async function discardInterruptedTurn(id: string, prompt: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session || !discardPendingTurn(session, prompt)) return;
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
+}
+
+/** Serializes bounded checkpoint writes for one in-flight turn. Deltas update
+ * memory immediately and coalesce into a disk write, while start, provider
+ * identity changes, completion, and error unwinding force a durable flush. */
+class DurableTurnCheckpoint {
+  private timer: NodeJS.Timeout | undefined;
+  private writes: Promise<void> = Promise.resolve();
+  private dirty = false;
+
+  private constructor(private readonly state: HarnessState, readonly session: HarnessSession) {}
+
+  static async start(state: HarnessState, session: HarnessSession, prompt: string): Promise<DurableTurnCheckpoint> {
+    const checkpoint = new DurableTurnCheckpoint(state, session);
+    beginPendingTurn(session, prompt, new Date().toISOString());
+    session.name ??= conversationTitle(prompt);
+    await checkpoint.enqueue();
+    return checkpoint;
+  }
+
+  response(text: string, mode: 'append' | 'replace' = 'append'): void {
+    updatePendingResponse(this.session, text, mode, new Date().toISOString());
+    this.schedule();
+  }
+
+  activity(event: HarnessActivityEvent): void {
+    recordPendingActivity(this.session, event, new Date().toISOString());
+    this.schedule();
+  }
+
+  async persistNow(): Promise<void> {
+    this.dirty = true;
+    await this.flush();
+  }
+
+  async complete(response: string): Promise<void> {
+    finishPendingTurn(this.session, response, new Date().toISOString());
+    this.dirty = true;
+    await this.flush();
+  }
+
+  async flush(): Promise<void> {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    if (this.dirty) {
+      this.dirty = false;
+      await this.enqueue();
+    } else await this.writes;
+  }
+
+  private schedule(): void {
+    this.dirty = true;
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      if (!this.dirty) return;
+      this.dirty = false;
+      void this.enqueue();
+    }, 250);
+  }
+
+  private enqueue(): Promise<void> {
+    this.writes = this.writes.then(() => writeState(this.state));
+    return this.writes;
+  }
 }
 
 /** Pull turns added directly in a vendor CLI back into an already-linked
@@ -214,9 +316,27 @@ async function synchronizeNativeTranscript(state: HarnessState, session: Harness
   const source = await reader(
     harness, session.nativeSessionId, session.workspace ?? process.cwd(), nativeProfileEnvironment(account?.nativeProfile),
   ).catch(() => []);
+  const previousLength = (session.messages ?? []).length;
   const merged = mergeNativeTranscript(session.messages ?? [], source);
   if (merged.length === (session.messages ?? []).length) return false;
   session.messages = merged;
+  // If the vendor transcript now contains the prompt that was journaled by a
+  // previously interrupted ClikCode process, the vendor copy is authoritative
+  // and the separate checkpoint must not render or hand off a duplicate.
+  if (session.pendingTurn) {
+    const appended = merged.slice(previousLength);
+    const promptIndex = appended.findIndex((message) =>
+      message.role === 'user' && message.content.trim() === session.pendingTurn!.prompt.trim());
+    if (promptIndex >= 0) {
+      const nativeHasAnswer = appended.slice(promptIndex + 1).some((message) => message.role === 'assistant');
+      if (!nativeHasAnswer) {
+        const checkpointAnswer = sessionTranscriptMessages({ ...session, messages: [] })
+          .find((message) => message.role === 'assistant');
+        if (checkpointAnswer) session.messages.push(checkpointAnswer);
+      }
+      delete session.pendingTurn;
+    }
+  }
   const firstUserMessage = merged.find((message) => message.role === 'user')?.content;
   if (!session.name && firstUserMessage) session.name = conversationTitle(firstUserMessage);
   session.updatedAt = new Date().toISOString();
@@ -1126,7 +1246,7 @@ export async function aiSessionClose(id: string): Promise<void> {
   // session came before, even when the user has configured nothing yet.
   // gatewayConfirmed is the same signal for the one route (Gateway) that
   // doesn't otherwise have a reliable "was this deliberate" field to check.
-  if (!(session.messages ?? []).length && !session.nativeSessionId && !session.nativeHarness && !session.gatewayConfirmed) {
+  if (!sessionTranscriptMessages(session).length && !session.nativeSessionId && !session.nativeHarness && !session.gatewayConfirmed) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
@@ -1175,6 +1295,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   }
   if (head === 'new' || head === 'reset') {
     session.messages = [];
+    delete session.pendingTurn;
     session.nativeSessionId = undefined;
     session.nativeStartedAt = undefined;
     session.updatedAt = new Date().toISOString();
@@ -1196,9 +1317,9 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
   }
-  if (head === 'history') return emitHarnessOutput({ panel: 'history', messages: session.messages ?? [] });
+  if (head === 'history') return emitHarnessOutput({ panel: 'history', messages: sessionTranscriptMessages(session) });
   if (head === 'copy') {
-    const last = [...(session.messages ?? [])].reverse().find((message) => message.role === 'assistant');
+    const last = sessionTranscriptMessages(session).reverse().find((message) => message.role === 'assistant');
     if (!last) throw new Error('There is no assistant response to copy yet.');
     await copyToClipboard(last.content);
     return emitHarnessOutput({ panel: 'copied', text: 'Last response copied to the clipboard.' });
@@ -1260,6 +1381,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     const fork: HarnessSession = {
       ...session, id: randomUUID(), name: words.join(' ').trim() || (session.name ? `${session.name} (fork)` : undefined),
       conversationId: conversationIdFor(session), parentSessionId: session.id,
+      messages: sessionTranscriptMessages(session), pendingTurn: undefined,
       nativeSessionId: undefined, nativeStartedAt: undefined, createdAt: now, updatedAt: now, status: 'active', closedAt: undefined,
     };
     // A fork is a sibling concept, not another copy of the handoff event that
@@ -1486,7 +1608,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['use <label-or-id>', 'login <harness> [label]', 'add <harness> [label]', 'remove <label-or-id>', 'failover auto|never'] });
   }
   if (head === 'gateway') {
-    if ((session.messages ?? []).length || session.nativeSessionId) {
+    if (sessionTranscriptMessages(session).length || session.nativeSessionId) {
       throw new Error('Use the interactive /provider menu to hand off an existing conversation to ClikDeploy Gateway.');
     }
     applyGatewaySessionPolicy(session);
@@ -1590,15 +1712,15 @@ async function newGatewayConversation(config: Conf, rl: HarnessPrompter, current
   if (await synchronizeNativeTranscript(state, current)) await writeState(state);
   const now = new Date().toISOString();
   const id = randomUUID();
-  const sourceHarness = current.nativeHarness ? localHarnessForCommand(current.nativeHarness) : undefined;
-  const sourceLabel = sourceHarness?.displayName ?? sessionProviderLabel(current);
   const session: HarnessSession = {
     id, conversationId: conversationIdFor(current), parentSessionId: current.id,
     handoff: { fromSessionId: current.id, fromHarness: current.nativeHarness ?? current.route, at: now },
     route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null,
     effort: 'platform-managed', accountFailover: 'never',
-    workspace: current.workspace ?? process.cwd(), name: current.name ? `${current.name.replace(/\s+\(from [^)]+\)$/i, '')} (from ${sourceLabel})` : undefined,
-    ...(current.messages?.length ? { messages: current.messages.map((message) => ({ ...message })) } : {}),
+    workspace: current.workspace ?? process.cwd(), name: current.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || undefined,
+    ...(sessionTranscriptMessages(current).length
+      ? { messages: sessionTranscriptMessages(current).map((message) => ({ ...message })) }
+      : {}),
     createdAt: now, updatedAt: now, status: 'active',
     gatewayConfirmed: true,
   };
@@ -1609,11 +1731,29 @@ async function newGatewayConversation(config: Conf, rl: HarnessPrompter, current
 
 export type ProviderChoice =
   | { kind: 'gateway' }
-  | { kind: 'provider'; harness: string };
+  | { kind: 'provider'; harness: string }
+  | { kind: 'more' };
 
 export type ProviderAccountChoice =
   | { kind: 'account'; harness: string; accountId: string }
   | { kind: 'add-account'; harness: string };
+
+function displayedIntegrationLevel(harness: AiLocalHarnessDefinition): 'native' | 'structured' | 'compatibility' | 'editor-only' {
+  if (harness.integration) return harness.integration;
+  if (harness.surface === 'editor-extension') return 'editor-only';
+  if (harness.command === 'codex') return 'native';
+  if (['cursor', 'cline', 'copilot', 'hermes'].includes(harness.command)) return 'structured';
+  return harness.turn?.output === 'text' ? 'compatibility' : 'structured';
+}
+
+function integrationLabel(harness: AiLocalHarnessDefinition): string {
+  return ({
+    native: 'full integration',
+    structured: 'structured integration',
+    compatibility: 'basic compatibility',
+    'editor-only': 'editor only',
+  } as const)[displayedIntegrationLevel(harness)];
+}
 
 /** Keep the first level deliberately sparse. Choosing a provider opens its
  * account list instead of mixing every account from every vendor together. */
@@ -1621,19 +1761,31 @@ export function providerPickerOptions(
   available: ReadonlyArray<{ harness: AiLocalHarnessDefinition; inspection: { installed: boolean; version?: string } }>,
   session: HarnessSession,
   gatewayConnected: boolean,
+  configuredProviders: ReadonlySet<string> = new Set(),
+  includeAll = false,
 ): PickerOption<ProviderChoice>[] {
+  const ordered = [...available].sort((left, right) => Number(right.inspection.installed) - Number(left.inspection.installed)
+    || left.harness.displayName.localeCompare(right.harness.displayName));
+  const visible = includeAll ? ordered : ordered.filter(({ harness, inspection }) => inspection.installed
+    || configuredProviders.has(harness.provider) || session.nativeHarness === harness.command);
+  const hiddenCount = ordered.length - visible.length;
   return [{
     label: 'ClikDeploy Gateway',
     detail: `· ${gatewayConnected ? 'connected' : 'sign in with OAuth'}${session.route === 'gateway' ? ' · current' : ''}`,
     value: { kind: 'gateway' },
-  }, ...available.map(({ harness, inspection }) => ({
+  }, ...visible.map(({ harness, inspection }) => ({
       label: harness.displayName,
       detail: `${inspection.installed
         ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
-        : harness.npmPackage ? '· install when needed' : '· vendor install required'}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''}`,
+        : harness.npmPackage ? '· install when needed' : '· vendor install required'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''}`,
       value: { kind: 'provider' as const, harness: harness.command },
-    })),
+    })), ...(hiddenCount > 0 ? [{ label: 'More providers…', detail: `· ${hiddenCount} available to install`, value: { kind: 'more' as const } }] : []),
   ];
+}
+
+/** Whether the account menu can actually complete an add operation. */
+export function harnessCanAddAccount(harness: AiLocalHarnessDefinition): boolean {
+  return harness.localAuth.includes('api-key') || Boolean(harness.loginArgv);
 }
 
 /** Account usage is loaded only after its provider is opened, avoiding a
@@ -1653,12 +1805,14 @@ export function providerAccountPickerOptions(
       ];
       return {
         label: account.label,
-        detail: `${usage ? `· ${usage} ` : ''}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
+        detail: `${usage ? `· ${usage} ` : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
         actions,
       };
     }),
-    { label: '+ Add account…', detail: `· ${harness.displayName}`, value: { kind: 'add-account', harness: harness.command } },
+    ...(harnessCanAddAccount(harness)
+      ? [{ label: '+ Add account…', detail: `· ${harness.displayName}`, value: { kind: 'add-account' as const, harness: harness.command } }]
+      : []),
   ];
 }
 
@@ -1683,9 +1837,19 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
     const session = state.sessions.find((item) => item.id === id);
     if (!session) throw new Error(`AI session "${id}" was not found`);
     const gatewayConnected = Boolean(ApiClient.getApiKeyForUrl(config, ApiClient.getApiUrl(config)));
-    const provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected));
+    const configuredProviders = new Set(state.accounts.map((account) => account.provider));
+    let provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected, configuredProviders));
     if (!provider) return undefined;
+    if (provider.kind === 'more') {
+      const primaryHarnesses = new Set(providerPickerOptions(available, session, gatewayConnected, configuredProviders)
+        .flatMap((option) => option.value.kind === 'provider' ? [option.value.harness] : []));
+      const more = providerPickerOptions(available, session, gatewayConnected, configuredProviders, true)
+        .filter((option) => option.value.kind === 'provider' && !primaryHarnesses.has(option.value.harness));
+      provider = await chooseOption(rl, 'More providers', more);
+      if (!provider) continue;
+    }
     if (provider.kind === 'gateway') return selectProviderConversation(config, rl, id, '__gateway__');
+    if (provider.kind !== 'provider') continue;
     const harness = localHarnessForCommand(provider.harness);
     if (!harness) throw new Error(`unknown local harness: ${provider.harness}`);
     for (;;) {
@@ -1784,6 +1948,7 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
  * generic <PROVIDER>_API_KEY guess for anything not in this short list. */
 const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
   anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GOOGLE_API_KEY', qwen: 'DASHSCOPE_API_KEY',
+  kiro: 'KIRO_API_KEY',
   // Confirmed real and current, not guessed: google-antigravity/antigravity-cli
   // issue #632 was closed 2 days before this was written (state_reason:
   // "completed"), with a maintainer's exact working recipe --
@@ -1946,7 +2111,7 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   // or linked to one directly, has a real vendor-side conversation behind it
   // that ClikCode simply never routed a turn through yet.
   const sessions = state.sessions
-    .filter((session) => session.id === currentId || (session.messages ?? []).length > 0 || Boolean(session.nativeSessionId))
+    .filter((session) => session.id === currentId || sessionTranscriptMessages(session).length > 0 || Boolean(session.nativeSessionId))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   // Conversations that exist only inside a vendor's own history — never opened
   // through ClikCode — are otherwise invisible here entirely: /resume only ever
@@ -2589,7 +2754,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           if (active && rl.render) {
             const pending: HarnessSession = {
               ...active,
-              messages: [...(active.messages ?? []), { role: 'user' as const, content: line }].slice(-40),
+              messages: [...sessionTranscriptMessages(active), { role: 'user' as const, content: line }].slice(-40),
+              pendingTurn: undefined,
             };
             rl.render(pending, activeAccount);
             const turnController = new AbortController();
@@ -2613,7 +2779,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           const outputStarted = activeFullScreenHarness.turnOutputStarted();
           const partialResponse = activeFullScreenHarness.liveResponseText();
           if (outputStarted) await preserveInterruptedTurn(id, interruptedSubmission.text, partialResponse, true);
-          else if (interruptedSubmission.restoreOnEscape) activeFullScreenHarness.restoreDraft(interruptedSubmission.text);
+          else {
+            await discardInterruptedTurn(id, interruptedSubmission.text);
+            if (interruptedSubmission.restoreOnEscape) activeFullScreenHarness.restoreDraft(interruptedSubmission.text);
+          }
           notice = outputStarted ? 'Stopped' : interruptedSubmission.restoreOnEscape ? 'Stopped · draft restored' : 'Stopped';
         } else if (rl.render) notice = cancelled ? 'Stopped' : `Error: ${message}`;
         else emitHarnessOutput({ panel: 'error', message });
@@ -2663,6 +2832,9 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     session.nativeHarness = harness.command;
     session.provider = harness.provider;
     session.workspace ??= process.cwd();
+    const baseMessages = sessionTranscriptMessages(session);
+    const checkpoint = await DurableTurnCheckpoint.start(state, session, text);
+    try {
     // A fresh native thread (no nativeSessionId yet) with prior ClikCode
     // messages already on the session means this conversation is continuing
     // under a different native identity than whatever produced those messages
@@ -2673,8 +2845,8 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     // quota-failover retry below does its own version of this for the
     // mid-conversation case; this covers every other route into a fresh
     // native thread with history already behind it.
-    if (!session.nativeSessionId && (session.messages ?? []).length > 0) {
-      turnText = failoverPrompt(session.messages ?? [], turnText);
+    if (!session.nativeSessionId && baseMessages.length > 0) {
+      turnText = failoverPrompt(baseMessages, turnText);
     }
     let switchedFrom: string | undefined;
     // Bounded to one attempt: this is a reactive fallback for exactly the
@@ -2720,6 +2892,31 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       let caughtTurnFailure: Error | undefined;
       let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>> = { stdout: '', stderr: '', exitCode: 0 };
       let result: { text: string; nativeSessionId?: string; isError?: boolean; statusCode?: number } | undefined;
+      const runStructuredCliTurn = async (): Promise<typeof result> => {
+        turnOutput = await captureNativeHarnessTurn(harness, argv, environment, {
+          cwd: session.workspace,
+          signal,
+          stdinText: harness.turn!.promptInput === 'stdin' ? turnText : undefined,
+          onStdoutLine: (lineText) => {
+            const responseUpdate = nativeResponseUpdate(harness, lineText);
+            if (responseUpdate) {
+              checkpoint.response(responseUpdate.text, responseUpdate.mode);
+              activeFullScreenHarness?.response(responseUpdate.text, responseUpdate.mode);
+            }
+            const textPhase = nativeActivityPhase(harness, lineText);
+            if (textPhase) activeFullScreenHarness?.phase(textPhase);
+            const event = parseNativeActivityEvent(harness, lineText);
+            if (!event) return;
+            checkpoint.activity(event);
+            activeFullScreenHarness?.phase(renderActivityPhase(event));
+            if (isJsonDefaultMode()) return;
+            if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(event);
+            else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
+          },
+        });
+        if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+        return nativeTurnResult(harness, turnOutput.stdout);
+      };
       try {
         if (harness.command === 'codex') {
           result = await runCodexAppServerTurn({
@@ -2729,40 +2926,49 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
             onSessionId: async (nativeSessionId) => {
               if (session.nativeSessionId === nativeSessionId) return;
               session.nativeSessionId = nativeSessionId;
-              await writeState(state);
+              await checkpoint.persistNow();
             },
-            onResponseDelta: (delta) => activeFullScreenHarness?.response(delta, 'append'),
+            onResponseDelta: (delta) => {
+              checkpoint.response(delta, 'append');
+              activeFullScreenHarness?.response(delta, 'append');
+            },
             onPhase: (phase) => activeFullScreenHarness?.phase(phase),
             onApproval: (title, detail) => activeFullScreenHarness?.approval(title, detail) ?? Promise.resolve(false),
             onActivity: (event) => {
+              checkpoint.activity(event);
               activeFullScreenHarness?.phase(renderActivityPhase(event));
               if (isJsonDefaultMode()) return;
               if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(event);
               else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
             },
           });
-        } else {
-          turnOutput = await captureNativeHarnessTurn(
-            harness, argv, environment, {
-              cwd: session.workspace,
-              signal,
-              stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
-              onStdoutLine: (lineText) => {
-                const responseUpdate = nativeResponseUpdate(harness, lineText);
-                if (responseUpdate) activeFullScreenHarness?.response(responseUpdate.text, responseUpdate.mode);
-                const textPhase = nativeActivityPhase(harness, lineText);
-                if (textPhase) activeFullScreenHarness?.phase(textPhase);
-                const event = parseNativeActivityEvent(harness, lineText);
-                if (!event) return;
-                activeFullScreenHarness?.phase(renderActivityPhase(event));
-                if (isJsonDefaultMode()) return;
-                if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(event);
-                else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
-              },
+        } else if (acpArgvForHarness(harness.command) && images.length === 0) {
+          try {
+            result = await runAcpTurn({
+              binary: harness.binary, command: harness.command, prompt: turnText, nativeSessionId: session.nativeSessionId,
+              cwd: session.workspace, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask', environment, signal,
+              onSessionId: async (nativeSessionId) => {
+              if (session.nativeSessionId === nativeSessionId) return;
+              session.nativeSessionId = nativeSessionId;
+              await checkpoint.persistNow();
             },
-          );
-          if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-          result = nativeTurnResult(harness, turnOutput.stdout);
+              onResponseDelta: (delta) => {
+                checkpoint.response(delta, 'append');
+                activeFullScreenHarness?.response(delta, 'append');
+              },
+              onActivity: (event) => {
+                checkpoint.activity(event);
+                activeFullScreenHarness?.activityEvent(event);
+              },
+              onApproval: (title, detail) => activeFullScreenHarness?.approval(title, detail) ?? Promise.resolve(false),
+            });
+          } catch (error) {
+            if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback) throw error;
+            activeFullScreenHarness?.phase('using structured CLI fallback');
+            result = await runStructuredCliTurn();
+          }
+        } else {
+          result = await runStructuredCliTurn();
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError') throw error;
@@ -2826,7 +3032,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
           // a disposable optimization, never a requirement.
           session.nativeSessionId = undefined;
           session.nativeStartedAt = undefined;
-          turnText = failoverPrompt(session.messages ?? [], `${text}${prepared.textContext}`);
+          turnText = interruptedTurnFailoverPrompt(session);
           continue;
         }
         if (failureKind !== 'quota-exhausted') throw failure;
@@ -2854,7 +3060,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
-        turnText = failoverPrompt(session.messages ?? [], `${text}${prepared.textContext}`);
+        turnText = interruptedTurnFailoverPrompt(session);
         continue;
       }
       session.nativeStartedAt ??= new Date().toISOString();
@@ -2863,10 +3069,8 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
       };
       state.invocations.push(invocation);
-      session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: result.text }];
-      session.name ??= conversationTitle(text);
       session.attachments = [];
-      session.updatedAt = new Date().toISOString();
+      await checkpoint.complete(result.text);
       // The vendor subprocess owns persistence. Re-read its transcript after
       // exit so any source-side turns/events that were not represented by the
       // final response are reflected in ClikCode before the turn is saved.
@@ -2875,13 +3079,19 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       if (!activeFullScreenHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
       return;
     }
+    } finally {
+      await checkpoint.flush();
+    }
   }
 
   if (prepared.images.length) throw new Error('Image attachments currently require a vendor-CLI Codex account. Switch with /codex or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
+  const baseMessages = sessionTranscriptMessages(session);
+  const checkpoint = await DurableTurnCheckpoint.start(state, session, text);
+  try {
   const invoke = (active: AiHarnessAccount) => streamLocalAiTurn({
     provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
-    messages: [...(session.messages ?? []), { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
+    messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
     ...(signal ? { abortSignal: signal } : {}),
   });
   let turn;
@@ -2926,12 +3136,12 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     }
   }
   state.invocations.push(invocation);
-  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.text }];
-  session.name ??= conversationTitle(text);
   session.attachments = [];
-  session.updatedAt = new Date().toISOString();
-  await writeState(state);
+  await checkpoint.complete(turn.text);
   if (!activeFullScreenHarness) emitHarnessOutput({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+  } finally {
+    await checkpoint.flush();
+  }
 }
 
 /** Send a gateway session through the existing authenticated platform assistant stream. */
@@ -2949,11 +3159,14 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   const apiKey = ApiClient.getApiKeyForUrl(config, baseUrl);
   if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
   const startedAt = Date.now();
+  const baseMessages = sessionTranscriptMessages(session);
+  const checkpoint = await DurableTurnCheckpoint.start(state, session, text);
+  try {
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
     signal,
     headers: { authorization: `Bearer ${apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json' },
-    body: JSON.stringify({ message: turnText, messages: session.messages ?? [], mode: 'plan' }),
+    body: JSON.stringify({ message: turnText, messages: baseMessages, mode: 'plan' }),
   });
   if (!response.ok || !response.body) throw new Error(`gateway AI request failed (${response.status})`);
   const reader = response.body.getReader();
@@ -2973,6 +3186,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
       if (frame.startsWith('data:')) {
         const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; label?: string; kind?: 'thinking' | 'tool-start'; tool?: string };
         if (event.type === 'delta' && typeof event.text === 'string') {
+          checkpoint.response(event.text, 'append');
           activeFullScreenHarness?.phase('generating response');
           activeFullScreenHarness?.response(event.text, 'append');
           reply += event.text;
@@ -2999,6 +3213,7 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
           activeFullScreenHarness?.phase(event.label);
           if (!isJsonDefaultMode()) {
             const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
+            checkpoint.activity(activityEvent);
             if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(activityEvent);
           }
         }
@@ -3010,13 +3225,13 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   if (!reply) throw new Error('gateway AI response contained no text');
   const invocation = { id: randomUUID(), accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform', at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
-  session.messages = [...(session.messages ?? []), { role: 'user' as const, content: text }, { role: 'assistant' as const, content: reply }];
-  session.name ??= conversationTitle(text);
   session.attachments = [];
-  session.updatedAt = new Date().toISOString();
-  await writeState(state);
+  await checkpoint.complete(reply);
   if (wroteDelta) output.write('\n\n');
   else if (!activeFullScreenHarness) emitHarnessOutput({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation });
+  } finally {
+    await checkpoint.flush();
+  }
 }
 
 export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; permissions?: AiHarnessPermissionMode; accountFailover?: 'never' | 'on-quota-exhausted'; nativeSession?: string }): Promise<void> {

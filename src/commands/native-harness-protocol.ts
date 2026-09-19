@@ -6,50 +6,17 @@
 
 import chalk from 'chalk';
 import { visibleSlice } from './markdown-render.js';
-import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
+import { localHarnessForCommand } from './harness-runtime.js';
+export { nativeResponseUpdate, type NativeResponseUpdate } from './harness-event-adapters.js';
 import type {
-  AiHarnessAccount, AiHarnessCapabilityManifest, AiHarnessPermissionMode, AiLocalHarnessDefinition, AiRouterRuntime,
+  AiHarnessAccount, AiLocalHarnessDefinition,
   HarnessActivityEvent, HarnessSession,
 } from './types.js';
-
-const require = createRequire(import.meta.url);
-let routerRuntime: AiRouterRuntime | undefined;
-export function localRouter(): AiRouterRuntime {
-  if (!routerRuntime) {
-    try {
-      // Normal clikdeploy-cli layout: dist/commands/ai.js → dist runtime.
-      routerRuntime = require('../ai-router-runtime.cjs') as AiRouterRuntime;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
-      // Standalone ClikCode bundle: dist/index.js → sibling runtime.
-      routerRuntime = require(fileURLToPath(new URL('./ai-router-runtime.cjs', import.meta.url))) as AiRouterRuntime;
-    }
-  }
-  return routerRuntime;
-}
-export function localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined {
-  return localRouter().localHarnessForCommand(command);
-}
-export function localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined {
-  return localRouter().localHarnessForProvider(provider);
-}
-export function localHarnessCapabilityManifest(harness: AiLocalHarnessDefinition): AiHarnessCapabilityManifest {
-  return localRouter().localHarnessCapabilityManifest(harness);
-}
-export function harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean {
-  return localRouter().harnessSupportsEffort(harness);
-}
-export function harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean {
-  return localRouter().harnessSupportsPermissionMode(harness, mode);
-}
-export function harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean {
-  return localRouter().harnessSupportsImages(harness);
-}
-export function streamLocalAiTurn(input: Record<string, unknown>): Promise<any> {
-  return localRouter().streamAiChatTurn(input);
-}
+export {
+  harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
+  localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, localRouter, streamLocalAiTurn,
+} from './harness-runtime.js';
 
 export function nativeSessionIds(outputText: string, format: 'json' | 'json-lines' | 'text' = 'text'): Set<string> {
   const explicitIds = new Set<string>();
@@ -169,77 +136,6 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   if (!text) throw new Error(`${harness.displayName} returned no assistant text in its structured output`);
   const ids = nativeSessionIds(stdout, harness.turn.output);
   return { text, nativeSessionId: [...ids][0], ...(isError ? { isError } : {}), ...(statusCode ? { statusCode } : {}) };
-}
-
-export interface NativeResponseUpdate {
-  text: string;
-  /** Delta chunks append; snapshots replace the in-progress response. */
-  mode: 'append' | 'replace';
-}
-
-/** Extract only provider-documented assistant stream updates. Keeping this
- * pure and separate from terminal painting prevents protocol details from
- * leaking into the UI or the session orchestrator. */
-export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText: string): NativeResponseUpdate | undefined {
-  let value: Record<string, unknown>;
-  try {
-    value = JSON.parse(lineText) as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
-  if (harness.command === 'codex' && value.type === 'item.completed') {
-    const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
-    if (item?.type === 'agent_message' && typeof item.text === 'string' && item.text) {
-      // `codex exec --json` does not expose token deltas, but it does publish
-      // each completed agent-message item immediately. Showing those items as
-      // they arrive keeps commentary/final prose visible among tool activity
-      // instead of withholding every natural-language update until process exit.
-      return { text: `${item.text}\n\n`, mode: 'append' };
-    }
-  }
-  if (harness.command === 'antigravity' && value.event === 'step_update') {
-    const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
-    if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string' && step.text_delta) {
-      return { text: step.text_delta, mode: 'append' };
-    }
-  }
-  if ((harness.command === 'claude' || harness.command === 'qwen') && value.type === 'stream_event') {
-    const event = value.event && typeof value.event === 'object' ? value.event as Record<string, unknown> : undefined;
-    const delta = event?.delta && typeof event.delta === 'object' ? event.delta as Record<string, unknown> : undefined;
-    if (event?.type === 'content_block_delta' && typeof delta?.text === 'string' && delta.text) {
-      return { text: delta.text, mode: 'append' };
-    }
-  }
-  if (harness.command === 'gemini' && value.type === 'message' && value.role === 'assistant' && typeof value.content === 'string' && value.content) {
-    return { text: value.content, mode: value.delta === false ? 'replace' : 'append' };
-  }
-  if (harness.command === 'cursor' && value.type === 'assistant') {
-    const message = value.message && typeof value.message === 'object' ? value.message as Record<string, unknown> : undefined;
-    const content = Array.isArray(message?.content) ? message.content : [];
-    const text = content.flatMap((part) => part && typeof part === 'object' && (part as Record<string, unknown>).type === 'text' && typeof (part as Record<string, unknown>).text === 'string'
-      ? [String((part as Record<string, unknown>).text)] : []).join('');
-    if (text) return { text, mode: 'append' };
-  }
-  if (harness.command === 'cline' && value.type === 'say' && typeof value.text === 'string' && value.text) {
-    // Cline's partial `say` records are snapshots of the current message.
-    return { text: value.text, mode: 'replace' };
-  }
-  if (harness.command === 'pi' && value.type === 'message_update') {
-    const event = value.assistantMessageEvent && typeof value.assistantMessageEvent === 'object'
-      ? value.assistantMessageEvent as Record<string, unknown> : undefined;
-    if (event?.type === 'text_delta' && typeof event.delta === 'string' && event.delta) {
-      return { text: event.delta, mode: 'append' };
-    }
-  }
-  if (harness.command === 'goose' && value.type === 'message') {
-    const message = value.message && typeof value.message === 'object' ? value.message as Record<string, unknown> : undefined;
-    const content = Array.isArray(message?.content) ? message.content : [];
-    const text = message?.role === 'assistant' ? content.flatMap((part) => part && typeof part === 'object'
-      && (part as Record<string, unknown>).type === 'text' && typeof (part as Record<string, unknown>).text === 'string'
-      ? [String((part as Record<string, unknown>).text)] : []).join('') : '';
-    if (text) return { text, mode: 'append' };
-  }
-  return undefined;
 }
 
 /** Render provider JSONL as a small provider-neutral activity stream. */

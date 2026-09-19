@@ -9,6 +9,7 @@ export type AiHarnessRoute = 'local' | 'gateway';
 export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
 
 export type AiHarnessPermissionMode = 'ask' | 'bypass' | 'auto';
+export type AiHarnessIntegrationLevel = 'native' | 'structured' | 'compatibility' | 'editor-only';
 
 export type AiHarnessOptionKind = 'boolean' | 'string' | 'enum' | 'string-list' | 'path' | 'path-list' | 'number';
 
@@ -52,6 +53,7 @@ export interface AiLocalHarnessDefinition {
   provider: string;
   displayName: string;
   surface: 'terminal' | 'editor-extension';
+  integration?: AiHarnessIntegrationLevel;
   localAuth: readonly AiHarnessAuthKind[];
   binary: string;
   npmPackage?: string;
@@ -110,6 +112,7 @@ export interface AiRouterRuntime {
   harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean;
   harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean;
   harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean;
+  harnessIntegrationLevel(harness: AiLocalHarnessDefinition): AiHarnessIntegrationLevel;
   nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: {
     prompt: string; nativeSessionId?: string; createdHere?: boolean; launchedBefore?: boolean;
     model?: string | null; workspace?: string | null; effort?: string | null;
@@ -181,6 +184,16 @@ export interface HarnessSession {
   nativeStartedAt?: string;
   workspace?: string;
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Crash-safe turn journal. It remains separate until completion so a
+   * provider retry cannot accidentally submit the same user prompt twice. */
+  pendingTurn?: {
+    prompt: string;
+    response?: string;
+    activities?: string[];
+    startedAt: string;
+    updatedAt: string;
+    outputStarted: boolean;
+  };
   attachments?: string[];
   /** Provider-native values validated against the selected harness manifest. */
   harnessOptions?: Record<string, unknown>;
@@ -220,7 +233,10 @@ export interface HarnessPrompter {
   close(): void;
 }
 
-export type MessageBlock = { kind: 'code'; lines: string[] } | { kind: 'text'; paragraph: string };
+export type MessageBlock =
+  | { kind: 'code'; lines: string[]; language?: string }
+  | { kind: 'table'; header: string[]; rows: string[][] }
+  | { kind: 'text'; paragraph: string };
 
 export interface FormattedParagraph {
   prefix: string;
