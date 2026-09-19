@@ -399,13 +399,102 @@ export function waitingSpinnerGlyph(frame: number): string {
     | bit(start + 1, 0) | bit(start + 1, 1) | bit(start + 1, 2) | bit(start + 1, 3))).join('');
 }
 
+/** Palette entries accept three optional fields beyond PickerOption:
+ * `argHint` (shown after the command, and kept on screen while its argument is
+ * typed), `group` (rendered under a header, after every ungrouped command) and
+ * `aliases` (matched like the command itself). */
+export type PaletteEntry = PickerOption<string> & { argHint?: string; group?: string; aliases?: readonly string[] };
+export const SWITCH_HARNESS_GROUP = 'Switch harness';
+
+const paletteGroup = (entry: PaletteEntry): string | undefined =>
+  // One `/<harness>` command per installed harness would otherwise crowd every
+  // short query: `/c` is for /clear and /compact, not a list of eight vendors.
+  entry.group ?? (/^switch to /i.test(entry.detail ?? '') ? SWITCH_HARNESS_GROUP : undefined);
+
+function isSubsequence(needle: string, haystack: string): boolean {
+  let index = 0;
+  for (const character of haystack) if (character === needle[index]) index += 1;
+  return index >= needle.length;
+}
+
+/** Lower is better; undefined is no match. Exact, then prefix, then a match at
+ * a word boundary, then anywhere, then fuzzy subsequence -- and only after all
+ * of those, a match in the description. */
+function paletteRank(entry: PaletteEntry, query: string): number | undefined {
+  if (!query) return 0;
+  const names = [entry.value, ...(entry.aliases ?? [])].map((name) => name.replace(/^\//, '').toLowerCase());
+  let best: number | undefined;
+  const consider = (rank: number): void => { if (best === undefined || rank < best) best = rank; };
+  for (const [index, name] of names.entries()) {
+    const alias = index > 0 ? 0.5 : 0;
+    if (name === query) consider(0 + alias);
+    else if (name.startsWith(query)) consider(1 + alias);
+    else if (new RegExp(`[-_:. ]${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(name)) consider(2 + alias);
+    else if (name.includes(query)) consider(3 + alias);
+    else if (isSubsequence(query, name)) consider(4 + alias);
+  }
+  // A one- or two-letter query occurs in nearly every description; matching
+  // those would list every command for `/c`.
+  if (best === undefined && query.length >= 3 && `${entry.detail ?? ''}`.toLowerCase().includes(query)) consider(5);
+  return best;
+}
+
+/** The exact command (or alias) the typed text names, case-insensitively. */
+export function exactPaletteCommand(value: string, commands: readonly PaletteEntry[]): string | undefined {
+  const typed = value.trim().toLowerCase();
+  if (!typed.startsWith('/')) return undefined;
+  for (const entry of commands) {
+    if (entry.value.toLowerCase() === typed) return entry.value;
+    if (entry.aliases?.some((alias) => alias.toLowerCase() === typed)) return value.trim();
+  }
+  return undefined;
+}
+
 export function commandPaletteMatches(
   value: string,
-  commands: readonly PickerOption<string>[],
-): readonly PickerOption<string>[] {
-  return value.startsWith('/') && !value.includes(' ')
-    ? commands.filter((option) => option.value.startsWith(value))
-    : [];
+  commands: readonly PaletteEntry[],
+): readonly PaletteEntry[] {
+  if (!value.startsWith('/')) return [];
+  const space = value.indexOf(' ');
+  if (space !== -1) {
+    // Typing an argument: keep just that command up so its hint stays visible.
+    const name = value.slice(0, space).toLowerCase();
+    const entry = commands.find((candidate) => candidate.value.toLowerCase() === name
+      || candidate.aliases?.some((alias) => alias.toLowerCase() === name));
+    return entry?.argHint ? [entry] : [];
+  }
+  const query = value.slice(1).toLowerCase();
+  const groupOrder = new Map<string | undefined, number>([[undefined, 0]]);
+  const ranked = commands.flatMap((entry, index) => {
+    const rank = paletteRank(entry, query);
+    if (rank === undefined) return [];
+    const group = paletteGroup(entry);
+    if (!groupOrder.has(group)) groupOrder.set(group, groupOrder.size);
+    return [{ entry: group === entry.group ? entry : { ...entry, group }, rank, index, group: groupOrder.get(group)! }];
+  });
+  return ranked.sort((left, right) => left.group - right.group || left.rank - right.rank || left.index - right.index)
+    .map((item) => item.entry);
+}
+
+/** Display rows for a palette window: group headers are rows, but never
+ * selectable, and the window is centred on the selected option. */
+export function paletteDisplayRows(
+  options: readonly PaletteEntry[], selected: number, capacity: number,
+): Array<{ header: string } | { option: PaletteEntry; index: number }> {
+  const rows: Array<{ header: string } | { option: PaletteEntry; index: number }> = [];
+  let group: string | undefined;
+  for (const [index, option] of options.entries()) {
+    if (option.group !== group) {
+      group = option.group;
+      if (group) rows.push({ header: group });
+    }
+    rows.push({ option, index });
+  }
+  const selectedRow = Math.max(0, rows.findIndex((row) => 'index' in row && row.index === selected));
+  let start = Math.max(0, Math.min(selectedRow - Math.floor(capacity / 2), rows.length - capacity));
+  // Keep a group's header attached when its first command is at the top.
+  if (start > 0 && 'index' in rows[start]! && 'header' in rows[start - 1]! && selectedRow < start + capacity - 1) start -= 1;
+  return rows.slice(start, start + capacity);
 }
 
 export function composerRightArrowValue(
@@ -898,6 +987,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private transientNoticeTimer?: NodeJS.Timeout;
   private turnUsage?: { inputTokens?: number; outputTokens?: number };
   private latestThought?: string;
+  private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
   /** Laid-out rows of settled messages, keyed by everything that shapes them.
    * A spinner tick or a keystroke repaints with forty cache hits instead of
@@ -1017,6 +1107,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.currentSession?.id !== session.id) {
       this.activityEntries = [];
       this.planEntries = [];
+      this.panelState = undefined;
       this.inlinePermanentLines = [];
       this.resetInlineScreen = 'history';
     }
@@ -1083,11 +1174,33 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
+  /** A scrollable viewer in the live region. It used to keep only the last six
+   * lines of the body, which cut /help and capability listings to their tail.
+   * The whole body is kept; the prompt scrolls it (Up/Down/PgUp/PgDn while the
+   * draft is empty) and q, Esc or Enter closes it. */
   panel(title: string, body: string): void {
-    const lines = body.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    this.activityEntries = [{ anchor: this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0, lines: [chalk.bold(title), ...lines].slice(-6) }];
-    this.activityAnchor = this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
+    const lines = sanitizeTerminalText(body, { keepSgr: true }).split('\n').map((line) => line.trimEnd());
+    while (lines.length && !lines[0]) lines.shift();
+    while (lines.length && !lines[lines.length - 1]) lines.pop();
+    this.panelState = { title: sanitizeTerminalText(title, { keepSgr: true, singleLine: true }), lines, offset: 0, page: 1, total: lines.length };
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+  }
+
+  /** True when the key was a panel command. Only consulted on an empty draft,
+   * so none of these keys is ever taken away from text being typed. */
+  private panelKey(key: string): boolean {
+    const panel = this.panelState;
+    if (!panel) return false;
+    const last = Math.max(0, panel.total - panel.page);
+    const scrollTo = (offset: number): boolean => { panel.offset = Math.max(0, Math.min(last, offset)); return true; };
+    if (key === '\u001b[A') return scrollTo(panel.offset - 1);
+    if (key === '\u001b[B') return scrollTo(panel.offset + 1);
+    if (key === '\u001b[5~') return scrollTo(panel.offset - Math.max(1, panel.page - 1));
+    if (key === '\u001b[6~' || key === ' ') return scrollTo(panel.offset + Math.max(1, panel.page - 1));
+    if (key === 'g') return scrollTo(0);
+    if (key === 'G') return scrollTo(last);
+    if (key === 'q' || key === 'Q' || key === '\u001b' || key === '\r') { this.panelState = undefined; return true; }
+    return false;
   }
 
   startWaiting(
@@ -1119,6 +1232,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingStartedAt = Date.now();
     this.turnUsage = undefined;
     this.latestThought = undefined;
+    this.panelState = undefined;
     if (input.isTTY) {
       const listen = (): void => {
         input.setRawMode(true);
@@ -1388,8 +1502,25 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ? [`  ${chalk.dim(chalk.italic(visibleSlice(`✻ ${this.latestThought}`, Math.max(1, inner))))}`] : [];
     liveBandBudget -= thoughtRows.length;
     const planRows = paletteRows || this.selecting ? [] : planBlockRows(this.planEntries, width, liveBandBudget);
+    liveBandBudget -= planRows.length;
+    const panelRows: string[] = [];
+    const panel = this.panelState;
+    if (panel && !paletteRows && !approval && !this.selecting && liveBandBudget >= 3) {
+      const wrapped = panel.lines.flatMap((line) => (terminalCellWidth(line) <= inner ? [line] : wrapCodeLine(line, inner)));
+      const page = Math.max(1, Math.min(wrapped.length, liveBandBudget - 2, Math.max(3, targetHeight - 10)));
+      panel.page = page;
+      panel.total = wrapped.length;
+      panel.offset = Math.max(0, Math.min(panel.offset, wrapped.length - page));
+      const scrollable = wrapped.length > page;
+      const position = scrollable ? `${panel.offset + 1}-${panel.offset + page} of ${wrapped.length} · ↑↓ PgUp/PgDn scroll · ` : '';
+      panelRows.push(
+        `  ${chalk.bold(visibleSlice(panel.title, inner))}`,
+        ...wrapped.slice(panel.offset, panel.offset + page).map((line) => `  ${line}`),
+        `  ${chalk.dim(visibleSlice(`${position}q/Esc/Enter close`, inner))}`,
+      );
+    }
     const maxComposerRows = Math.max(
-      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - planRows.length,
+      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - planRows.length - panelRows.length,
     );
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     const conversation: Array<{ text: string }> = [];
@@ -1586,21 +1717,25 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (paletteCapacity) {
       footer.push(rule);
       const visibleRows = paletteCapacity - 2;
-      const start = Math.max(0, Math.min(selected - Math.floor(visibleRows / 2), options.length - visibleRows));
-      const windowed = options.slice(start, start + visibleRows);
-      windowed.forEach((option, index) => {
-        const absoluteIndex = start + index;
-        const selectedOption = absoluteIndex === selected;
+      const windowed = paletteDisplayRows(options as readonly PaletteEntry[], selected, visibleRows);
+      for (const row of windowed) {
+        if ('header' in row) {
+          footer.push(`  ${chalk.dim(visibleSlice(`── ${row.header}`, Math.max(1, width - 4)))}`);
+          continue;
+        }
+        const selectedOption = row.index === selected;
         const available = Math.max(1, width - 4);
-        const label = visibleSlice(option.label, available);
-        const remaining = available - terminalCellWidth(label);
-        const detail = option.detail && remaining > 3 ? visibleSlice(option.detail, remaining - 2) : '';
-        footer.push(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
-      });
+        const label = visibleSlice(row.option.label, available);
+        let remaining = available - terminalCellWidth(label);
+        const argHint = row.option.argHint && remaining > 3 ? visibleSlice(row.option.argHint, remaining - 1) : '';
+        remaining -= argHint ? terminalCellWidth(argHint) + 1 : 0;
+        const detail = row.option.detail && remaining > 3 ? visibleSlice(row.option.detail, remaining - 2) : '';
+        footer.push(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${argHint ? ` ${chalk.dim(argHint)}` : ''}${detail ? `  ${chalk.dim(detail)}` : ''}`);
+      }
       for (let index = windowed.length; index < visibleRows; index++) footer.push('');
       footer.push(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
-    footer.push(...planRows, ...approvalRows, ...thoughtRows);
+    footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
     if (waitingRows) {
       footer.push(`  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
@@ -1798,7 +1933,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   async question(
     prompt: string,
-    commands: readonly PickerOption<string>[] = [],
+    commands: readonly PaletteEntry[] = [],
     settings?: { cancellable?: boolean; rightArrowPalette?: boolean },
   ): Promise<string> {
     if (!input.isTTY) {
@@ -1842,7 +1977,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const options = commandPaletteMatches(value, commands);
         if (selected >= options.length) selected = 0;
         if (options.length) {
-          this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity });
+          // After a space the palette is that one command's argument hint.
+          const hint = value.includes(' ') ? 'Enter run · Esc clear' : undefined;
+          this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, ...(hint ? { hint } : {}) });
           this.paletteActive = true;
           return;
         }
@@ -1860,6 +1997,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         output.write(`${leaveInputModes()}\u001b[?25h`);
         this.resumeInput = undefined;
         this.clearTransientNotice();
+        if (answer) this.panelState = undefined;
         if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
         resolveQuestion(answer);
       };
@@ -1882,7 +2020,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
       const handleKey = (key: string): void => {
-        const options = matches();
+        const matched = matches();
+        // `options` drives selection keys. While an argument is being typed the
+        // palette is only a hint, and every key edits the draft as usual.
+        const options = value.includes(' ') ? [] : matched;
         const pasted = pastedText(key);
         if (pasted !== undefined) {
           // Pasted newlines are content, not Enter. Splitting on them is what
@@ -1893,6 +2034,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           return draw();
         }
         if (key === '\u001a') return this.suspendToShell();
+        if (!value && !matched.length && this.panelKey(key)) return draw();
         if (key === '\u0003') {
           // Ctrl+C clears a draft first. Leaving takes a second press, because
           // the same key also interrupts a turn and is pressed by reflex.
@@ -1907,7 +2049,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // forward like every other line editor.
         if (key === '\u0004' && !value) return finish('/exit');
         if (key === '\u001b' && settings?.cancellable) return cancel();
-        if (key === '\u001b' && options.length) {
+        if (key === '\u001b' && matched.length) {
           value = '';
           cursor = 0;
           selected = 0;
@@ -1917,7 +2059,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           const continued = options.length ? undefined : backslashNewline(value, cursor);
           if (continued) { value = continued.value; cursor = continued.cursor; return draw(); }
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
-            const command = options[selected].value;
+            // What was typed wins when it names a command outright: `/new`
+            // must run /new even while a better-ranked row is highlighted.
+            const command = exactPaletteCommand(value, commands) ?? options[selected].value;
             // Deliberately NOT cleared here. Blanking the region on submit
             // leaves the screen empty for however long the command takes to
             // produce its first frame, which read as "the composer vanished".
@@ -1928,8 +2072,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           return finish(value);
         }
         if (key === '\t' && options.length) {
-          value = options[selected].value;
+          // A command that takes an argument completes ready for it.
+          value = `${options[selected].value}${options[selected].argHint ? ' ' : ''}`;
           cursor = value.length;
+          selected = 0;
           return draw();
         }
         // Up/Down navigate palette options; otherwise they move through a
