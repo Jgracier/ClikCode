@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, composerRightArrowCommand, conversationMessageWindow, editWaitingComposer, inlineConversationPlan, liveConversationLines, pickerConfirmsSelection, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { commandPaletteMatches, composerRightArrowValue, conversationMessageWindow, editWaitingComposer, inlineConversationPlan, liveConversationLines, pickerConfirmsSelection, responseTimeline, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('terminal waiting input', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
@@ -85,16 +85,15 @@ describe('terminal waiting input', () => {
     expect(editWaitingComposer(draft.value, draft.cursor, '\u007f')).toEqual({ value: 'next', cursor: 3, changed: true });
   });
 
-  it('opens accounts from Right Arrow only when the composer is empty', () => {
-    expect(composerRightArrowCommand('', false, '/account')).toBe('/account');
-    expect(composerRightArrowCommand('draft', false, '/account')).toBeUndefined();
-    expect(composerRightArrowCommand('', true, '/account')).toBeUndefined();
+  it('opens the main slash choices from Right Arrow only when the composer is empty', () => {
+    expect(composerRightArrowValue('', false, true)).toBe('/');
+    expect(composerRightArrowValue('draft', false, true)).toBeUndefined();
+    expect(composerRightArrowValue('', true, true)).toBeUndefined();
   });
 
-  it('uses Left Arrow as confirmation only for the account picker', () => {
+  it('reserves confirmation for Enter so Left Arrow can consistently navigate back', () => {
     expect(pickerConfirmsSelection('\r')).toBe(true);
     expect(pickerConfirmsSelection('\u001b[D')).toBe(false);
-    expect(pickerConfirmsSelection('\u001b[D', true)).toBe(true);
   });
 
   it('does not shift the persisted transcript window when live rows arrive', () => {
