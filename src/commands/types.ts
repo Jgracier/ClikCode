@@ -122,6 +122,11 @@ export interface AiRouterRuntime {
 export interface HarnessActivityEvent {
   kind: 'thinking' | 'tool-start' | 'tool-done';
   label: string;
+  /** Vendor tool-call identity, when emitted, lets the TUI update an in-flight
+   * row instead of appending a detached completion at the bottom. */
+  id?: string;
+  /** Bounded partial/final tool output supplied by the native event stream. */
+  output?: string[];
   /** Only ever populated where the harness's own JSON genuinely carries the
    * before/after text (confirmed so far: Claude Code's Edit/Write tool_use
    * blocks) -- never synthesized from a "files updated" style event that
@@ -209,6 +214,7 @@ export interface HarnessPrompter {
   select?<T>(title: string, options: readonly PickerOption<T>[], onAction?: (value: T, action: string) => Promise<void>): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
   response?(text: string, mode?: 'append' | 'replace'): void;
+  activityEvent?(event: HarnessActivityEvent): void;
   panel?(title: string, body: string): void;
   close(): void;
 }

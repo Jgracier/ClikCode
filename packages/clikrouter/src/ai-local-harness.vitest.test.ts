@@ -104,6 +104,8 @@ describe('local harness catalog', () => {
     const codex = localHarnessForCommand('codex')!;
     expect(nativeHarnessTurnArgv(codex, { prompt: 'research', options: { search: true } }))
       .toEqual(['--search', 'exec', '--json', '--skip-git-repo-check', '-']);
+    expect(nativeHarnessTurnArgv(codex, { prompt: 'push changes', permissionMode: 'ask', options: { 'network-access': true } }))
+      .toEqual(['--config', 'sandbox_workspace_write.network_access=true', '--sandbox', 'workspace-write', '--ask-for-approval', 'on-request', 'exec', '--json', '--skip-git-repo-check', '-']);
     const pi = localHarnessForCommand('pi')!;
     const piArgv = nativeHarnessTurnArgv(pi, { prompt: 'inspect', options: { tools: ['read', 'bash'] } });
     expect(piArgv).toContain('read,bash');

@@ -222,3 +222,50 @@ export function composerViewport(value: string, cursor: number, available: numbe
   while (end > cursor && terminalCellWidth(prefix + value.slice(start, end) + suffix) > available) end = previousCharacterIndex(value, end);
   return { text: `${prefix}${value.slice(start, end)}${suffix}`, cursorWidth: terminalCellWidth(prefix + value.slice(start, cursor)) };
 }
+
+export interface ComposerLayout {
+  rows: string[];
+  cursorRow: number;
+  cursorWidth: number;
+}
+
+/** Soft-wrap the composer like a normal terminal editor. The old horizontal
+ * viewport hid the beginning of long prompts and made typing appear stuck on
+ * one line; this preserves the whole nearby draft and exposes a real cursor
+ * row for absolute-positioned TUI painting. */
+export function composerLayout(value: string, cursor: number, available: number, maxRows = 6): ComposerLayout {
+  const width = Math.max(1, available);
+  const rows: string[] = [''];
+  const positions = new Map<number, { row: number; column: number }>([[0, { row: 0, column: 0 }]]);
+  let row = 0;
+  let column = 0;
+  for (let index = 0; index < value.length;) {
+    const next = nextCharacterIndex(value, index);
+    const character = value.slice(index, next);
+    if (character === '\n') {
+      rows.push('');
+      row++;
+      column = 0;
+      positions.set(next, { row, column });
+      index = next;
+      continue;
+    }
+    const characterWidth = Math.max(1, terminalCellWidth(character));
+    if (column > 0 && column + characterWidth > width) {
+      rows.push('');
+      row++;
+      column = 0;
+      positions.set(index, { row, column });
+    }
+    rows[row] += character;
+    column += characterWidth;
+    positions.set(next, { row, column });
+    index = next;
+  }
+  const position = positions.get(cursor) ?? { row, column };
+  const start = Math.max(0, Math.min(position.row - maxRows + 1, rows.length - maxRows));
+  const visible = rows.slice(start, start + maxRows);
+  if (start > 0 && visible.length) visible[0] = `…${visible[0]!.slice(1)}`;
+  if (start + maxRows < rows.length && visible.length) visible[visible.length - 1] = `${visible[visible.length - 1]!.slice(0, -1)}…`;
+  return { rows: visible, cursorRow: position.row - start, cursorWidth: position.column };
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nativeResponseUpdate, nativeSessionIds, nativeTurnResult } from './native-harness-protocol';
+import { nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent, renderActivityLine } from './native-harness-protocol';
 import type { AiLocalHarnessDefinition } from './types';
 
 const codex = {
@@ -98,5 +98,27 @@ describe('native harness response streams', () => {
       .toEqual({ text: 'D', mode: 'append' });
     expect(nativeResponseUpdate(harness('goose'), JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'E' }] } })))
       .toEqual({ text: 'E', mode: 'append' });
+  });
+});
+
+describe('incremental native tool activity', () => {
+  it('retains Codex tool identity and bounded completion output', () => {
+    const event = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'call-1', type: 'command_execution', command: 'git status', aggregated_output: 'one\ntwo\nthree\nfour' },
+    }));
+    expect(event).toEqual({ kind: 'tool-done', label: 'git status', id: 'call-1', output: ['one', 'two', 'three', '… 1 more line'] });
+    expect(renderActivityLine(event!)).toHaveLength(5);
+  });
+
+  it('pairs Claude tool starts and partial results by tool-use id', () => {
+    const start = parseNativeActivityEvent({ ...codex, command: 'claude' }, JSON.stringify({
+      type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'git status' } }] },
+    }));
+    const done = parseNativeActivityEvent({ ...codex, command: 'claude' }, JSON.stringify({
+      type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'clean' }] },
+    }));
+    expect(start).toMatchObject({ kind: 'tool-start', label: 'Bash', id: 'tool-1' });
+    expect(done).toEqual({ kind: 'tool-done', label: 'tool', id: 'tool-1', output: ['clean'] });
   });
 });

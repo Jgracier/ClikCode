@@ -9,12 +9,12 @@
 import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import {
-  composerViewport, formatParagraph, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown,
+  composerLayout, formatParagraph, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown,
   splitIntoBlocks, terminalCellWidth, visibleSlice, wrapWords,
 } from './markdown-render.js';
-import { compactPath, harnessSupportsEffort, localHarnessForCommand, sessionProviderLabel } from './native-harness-protocol.js';
+import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { CLAUDE_ALIAS_LABELS } from './native-account-data.js';
-import type { HarnessPrompter, HarnessSession, PickerOption } from './types.js';
+import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, PickerOption } from './types.js';
 
 export class FullScreenHarnessPrompter implements HarnessPrompter {
   private closed = false;
@@ -32,7 +32,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private waitingFrame = 0;
   private waitingLabel = '';
   private waitingStartedAt = 0;
-  private activityLines: string[] = [];
+  private activityEntries: Array<{ anchor: number; event?: HarnessActivityEvent; lines: string[] }> = [];
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private activityAnchor = 0;
@@ -77,6 +77,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {
+    if (this.currentSession?.id !== session.id) this.activityEntries = [];
     this.currentSession = session;
     this.currentAccount = account;
     this.currentNotice = notice;
@@ -105,21 +106,45 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
 
   activity(message: string): void {
     const normalized = message.trim();
-    if (!normalized || this.activityLines[this.activityLines.length - 1] === normalized) return;
-    this.activityLines = [...this.activityLines.slice(-5), normalized];
+    const last = this.activityEntries[this.activityEntries.length - 1];
+    if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
+    this.activityEntries = [...this.activityEntries.slice(-49), {
+      anchor: this.currentSession?.messages?.length ?? 0,
+      lines: [normalized],
+    }];
+    if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+  }
+
+  activityEvent(event: HarnessActivityEvent): void {
+    const anchor = this.currentSession?.messages?.length ?? 0;
+    const match = event.kind === 'tool-done'
+      ? [...this.activityEntries].reverse().find((entry) => entry.anchor === anchor && entry.event?.kind === 'tool-start'
+        && (event.id ? entry.event.id === event.id : entry.event.label === event.label))
+      : undefined;
+    const effective = match ? {
+      ...event,
+      ...(event.label === 'tool' ? { label: match.event!.label } : {}),
+      ...(event.diff ? {} : match.event?.diff ? { diff: match.event.diff } : {}),
+    } : event;
+    const lines = renderActivityLine(effective).map((line) => line.trim());
+    if (match) {
+      match.event = effective;
+      match.lines = lines;
+    } else {
+      this.activityEntries = [...this.activityEntries.slice(-49), { anchor, event: effective, lines }];
+    }
     if (!this.selecting && !this.paletteActive) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
   panel(title: string, body: string): void {
     const lines = body.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    this.activityLines = [chalk.bold(title), ...lines].slice(-6);
+    this.activityEntries = [{ anchor: this.currentSession?.messages?.length ?? 0, lines: [chalk.bold(title), ...lines].slice(-6) }];
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
   startWaiting(message: string, onCancel?: () => void): void {
     this.stopWaiting(false);
-    this.activityLines = [];
     this.liveResponse = '';
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
     this.waitingLabel = message;
@@ -264,20 +289,20 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const footerOnly = palette?.footerOnly ?? false;
     const paletteRows = paletteCapacity;
     const noticeRows = this.currentNotice ? 1 : 0;
-    // 4 reserved lines below the conversation/palette/notice bands: rule,
-    // composer, a second rule (with the chat's title embedded at its right
-    // edge) — each newline-terminated — plus one further implicit row for
-    // meta (provider/model/directory), deliberately the one line with no
-    // trailing newline; see the comment on that write below for why.
-    const rows = Math.max(1, targetHeight - 4 - paletteRows - noticeRows);
+    const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
+    const composerRows = composerLayout(composer, cursor, composerWidth);
+    // Three non-composer footer rows: rule, title rule, and meta. Composer
+    // rows expand upward and reduce transcript space instead of scrolling
+    // horizontally off-screen.
+    const rows = Math.max(1, targetHeight - 3 - composerRows.rows.length - paletteRows - noticeRows);
     const conversation: Array<{ text: string; waiting?: boolean }> = [];
-    let activityAppended = false;
-    const appendActivity = (): void => {
-      if (activityAppended) return;
-      activityAppended = true;
-      for (const activity of this.activityLines) conversation.push({ text: `${chalk.dim('·')} ${activity}` });
-      if (this.waitingLabel) conversation.push({ text: `${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`, waiting: true });
+    const appendActivity = (anchor: number): void => {
+      for (const entry of this.activityEntries.filter((item) => item.anchor === anchor)) {
+        for (const activity of entry.lines) conversation.push({ text: `${chalk.dim('·')} ${visibleSlice(activity, Math.max(1, conversationInner - 2))}` });
+      }
+      if (this.waitingLabel && anchor === this.activityAnchor) conversation.push({ text: `${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`, waiting: true });
     };
+    appendActivity(messageStart);
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
       let firstLine = true;
@@ -316,9 +341,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         }
       }
       conversation.push({ text: '' });
-      if (messageStart + messageIndex + 1 === this.activityAnchor) appendActivity();
+      appendActivity(messageStart + messageIndex + 1);
     }
-    if (!activityAppended) appendActivity();
     // Clamped here (not just where scroll changes) because the available
     // content shifts underneath the same scroll value on every repaint: a
     // new message arriving grows `conversation`, a session switch can shrink
@@ -374,8 +398,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       screenLine(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
     screenLine(rule);
-    const viewport = composerViewport(composer, cursor, Math.max(8, inner - terminalCellWidth(prompt)));
-    screenLine(`  ${chalk.white(prompt)}${viewport.text}`);
+    for (const [index, row] of composerRows.rows.entries()) {
+      screenLine(`  ${index === 0 ? chalk.white(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
+    }
     // The rule below the composer carries the chat's title at its right
     // edge instead of a plain dashed line -- dashes fill from the left up to
     // wherever the title starts, so a longer title just eats more of the
@@ -395,7 +420,10 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // old line was never overwritten, only added to -- the "adds a line
     // every time you scroll" reports in the palette and pickers.
     frame += `\r\x1b[2K  ${chalk.dim(visibleSlice(meta, inner))}\x1b[?7h`;
-    if (!palette?.hideCursor) frame += `\x1b[2A\r\x1b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\x1b[?25h`;
+    if (!palette?.hideCursor) {
+      const rowsUp = 2 + (composerRows.rows.length - 1 - composerRows.cursorRow);
+      frame += `\x1b[${rowsUp}A\r\x1b[${2 + terminalCellWidth(prompt) + composerRows.cursorWidth}C\x1b[?25h`;
+    }
     output.write(frame);
   }
 
@@ -459,9 +487,14 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
           // "is a palette actually showing").
           this.paint(value, [], 0, prompt, cursor);
         } else {
-          const available = Math.max(8, (output.columns || 100) - 5 - terminalCellWidth(prompt));
-          const viewport = composerViewport(value, cursor, available);
-          output.write(`\u001b[?25l\r\u001b[2K  ${chalk.white(prompt)}${viewport.text}\r\u001b[${2 + terminalCellWidth(prompt) + viewport.cursorWidth}C\u001b[?25h`);
+          const available = Math.max(8, (output.columns || 100) - 4 - terminalCellWidth(prompt));
+          const currentLayout = composerLayout(value, cursor, available);
+          const previousLayout = composerLayout(this.draft, this.draftCursor, available);
+          if (currentLayout.rows.length > 1 || previousLayout.rows.length > 1) {
+            this.paint(value, [], 0, prompt, cursor);
+          } else {
+            output.write(`\u001b[?25l\r\u001b[2K  ${chalk.white(prompt)}${currentLayout.rows[0] ?? ''}\r\u001b[${2 + terminalCellWidth(prompt) + currentLayout.cursorWidth}C\u001b[?25h`);
+          }
           this.draft = value;
           this.draftOptions = [];
           this.draftSelected = selected;
