@@ -90,8 +90,8 @@ async function inspectNativeHarnessUncached(spec: NativeHarnessSpec, timeoutMs: 
     const collect = (chunk: Buffer | string): void => {
       if (text.length < 4096) text += String(chunk);
     };
-    child.stdout.on('data', collect);
-    child.stderr.on('data', collect);
+    child.stdout!.on('data', collect);
+    child.stderr!.on('data', collect);
     child.once('error', (error) => finish({ installed: true, error: error.message }));
     child.once('exit', (code, signal) => {
       const version = text.trim().split(/\r?\n/).find(Boolean)?.trim();
@@ -206,16 +206,16 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
       if (error) reject(error);
       else resolve(stdout);
     };
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
+    child.stdout!.setEncoding('utf8');
+    child.stderr!.setEncoding('utf8');
+    child.stdout!.on('data', (chunk: string) => {
       stdout += chunk;
       if (stdout.length > 64 * 1024) {
         exceededLimit = true;
         terminatePortable(child);
       }
     });
-    child.stderr.on('data', (chunk: string) => { if (stderr.length < 16 * 1024) stderr += chunk; });
+    child.stderr!.on('data', (chunk: string) => { if (stderr.length < 16 * 1024) stderr += chunk; });
     child.once('error', (error) => finish(error));
     child.once('exit', (code, signal) => {
       if (exceededLimit) return finish(new Error(`${spec.displayName} helper output exceeded 64 KiB`));

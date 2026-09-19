@@ -72,8 +72,8 @@ export function runCodexAppServerTurn(input: CodexAppServerTurnInput): Promise<C
     const child = spawn(input.binary, ['app-server', '--stdio'], {
       cwd: input.cwd, env: { ...process.env, ...input.environment }, stdio: ['pipe', 'pipe', 'pipe'],
     });
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
+    child.stdout!.setEncoding('utf8');
+    child.stderr!.setEncoding('utf8');
     let stdoutPending = '';
     let stderr = '';
     let settled = false;
@@ -84,7 +84,7 @@ export function runCodexAppServerTurn(input: CodexAppServerTurnInput): Promise<C
     let streamedMessage = '';
     const pending = new Map<number, (message: JsonObject) => void>();
     const send = (message: JsonObject): void => {
-      child.stdin.write(`${JSON.stringify(message)}\n`);
+      child.stdin!.write(`${JSON.stringify(message)}\n`);
     };
     const request = (method: string, params: JsonObject): Promise<JsonObject> => new Promise((resolveRequest, rejectRequest) => {
       const id = nextId++;
@@ -153,13 +153,13 @@ export function runCodexAppServerTurn(input: CodexAppServerTurnInput): Promise<C
         if (resolver) { pending.delete(message.id); resolver(message); }
       } else void notification(message).catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
     };
-    child.stdout.on('data', (chunk: string) => {
+    child.stdout!.on('data', (chunk: string) => {
       const lines = (stdoutPending + chunk).split(/\r?\n/);
       stdoutPending = lines.pop() ?? '';
       for (const line of lines) if (line.trim()) handleLine(line);
     });
-    child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-8000); });
-    child.stdin.on('error', (error) => finish(error));
+    child.stderr!.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-8000); });
+    child.stdin!.on('error', (error) => finish(error));
     child.once('error', (error) => finish(error));
     child.once('exit', (code) => { if (!settled) finish(new Error(stderr.trim() || `Codex app-server exited ${code ?? 1}`)); });
     input.signal?.addEventListener('abort', abort, { once: true });

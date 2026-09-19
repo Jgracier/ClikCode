@@ -76,8 +76,8 @@ export function runAcpTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
     // harnesses publish root-level configuration flags before their ACP mode.
     const configuredArgv = input.command === 'droid' ? [...argv, ...configuredOptions] : [...configuredOptions, ...argv];
     const child = spawn(input.binary, configuredArgv, { cwd: input.cwd, env: { ...process.env, ...input.environment }, stdio: ['pipe', 'pipe', 'pipe'] });
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
+    child.stdout!.setEncoding('utf8');
+    child.stderr!.setEncoding('utf8');
     let pendingText = '';
     let stderr = '';
     let nextId = 1;
@@ -86,7 +86,7 @@ export function runAcpTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
     let promptStarted = false;
     let stdoutNoise = '';
     const pending = new Map<number, { resolve: (value: Json) => void; reject: (error: Error) => void }>();
-    const send = (message: Json): void => { child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`); };
+    const send = (message: Json): void => { child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`); };
     const request = (method: string, params: Json): Promise<Json> => new Promise((resolveRequest, rejectRequest) => {
       const id = nextId++;
       pending.set(id, { resolve: resolveRequest, reject: rejectRequest });
@@ -142,13 +142,13 @@ export function runAcpTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
         else waiting.resolve(message.result ?? {});
       } else void serverMessage(message).catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
     };
-    child.stdout.on('data', (chunk: string) => {
+    child.stdout!.on('data', (chunk: string) => {
       const lines = (pendingTextBuffer + chunk).split(/\r?\n/);
       pendingTextBuffer = lines.pop() ?? '';
       for (const line of lines) if (line.trim()) handleLine(line);
     });
     let pendingTextBuffer = '';
-    child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-8000); });
+    child.stderr!.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-8000); });
     child.once('error', finish);
     child.once('exit', (code) => { if (!settled) finish(new Error(stderr.trim() || stdoutNoise.trim() || `${input.command} ACP exited ${code ?? 1}`)); });
     input.signal?.addEventListener('abort', abort, { once: true });
