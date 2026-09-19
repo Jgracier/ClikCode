@@ -1018,6 +1018,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     const conversation: Array<{ text: string }> = [];
     let stableConversationBoundary = 0;
+    // Rows of a still-open block that can no longer change: everything above
+    // the final Markdown part, plus every completed source line of an open code
+    // fence. Without this only a CLOSED block could leave the live region, so a
+    // code block taller than the viewport showed just its tail while streaming
+    // and its head rows never reached scrollback at all.
+    let lineStableConversationBoundary = 0;
     const ensureBlankConversationRow = (): void => {
       if (conversation.length && conversation[conversation.length - 1]?.text !== '') conversation.push({ text: '' });
     };
@@ -1042,7 +1048,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         content: string, messageMarker: string, events: readonly InlineResponseEvent[] = [], trackStableTail = false,
       ): void => {
         let firstLine = true;
-        const appendBlock = (block: MessageBlock): void => {
+        /** Returns how many conversation rows are final even if this block is
+         * still growing at the end of a live stream. */
+        const appendBlock = (block: MessageBlock): number => {
+          const blockStart = conversation.length;
           const quotePrefix = block.quoteDepth ? chalk.dim('│ '.repeat(block.quoteDepth)) : '';
           const linePrefix = (): string => {
             const prefix = firstLine ? `${messageMarker} ` : '  ';
@@ -1051,26 +1060,32 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           };
           if (block.kind === 'code') {
             const structural = `${quotePrefix}${'  '.repeat(block.indent)}`;
+            let lastLineStart = blockStart;
             for (const codeLine of [...(block.language ? [chalk.dim(`[${block.language}]`)] : []), ...block.lines]) {
+              lastLineStart = conversation.length;
               const segments = wrapCodeLine(codeLine, Math.max(1, conversationInner - terminalCellWidth(structural) - 2));
               for (const [segmentIndex, segment] of segments.entries()) {
                 const continuation = segmentIndex ? chalk.dim('↳ ') : '  ';
                 conversation.push({ text: `${linePrefix()}${structural}${continuation}${chalk.cyan(segment)}` });
               }
             }
-            return;
+            // The last source line may still be receiving characters, and a
+            // fence with no body yet may still be receiving its info string.
+            return block.lines.length > 1 || block.lines[0] ? lastLineStart : blockStart;
           }
           if (block.kind === 'table') {
             const available = Math.max(1, conversationInner - terminalCellWidth(quotePrefix));
             for (const tableLine of renderTableBlock(block.header, block.rows, available, block.align)) {
               conversation.push({ text: `${linePrefix()}${quotePrefix}${tableLine}` });
             }
-            return;
+            // A new row can re-layout every column, so no table row is final
+            // until the block closes. All of them are written at that point.
+            return blockStart;
           }
           if (block.kind === 'rule') {
             const available = Math.max(1, conversationInner - terminalCellWidth(quotePrefix));
             conversation.push({ text: `${linePrefix()}${quotePrefix}${chalk.dim('─'.repeat(available))}` });
-            return;
+            return blockStart;
           }
           const listPrefix = block.kind === 'list-item'
             ? `${'  '.repeat(block.depth)}${block.task ? chalk.cyan(block.checked ? '☑' : '☐') : block.ordered ? chalk.dim(`${block.number}.`) : chalk.dim('•')} `
@@ -1088,11 +1103,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
               : line;
             conversation.push({ text: `${linePrefix()}${indentation}${rendered}` });
           }
+          return blockStart;
         };
         const timeline = responseTimeline(content, events);
+        let finalMarkdownPart = -1;
+        for (const [partIndex, part] of timeline.entries()) if (part.kind === 'markdown') finalMarkdownPart = partIndex;
         for (const [partIndex, part] of timeline.entries()) {
-          if (part.kind === 'markdown') appendBlock(part.block);
-          else if (part.kind === 'activity') appendActivityGroup(part.lines);
+          if (part.kind === 'markdown') {
+            const stableRows = appendBlock(part.block);
+            if (trackStableTail && partIndex === finalMarkdownPart) lineStableConversationBoundary = stableRows;
+          } else if (part.kind === 'activity') appendActivityGroup(part.lines);
           else {
             ensureBlankConversationRow();
             appendMarkdownContent(part.text, chalk.white('›'));
@@ -1197,7 +1217,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const maxDynamicConversation = Math.max(0, targetHeight - footer.length);
     const plan = inlineConversationPlan(
       this.inlinePermanentLines, conversationLines, commit, maxDynamicConversation,
-      commit ? conversationLines.length : stableConversationBoundary,
+      commit ? conversationLines.length : Math.max(stableConversationBoundary, lineStableConversationBoundary),
     );
     const reset: InlineReset = this.resetInlineScreen || (plan.reset ? 'viewport' : false);
     const dynamicConversation = plan.dynamic;
