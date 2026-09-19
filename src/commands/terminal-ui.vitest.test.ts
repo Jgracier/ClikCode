@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { commandPaletteMatches, interleaveResponseContent, waitingInputActions } from './terminal-ui';
+import { terminalCellWidth } from './markdown-render';
+import { commandPaletteMatches, interleaveResponseContent, rightLabeledRule, waitingInputActions } from './terminal-ui';
 
 describe('full-screen waiting input', () => {
   it('keeps scrolling available while a provider turn is running', () => {
@@ -32,5 +33,19 @@ describe('command palette layout', () => {
     const commands = [{ label: '/help', value: '/help' }, { label: '/model', value: '/model' }];
     expect(commandPaletteMatches('/', commands)).toHaveLength(2);
     expect(commandPaletteMatches('', commands)).toEqual([]);
+  });
+});
+
+describe('composer border labels', () => {
+  it('right-aligns usage and title labels without changing the border width', () => {
+    expect(rightLabeledRule(30, '5h 12% · weekly 34%')).toBe('─'.repeat(10) + ' 5h 12% · weekly 34%');
+    expect(terminalCellWidth(rightLabeledRule(30, '5h 12% · weekly 34%'))).toBe(30);
+    expect(rightLabeledRule(30, 'Fix session persistence')).toBe('─'.repeat(6) + ' Fix session persistence');
+  });
+
+  it('keeps a visible rule when a label must be truncated', () => {
+    const line = rightLabeledRule(12, 'an extremely long title');
+    expect(terminalCellWidth(line)).toBe(12);
+    expect(line.startsWith('───')).toBe(true);
   });
 });

@@ -42,6 +42,14 @@ export function commandPaletteMatches(
     : [];
 }
 
+/** Fill a terminal-width rule from the left and pin a short label to its
+ * right edge. Both composer borders use this same layout: usage above and
+ * the conversation title below. */
+export function rightLabeledRule(width: number, label?: string): string {
+  const suffix = label ? ` ${visibleSlice(label, Math.max(0, width - 4))}` : '';
+  return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
+}
+
 export type InterleavedResponsePart = { kind: 'text'; text: string } | { kind: 'activity'; lines: string[] };
 
 /** Preserve the chronology of prose and tool events within one assistant
@@ -275,7 +283,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const session = this.currentSession;
     if (!session) return '';
     const context = compactPath(session.workspace ?? process.cwd());
-    const provider = `${sessionProviderLabel(session)}${this.usageLabel ? `  ${this.usageLabel}` : ''}`;
+    const provider = sessionProviderLabel(session);
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     const rawModel = harness?.modelArgvPrefix ? session.model ?? 'automatic' : undefined;
     const model = nativeModelLabel(harness?.command, rawModel);
@@ -499,7 +507,10 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       for (let index = windowed.length; index < visibleRows; index++) screenLine();
       screenLine(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
-    screenLine(rule);
+    // Usage lives on the upper composer border, mirroring the title on the
+    // lower border. Keeping it out of the provider/model/directory row makes
+    // the two quota windows easy to scan without adding another footer row.
+    screenLine(chalk.dim(rightLabeledRule(width, this.usageLabel)));
     for (const [index, row] of composerRows.rows.entries()) {
       screenLine(`  ${index === 0 ? chalk.white(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
     }
@@ -509,10 +520,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // rule rather than needing a line of its own. Provider/model/directory
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
-    const title = this.titleText();
-    const titleSuffix = title ? ` ${visibleSlice(title, Math.max(0, width - 4))}` : '';
-    const ruleWidth = Math.max(0, width - terminalCellWidth(titleSuffix));
-    screenLine(`${chalk.dim('─'.repeat(ruleWidth))}${chalk.dim(titleSuffix)}`);
+    screenLine(chalk.dim(rightLabeledRule(width, this.titleText())));
     // Meta is the true last line and therefore has no trailing newline; adding
     // one at the terminal's bottom row would scroll the otherwise fixed frame.
     frame += `\r\x1b[2K  ${chalk.dim(visibleSlice(meta, inner))}\x1b[?7h`;
