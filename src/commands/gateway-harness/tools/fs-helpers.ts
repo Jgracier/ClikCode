@@ -4,7 +4,7 @@
  * wires a tool up without that layer. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { matchGlob } from '../glob-match.js';
+import { globToRegExp, matchGlob } from '../glob-match.js';
 import { readDenyReason, resolvePath, writeDenyReason, type PathScope, type ResolvedPath } from '../security.js';
 import type { ToolContext } from '../types.js';
 
@@ -81,7 +81,10 @@ export function isIgnored(rules: readonly IgnoreRule[], relative: string, isDire
     if (rule.base && !(relative === rule.base || relative.startsWith(`${rule.base}/`))) continue;
     const local = rule.base ? relative.slice(rule.base.length + 1) : relative;
     if (!local) continue;
-    const hit = rule.anchored ? matchGlob(rule.pattern, local) : matchGlob(rule.pattern, local.slice(local.lastIndexOf('/') + 1));
+    // Anchored patterns match the whole path from the .gitignore's directory;
+    // matchGlob's basename shortcut would wrongly let `/rooted.txt` hit a
+    // nested `a/rooted.txt`.
+    const hit = rule.anchored ? globToRegExp(rule.pattern).test(local) : matchGlob(rule.pattern, local.slice(local.lastIndexOf('/') + 1));
     if (hit) ignored = !rule.negated;
   }
   return ignored;
