@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "type-check": "node scripts/build.mjs --check",
+    "type-check": "tsc --noEmit -p tsconfig.json",
     "test": "pnpm run build && node dist/index.js --help && node dist/index.js --human doctor"
   },
   "dependencies": {
