@@ -55,6 +55,16 @@ describe('native harness turn results', () => {
     const cline = { ...codex, command: 'cline', displayName: 'Cline', turn: { ...codex.turn, responseFields: ['text'] } };
     expect(nativeTurnResult(cline, JSON.stringify({ type: 'say', text: 'Finished.', partial: false })).text).toBe('Finished.');
   });
+
+  it('reassembles Goose assistant message chunks', () => {
+    const goose = { ...codex, command: 'goose', displayName: 'Goose', turn: { ...codex.turn, responseFields: ['text'] } };
+    const stdout = [
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Hello ' }] } },
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'world.' }] } },
+      { type: 'complete' },
+    ].map(JSON.stringify).join('\n');
+    expect(nativeTurnResult(goose, stdout).text).toBe('Hello world.');
+  });
 });
 
 describe('native harness response streams', () => {
@@ -64,6 +74,14 @@ describe('native harness response streams', () => {
     const line = JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'c3b66b04-872b-4fbe-a3a4-058a026ef20a', step_type: 'agent_response', text_delta: 'chunk' } });
     expect(nativeResponseUpdate(harness('antigravity'), line)).toEqual({ text: 'chunk', mode: 'append' });
     expect([...nativeSessionIds(line, 'json-lines')]).toContain('c3b66b04-872b-4fbe-a3a4-058a026ef20a');
+  });
+
+  it('prioritizes explicit thread identities over nested item ids', () => {
+    const output = [
+      JSON.stringify({ type: 'item.completed', item: { id: 'item-first', type: 'reasoning' } }),
+      JSON.stringify({ type: 'thread.started', thread_id: 'thread-source' }),
+    ].join('\n');
+    expect([...nativeSessionIds(output, 'json-lines')][0]).toBe('thread-source');
   });
 
   it('extracts Claude/Qwen stream events, Gemini chunks, Cursor deltas, and Cline snapshots', () => {
@@ -76,5 +94,9 @@ describe('native harness response streams', () => {
       .toEqual({ text: 'C', mode: 'append' });
     expect(nativeResponseUpdate(harness('cline'), JSON.stringify({ type: 'say', text: 'Current', partial: true })))
       .toEqual({ text: 'Current', mode: 'replace' });
+    expect(nativeResponseUpdate(harness('pi'), JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'D' } })))
+      .toEqual({ text: 'D', mode: 'append' });
+    expect(nativeResponseUpdate(harness('goose'), JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'E' }] } })))
+      .toEqual({ text: 'E', mode: 'append' });
   });
 });

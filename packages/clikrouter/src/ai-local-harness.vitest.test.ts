@@ -42,7 +42,7 @@ describe('selectLocalHarnessRoute', () => {
 
 describe('local harness catalog', () => {
   it('publishes a versioned adapter contract', () => {
-    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(4);
+    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(5);
   });
 
   it('uses one reversible command/provider mapping for every supported local harness', () => {
@@ -104,6 +104,10 @@ describe('local harness catalog', () => {
     const codex = localHarnessForCommand('codex')!;
     expect(nativeHarnessTurnArgv(codex, { prompt: 'research', options: { search: true } }))
       .toEqual(['--search', 'exec', '--json', '--skip-git-repo-check', '-']);
+    const pi = localHarnessForCommand('pi')!;
+    const piArgv = nativeHarnessTurnArgv(pi, { prompt: 'inspect', options: { tools: ['read', 'bash'] } });
+    expect(piArgv).toContain('read,bash');
+    expect(piArgv.filter((arg) => arg === '--tools')).toHaveLength(1);
   });
 
   it('builds headless Codex turns instead of launching the Codex TUI', () => {
@@ -112,6 +116,13 @@ describe('local harness catalog', () => {
       .toEqual(['exec', '--json', '--skip-git-repo-check', '--model', 'gpt-5', '--cd', '/repo', '--config', 'model_reasoning_effort="medium"', '-']);
     expect(nativeHarnessTurnArgv(codex, { prompt: 'continue', nativeSessionId: 'thread-id', workspace: '/repo' }))
       .toEqual(['exec', 'resume', 'thread-id', '--json', '--skip-git-repo-check', '-']);
+  });
+
+  it('uses each vendor\'s exact native-session selector', () => {
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('droid')!, { prompt: 'continue', nativeSessionId: 'droid-thread' }))
+      .toEqual(['exec', '--output-format', 'json', '--session-id', 'droid-thread', 'continue']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('kiro')!, { prompt: 'continue', nativeSessionId: 'kiro-thread', effort: 'high' }))
+      .toEqual(['chat', '--no-interactive', '--agent-engine', 'v3', '--output-format', 'stream-json', '--resume-id', 'kiro-thread', '--effort', 'high', 'continue']);
   });
 
   it('builds headless Claude create and resume turns', () => {
@@ -136,7 +147,7 @@ describe('local harness catalog', () => {
     const goose = localHarnessForCommand('goose')!;
     expect(harnessSupportsPermissionMode(goose, 'ask')).toBe(false);
     expect(nativeHarnessTurnArgv(goose, { prompt: 'inspect', permissionMode: 'ask' }))
-      .toEqual(['run', '--text', 'inspect']);
+      .toEqual(['run', '--output-format', 'stream-json', '--text', 'inspect']);
   });
 
   it('declares effort support only where a real flag exists', () => {
@@ -146,15 +157,16 @@ describe('local harness catalog', () => {
   });
 
   it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
-    const fullThreeTier = new Set(['codex', 'claude', 'cursor', 'qwen', 'droid']);
+    const fullThreeTier = new Set(['codex', 'claude', 'gemini', 'cursor', 'qwen', 'droid', 'command']);
+    const askAndAuto = new Set(['kilo']);
     const askAndBypass = new Set([
-      'gemini', 'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'cline',
-      'kilo', 'crush', 'hermes', 'command',
+      'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'cline',
+      'crush', 'hermes', 'command',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
-      expect(harnessSupportsPermissionMode(harness, 'ask')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'ask')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || askAndAuto.has(harness.command));
       expect(harnessSupportsPermissionMode(harness, 'bypass')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command));
-      expect(harnessSupportsPermissionMode(harness, 'auto')).toBe(fullThreeTier.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'auto')).toBe(fullThreeTier.has(harness.command) || askAndAuto.has(harness.command));
     }
   });
 
@@ -191,7 +203,6 @@ describe('local harness catalog', () => {
       ['aider', [], ['--yes-always']],
       ['kiro', [], ['--trust-all-tools']],
       ['cline', ['--auto-approve', 'false'], ['--auto-approve', 'true']],
-      ['kilo', [], ['--dangerously-skip-permissions']],
       ['crush', [], ['--yolo']],
       ['command', [], ['--yolo']],
     ];
@@ -203,12 +214,16 @@ describe('local harness catalog', () => {
       for (const arg of bypassArgs) expect(bypass, `${command}:bypass`).toContain(arg);
       if (bypassArgs.length) expect(bypass, command).not.toEqual(ask);
     }
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('kilo')!, { prompt: 'hi', permissionMode: 'auto' })).toContain('--auto');
   });
 
   it('shows the exact normalized permission choices every mapped harness accepts', () => {
     for (const harness of AI_LOCAL_HARNESSES) {
       const option = localHarnessCapabilityManifest(harness).options.find((item) => item.id === 'permissions');
-      if (harness.permissionModes?.length) expect(option?.values, harness.command).toEqual(harness.permissionModes);
+      if (harness.permissionModes?.length) {
+        expect(option?.values, harness.command).toEqual(harness.permissionModes);
+        for (const mode of harness.permissionModes) expect(harness.permissionArgv?.[mode], `${harness.command}:${mode}`).toBeDefined();
+      }
       else expect(option, harness.command).toBeUndefined();
     }
   });

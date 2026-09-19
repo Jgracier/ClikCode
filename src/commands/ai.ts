@@ -19,7 +19,7 @@ import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
 import { classifyAccountFailure, failoverPrompt } from './ai-failover.js';
 import {
-  ADOPTED_TRANSCRIPT_READERS, conversationTitle, discoverNativeSessions, FS_SESSION_DISCOVERY, type DiscoveredNativeSession,
+  ADOPTED_TRANSCRIPT_READERS, conversationTitle, discoverNativeSessions, FS_SESSION_DISCOVERY, mergeNativeTranscript, type DiscoveredNativeSession,
 } from './native-session-discovery.js';
 import type {
   AiHarnessAccount, AiHarnessAuthKind, AiHarnessCapabilityManifest, AiHarnessOptionDefinition,
@@ -58,6 +58,62 @@ export {
 
 
 let activeFullScreenHarness: FullScreenHarnessPrompter | undefined;
+
+/** Pull turns added directly in a vendor CLI back into an already-linked
+ * ClikCode conversation. The native CLI remains the only writer of its own
+ * files; this only reconciles ClikCode's cached view after an exact-id resume. */
+async function synchronizeNativeTranscript(state: HarnessState, session: HarnessSession): Promise<boolean> {
+  if (!session.nativeHarness || !session.nativeSessionId) return false;
+  const harness = localHarnessForCommand(session.nativeHarness);
+  const reader = harness ? ADOPTED_TRANSCRIPT_READERS[harness.command] : undefined;
+  if (!harness || !reader) return false;
+  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  const source = await reader(
+    harness, session.nativeSessionId, session.workspace ?? process.cwd(), nativeProfileEnvironment(account?.nativeProfile),
+  ).catch(() => []);
+  const merged = mergeNativeTranscript(session.messages ?? [], source);
+  if (merged.length === (session.messages ?? []).length) return false;
+  session.messages = merged;
+  const firstUserMessage = merged.find((message) => message.role === 'user')?.content;
+  if (!session.name && firstUserMessage) session.name = conversationTitle(firstUserMessage);
+  session.updatedAt = new Date().toISOString();
+  return true;
+}
+
+/** Gateway routing owns these fields as one policy unit. Keeping the mutation
+ * centralized prevents route switches, slash settings, and headless setters
+ * from leaving stale local harness/account controls attached to a remote
+ * platform-managed session. */
+function applyGatewaySessionPolicy(session: HarnessSession): void {
+  session.route = 'gateway';
+  session.accountId = null;
+  session.provider = 'clikdeploy-gateway';
+  session.model = null;
+  session.effort = 'platform-managed';
+  session.accountFailover = 'never';
+  session.gatewayConfirmed = true;
+  delete session.permissionMode;
+  delete session.nativeHarness;
+  delete session.nativeSessionId;
+  delete session.nativeStartedAt;
+  delete session.harnessOptions;
+}
+
+function applyFreshLocalSessionPolicy(state: HarnessState, session: HarnessSession): void {
+  const defaults = resolveDefaultSettings(state, null);
+  session.route = 'local';
+  session.accountId = null;
+  session.provider = null;
+  session.model = null;
+  session.effort = defaults.effort;
+  session.permissionMode = defaults.permissionMode;
+  session.accountFailover = defaults.accountFailover;
+  delete session.gatewayConfirmed;
+  delete session.nativeHarness;
+  delete session.nativeSessionId;
+  delete session.nativeStartedAt;
+  delete session.harnessOptions;
+}
 
 function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
@@ -119,8 +175,8 @@ function renderSessionCard(session: HarnessSession, account?: string): string {
     line('provider', sessionProviderLabel(session)),
     line('account', account ?? 'default'),
     line('model', modelLabel ?? 'provider default'),
-    line('effort', session.effort),
-    line('permissions', session.permissionMode ?? 'ask'),
+    line('effort', session.route === 'gateway' ? 'platform managed' : session.effort),
+    line('permissions', session.route === 'gateway' ? 'platform policy' : session.permissionMode ?? 'ask'),
     line('session', session.id.slice(0, 8)),
   ].join('\n');
 }
@@ -590,7 +646,7 @@ export async function aiGatewayStatus(config: Conf): Promise<void> {
   });
 }
 
-const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+const VALID_EFFORTS = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['ask', 'bypass', 'auto'];
 
 function optionForHarness(harness: AiLocalHarnessDefinition, id: string): AiHarnessOptionDefinition | undefined {
@@ -708,6 +764,9 @@ export async function aiSettingsClearProvider(providerOrHarness: string): Promis
 
 export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
   if (options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
+  if (options.route === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
+    throw new Error('Gateway account, provider, model, effort, and failover are selected by ClikDeploy platform routing and cannot be overridden per session.');
+  }
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   const state = await readState();
   const account = options.account
@@ -726,10 +785,14 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const defaults = resolveDefaultSettings(state, provider);
   const now = new Date().toISOString();
   const session: HarnessSession = {
-    id: randomUUID(), route: options.route, accountId: account?.id ?? null,
-    provider, model: options.model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
-    effort: options.effort ?? defaults.effort, permissionMode: defaults.permissionMode,
-    accountFailover: options.accountFailover ?? defaults.accountFailover, createdAt: now, updatedAt: now, status: 'active',
+    id: randomUUID(), route: options.route, accountId: options.route === 'gateway' ? null : account?.id ?? null,
+    provider: options.route === 'gateway' ? 'clikdeploy-gateway' : provider,
+    model: options.route === 'gateway' ? null : options.model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
+    effort: options.route === 'gateway' ? 'platform-managed' : options.effort ?? defaults.effort,
+    ...(options.route === 'local' ? { permissionMode: defaults.permissionMode } : {}),
+    accountFailover: options.route === 'gateway' ? 'never' : options.accountFailover ?? defaults.accountFailover,
+    ...(options.route === 'gateway' ? { gatewayConfirmed: true as const } : {}),
+    createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
   await writeState(state);
@@ -796,11 +859,14 @@ export async function aiSessionOpenDefault(config: Conf): Promise<void> {
     const provider = previous?.provider ?? null;
     const defaults = resolveDefaultSettings(state, provider);
     const now = new Date().toISOString();
+    const route = previous?.route ?? 'local';
     session = {
-      id: randomUUID(), route: previous?.route ?? 'local', accountId: previous?.accountId ?? null,
-      provider, model: (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
-      effort: defaults.effort, accountFailover: defaults.accountFailover,
-      permissionMode: defaults.permissionMode,
+      id: randomUUID(), route, accountId: route === 'gateway' ? null : previous?.accountId ?? null,
+      provider: route === 'gateway' ? 'clikdeploy-gateway' : provider,
+      model: route === 'gateway' ? null : (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
+      effort: route === 'gateway' ? 'platform-managed' : defaults.effort,
+      accountFailover: route === 'gateway' ? 'never' : defaults.accountFailover,
+      ...(route === 'local' ? { permissionMode: defaults.permissionMode } : {}),
       createdAt: now, updatedAt: now, status: 'active',
     };
     state.sessions.push(session);
@@ -897,6 +963,7 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     return emitHarnessOutput({ panel: 'conversation-reset', session });
   }
   if (head === 'permissions') {
+    if (session.route === 'gateway') throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy; Ask, Bypass, and Auto apply only to local harnesses.');
     const value = words.shift()?.toLowerCase();
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness) throw new Error('Choose a provider before setting permissions.');
@@ -1047,10 +1114,14 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     if (!value) throw new Error(`usage: /settings ${setting} <value>`);
     if (setting === 'route') {
       if (value !== 'local' && value !== 'gateway') throw new Error('route must be local or gateway');
-      session.route = value;
+      if (value === 'gateway') applyGatewaySessionPolicy(session);
+      else if (session.route === 'gateway') applyFreshLocalSessionPolicy(state, session);
+      else session.route = 'local';
     } else if (setting === 'account') {
       const account = state.accounts.find((item) => item.id === value || item.label.toLowerCase() === value.toLowerCase());
       if (!account) throw new Error(`local AI account "${value}" was not found`);
+      const leavingGateway = session.route === 'gateway';
+      if (leavingGateway) applyFreshLocalSessionPolicy(state, session);
       const accountHarness = localHarnessForProvider(account.provider);
       if (accountHarness?.turn && session.nativeHarness !== accountHarness.command) {
         session.nativeHarness = accountHarness.command;
@@ -1073,6 +1144,13 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       session.accountId = account.id;
       session.provider = account.provider;
       session.route = 'local';
+      if (leavingGateway) {
+        const defaults = resolveDefaultSettings(state, account.provider);
+        session.model = state.providerSettings[account.provider]?.model ?? null;
+        session.effort = defaults.effort;
+        session.permissionMode = defaults.permissionMode;
+        session.accountFailover = defaults.accountFailover;
+      }
       account.quotaState = 'available';
       account.quotaRetryAt = undefined;
     } else if (setting === 'model') {
@@ -1114,6 +1192,8 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       if (!labelOrId) throw new Error('usage: /accounts use <label-or-id>');
       const account = state.accounts.find((item) => item.id === labelOrId || item.label.toLowerCase() === labelOrId.toLowerCase());
       if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
+      const leavingGateway = session.route === 'gateway';
+      if (leavingGateway) applyFreshLocalSessionPolicy(state, session);
       if (session.nativeHarness) {
         const selectedHarness = localHarnessForCommand(session.nativeHarness);
         if (selectedHarness && selectedHarness.provider !== account.provider) throw new Error(`account "${account.label}" belongs to ${account.provider}; select /${localHarnessForProvider(account.provider)?.command ?? account.provider} first`);
@@ -1144,6 +1224,13 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
       account.quotaRetryAt = undefined;
       session.provider = account.provider;
       session.route = 'local';
+      if (leavingGateway) {
+        const defaults = resolveDefaultSettings(state, account.provider);
+        session.model = state.providerSettings[account.provider]?.model ?? null;
+        session.effort = defaults.effort;
+        session.permissionMode = defaults.permissionMode;
+        session.accountFailover = defaults.accountFailover;
+      }
       session.updatedAt = new Date().toISOString();
       await writeState(state);
       return emitHarnessOutput({ panel: 'accounts', selected: accountView(account), session });
@@ -1269,7 +1356,7 @@ async function newGatewayConversation(config: Conf, rl: HarnessPrompter, current
   const now = new Date().toISOString();
   const session: HarnessSession = {
     id: randomUUID(), route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null,
-    effort: current.effort, permissionMode: current.permissionMode, accountFailover: 'never',
+    effort: 'platform-managed', accountFailover: 'never',
     workspace: current.workspace ?? process.cwd(), createdAt: now, updatedAt: now, status: 'active',
     gatewayConfirmed: true,
   };
@@ -1597,7 +1684,7 @@ async function interactiveAccountPicker(rl: HarnessPrompter, id: string): Promis
 }
 
 
-async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string; adopted: boolean } | undefined> {
+async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string } | undefined> {
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
   // A session with no turns yet has nothing to resume into — showing it here is
@@ -1632,23 +1719,34 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   // mismatch between this catalog's entry and the only public docs found for
   // its name (Command Code) — none of these are guessed at.
   const workspace = current?.workspace ?? process.cwd();
+  const discoveryProfiles = (harness: AiLocalHarnessDefinition): Array<AiHarnessAccount | undefined> => {
+    const accounts = state.accounts.filter((item) => item.provider === harness.provider && item.status === 'ready');
+    if (!accounts.length) return [undefined];
+    const unique = new Map<string, AiHarnessAccount>();
+    for (const account of accounts) unique.set(account.nativeProfile?.path ?? 'default', account);
+    return [...unique.values()];
+  };
   const discoverable = localRouter().AI_LOCAL_HARNESSES.filter((harness) => harness.session?.discoverArgv);
   const shellDiscovered = (await Promise.all(discoverable.map(async (harness) => {
-    const account = state.accounts.find((item) => item.provider === harness.provider && item.status === 'ready');
-    const environment = nativeProfileEnvironment(account?.nativeProfile);
-    const found = await discoverNativeSessions(harness, environment, workspace);
-    return found.map((item) => ({ harness, item }));
+    return (await Promise.all(discoveryProfiles(harness).map(async (account) => {
+      const environment = nativeProfileEnvironment(account?.nativeProfile);
+      const found = await discoverNativeSessions(harness, environment, workspace);
+      return found.map((item) => ({ harness, item, accountId: account?.id }));
+    }))).flat();
   }))).flat();
   const fsDiscovered = (await Promise.all(Object.entries(FS_SESSION_DISCOVERY).map(async ([command, discover]) => {
     const harness = localHarnessForCommand(command);
     if (!harness) return [];
     const inspection = await inspectNativeHarness(harness, 500);
     if (!inspection.installed) return [];
-    const found = await discover(workspace).catch(() => []);
-    return found.map((item) => ({ harness, item }));
+    return (await Promise.all(discoveryProfiles(harness).map(async (account) => {
+      const found = await discover(workspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => []);
+      return found.map((item) => ({ harness, item, accountId: account?.id }));
+    }))).flat();
   }))).flat();
   const discovered = [...shellDiscovered, ...fsDiscovered]
-    .filter(({ harness, item }) => !state.sessions.some((session) => session.nativeHarness === harness.command && session.nativeSessionId === item.nativeId));
+    .filter(({ harness, item, accountId }) => !state.sessions.some((session) => session.nativeHarness === harness.command
+      && session.nativeSessionId === item.nativeId && (!accountId || session.accountId === accountId)));
   // Every option gets a single real recency key so the newest conversation is
   // always near the top regardless of which source found it — grouping by
   // source first (every ClikCode session, then every opencode result, then
@@ -1670,24 +1768,23 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
         sortKey: Number.isNaN(sortKey) ? -Infinity : sortKey,
       };
     }),
-    ...discovered.map(({ harness, item }) => ({
+    ...discovered.map(({ harness, item, accountId }, index) => ({
       label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
-      detail: `· not yet in ClikCode${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
-      value: `native:${harness.command}:${item.nativeId}`,
+      detail: `· not yet in ClikCode${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
+      value: `native:${index}`,
       sortKey: item.updatedAtMs ?? -Infinity,
     })),
   ];
   options.sort((left, right) => right.sortKey - left.sortKey);
   const selected = await chooseOption(rl, 'Resume a session', options);
   if (!selected) return undefined;
-  if (!selected.startsWith('native:')) return { id: selected, adopted: false };
-  const rest = selected.slice('native:'.length);
-  const separator = rest.indexOf(':');
-  const harnessCommand = rest.slice(0, separator);
-  const nativeId = rest.slice(separator + 1);
-  const match = discovered.find((entry) => entry.harness.command === harnessCommand && entry.item.nativeId === nativeId);
+  if (!selected.startsWith('native:')) return { id: selected };
+  const match = discovered[Number.parseInt(selected.slice('native:'.length), 10)];
   if (!match) return undefined;
-  const account = state.accounts.find((item) => item.provider === match.harness.provider && item.status === 'ready');
+  const nativeId = match.item.nativeId;
+  const account = match.accountId
+    ? state.accounts.find((item) => item.id === match.accountId)
+    : state.accounts.find((item) => item.provider === match.harness.provider && item.status === 'ready');
   const defaults = resolveDefaultSettings(state, match.harness.provider);
   const now = new Date().toISOString();
   // The vendor's own thread already has full context regardless — adopting
@@ -1697,7 +1794,9 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   // way to read a whole conversation back out (see ADOPTED_TRANSCRIPT_READERS
   // above), and never something continuation itself depends on.
   const transcriptReader = ADOPTED_TRANSCRIPT_READERS[match.harness.command];
-  const messages = transcriptReader ? await transcriptReader(match.harness, nativeId, workspace).catch(() => []) : [];
+  const messages = transcriptReader
+    ? await transcriptReader(match.harness, nativeId, workspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => [])
+    : [];
   const adopted: HarnessSession = {
     id: randomUUID(), route: 'local', accountId: account?.id ?? null, provider: match.harness.provider,
     model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
@@ -1711,7 +1810,7 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   // it as that vendor — forcing it onto whatever provider was already active
   // (the same-conversation /resume behavior below) would immediately discard
   // the native session id just adopted, undoing the entire point of listing it.
-  return { id: adopted.id, adopted: true };
+  return { id: adopted.id };
 }
 
 async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<void> {
@@ -1804,6 +1903,7 @@ async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.route === 'gateway') throw new Error('ClikDeploy Gateway reasoning effort is selected by platform routing policy.');
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   if (harness && !harnessSupportsEffort(harness)) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
   const effortOption = harness ? optionForHarness(harness, 'effort') : undefined;
@@ -1850,6 +1950,7 @@ async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Pro
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.route === 'gateway') throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy.');
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const current = session.permissionMode ?? 'ask';
   const descriptions: Record<AiHarnessPermissionMode, string> = {
@@ -1951,6 +2052,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   const state = await readState();
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (await synchronizeNativeTranscript(state, session)) await writeState(state);
   const commandDetails: Record<string, string> = {
     '/provider': 'choose a provider (including ClikDeploy Gateway)', '/settings': 'configure this workspace', '/account': 'choose, view, or add an account',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'approval behavior',
@@ -2045,6 +2147,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     }).catch(() => { /* Usage is optional provider metadata. */ });
   }, 20_000) : undefined;
   let notice: string | undefined;
+  let synchronizedSessionId = id;
   try {
     while (true) {
       let line: string;
@@ -2052,6 +2155,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const latestState = await readState();
         const latest = latestState.sessions.find((item) => item.id === id);
         if (!latest) break;
+        if (synchronizedSessionId !== id) {
+          if (await synchronizeNativeTranscript(latestState, latest)) await writeState(latestState);
+          synchronizedSessionId = id;
+        }
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         rl.render?.(latest, account, notice);
         refreshUsage(latest, latestState);
@@ -2082,6 +2189,18 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         else if (command === '/capabilities') {
           const commandState = await readState();
           const commandSession = commandState.sessions.find((item) => item.id === id);
+          if (commandSession?.route === 'gateway') {
+            rl.panel?.('ClikDeploy Gateway capabilities', [
+              'Inference routing: platform managed',
+              'Streaming: live SSE token deltas with bounded fallback chunking',
+              'Tools: ClikDeploy capability registry and MCP bridge',
+              'Permissions: authenticated server policy and confirmation gates',
+              'Sessions: durable ClikCode transcript replay',
+              'Models and effort: selected by Gateway routing policy',
+            ].join('\n'));
+            if (rl.render) await rl.question('Press Enter to return › ');
+            continue;
+          }
           const selectedHarness = commandSession?.nativeHarness ? localHarnessForCommand(commandSession.nativeHarness) : undefined;
           if (!selectedHarness) throw new Error('Choose a provider first.');
           const manifest = localHarnessCapabilityManifest(selectedHarness);
@@ -2138,44 +2257,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         else if (command === '/resume') {
           const selected = await interactiveSessionPicker(rl, id);
           if (selected && selected.id !== id) {
-            // Resuming picks up a conversation's content, not necessarily its
-            // original vendor: staying on whatever you're already running is
-            // the point of switching providers in the first place — reopening
-            // an old chat shouldn't silently pull you back to a different one.
-            // A session freshly adopted from a vendor's own history (picked by
-            // that vendor's name, e.g. "OpenCode • Test message") is the one
-            // exception: that choice already names the provider you want, and
-            // forcing it onto the current one would immediately discard the
-            // native session id just adopted.
-            if (!selected.adopted) {
-              const resumeState = await readState();
-              const current = resumeState.sessions.find((item) => item.id === id);
-              const target = resumeState.sessions.find((item) => item.id === selected.id);
-              if (current?.nativeHarness && target && target.nativeHarness !== current.nativeHarness) {
-                const originalLabel = sessionProviderLabel(target);
-                const hasContent = (target.messages ?? []).length > 0;
-                target.nativeHarness = current.nativeHarness;
-                target.provider = current.provider;
-                target.accountId = current.accountId;
-                target.model = null;
-                target.nativeSessionId = undefined;
-                target.nativeStartedAt = undefined;
-                // A title inherited from the old provider's conversation is
-                // only meaningful alongside that conversation's actual
-                // messages. Wiping the native session id above already
-                // discards the old provider's identity; leaving a title with
-                // nothing behind it produced a real, reported bug — a chat
-                // that "shows a title but never loads," because there was
-                // never anything to load once the messages were gone (a
-                // session adopted with no readable transcript, most often).
-                if (!hasContent) target.name = undefined;
-                target.updatedAt = new Date().toISOString();
-                await writeState(resumeState);
-                notice = hasContent
-                  ? `Continuing this ${originalLabel} chat under ${sessionProviderLabel(current)}.`
-                  : `Starting fresh under ${sessionProviderLabel(current)} — this ${originalLabel} chat had no readable history to bring over.`;
-              }
-            }
+            // Resume means reopening the selected conversation at its source:
+            // retain its account, harness, and exact native session identity.
+            // Moving a transcript to another provider remains an explicit
+            // /provider action, never a side effect of choosing history.
             id = selected.id;
             continue;
           }
@@ -2486,6 +2571,10 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       session.name ??= conversationTitle(text);
       session.attachments = [];
       session.updatedAt = new Date().toISOString();
+      // The vendor subprocess owns persistence. Re-read its transcript after
+      // exit so any source-side turns/events that were not represented by the
+      // final response are reflected in ClikCode before the turn is saved.
+      await synchronizeNativeTranscript(state, session);
       await writeState(state);
       if (!activeFullScreenHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
       return;
@@ -2642,22 +2731,56 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   const index = state.sessions.findIndex((item) => item.id === id);
   if (index < 0) throw new Error(`AI session "${id}" was not found`);
   const current = state.sessions[index];
+  const effectiveRoute = options.route ?? current.route;
+  if (options.permissions && effectiveRoute === 'gateway') {
+    throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy; Ask, Bypass, and Auto apply only to local harnesses.');
+  }
+  if (effectiveRoute === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
+    throw new Error('Gateway account, provider, model, effort, failover, and native sessions are selected by ClikDeploy platform routing and cannot be overridden per session.');
+  }
   const account = options.account === undefined
     ? undefined
     : state.accounts.find((item) => item.id === options.account || item.label === options.account);
   if (options.account !== undefined && !account) throw new Error(`local AI account "${options.account}" was not found`);
+  if (account && options.provider && options.provider !== account.provider) {
+    throw new Error(`account "${account.label}" belongs to ${account.provider}, not ${options.provider}`);
+  }
+  if (!account && options.provider && current.accountId) {
+    const currentAccount = state.accounts.find((item) => item.id === current.accountId);
+    if (currentAccount && currentAccount.provider !== options.provider) {
+      throw new Error(`account "${currentAccount.label}" belongs to ${currentAccount.provider}; select a matching account when changing provider`);
+    }
+  }
   if (options.nativeSession !== undefined) {
     if (!current.nativeHarness) throw new Error('launch a native harness for this ClikCode session before attaching its native session id');
     const harness = localHarnessForCommand(current.nativeHarness);
     if (!harness?.session?.resumeIdPrefix) throw new Error(`${harness?.displayName ?? current.nativeHarness} does not declare exact native-session resume support`);
     if (!options.nativeSession.trim()) throw new Error('native session id cannot be empty');
   }
-  const selectedHarness = current.nativeHarness ? localHarnessForCommand(current.nativeHarness) : undefined;
-  if (options.permissions && selectedHarness && !harnessSupportsPermissionMode(selectedHarness, options.permissions)) {
+  const selectedHarness = account
+    ? localHarnessForProvider(account.provider)
+    : options.provider
+      ? localHarnessForProvider(options.provider)
+      : current.nativeHarness ? localHarnessForCommand(current.nativeHarness) : undefined;
+  if (effectiveRoute === 'local' && (options.account || options.provider) && !selectedHarness) {
+    throw new Error(`unknown local provider "${options.provider ?? account?.provider}"`);
+  }
+  if (options.model && selectedHarness && !selectedHarness.modelArgvPrefix) {
+    throw new Error(`${selectedHarness.displayName} does not publish a model selector.`);
+  }
+  if (options.effort && selectedHarness) {
+    const effortOption = optionForHarness(selectedHarness, 'effort');
+    if (!effortOption) throw new Error(`${selectedHarness.displayName} does not publish a configurable reasoning-effort flag.`);
+    parseHarnessOption(effortOption, options.effort);
+  }
+  if (options.permissions && (!selectedHarness || !harnessSupportsPermissionMode(selectedHarness, options.permissions))) {
+    if (!selectedHarness) throw new Error('Choose a provider before setting permissions.');
     throw new Error(`${selectedHarness.displayName} does not support ${options.permissions} permissions.`);
   }
+  const base: HarnessSession = { ...current };
+  if (options.route === 'local' && current.route === 'gateway') applyFreshLocalSessionPolicy(state, base);
   const next: HarnessSession = {
-    ...current,
+    ...base,
     ...(options.route ? { route: options.route } : {}),
     ...(account ? { accountId: account.id, provider: options.provider ?? account.provider } : {}),
     ...(options.provider ? { provider: options.provider } : {}),
@@ -2668,6 +2791,20 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),
   };
+  if (effectiveRoute === 'gateway') applyGatewaySessionPolicy(next);
+  else if (account) {
+    if (account.authKind === 'vendor-cli' && selectedHarness?.turn) {
+      if (next.nativeHarness !== selectedHarness.command || current.accountId !== account.id) {
+        next.nativeSessionId = undefined;
+        next.nativeStartedAt = undefined;
+      }
+      next.nativeHarness = selectedHarness.command;
+    } else {
+      delete next.nativeHarness;
+      delete next.nativeSessionId;
+      delete next.nativeStartedAt;
+    }
+  }
   state.sessions[index] = next;
   await writeState(state);
   emitJson({ session: next });

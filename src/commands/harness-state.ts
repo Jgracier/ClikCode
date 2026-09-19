@@ -29,6 +29,16 @@ function normalizedPermissionMode(value: unknown): HarnessDefaultSettings['permi
   return HARNESS_DEFAULT_SETTINGS.permissionMode;
 }
 
+function normalizedSessionPermission(session: HarnessSession): Pick<HarnessSession, 'permissionMode'> {
+  // Gateway authorization is enforced by the authenticated platform and has
+  // no local Ask/Bypass/Auto override. Keep that distinction in persisted
+  // state too; otherwise every read silently reintroduced `ask` after the
+  // Gateway creation/switch paths deliberately removed it.
+  return session.route === 'gateway'
+    ? { permissionMode: undefined }
+    : { permissionMode: normalizedPermissionMode(session.permissionMode) };
+}
+
 
 export function resolveDefaultSettings(state: HarnessState, provider?: string | null): HarnessDefaultSettings {
   const overrides = provider ? state.providerSettings[provider] : undefined;
@@ -83,7 +93,7 @@ export async function readState(): Promise<HarnessState> {
           provider,
           { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
         ])),
-        sessions: (parsed.sessions as HarnessSession[]).map((session) => ({ ...session, permissionMode: normalizedPermissionMode(session.permissionMode) })),
+        sessions: (parsed.sessions as HarnessSession[]).map((session) => ({ ...session, ...normalizedSessionPermission(session) })),
       } as HarnessState;
       await writeState(upgraded);
       return upgraded;
@@ -97,7 +107,7 @@ export async function readState(): Promise<HarnessState> {
       // Sessions created before lifecycle state existed were still open at the
       // time of upgrade, so preserve their resumability once.
       status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
-      permissionMode: normalizedPermissionMode(session.permissionMode),
+      ...normalizedSessionPermission(session),
     }));
     // Older builds invented a 60-second quota reset. A real limit remains
     // exhausted until the user explicitly retries that account or the provider
