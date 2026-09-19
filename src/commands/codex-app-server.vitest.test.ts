@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codexActivityForItem, codexPermissionSettings } from './codex-app-server';
+import { codexActivityForItem, codexPermissionSettings, codexSteerParams } from './codex-app-server';
 
 describe('Codex app-server protocol mapping', () => {
   it('preserves native ids so tool completion updates the start row', () => {
@@ -17,6 +17,13 @@ describe('Codex app-server protocol mapping', () => {
     });
     expect(codexPermissionSettings('bypass')).toEqual({
       approvalPolicy: 'never', sandbox: 'danger-full-access', approvalsReviewer: 'user',
+    });
+  });
+
+  it('targets the active turn when steering without starting a second turn', () => {
+    expect(codexSteerParams('thread-1', 'turn-1', 'Focus on the failing test.')).toEqual({
+      threadId: 'thread-1', expectedTurnId: 'turn-1',
+      input: [{ type: 'text', text: 'Focus on the failing test.', text_elements: [] }],
     });
   });
 });

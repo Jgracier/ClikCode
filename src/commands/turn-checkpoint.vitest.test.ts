@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  beginPendingTurn, discardPendingTurn, finishPendingTurn, recordPendingActivity,
+  beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
   sessionTranscriptMessages, updatePendingResponse,
 } from './turn-checkpoint.js';
 import type { HarnessSession } from './types.js';
@@ -71,5 +71,26 @@ describe('durable turn checkpoints', () => {
       { role: 'assistant', content: 'Partial' },
     ]);
     expect(target.pendingTurn?.prompt).toBe('Second');
+  });
+
+  it('preserves native steering inside the active turn transcript', () => {
+    const target = session();
+    beginPendingTurn(target, 'Initial request', '2026-01-02T00:00:00.000Z');
+    recordPendingSteer(target, 'Prioritize tests', '2026-01-02T00:00:01.000Z', '2026-01-02T00:00:01.000Z');
+    updatePendingResponse(target, 'Done', 'append', '2026-01-02T00:00:02.000Z');
+    expect(sessionTranscriptMessages(target).slice(-2)).toEqual([
+      { role: 'user', content: 'Initial request\n\nSteering update while this turn was running:\nPrioritize tests' },
+      { role: 'assistant', content: 'Done' },
+    ]);
+  });
+
+  it('durably queues and atomically consumes a follow-up turn', () => {
+    const target = session();
+    const queued = { id: 'queued-1', text: '/this remains conversation text', submittedAt: '2026-01-02T00:00:00.000Z' };
+    enqueueSessionTurn(target, queued, queued.submittedAt);
+    enqueueSessionTurn(target, queued, queued.submittedAt);
+    expect(target.queuedTurns).toEqual([queued]);
+    expect(consumeSessionTurn(target, queued.id)).toBe(true);
+    expect(target.queuedTurns).toBeUndefined();
   });
 });

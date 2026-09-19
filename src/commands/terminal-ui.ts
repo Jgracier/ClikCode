@@ -10,11 +10,12 @@ import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import {
   composerLayout, formatParagraph, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown, renderTableBlock,
-  splitIntoBlocks, terminalCellWidth, visibleSlice, wrapWords,
+  splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
 } from './markdown-render.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import { nativeModelLabel } from './native-account-data.js';
+import type { LiveTurnInputResult } from './live-turn-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, PickerOption } from './types.js';
 
 export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
@@ -33,6 +34,23 @@ export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[
     if (key === '\u001b[6~') return ['page-down'];
     return [];
   });
+}
+
+export function editWaitingComposer(value: string, cursor: number, key: string): { value: string; cursor: number; changed: boolean } {
+  if (key === '\u001b[D') return { value, cursor: previousCharacterIndex(value, cursor), changed: true };
+  if (key === '\u001b[C') return { value, cursor: nextCharacterIndex(value, cursor), changed: true };
+  if (key === '\u007f' || key === '\b') {
+    if (cursor <= 0) return { value, cursor, changed: true };
+    const previous = previousCharacterIndex(value, cursor);
+    return { value: value.slice(0, previous) + value.slice(cursor), cursor: previous, changed: true };
+  }
+  if (key === '\u0015') return { value: '', cursor: 0, changed: true };
+  if (key === '\u0001') return { value, cursor: 0, changed: true };
+  if (key === '\u0005') return { value, cursor: value.length, changed: true };
+  if (!key.startsWith('\u001b') && !/[\u0000-\u001f]/.test(key)) {
+    return { value: value.slice(0, cursor) + key + value.slice(cursor), cursor: cursor + key.length, changed: true };
+  }
+  return { value, cursor, changed: false };
 }
 
 /** ASCII-only 2x2 dot pattern: opposite corners alternate without relying on
@@ -152,6 +170,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private frameInFlight = false;
   private pendingFrame?: string;
   private queuedDraft?: string;
+  private waitingDraft = '';
+  private waitingCursor = 0;
+  private waitingSubmit?: (text: string) => Promise<LiveTurnInputResult>;
+  private waitingSubmissions: Array<{ localId: number; text: string; state: 'sending' | 'queued' | 'steered' | 'error' }> = [];
+  private waitingSubmissionId = 0;
+  private readonly waitingSubmissionWrites = new Set<Promise<void>>();
   private suspended = false;
   private activityAnchor = 0;
   /** Lines back from the very end of the conversation. 0 means "showing the
@@ -186,7 +210,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       }
       return;
     }
-    for (const action of waitingInputActions(chunk)) {
+    const keys = String(chunk).match(/\u001b\[[ABCD]|\u001b\[[56]~|[\s\S]/g) ?? [];
+    for (const key of keys) {
+      const action = waitingInputActions(key)[0];
       if (action === 'cancel-edit' || action === 'cancel-stop') {
         if (this.waitingCancelled) continue;
         this.waitingCancelled = true;
@@ -205,6 +231,37 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       } else if (action === 'page-down') {
         this.historyScroll = Math.max(0, this.historyScroll - 10);
         this.updateWaiting();
+      } else if (key === '\r' || key === '\n') {
+        const text = this.waitingDraft.trim();
+        if (!text || !this.waitingSubmit) continue;
+        this.waitingDraft = '';
+        this.waitingCursor = 0;
+        const localId = ++this.waitingSubmissionId;
+        this.waitingSubmissions.push({ localId, text, state: 'sending' });
+        this.updateWaiting();
+        const write = this.waitingSubmit(text).then((result) => {
+          const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
+          if (item) item.state = result.disposition;
+          this.updateWaiting();
+        }).catch(() => {
+          const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
+          if (item) item.state = 'error';
+          if (!this.waitingDraft) {
+            this.waitingDraft = text;
+            this.waitingCursor = text.length;
+          }
+          this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
+          this.updateWaiting();
+        });
+        this.waitingSubmissionWrites.add(write);
+        void write.finally(() => this.waitingSubmissionWrites.delete(write));
+      } else if (this.waitingSubmit) {
+        const edited = editWaitingComposer(this.waitingDraft, this.waitingCursor, key);
+        if (edited.changed) {
+          this.waitingDraft = edited.value;
+          this.waitingCursor = edited.cursor;
+          this.updateWaiting();
+        }
       }
     }
   };
@@ -222,6 +279,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
 
   render(session: HarnessSession, account?: string, notice?: string): void {
     if (this.currentSession?.id !== session.id) this.activityEntries = [];
+    if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
     this.currentAccount = account;
     this.currentNotice = notice;
@@ -265,12 +323,20 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
-  startWaiting(message: string, onCancel?: (restoreDraft: boolean) => void): void {
+  startWaiting(
+    message: string,
+    onCancel?: (restoreDraft: boolean) => void,
+    onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
+  ): void {
     this.stopWaiting(false);
     this.liveResponse = '';
     this.activityAnchor = this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
     this.waitingLabel = message;
     this.cancelWaiting = onCancel;
+    this.waitingSubmit = onSubmit;
+    this.waitingDraft = '';
+    this.waitingCursor = 0;
+    this.waitingSubmissions = [];
     this.waitingCancelled = false;
     this.waitingFrame = 0;
     this.waitingStartedAt = Date.now();
@@ -279,7 +345,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       input.resume();
       input.on('data', this.onWaitingInput);
     }
-    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    this.paint('', [], 0, '› ', 0);
     this.waitingTimer = setInterval(() => {
       this.waitingFrame++;
       this.updateWaiting();
@@ -291,6 +357,9 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * Escape restores the submitted text; after output begins, the partial turn
    * is persisted instead. */
   restoreDraft(value: string): void { this.queuedDraft = value; }
+  async flushWaitingSubmissions(): Promise<void> {
+    await Promise.allSettled([...this.waitingSubmissionWrites]);
+  }
   liveResponseText(): string { return this.liveResponse; }
   turnOutputStarted(): boolean {
     return Boolean(this.liveResponse || this.activityEntries.some((entry) =>
@@ -304,6 +373,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     input.off('data', this.onWaitingInput);
     if (input.isTTY) input.setRawMode(false);
     this.cancelWaiting = undefined;
+    this.waitingSubmit = undefined;
     this.waitingCancelled = false;
     this.pendingApproval = undefined;
     this.waitingLabel = '';
@@ -366,7 +436,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // unsupported Braille spinner glyphs visibly flashed as question marks.
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
     const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
-    return `${waitingSpinnerFrame(this.waitingFrame)} ${this.waitingLabel} (${elapsed})`;
+    return `${waitingSpinnerFrame(this.waitingFrame)} ${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to steer or queue' : ''}`;
   }
 
   private updateWaiting(): void {
@@ -383,7 +453,8 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     this.responsePaintTimer = setTimeout(() => {
       this.responsePaintTimer = undefined;
       if (!this.closed && !this.selecting && !this.paletteActive) {
-        this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+        if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
+        else this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
       }
     }, delay);
     this.responsePaintTimer.unref();
@@ -426,9 +497,15 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     const hasTransientAssistant = transientAssistantRequired(
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
     );
-    const allMessages = hasTransientAssistant
+    const baseMessages = hasTransientAssistant
       ? [...persistedMessages, { role: 'assistant' as const, content: this.liveResponse }]
       : persistedMessages;
+    const storedQueued = session.queuedTurns ?? [];
+    const queuedMessages = [
+      ...storedQueued.map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
+      ...this.waitingSubmissions.map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
+    ];
+    const allMessages: Array<{ role: 'user' | 'assistant'; content: string; queueState?: string }> = [...baseMessages, ...queuedMessages];
     // 40, not 6: matches the same replay/adoption cap used elsewhere
     // (failoverPrompt, ADOPTED_TRANSCRIPT_LIMIT) and — now that the
     // conversation area supports scrolling — gives Page Up somewhere real to
@@ -475,13 +552,14 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       const appendMessageText = (content: string): void => {
         for (const block of splitIntoBlocks(content)) {
           if (block.kind === 'code') {
-            // Not word-wrapped -- re-flowing code would change what it means.
-            // Hard-truncated instead, same as visibleSlice does for a single
-            // overlong token elsewhere in this file.
             for (const codeLine of [...(block.language ? [chalk.dim(`[${block.language}]`)] : []), ...block.lines]) {
-              const prefix = firstLine ? `${marker} ` : '  ';
-              conversation.push({ text: `${prefix}  ${chalk.cyan(visibleSlice(codeLine, Math.max(1, conversationInner - 2)))}` });
-              firstLine = false;
+              const segments = wrapCodeLine(codeLine, Math.max(1, conversationInner - 4));
+              for (const [segmentIndex, segment] of segments.entries()) {
+                const prefix = firstLine ? `${marker} ` : '  ';
+                const continuation = segmentIndex ? chalk.dim('↳ ') : '  ';
+                conversation.push({ text: `${prefix}${continuation}${chalk.cyan(segment)}` });
+                firstLine = false;
+              }
             }
             continue;
           }
@@ -523,6 +601,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       for (const part of interleaveResponseContent(message.content, embeddedActivities)) {
         if (part.kind === 'text') appendMessageText(part.text);
         else appendActivityGroup(part.lines);
+      }
+      if (message.queueState) {
+        const status = message.queueState === 'steered' ? 'steered into active turn'
+          : message.queueState === 'sending' ? 'submitting…'
+            : message.queueState === 'error' ? 'not sent · restored for editing' : 'queued for next turn';
+        conversation.push({ text: `  ${chalk.dim(`↳ ${status}`)}` });
       }
       ensureBlankConversationRow();
       appendActivity(messageStart + messageIndex + 1);

@@ -175,6 +175,29 @@ export function visibleSlice(value: string, width: number): string {
   return `${rendered}${sawAnsi ? '\u001b[0m' : ''}…`;
 }
 
+/** Split a code line into display-only continuation rows without modifying
+ * the underlying Markdown. Unlike visibleSlice this preserves every byte;
+ * continuation markers make it clear that wrapping is presentation, not a
+ * newline in the model's code. */
+export function wrapCodeLine(value: string, width: number): string[] {
+  const safeWidth = Math.max(1, width);
+  if (!value) return [''];
+  const rows: string[] = [];
+  let remaining = value;
+  while (remaining && terminalCellWidth(remaining) > safeWidth) {
+    let cut = 0;
+    for (const character of remaining) {
+      if (terminalCellWidth(remaining.slice(0, cut + character.length)) > safeWidth) break;
+      cut += character.length;
+    }
+    cut = Math.max(1, cut);
+    rows.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut);
+  }
+  rows.push(remaining);
+  return rows;
+}
+
 export function terminalCellWidth(value: string): number {
   const plain = value.replace(/\u001b\[[0-9;]*m/g, '');
   let width = 0;

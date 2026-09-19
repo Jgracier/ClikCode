@@ -190,10 +190,16 @@ export interface HarnessSession {
     prompt: string;
     response?: string;
     activities?: string[];
+    /** Additional user instructions accepted by a provider's active-turn
+     * steering protocol. They are part of this turn, not future prompts. */
+    steers?: Array<{ text: string; submittedAt: string }>;
     startedAt: string;
     updatedAt: string;
     outputStarted: boolean;
   };
+  /** User messages submitted while a provider without active steering was
+   * running. Persisted independently so process exit cannot discard them. */
+  queuedTurns?: Array<{ id: string; text: string; submittedAt: string }>;
   attachments?: string[];
   /** Provider-native values validated against the selected harness manifest. */
   harnessOptions?: Record<string, unknown>;

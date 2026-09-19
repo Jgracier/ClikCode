@@ -10,6 +10,7 @@ type Json = Record<string, any>;
 const ACP_ARGV: Readonly<Record<string, readonly string[]>> = {
   cline: ['--acp'],
   copilot: ['--acp', '--stdio'],
+  droid: ['exec', '--output-format', 'acp'],
   hermes: ['acp'],
 };
 
@@ -61,15 +62,19 @@ export function runAcpTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
   const argv = acpArgvForHarness(input.command);
   if (!argv) return Promise.reject(new Error(`${input.command} has no ACP adapter`));
   return new Promise((resolve, reject) => {
-    const configuredArgv = [
+    const configuredOptions = [
       ...(input.model ? ['--model', input.model] : []),
       ...(input.effort && input.command === 'cline' ? ['--thinking', input.effort] : []),
       ...(input.effort && input.command === 'copilot' ? ['--effort', input.effort] : []),
+      ...(input.effort && input.command === 'droid' ? ['--reasoning-effort', input.effort] : []),
       ...(input.effort && input.command === 'hermes' ? ['--reasoning', input.effort] : []),
-      ...(input.permissionMode === 'bypass' ? input.command === 'cline' ? ['--auto-approve', 'true'] : input.command === 'cursor' ? ['--force'] : input.command === 'copilot' ? ['--allow-all'] : input.command === 'hermes' ? ['--yolo'] : [] : []),
+      ...(input.permissionMode === 'bypass' ? input.command === 'cline' ? ['--auto-approve', 'true'] : input.command === 'cursor' ? ['--force'] : input.command === 'copilot' ? ['--allow-all'] : input.command === 'droid' ? ['--skip-permissions-unsafe'] : input.command === 'hermes' ? ['--yolo'] : [] : []),
+      ...(input.permissionMode === 'auto' && input.command === 'droid' ? ['--auto', 'low'] : []),
       ...(input.permissionMode === 'auto' ? input.command === 'cline' ? ['--auto-approve', 'true'] : input.command === 'cursor' ? ['--auto-review'] : [] : []),
-      ...argv,
     ];
+    // Droid's model/autonomy flags belong to the `exec` subcommand. Other ACP
+    // harnesses publish root-level configuration flags before their ACP mode.
+    const configuredArgv = input.command === 'droid' ? [...argv, ...configuredOptions] : [...configuredOptions, ...argv];
     const child = spawn(input.binary, configuredArgv, { cwd: input.cwd, env: { ...process.env, ...input.environment }, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');

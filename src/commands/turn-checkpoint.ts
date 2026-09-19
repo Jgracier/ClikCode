@@ -2,6 +2,7 @@
  * has not reached a successful provider completion yet. */
 
 import type { HarnessActivityEvent, HarnessSession } from './types.js';
+import type { LiveTurnSubmission } from './live-turn-input.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
 
@@ -16,7 +17,11 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   const messages = [...(session.messages ?? [])];
   const pending = session.pendingTurn;
   if (!pending) return messages;
-  messages.push({ role: 'user', content: pending.prompt });
+  const prompt = [
+    pending.prompt,
+    ...(pending.steers ?? []).map((steer) => `Steering update while this turn was running:\n${steer.text}`),
+  ].join('\n\n');
+  messages.push({ role: 'user', content: prompt });
   if (pending.response?.trim()) messages.push({ role: 'assistant', content: pending.response });
   else if (pending.activities?.length) messages.push({ role: 'assistant', content: activitySummary(pending.activities) });
   return messages;
@@ -50,6 +55,29 @@ export function recordPendingActivity(session: HarnessSession, event: HarnessAct
   pending.outputStarted = true;
   pending.updatedAt = now;
   session.updatedAt = now;
+}
+
+export function recordPendingSteer(session: HarnessSession, text: string, submittedAt: string, now: string): void {
+  const pending = session.pendingTurn;
+  if (!pending || !text.trim()) return;
+  pending.steers = [...(pending.steers ?? []), { text: text.trim(), submittedAt }];
+  pending.updatedAt = now;
+  session.updatedAt = now;
+}
+
+export function enqueueSessionTurn(session: HarnessSession, submission: LiveTurnSubmission, now: string): void {
+  if ((session.queuedTurns ?? []).some((item) => item.id === submission.id)) return;
+  session.queuedTurns = [...(session.queuedTurns ?? []), submission];
+  session.updatedAt = now;
+}
+
+export function consumeSessionTurn(session: HarnessSession, id: string): boolean {
+  const queued = session.queuedTurns ?? [];
+  const next = queued.filter((item) => item.id !== id);
+  if (next.length === queued.length) return false;
+  if (next.length) session.queuedTurns = next;
+  else delete session.queuedTurns;
+  return true;
 }
 
 export function finishPendingTurn(session: HarnessSession, response: string | undefined, now: string): void {

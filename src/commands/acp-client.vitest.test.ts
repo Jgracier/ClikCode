@@ -22,6 +22,7 @@ describe('shared ACP adapter contract', () => {
     // subcommand; do not pay for a guaranteed failed spawn before fallback.
     expect(acpArgvForHarness('cursor')).toBeUndefined();
     expect(acpArgvForHarness('copilot')).toEqual(['--acp', '--stdio']);
+    expect(acpArgvForHarness('droid')).toEqual(['exec', '--output-format', 'acp']);
     expect(acpArgvForHarness('aider')).toBeUndefined();
   });
 });

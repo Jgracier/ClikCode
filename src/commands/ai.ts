@@ -32,7 +32,7 @@ import {
   renderInlineMarkdown, splitIntoBlocks, styleWords, terminalCellWidth, visibleSlice, wrapWords,
 } from './markdown-render.js';
 import {
-  capDiffLines, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
+  capDiffLines, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   isCodeChangeLabel, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
   localRouter, nativeActivityPhase, nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent,
   compactPath, nativeProfileEnvironment, renderActivityLine, renderActivityPhase, sessionProviderLabel, streamLocalAiTurn,
@@ -50,9 +50,11 @@ import {
 } from './account-management.js';
 import { FullScreenHarnessPrompter } from './terminal-ui.js';
 import { runCodexAppServerTurn } from './codex-app-server.js';
-import { acpArgvForHarness, runAcpTurn } from './acp-client.js';
+import { runAcpTurn } from './acp-client.js';
+import { harnessTurnTransport } from './harness-transport.js';
+import { LiveTurnInputBroker, type LiveTurnSubmission } from './live-turn-input.js';
 import {
-  beginPendingTurn, discardPendingTurn, finishPendingTurn, recordPendingActivity,
+  beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
   sessionTranscriptMessages, updatePendingResponse,
 } from './turn-checkpoint.js';
 export {
@@ -65,6 +67,11 @@ export {
 
 
 let activeFullScreenHarness: FullScreenHarnessPrompter | undefined;
+
+interface TurnRunOptions {
+  liveInput?: LiveTurnInputBroker;
+  queuedTurnId?: string;
+}
 
 function conversationIdFor(session: HarnessSession): string {
   return session.conversationId ?? session.id;
@@ -249,8 +256,11 @@ class DurableTurnCheckpoint {
 
   private constructor(private readonly state: HarnessState, readonly session: HarnessSession) {}
 
-  static async start(state: HarnessState, session: HarnessSession, prompt: string): Promise<DurableTurnCheckpoint> {
+  static async start(
+    state: HarnessState, session: HarnessSession, prompt: string, queuedTurnId?: string,
+  ): Promise<DurableTurnCheckpoint> {
     const checkpoint = new DurableTurnCheckpoint(state, session);
+    if (queuedTurnId) consumeSessionTurn(session, queuedTurnId);
     beginPendingTurn(session, prompt, new Date().toISOString());
     session.name ??= conversationTitle(prompt);
     await checkpoint.enqueue();
@@ -265,6 +275,16 @@ class DurableTurnCheckpoint {
   activity(event: HarnessActivityEvent): void {
     recordPendingActivity(this.session, event, new Date().toISOString());
     this.schedule();
+  }
+
+  async queue(submission: LiveTurnSubmission): Promise<void> {
+    enqueueSessionTurn(this.session, submission, new Date().toISOString());
+    await this.persistNow();
+  }
+
+  async steer(submission: LiveTurnSubmission): Promise<void> {
+    recordPendingSteer(this.session, submission.text, submission.submittedAt, new Date().toISOString());
+    await this.persistNow();
   }
 
   async persistNow(): Promise<void> {
@@ -1738,21 +1758,13 @@ export type ProviderAccountChoice =
   | { kind: 'account'; harness: string; accountId: string }
   | { kind: 'add-account'; harness: string };
 
-function displayedIntegrationLevel(harness: AiLocalHarnessDefinition): 'native' | 'structured' | 'compatibility' | 'editor-only' {
-  if (harness.integration) return harness.integration;
-  if (harness.surface === 'editor-extension') return 'editor-only';
-  if (harness.command === 'codex') return 'native';
-  if (['cursor', 'cline', 'copilot', 'hermes'].includes(harness.command)) return 'structured';
-  return harness.turn?.output === 'text' ? 'compatibility' : 'structured';
-}
-
 function integrationLabel(harness: AiLocalHarnessDefinition): string {
   return ({
     native: 'full integration',
     structured: 'structured integration',
     compatibility: 'basic compatibility',
     'editor-only': 'editor only',
-  } as const)[displayedIntegrationLevel(harness)];
+  } as const)[harnessIntegrationLevel(harness)];
 }
 
 /** Keep the first level deliberately sparse. Choosing a provider opens its
@@ -2568,6 +2580,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   try {
     while (true) {
       let line: string;
+      let queuedTurnId: string | undefined;
       let activeWorkspace = process.cwd();
       try {
         const latestState = await readState();
@@ -2582,7 +2595,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         rl.render?.(latest, account, notice);
         refreshUsage(latest, latestState);
         notice = undefined;
-        line = (await rl.question('› ', slashCommandsFor(latest))).trim();
+        const queued = latest.queuedTurns?.[0];
+        if (queued) {
+          line = queued.text;
+          queuedTurnId = queued.id;
+          notice = 'Running queued message';
+        } else line = (await rl.question('› ', slashCommandsFor(latest))).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.
@@ -2596,8 +2614,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       }
       let interruptedSubmission: { text: string; restoreOnEscape: boolean } | undefined;
       try {
-        const command = line.toLowerCase();
-        const standaloneAttachment = await resolveStandaloneAttachment(line, activeWorkspace);
+        // A queued live-composer submission is always conversation text. A
+        // leading slash or path in it must not turn into a local command when
+        // it is automatically dispatched after the active turn.
+        const command = queuedTurnId ? '' : line.toLowerCase();
+        const standaloneAttachment = queuedTurnId ? undefined : await resolveStandaloneAttachment(line, activeWorkspace);
         if (command === '/switch' || command === '/engine' || command === '/provider') {
           const selected = await interactiveEnginePicker(config, rl, id);
           if (selected && selected !== id) { id = selected; continue; }
@@ -2720,9 +2741,14 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             ? 'Inspect this repository and create or improve AGENTS.md with concise, accurate build, test, architecture, and contribution instructions for coding agents. Verify every command you include.'
             : `Review the uncommitted changes in this workspace. Identify concrete bugs, regressions, security issues, and missing tests. Prioritize findings and cite file paths.${extra ? ` Additional focus: ${extra}` : ''}`;
           const turnController = new AbortController();
-          activeFullScreenHarness?.startWaiting('thinking', () => turnController.abort());
-          try { await aiGatewaySessionSend(config, id, task, turnController.signal); }
-          finally { activeFullScreenHarness?.stopWaiting(); }
+          const liveInput = new LiveTurnInputBroker();
+          activeFullScreenHarness?.startWaiting('thinking', () => turnController.abort(), (text) => liveInput.submit(text));
+          try { await aiGatewaySessionSend(config, id, task, turnController.signal, { liveInput }); }
+          finally {
+            liveInput.close();
+            await activeFullScreenHarness?.flushWaitingSubmissions();
+            activeFullScreenHarness?.stopWaiting();
+          }
         }
         else if (standaloneAttachment) {
           const attachmentState = await readState();
@@ -2735,12 +2761,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           if (!rl.render) emitHarnessOutput({ panel: 'attachments', attachments: attachmentSession.attachments ?? [] });
           continue;
         }
-        else if (line.startsWith('/') && !line.includes(' ') && localHarnessForCommand(command.slice(1))) {
+        else if (!queuedTurnId && line.startsWith('/') && !line.includes(' ') && localHarnessForCommand(command.slice(1))) {
           const selected = await newProviderConversation(id, command.slice(1));
           id = selected;
           continue;
         }
-        else if (line.startsWith('/')) {
+        else if (!queuedTurnId && line.startsWith('/')) {
           await aiSessionCommand(id, line);
           const head = command.split(/\s+/, 1)[0];
           if (rl.render && ['/help', '/status', '/models', '/usage', '/history', '/diff', '/attachments', '/copy', '/fork', '/capabilities', '/mcp', '/skills', '/plugins', '/agents', '/hooks', '/tools'].includes(head)) {
@@ -2756,20 +2782,28 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               ...active,
               messages: [...sessionTranscriptMessages(active), { role: 'user' as const, content: line }].slice(-40),
               pendingTurn: undefined,
+              ...(queuedTurnId
+                ? { queuedTurns: active.queuedTurns?.filter((item) => item.id !== queuedTurnId) }
+                : {}),
             };
             rl.render(pending, activeAccount);
             const turnController = new AbortController();
+            const liveInput = new LiveTurnInputBroker();
             interruptedSubmission = { text: line, restoreOnEscape: false };
             activeFullScreenHarness?.startWaiting('thinking', (restoreDraft) => {
               interruptedSubmission!.restoreOnEscape = restoreDraft;
               turnController.abort();
-            });
-            try { await aiGatewaySessionSend(config, id, line, turnController.signal); }
-            finally { activeFullScreenHarness?.stopWaiting(); }
+            }, (text) => liveInput.submit(text));
+            try { await aiGatewaySessionSend(config, id, line, turnController.signal, { liveInput, queuedTurnId }); }
+            finally {
+              liveInput.close();
+              await activeFullScreenHarness?.flushWaitingSubmissions();
+              activeFullScreenHarness?.stopWaiting();
+            }
             continue;
           }
           else output.write(`${chalk.dim(`${active ? sessionProviderLabel(active) : 'Provider'} · working…`)}\n`);
-          try { await aiGatewaySessionSend(config, id, line); }
+          try { await aiGatewaySessionSend(config, id, line, undefined, { queuedTurnId }); }
           finally { activeFullScreenHarness?.stopWaiting(); }
         }
       } catch (error) {
@@ -2799,7 +2833,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
  * Runs one durable local session turn. Local sessions resolve an env reference
  * only in this process and record normalized, credential-free usage.
  */
-export async function aiSessionSend(id: string, prompt: string, signal?: AbortSignal): Promise<void> {
+export async function aiSessionSend(
+  id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
+): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -2833,7 +2869,8 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
     session.provider = harness.provider;
     session.workspace ??= process.cwd();
     const baseMessages = sessionTranscriptMessages(session);
-    const checkpoint = await DurableTurnCheckpoint.start(state, session, text);
+    const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
+    run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     try {
     // A fresh native thread (no nativeSessionId yet) with prior ClikCode
     // messages already on the session means this conversation is continuing
@@ -2918,7 +2955,8 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
         return nativeTurnResult(harness, turnOutput.stdout);
       };
       try {
-        if (harness.command === 'codex') {
+        const transport = harnessTurnTransport(harness, images.length > 0);
+        if (transport === 'codex-app-server') {
           result = await runCodexAppServerTurn({
             binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
             cwd: session.workspace, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
@@ -2934,6 +2972,10 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
             },
             onPhase: (phase) => activeFullScreenHarness?.phase(phase),
             onApproval: (title, detail) => activeFullScreenHarness?.approval(title, detail) ?? Promise.resolve(false),
+            onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText) => {
+              await handler(steerText);
+              await checkpoint.steer({ id: randomUUID(), text: steerText, submittedAt: new Date().toISOString() });
+            } : undefined),
             onActivity: (event) => {
               checkpoint.activity(event);
               activeFullScreenHarness?.phase(renderActivityPhase(event));
@@ -2942,7 +2984,7 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
               else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
             },
           });
-        } else if (acpArgvForHarness(harness.command) && images.length === 0) {
+        } else if (transport === 'acp') {
           try {
             result = await runAcpTurn({
               binary: harness.binary, command: harness.command, prompt: turnText, nativeSessionId: session.nativeSessionId,
@@ -3087,7 +3129,8 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
   if (prepared.images.length) throw new Error('Image attachments currently require a vendor-CLI Codex account. Switch with /codex or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
   const baseMessages = sessionTranscriptMessages(session);
-  const checkpoint = await DurableTurnCheckpoint.start(state, session, text);
+  const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
+  run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
   try {
   const invoke = (active: AiHarnessAccount) => streamLocalAiTurn({
     provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
@@ -3145,11 +3188,13 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
 }
 
 /** Send a gateway session through the existing authenticated platform assistant stream. */
-export async function aiGatewaySessionSend(config: Conf, id: string, prompt: string, signal?: AbortSignal): Promise<void> {
+export async function aiGatewaySessionSend(
+  config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
+): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route !== 'gateway') return aiSessionSend(id, prompt, signal);
+  if (session.route !== 'gateway') return aiSessionSend(id, prompt, signal, run);
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
   const prepared = await prepareAttachments(session.attachments ?? []);
@@ -3160,7 +3205,8 @@ export async function aiGatewaySessionSend(config: Conf, id: string, prompt: str
   if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
-  const checkpoint = await DurableTurnCheckpoint.start(state, session, text);
+  const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
+  run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
   try {
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
