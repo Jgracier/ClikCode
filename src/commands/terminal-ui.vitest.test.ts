@@ -3,10 +3,12 @@ import { terminalCellWidth } from './markdown-render';
 import { commandPaletteMatches, editWaitingComposer, interleaveResponseContent, rightLabeledRule, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
 
 describe('full-screen waiting input', () => {
-  it('alternates opposite dots in a stable ASCII square', () => {
-    expect([waitingSpinnerFrame(0), waitingSpinnerFrame(1), waitingSpinnerFrame(2)]).toEqual([
-      '[o . / . o]', '[. o / o .]', '[o . / . o]',
-    ]);
+  it('animates twelve tiny dots in a stable 3x4 field', () => {
+    const frames = [waitingSpinnerFrame(0), waitingSpinnerFrame(1), waitingSpinnerFrame(11)];
+    expect(frames[0]).toEqual(['•···', '····', '····']);
+    expect(frames[1]).toEqual(['·•··', '····', '····']);
+    expect(frames[2]).toEqual(['····', '····', '···•']);
+    expect(frames.every((frame) => frame.join('').length === 12)).toBe(true);
   });
 
   it('keeps scrolling available while a provider turn is running', () => {
@@ -74,6 +76,7 @@ describe('streamed response chronology', () => {
     expect(transientAssistantRequired('', true, 3, entries)).toBe(true);
     expect(transientAssistantRequired('', false, 3, entries)).toBe(false);
     expect(transientAssistantRequired('A', true, 3, [])).toBe(true);
+    expect(transientAssistantRequired('', true, 3, [])).toBe(true);
   });
 });
 

@@ -53,10 +53,13 @@ export function editWaitingComposer(value: string, cursor: number, key: string):
   return { value, cursor, changed: false };
 }
 
-/** ASCII-only 2x2 dot pattern: opposite corners alternate without relying on
- * Braille/block glyphs that render as question marks in restricted terminals. */
-export function waitingSpinnerFrame(frame: number): string {
-  return frame % 2 ? '[. o / o .]' : '[o . / . o]';
+/** A stable 3x4 field containing exactly twelve small dots. One dot advances
+ * per frame; the geometry never rotates, widens, or depends on Braille/font
+ * support, so restricted and remote terminals render the same animation. */
+export function waitingSpinnerFrame(frame: number): [string, string, string] {
+  const active = ((frame % 12) + 12) % 12;
+  const dots = Array.from({ length: 12 }, (_, index) => index === active ? '•' : '·');
+  return [dots.slice(0, 4).join(''), dots.slice(4, 8).join(''), dots.slice(8, 12).join('')];
 }
 
 export function commandPaletteMatches(
@@ -117,10 +120,9 @@ export function upsertActivityEvent(
 }
 
 export function transientAssistantRequired(
-  liveResponse: string, waiting: boolean, transcriptLength: number, entries: readonly ActivityEntry[],
+  liveResponse: string, waiting: boolean, _transcriptLength: number, _entries: readonly ActivityEntry[],
 ): boolean {
-  return Boolean(liveResponse || (waiting && entries.some((entry) =>
-    entry.anchor === transcriptLength && entry.responseOffset !== undefined)));
+  return Boolean(liveResponse || waiting);
 }
 
 /** Preserve the chronology of prose and tool events within one assistant
@@ -431,12 +433,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * for 5m 31s" style -- so a long turn reads as "still working, N seconds in"
    * rather than the same static label sitting there with no sense of how long
    * it's actually been (only the spinner glyph itself changing periodically). */
-  private waitingText(): string {
-    // ASCII frames render reliably in restricted fonts and remote terminals;
-    // unsupported Braille spinner glyphs visibly flashed as question marks.
+  private waitingLines(): [string, string, string] {
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - this.waitingStartedAt) / 1000));
     const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
-    return `${waitingSpinnerFrame(this.waitingFrame)} ${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to steer or queue' : ''}`;
+    const dots = waitingSpinnerFrame(this.waitingFrame).map((row) => chalk.cyan(row)) as [string, string, string];
+    const label = `${this.waitingLabel} (${elapsed})${this.waitingSubmit ? ' · type and press Enter to steer or queue' : ''}`;
+    return [dots[0], `${dots[1]}  ${chalk.dim(label)}`, dots[2]];
   }
 
   private updateWaiting(): void {
@@ -538,11 +540,18 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       }
       ensureBlankConversationRow();
     };
+    const appendWaitingGroup = (): void => {
+      if (!this.waitingLabel) return;
+      ensureBlankConversationRow();
+      for (const line of this.waitingLines()) {
+        conversation.push({ text: `  ${visibleSlice(line, Math.max(1, conversationInner - 2))}` });
+      }
+      ensureBlankConversationRow();
+    };
     const appendActivity = (anchor: number): void => {
       const lines = this.activityEntries
         .filter((item) => item.anchor === anchor && item.responseOffset === undefined)
         .flatMap((entry) => entry.lines);
-      if (this.waitingLabel && anchor === this.activityAnchor) lines.push(`${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`);
       appendActivityGroup(lines);
     };
     appendActivity(messageStart);
@@ -595,6 +604,10 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         }
       };
       const absoluteMessageIndex = messageStart + messageIndex;
+      // Status owns a fixed position immediately before the in-flight
+      // assistant anchor. It is deliberately not another trailing activity:
+      // prose and tools may grow, but can never move ahead of "generating".
+      if (this.waitingLabel && absoluteMessageIndex === persistedMessages.length) appendWaitingGroup();
       const embeddedActivities = this.activityEntries
         .filter((entry) => entry.anchor === absoluteMessageIndex && entry.responseOffset !== undefined)
         .map((entry) => ({ responseOffset: entry.responseOffset!, lines: entry.lines }));
