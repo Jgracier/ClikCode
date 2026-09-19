@@ -38,7 +38,7 @@ import {
 } from './harness-state.js';
 import {
   accountUsageLabel, cachedAccountUsageLabel, nativeModelCatalog, nativeModelCatalogForPicker, nativeModelLabel,
-  nativeUsageLabel, recordNativeStreamUsage,
+  nativeUsageLabel, codexRateLimitsLabel, recordDerivedUsage, recordNativeStreamUsage,
 } from './native-account-data.js';
 import {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
@@ -3259,6 +3259,12 @@ export async function aiSessionSend(
               if (session.nativeSessionId === nativeSessionId) return;
               session.nativeSessionId = nativeSessionId;
               await checkpoint.persistNow();
+            },
+            // Codex reports its own quota on this connection during the turn,
+            // which is the same figure codexUsageProbe otherwise spawns a whole
+            // second app-server to ask for.
+            onRateLimits: (rateLimits) => {
+              void recordDerivedUsage(session, codexRateLimitsLabel(rateLimits)).catch(() => undefined);
             },
             onResponseDelta: (text, mode = 'append') => {
               checkpoint.response(text, mode);

@@ -7,7 +7,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import {
   composerLayout, nextCharacterIndex, previousCharacterIndex, renderInlineMarkdown, renderTableBlock,
-  splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
+  sanitizeTerminalText, splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
 } from './markdown-render.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
@@ -69,10 +69,14 @@ export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const PASTE_START = '\u001b[200~';
 const PASTE_END = '\u001b[201~';
 
-/** The literal text of a pasted key, or undefined for an ordinary keystroke. */
+/** The text of a pasted key as it should enter a draft, or undefined for an
+ * ordinary keystroke. Terminals deliver a pasted line break as a bare `\r`
+ * (and Windows sources as `\r\n`), which drew as one row that kept rewinding
+ * over itself instead of a multi-line draft; tabs and any escape sequences
+ * smuggled inside the paste are neutralised by the same sanitizer. */
 export function pastedText(key: string): string | undefined {
   return key.startsWith(PASTE_START) && key.endsWith(PASTE_END)
-    ? key.slice(PASTE_START.length, key.length - PASTE_END.length)
+    ? sanitizeTerminalText(key.slice(PASTE_START.length, key.length - PASTE_END.length))
     : undefined;
 }
 
@@ -278,9 +282,15 @@ export function rightLabeledRule(width: number, label?: string): string {
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
 }
 
+/** `commitThrough` is where provisional content begins: the live assistant and
+ * any queued turns. Those rows are drawn from state that is about to change --
+ * a queued turn becomes a real user message the moment it is sent -- so
+ * promoting them into native scrollback paints them a second time when they
+ * become real, stranding the first copy above the running turn's own output.
+ * Native scrollback may only ever receive rows that are already persisted. */
 export function inlineConversationPlan(
   permanent: readonly string[], current: readonly string[], commit: boolean, maxDynamic: number,
-  promoteThrough = permanent.length,
+  promoteThrough = permanent.length, commitThrough = current.length,
 ): { reset: boolean; dynamic: string[]; permanent: string[] } {
   const prefixMatches = permanent.every((line, index) => current[index] === line);
   // A transient state can briefly omit the pending assistant between
@@ -292,8 +302,11 @@ export function inlineConversationPlan(
   const previous = prefixMatches ? [...permanent] : [];
   const overflowBoundary = Math.max(previous.length, current.length - Math.max(0, maxDynamic));
   const promotedBoundary = Math.min(promoteThrough, overflowBoundary);
-  const nextPermanent = commit ? [...current] : current.slice(0, Math.max(previous.length, promotedBoundary));
-  const uncommitted = commit ? [] : current.slice(previous.length);
+  const committed = Math.max(previous.length, Math.min(commitThrough, current.length));
+  const nextPermanent = commit
+    ? current.slice(0, committed)
+    : current.slice(0, Math.max(previous.length, Math.min(promotedBoundary, commitThrough)));
+  const uncommitted = commit ? current.slice(committed) : current.slice(previous.length);
   return {
     reset: !prefixMatches,
     dynamic: uncommitted.slice(-Math.max(0, maxDynamic)),
@@ -425,9 +438,15 @@ export function upsertActivityEvent(
   entries: readonly ActivityEntry[], anchor: number, responseOffset: number | undefined, event: HarnessActivityEvent, sequence?: number,
 ): ActivityEntry[] {
   if (event.kind === 'thinking') return [...entries];
+  // Tool labels, output and diffs are untrusted text. They are cleaned before
+  // renderActivityLine styles them, so the only escapes left in a row are the
+  // color codes this UI added itself.
+  const cleanLines = (lines: readonly string[]): string[] => lines.map((line) => sanitizeTerminalText(line, { singleLine: true }));
   const normalized: HarnessActivityEvent = {
     ...event,
-    label: visibleSlice(event.label.replace(/\s+/g, ' ').trim() || 'tool', 120),
+    label: visibleSlice(sanitizeTerminalText(event.label, { singleLine: true }).replace(/\s+/g, ' ').trim() || 'tool', 120),
+    ...(event.output ? { output: cleanLines(event.output) } : {}),
+    ...(event.diff ? { diff: { ...event.diff, removed: cleanLines(event.diff.removed), added: cleanLines(event.diff.added) } } : {}),
   };
   const matchIndex = (() => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -728,7 +747,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   activity(message: string): void {
-    const normalized = message.trim();
+    const normalized = sanitizeTerminalText(message, { keepSgr: true, singleLine: true }).trim();
     const last = this.activityEntries[this.activityEntries.length - 1];
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
     this.activityEntries = [...this.activityEntries, {
@@ -1014,6 +1033,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     const conversation: Array<{ text: string }> = [];
     let stableConversationBoundary = 0;
+    // Where provisional rows begin. The live assistant and any queued turns are
+    // drawn from state that is about to change -- a queued turn becomes a real
+    // user message the moment it is sent -- so they must stay in the repainted
+    // region until they are persisted, never in native scrollback.
+    let provisionalConversationStart = Number.POSITIVE_INFINITY;
     // Rows of a still-open block that can no longer change: everything above
     // the final Markdown part, plus every completed source line of an open code
     // fence. Without this only a CLOSED block could leave the live region, so a
@@ -1041,8 +1065,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
       const appendMarkdownContent = (
-        content: string, messageMarker: string, events: readonly InlineResponseEvent[] = [], trackStableTail = false,
+        rawContent: string, messageMarker: string, events: readonly InlineResponseEvent[] = [], trackStableTail = false,
       ): void => {
+        // Model and user text is sanitized before it is parsed or styled, so
+        // the live stream and the persisted copy of a message lay out alike.
+        const content = sanitizeTerminalText(rawContent);
         let firstLine = true;
         /** Returns how many conversation rows are final even if this block is
          * still growing at the end of a live stream. */
@@ -1165,6 +1192,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       ensureBlankConversationRow();
       appendActivity(messageStart + messageIndex + 1);
+      // Only QUEUED rows are provisional. The live assistant is re-rendered
+      // identically once persisted, so its settled prefix may still spill into
+      // scrollback -- which is what keeps an answer taller than the viewport
+      // from losing its head rows while it streams.
+      if (absoluteMessageIndex + 1 === persistedMessages.length + (hasTransientAssistant ? 1 : 0)) {
+        provisionalConversationStart = conversation.length;
+      }
     }
     const conversationLines = liveConversationLines(
       conversation.map((row) => row.text), hasTransientAssistant,
@@ -1211,9 +1245,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
     const commit = this.commitConversationOnNextPaint;
     const maxDynamicConversation = Math.max(0, targetHeight - footer.length);
+    // With no queued row on screen there is nothing provisional, so the whole
+    // conversation is committable.
+    const provisionalStart = Number.isFinite(provisionalConversationStart)
+      ? provisionalConversationStart : conversationLines.length;
     const plan = inlineConversationPlan(
       this.inlinePermanentLines, conversationLines, commit, maxDynamicConversation,
       commit ? conversationLines.length : Math.max(stableConversationBoundary, lineStableConversationBoundary),
+      Math.min(provisionalStart, conversationLines.length),
     );
     const reset: InlineReset = this.resetInlineScreen || (plan.reset ? 'viewport' : false);
     const dynamicConversation = plan.dynamic;
@@ -1235,8 +1274,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     permanent: readonly string[], dynamic: readonly string[], cursorRow: number,
     cursorColumn: number, reset: InlineReset, hideCursor: boolean, targetHeight = Math.max(5, output.rows || 30),
   ): void {
+    // Last line of defence: whatever produced a row, the only escape sequences
+    // that reach the terminal are SGR colors, and no row contains a control
+    // character that would move the cursor out from under the diff.
+    const safeRow = (row: string): string => sanitizeTerminalText(row, { keepSgr: true, singleLine: true });
     const state: InlineFrameState = {
-      permanent: [...permanent], dynamic: [...dynamic], cursorRow, cursorColumn, reset, hideCursor, targetHeight,
+      permanent: permanent.map(safeRow), dynamic: dynamic.map(safeRow), cursorRow, cursorColumn, reset, hideCursor, targetHeight,
     };
     if (this.frameInFlight) {
       // A resize/session reset must survive later spinner or token paints
