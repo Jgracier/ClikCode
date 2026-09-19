@@ -108,6 +108,11 @@ export function nativeSessionIds(
     for (const match of outputText.matchAll(UUID)) ids.add(match[0]);
     return ids;
   }
+  return nativeSessionIdsFromValues(format === 'json' ? parseJsonDocument(outputText) : parseJsonLines(outputText).values, harnessCommand);
+}
+
+/** nativeSessionIds over already-parsed structured records. */
+export function nativeSessionIdsFromValues(values: readonly unknown[], harnessCommand?: string): Set<string> {
   const preferredKeys = new Set(harnessCommand ? HARNESS_SESSION_KEYS[harnessCommand] ?? [] : []);
   const preferred = new Set<string>();
   const explicit = new Set<string>();
@@ -117,14 +122,15 @@ export function nativeSessionIds(
     const record = asRecord(value);
     if (!record) return;
     for (const [key, child] of Object.entries(record)) {
-      if (typeof child === 'string' && child.trim()) {
+      if (typeof child === 'string') {
+        if (!child.trim()) continue;
         if (preferredKeys.has(key)) preferred.add(child.trim());
         else if (SESSION_KEY.test(key)) explicit.add(child.trim());
         else if (key === 'id' && depth === 0 && SESSION_ENVELOPE_TYPE.test(String(record.type ?? record.event ?? ''))) envelope.add(child.trim());
       } else visit(child, depth + 1);
     }
   };
-  for (const value of format === 'json' ? parseJsonDocument(outputText) : parseJsonLines(outputText).values) visit(value, 0);
+  for (const value of values) visit(value, 0);
   return new Set<string>([...preferred, ...explicit, ...envelope]);
 }
 
@@ -324,7 +330,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   // through should still show that output, not the failure reason instead
   // of it.
   const text = claudeText || geminiStreamText.trim() || gooseStreamText.trim() || messages[messages.length - 1]?.trim() || errorMessage;
-  const ids = nativeSessionIds(stdout, harness.turn.output, harness.command);
+  const ids = nativeSessionIdsFromValues(values, harness.command);
   const usage = nativeTurnUsage(harness, values);
   const extras = {
     ...(ids.size ? { nativeSessionId: [...ids][0] } : {}),
