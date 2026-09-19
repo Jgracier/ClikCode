@@ -14,7 +14,7 @@ import type {
   HarnessActivityEvent, HarnessSession,
 } from './types.js';
 export {
-  harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
+  harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, localRouter, streamLocalAiTurn,
 } from './harness-runtime.js';
 

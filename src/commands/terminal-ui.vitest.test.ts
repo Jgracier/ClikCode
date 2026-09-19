@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, interleaveResponseContent, rightLabeledRule, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
+import { commandPaletteMatches, editWaitingComposer, interleaveResponseContent, rightLabeledRule, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
 
 describe('full-screen waiting input', () => {
   it('alternates opposite dots in a stable ASCII square', () => {
@@ -17,6 +17,15 @@ describe('full-screen waiting input', () => {
 
   it('keeps escape and control-c as cancellation without treating other keys as actions', () => {
     expect(waitingInputActions(`x\u001b\u0003`)).toEqual(['cancel-edit', 'cancel-stop']);
+  });
+
+  it('edits a real composer during generation instead of discarding typed keys', () => {
+    let draft = { value: '', cursor: 0, changed: false };
+    for (const key of ['n', 'e', 'x', 't']) draft = editWaitingComposer(draft.value, draft.cursor, key);
+    draft = editWaitingComposer(draft.value, draft.cursor, '\u001b[D');
+    draft = editWaitingComposer(draft.value, draft.cursor, '!');
+    expect(draft).toEqual({ value: 'nex!t', cursor: 4, changed: true });
+    expect(editWaitingComposer(draft.value, draft.cursor, '\u007f')).toEqual({ value: 'next', cursor: 3, changed: true });
   });
 });
 

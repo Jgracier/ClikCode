@@ -19,6 +19,8 @@ export interface CodexAppServerTurnInput {
   onActivity?: (event: HarnessActivityEvent) => void;
   onPhase?: (phase: string) => void;
   onApproval?: (title: string, detail?: string) => Promise<boolean>;
+  /** Published only while a real active turn id exists. */
+  onSteerReady?: (handler?: (text: string) => Promise<void>) => void;
 }
 
 export interface CodexAppServerTurnResult {
@@ -26,6 +28,13 @@ export interface CodexAppServerTurnResult {
   nativeSessionId: string;
   isError?: boolean;
   statusCode?: number;
+}
+
+export function codexSteerParams(threadId: string, turnId: string, text: string): JsonObject {
+  return {
+    threadId, expectedTurnId: turnId,
+    input: [{ type: 'text', text, text_elements: [] }],
+  };
 }
 
 export function codexActivityForItem(item: JsonObject, completed: boolean): HarnessActivityEvent | undefined {
@@ -88,6 +97,7 @@ export function runCodexAppServerTurn(input: CodexAppServerTurnInput): Promise<C
     const finish = (error?: Error): void => {
       if (settled) return;
       settled = true;
+      input.onSteerReady?.(undefined);
       input.signal?.removeEventListener('abort', abort);
       child.kill('SIGTERM');
       if (error) reject(error);
@@ -175,6 +185,10 @@ export function runCodexAppServerTurn(input: CodexAppServerTurnInput): Promise<C
         cwd: input.cwd, model: input.model ?? null, effort: input.effort ?? null,
       });
       turnId = String(((turnResult.turn as JsonObject) ?? {}).id ?? '');
+      if (!turnId) throw new Error('Codex app-server did not return a turn id');
+      input.onSteerReady?.(async (text) => {
+        await request('turn/steer', codexSteerParams(threadId!, turnId!, text));
+      });
     })().catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
   });
 }
