@@ -297,7 +297,7 @@ export async function codexUsageProbe(_session: HarnessSession, environment: Rea
     const minutes = typeof window.windowDurationMins === 'number' ? window.windowDurationMins : undefined;
     if (used === undefined || minutes === undefined) return [];
     const period = minutes === 300 ? '5h' : minutes === 10_080 ? 'weekly' : minutes < 1_440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1_440)}d`;
-    return [`${period} ${Math.max(0, Math.min(100, used))}% used`];
+    return [`${period} ${Math.max(0, Math.min(100, 100 - used))}% left`];
   });
   return parts.length ? parts.join(' · ') : undefined;
 }
@@ -337,8 +337,8 @@ export async function claudeUsageProbe(_session: HarnessSession, environment: Re
       seven_day?: { utilization?: number };
     };
     const parts: string[] = [];
-    if (typeof body.five_hour?.utilization === 'number') parts.push(`5h ${Math.max(0, Math.min(100, body.five_hour.utilization))}% used`);
-    if (typeof body.seven_day?.utilization === 'number') parts.push(`weekly ${Math.max(0, Math.min(100, body.seven_day.utilization))}% used`);
+    if (typeof body.five_hour?.utilization === 'number') parts.push(`5h ${Math.max(0, Math.min(100, 100 - body.five_hour.utilization))}% left`);
+    if (typeof body.seven_day?.utilization === 'number') parts.push(`weekly ${Math.max(0, Math.min(100, 100 - body.seven_day.utilization))}% left`);
     return parts.length ? parts.join(' · ') : undefined;
   } catch { return undefined; }
 }

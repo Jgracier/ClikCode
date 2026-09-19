@@ -192,7 +192,7 @@ export interface HarnessSession {
     activities?: string[];
     /** Additional user instructions accepted by a provider's active-turn
      * steering protocol. They are part of this turn, not future prompts. */
-    steers?: Array<{ text: string; submittedAt: string }>;
+    steers?: Array<{ text: string; submittedAt: string; responseOffset?: number }>;
     startedAt: string;
     updatedAt: string;
     outputStarted: boolean;
@@ -240,18 +240,11 @@ export interface HarnessPrompter {
 }
 
 export type MessageBlock =
-  | { kind: 'code'; lines: string[]; language?: string }
-  | { kind: 'table'; header: string[]; rows: string[][] }
-  | { kind: 'text'; paragraph: string };
-
-export interface FormattedParagraph {
-  prefix: string;
-  hangIndent: string;
-  text: string;
-  bold: boolean;
-  /** A horizontal rule has no text at all -- the render loop draws a full
-   * dim rule line and skips wrapping entirely for it. */
-  rule: boolean;
-}
+  | { kind: 'paragraph'; text: string; quoteDepth: number; indent: number; sourceEnd: number }
+  | { kind: 'heading'; text: string; level: number; quoteDepth: number; sourceEnd: number }
+  | { kind: 'rule'; quoteDepth: number; sourceEnd: number }
+  | { kind: 'code'; lines: string[]; language?: string; quoteDepth: number; indent: number; sourceEnd: number }
+  | { kind: 'table'; header: string[]; rows: string[][]; align: Array<'left' | 'center' | 'right' | null>; quoteDepth: number; sourceEnd: number }
+  | { kind: 'list-item'; text: string; depth: number; ordered: boolean; number?: number; task: boolean; checked?: boolean; quoteDepth: number; sourceEnd: number };
 
 export interface PickerOption<T> { label: string; detail?: string; value: T; actions?: readonly { label: string; value: string }[] }

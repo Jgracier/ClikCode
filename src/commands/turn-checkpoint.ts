@@ -17,13 +17,19 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   const messages = [...(session.messages ?? [])];
   const pending = session.pendingTurn;
   if (!pending) return messages;
-  const prompt = [
-    pending.prompt,
-    ...(pending.steers ?? []).map((steer) => `Steering update while this turn was running:\n${steer.text}`),
-  ].join('\n\n');
-  messages.push({ role: 'user', content: prompt });
-  if (pending.response?.trim()) messages.push({ role: 'assistant', content: pending.response });
-  else if (pending.activities?.length) messages.push({ role: 'assistant', content: activitySummary(pending.activities) });
+  messages.push({ role: 'user', content: pending.prompt });
+  const response = pending.response ?? '';
+  let responseOffset = 0;
+  for (const steer of [...(pending.steers ?? [])].sort((left, right) => (left.responseOffset ?? 0) - (right.responseOffset ?? 0))) {
+    const steerOffset = Math.max(responseOffset, Math.min(response.length, steer.responseOffset ?? 0));
+    const beforeSteer = response.slice(responseOffset, steerOffset);
+    if (beforeSteer.trim()) messages.push({ role: 'assistant', content: beforeSteer });
+    messages.push({ role: 'user', content: steer.text });
+    responseOffset = steerOffset;
+  }
+  const remaining = response.slice(responseOffset);
+  if (remaining.trim()) messages.push({ role: 'assistant', content: remaining });
+  else if (!response.trim() && pending.activities?.length) messages.push({ role: 'assistant', content: activitySummary(pending.activities) });
   return messages;
 }
 
@@ -57,10 +63,12 @@ export function recordPendingActivity(session: HarnessSession, event: HarnessAct
   session.updatedAt = now;
 }
 
-export function recordPendingSteer(session: HarnessSession, text: string, submittedAt: string, now: string): void {
+export function recordPendingSteer(
+  session: HarnessSession, text: string, submittedAt: string, responseOffset: number, now: string,
+): void {
   const pending = session.pendingTurn;
   if (!pending || !text.trim()) return;
-  pending.steers = [...(pending.steers ?? []), { text: text.trim(), submittedAt }];
+  pending.steers = [...(pending.steers ?? []), { text: text.trim(), submittedAt, responseOffset: Math.max(0, responseOffset) }];
   pending.updatedAt = now;
   session.updatedAt = now;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyAccountFailure, failoverPrompt } from './ai-failover';
+import { classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover';
 
 describe('ClikCode account failover', () => {
   it('does not confuse temporary throttling with exhausted quota', () => {
@@ -11,6 +11,16 @@ describe('ClikCode account failover', () => {
 
   it('classifies authentication separately', () => {
     expect(classifyAccountFailure(Object.assign(new Error('unauthorized'), { statusCode: 401 }))).toBe('authentication-required');
+  });
+
+  it('routes around accounts whose live usage window is exhausted', () => {
+    expect(usageLabelIsExhausted('5h 0% left · weekly 69% left')).toBe(true);
+    expect(usageLabelIsExhausted('5h 58% left · weekly 0% left')).toBe(true);
+    expect(usageLabelIsExhausted('5h 0.1% left · weekly 69% left')).toBe(false);
+    expect(usageLabelIsExhausted('usage unavailable')).toBe(false);
+    expect(usageLabelRemainingPercent('5h 58% left · weekly 29% left')).toBe(29);
+    expect(usageLabelRemainingPercent('5h 42% used · weekly 71% used')).toBe(29);
+    expect(usageLabelRemainingPercent('12k tok · $0.02')).toBeUndefined();
   });
 
   it('rehydrates the complete canonical transcript and interrupted request', () => {
