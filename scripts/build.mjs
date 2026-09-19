@@ -10,10 +10,12 @@
  * Flags:
  *   --analyze   Print a metafile report: top inputs by bytes, runtime externals,
  *               and any deployment-CLI sources that landed in index.js.
- *   --strict    With or without --analyze: FAIL when a deployment-CLI source
- *               (basename server-*, deploy*, docker*, admin-*) is in index.js.
- *               Opt-in until commands/ai.ts stops importing api/client.js and
- *               commands/auth.js; then make it the default in package.json.
+ *   --no-strict Downgrade the deployment-CLI source check to a warning. By
+ *               default (and with the legacy --strict spelling) the build FAILS
+ *               when a deployment-CLI source (basename server-*, deploy*,
+ *               docker*, admin-*) is in index.js: commands/ai.ts no longer
+ *               imports api/client.js or commands/auth.js, so any such file is
+ *               a regression that drags axios/inquirer/ora back in.
  *
  * Always enforced (cheap, and each one is a broken publish if it regresses):
  *   - every package index.js imports at runtime is in package.json `dependencies`
@@ -38,7 +40,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
 
 const analyze = process.argv.includes('--analyze');
-const strict = process.argv.includes('--strict');
+const strict = !process.argv.includes('--no-strict');
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 
 /**

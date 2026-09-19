@@ -1,6 +1,6 @@
 /** Local ClikDeploy AI harness lifecycle, account aliases, and durable session settings. */
 
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { copyFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
@@ -11,8 +11,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import type Conf from 'conf';
 import chalk from 'chalk';
-import { ApiClient } from '../api/client.js';
-import { login } from './auth.js';
+import { getApiKeyForUrl, getApiUrl } from './gateway-credentials.js';
+import { gatewayLogin } from './gateway-login.js';
+import { isAllowedLoopbackHost } from './control-api-host.js';
+import { CLIKCODE_USER_AGENT } from '../version.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, ensureNativeHarness, inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
@@ -30,7 +32,7 @@ import type {
 import {
   capDiffLines, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   isCodeChangeLabel, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
-  localRouter, nativeActivityPhase, nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent,
+  nativeActivityPhase, nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent,
   compactPath, nativeProfileEnvironment, renderActivityLine, sessionProviderLabel, streamLocalAiTurn,
 } from './native-harness-protocol.js';
 import {
@@ -49,6 +51,7 @@ import { TerminalHarnessPrompter, terminalUiSupported } from './terminal-ui.js';
 import { runCodexAppServerTurn } from './codex-app-server.js';
 import { runAcpTurn } from './acp-client.js';
 import { harnessTurnTransport } from './harness-transport.js';
+import { allLocalHarnesses, nativeHarnessTurnArgv } from './harness-runtime.js';
 import { LiveTurnInputBroker, type LiveTurnSubmission } from './live-turn-input.js';
 import {
   beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
@@ -726,6 +729,11 @@ function sendJson(response: ServerResponse, code: number, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
+function boundPort(server: Server): number {
+  const address = server.address();
+  return address && typeof address !== 'string' ? address.port : -1;
+}
+
 function methodAndPath(request: IncomingMessage): `${string} ${string}` {
   return `${request.method ?? 'GET'} ${new URL(request.url ?? '/', 'http://127.0.0.1').pathname}`;
 }
@@ -773,6 +781,8 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
   const startupState = await readState();
   const server = createServer(async (request, response) => {
     try {
+      // DNS-rebinding guard: only a literal loopback authority on OUR port.
+      if (!isAllowedLoopbackHost(request.headers.host, boundPort(server))) return sendJson(response, 403, { error: 'forbidden_host' });
       const route = methodAndPath(request);
       if (route === 'GET /v1/health') {
         sendJson(response, 200, { status: 'ok', installationId: startupState.installationId, runtime: harnessCommand(), credentialBoundary: 'local-only' });
@@ -1027,10 +1037,10 @@ export async function aiUsage(): Promise<void> {
 
 /** Reports the separate ClikDeploy OAuth/API-key gateway identity, never a BYO provider login. */
 export async function aiGatewayStatus(config: Conf): Promise<void> {
-  const apiUrl = ApiClient.getApiUrl(config);
+  const apiUrl = getApiUrl(config);
   emitJson({
     route: 'gateway',
-    connected: Boolean(ApiClient.getApiKeyForUrl(config, apiUrl)),
+    connected: Boolean(getApiKeyForUrl(config, apiUrl)),
     apiUrl,
     authentication: 'clikdeploy-oauth-or-api-key',
     credentialBoundary: 'gateway-auth-only',
@@ -1806,8 +1816,8 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
 }
 
 async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<void> {
-  const apiUrl = ApiClient.getApiUrl(config);
-  if (ApiClient.getApiKeyForUrl(config, apiUrl)) return;
+  const apiUrl = getApiUrl(config);
+  if (getApiKeyForUrl(config, apiUrl)) return;
   const provider = await chooseOption(rl, 'Sign in to ClikDeploy Gateway', [
     { label: 'Continue with Google', value: 'google' as const },
     { label: 'Continue with GitHub', value: 'github' as const },
@@ -1815,11 +1825,11 @@ async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<vo
   if (!provider) throw new Error('ClikDeploy Gateway sign-in was cancelled.');
   if (rl instanceof TerminalHarnessPrompter) await rl.suspend();
   try {
-    await login(config, { google: provider === 'google', github: provider === 'github', embedded: true });
+    await gatewayLogin(config, { google: provider === 'google', github: provider === 'github', embedded: true });
   } finally {
     if (rl instanceof TerminalHarnessPrompter) rl.resume();
   }
-  if (!ApiClient.getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a Gateway credential.');
+  if (!getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a Gateway credential.');
 }
 
 async function newGatewayConversation(config: Conf, rl: HarnessPrompter, currentId: string): Promise<string> {
@@ -2012,13 +2022,13 @@ async function interactiveAccountPicker(
 
 async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
   for (;;) {
-    const available = await Promise.all(localRouter().AI_LOCAL_HARNESSES
+    const available = await Promise.all(allLocalHarnesses()
       .filter((harness) => harness.surface === 'terminal' && harness.turn)
       .map(async (harness) => ({ harness, inspection: await inspectNativeHarnessForPicker(harness) })));
     const state = await readState();
     const session = state.sessions.find((item) => item.id === id);
     if (!session) throw new Error(`AI session "${id}" was not found`);
-    const gatewayConnected = Boolean(ApiClient.getApiKeyForUrl(config, ApiClient.getApiUrl(config)));
+    const gatewayConnected = Boolean(getApiKeyForUrl(config, getApiUrl(config)));
     const configuredProviders = new Set(state.accounts.map((account) => account.provider));
     let provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected, configuredProviders));
     if (!provider) return undefined;
@@ -2069,7 +2079,7 @@ async function autoSelectSessionHarness(id: string): Promise<boolean> {
     await aiHarnessSelect(preferred.command, id);
     return true;
   }
-  const candidates = localRouter().AI_LOCAL_HARNESSES
+  const candidates = allLocalHarnesses()
     .filter((harness) => harness.surface === 'terminal' && harness.turn)
     .sort((left, right) => harnessAutoPreference(left.command) - harnessAutoPreference(right.command));
   for (const harness of candidates) {
@@ -2278,7 +2288,7 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
     for (const account of accounts) unique.set(account.nativeProfile?.path ?? 'default', account);
     return [...unique.values()];
   };
-  const discoverable = localRouter().AI_LOCAL_HARNESSES.filter((harness) => harness.session?.discoverArgv);
+  const discoverable = allLocalHarnesses().filter((harness) => harness.session?.discoverArgv);
   const shellDiscovered = (await Promise.all(discoverable.map(async (harness) => {
     return (await Promise.all(discoveryProfiles(harness).map(async (account) => {
       const environment = nativeProfileEnvironment(account?.nativeProfile);
@@ -2715,7 +2725,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     return [
       ...Object.keys(commandDetails).map((value) => ({ label: value, detail: commandDetails[value], value })),
       ...Object.entries(managers).map(([name, manager]) => ({ label: `/${name}`, detail: manager?.label ?? name, value: `/${name}` })),
-      ...localRouter().AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal').map((item) => ({
+      ...allLocalHarnesses().filter((item) => item.surface === 'terminal').map((item) => ({
         label: `/${item.command}`, detail: `switch to ${item.displayName}`, value: `/${item.command}`,
       })),
     ];
@@ -3199,7 +3209,7 @@ export async function aiSessionSend(
         session.nativeSessionId = await captureNativeHarness(harness, harness.session.createSessionArgv, environment);
         createdHere = true;
       }
-      const argv = localRouter().nativeHarnessTurnArgv(harness, {
+      const argv = nativeHarnessTurnArgv(harness, {
         prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
         launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
         permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
@@ -3536,8 +3546,8 @@ export async function aiGatewaySessionSend(
   const prepared = await prepareAttachments(session.attachments ?? []);
   if (prepared.images.length) throw new Error('Image attachments currently require the local Codex provider. Switch with /codex or clear them with /attachments clear.');
   const turnText = `${text}${prepared.textContext}`;
-  const baseUrl = ApiClient.getApiUrl(config).replace(/\/$/, '');
-  const apiKey = ApiClient.getApiKeyForUrl(config, baseUrl);
+  const baseUrl = getApiUrl(config).replace(/\/$/, '');
+  const apiKey = getApiKeyForUrl(config, baseUrl);
   if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
@@ -3547,7 +3557,7 @@ export async function aiGatewaySessionSend(
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
     signal,
-    headers: { authorization: `Bearer ${apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
     body: JSON.stringify({ message: turnText, messages: baseMessages, mode: 'plan' }),
   });
   if (!response.ok || !response.body) throw new Error(`gateway AI request failed (${response.status})`);
