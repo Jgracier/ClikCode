@@ -325,7 +325,11 @@ export async function claudeUsageProbe(_session: HarnessSession, environment: Re
     const raw = await readFile(join(configDir, '.credentials.json'), 'utf8');
     const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
     token = typeof parsed.claudeAiOauth?.accessToken === 'string' ? parsed.claudeAiOauth.accessToken : undefined;
-  } catch { return undefined; }
+  } catch {
+    // fail-open-ok: a missing or malformed .credentials.json means this account is not
+    // signed in, so there is no usage to label. Absence is the real answer.
+    return undefined;
+  }
   if (!token) return undefined;
   try {
     const response = await fetch('https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1', {
@@ -340,7 +344,11 @@ export async function claudeUsageProbe(_session: HarnessSession, environment: Re
     if (typeof body.five_hour?.utilization === 'number') parts.push(`5h ${Math.max(0, Math.min(100, 100 - body.five_hour.utilization))}% left`);
     if (typeof body.seven_day?.utilization === 'number') parts.push(`weekly ${Math.max(0, Math.min(100, 100 - body.seven_day.utilization))}% left`);
     return parts.length ? parts.join(' · ') : undefined;
-  } catch { return undefined; }
+  } catch {
+    // fail-open-ok: the usage label is optional chrome on the account chooser. If the probe
+    // cannot reach the endpoint we render no label rather than failing the chooser.
+    return undefined;
+  }
 }
 
 export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
