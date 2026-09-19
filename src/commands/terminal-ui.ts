@@ -354,8 +354,6 @@ type InlineFrameState = {
   targetHeight: number;
 };
 
-const MAX_ACTIVITY_BURST = 3;
-const MAX_ACTIVITY_BURST_ROWS = 6;
 
 /** One provider may publish pending/running/progress frames for the same tool.
  * They describe one lifecycle, not separate calls. Upsert by native id, or by
@@ -449,55 +447,27 @@ export function responseTimeline(content: string, events: readonly InlineRespons
   const blocks = splitIntoBlocks(content);
   const sorted = [...events].sort((left, right) => left.responseOffset - right.responseOffset
     || (left.sequence ?? 0) - (right.sequence ?? 0));
-  // There is deliberately no response-level cap here. Collapsing older tools
-  // into a "… N earlier tool calls in this response" row placed that row at
-  // the offset of the OLDEST hidden tool -- near the top of the answer -- and
-  // its count changed every time another tool ran. A row whose text keeps
-  // changing can never enter native scrollback, so it held itself and every
-  // paragraph after it in the repainted region directly above the composer for
-  // the whole turn. Finished tool rows are immutable and flow away into
-  // scrollback on their own; the per-burst cap below still bounds the one case
-  // that genuinely needs it, a pile of tools at a single offset.
+  // No tool row is ever collapsed into a "… N earlier tool calls" count, at
+  // either the response or the burst level. Such a row's text changes every
+  // time another tool runs, and a row that can still change cannot enter
+  // native scrollback -- so it pinned itself, and every paragraph after it, in
+  // the repainted region directly above the composer for the rest of the turn.
+  // Each finished tool is instead one immutable row at the offset where it
+  // started, so tools and prose stay interleaved in the order they happened
+  // and scroll away together. Overall height is bounded where it actually
+  // matters, by renderActivityLine capping one tool's own output preview and
+  // by inlineConversationPlan promoting overflow out of the live region.
   const slots: InlineResponseEvent[][] = Array.from({ length: blocks.length + 1 }, () => []);
   for (const event of sorted) {
     const blockIndex = event.responseOffset <= 0 ? -1
       : blocks.findIndex((block) => event.responseOffset <= block.sourceEnd);
     slots[blockIndex < 0 ? (event.responseOffset <= 0 ? 0 : blocks.length) : blockIndex + 1]!.push(event);
   }
-  const compact = (slot: readonly InlineResponseEvent[]): InlineResponseEvent[] => {
-    const compacted: InlineResponseEvent[] = [];
-    const flush = (burst: Array<Extract<InlineResponseEvent, { kind: 'activity' }>>): void => {
-      if (!burst.length) return;
-      const retained: typeof burst = [];
-      let rows = 0;
-      for (let index = burst.length - 1; index >= 0 && retained.length < MAX_ACTIVITY_BURST; index -= 1) {
-        const event = burst[index]!;
-        if (retained.length && rows + event.lines.length > MAX_ACTIVITY_BURST_ROWS) break;
-        retained.unshift(event);
-        rows += event.lines.length;
-      }
-      const hidden = burst.length - retained.length;
-      if (hidden) compacted.push({
-        kind: 'activity', responseOffset: burst[0]!.responseOffset,
-        ...(burst[0]!.sequence === undefined ? {} : { sequence: burst[0]!.sequence }),
-        lines: [`… ${hidden} earlier tool ${hidden === 1 ? 'call' : 'calls'}`],
-      });
-      compacted.push(...retained);
-      burst.length = 0;
-    };
-    const burst: Array<Extract<InlineResponseEvent, { kind: 'activity' }>> = [];
-    for (const event of slot) {
-      if (event.kind === 'activity') burst.push(event);
-      else { flush(burst); compacted.push(event); }
-    }
-    flush(burst);
-    return compacted;
-  };
   const parts: ResponseTimelinePart[] = [];
-  parts.push(...compact(slots[0]!));
+  parts.push(...slots[0]!);
   for (const [index, block] of blocks.entries()) {
     parts.push({ kind: 'markdown', block });
-    parts.push(...compact(slots[index + 1]!));
+    parts.push(...slots[index + 1]!);
   }
   return parts;
 }
