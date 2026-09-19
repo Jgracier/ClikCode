@@ -20,3 +20,15 @@ export function terminatePortable(child: ChildProcess, signal: NodeJS.Signals = 
   });
   killer.once('error', () => { if (child.exitCode === null) child.kill(); });
 }
+
+/** Signal the whole process tree. A child spawned `detached` on POSIX leads
+ * its own process group, so a negative pid reaches grandchildren (MCP servers,
+ * shells) that would otherwise survive their parent. Windows already gets tree
+ * semantics from taskkill in terminatePortable. */
+export function killProcessTreePortable(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM', detached = false): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (detached && process.platform !== 'win32' && child.pid) {
+    try { process.kill(-child.pid, signal); return; } catch { /* fall back to the direct child */ }
+  }
+  terminatePortable(child, signal);
+}
