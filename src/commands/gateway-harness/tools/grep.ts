@@ -41,7 +41,10 @@ function limitLines(lines: string[], limit: number): string {
 
 export async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolContext, 'signal' | 'cwd'>): Promise<{ output: string; isError?: boolean }> {
   const mode = args.output_mode ?? 'content';
-  const argv = ['--color', 'never', '--no-messages', '--max-filesize', '5M'];
+  // --no-require-git: honor .gitignore even outside a git checkout, matching
+  // the Node fallback. Hidden files are searched, VCS internals and
+  // node_modules never are.
+  const argv = ['--color', 'never', '--no-messages', '--max-filesize', '5M', '--no-require-git', '--hidden', '--glob', '!**/.git/**', '--glob', '!**/node_modules/**'];
   if (mode === 'files') argv.push('--files-with-matches');
   else if (mode === 'count') argv.push('--count');
   else { argv.push('--line-number', '--no-heading', '--with-filename'); if (args.context) argv.push('--context', String(args.context)); }
