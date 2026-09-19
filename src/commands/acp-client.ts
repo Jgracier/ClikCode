@@ -44,14 +44,15 @@ export function acpResponseDelta(update: Json): string | undefined {
 
 export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined {
   if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return undefined;
-  const completed = ['completed', 'failed'].includes(String(update.status));
+  const status = String(update.status);
+  const completed = ['completed', 'failed'].includes(status);
   const diff = Array.isArray(update.content)
     ? update.content.flatMap((entry: Json) => entry?.type === 'diff'
       ? [{ removed: String(entry.oldText ?? '').split(/\r?\n/), added: String(entry.newText ?? '').split(/\r?\n/) }]
       : [])[0]
     : undefined;
   return {
-    kind: completed ? 'tool-done' : 'tool-start',
+    kind: status === 'failed' ? 'tool-error' : completed ? 'tool-done' : 'tool-start',
     label: String(update.title ?? update.name ?? 'tool'),
     ...(typeof update.toolCallId === 'string' ? { id: update.toolCallId } : {}),
     ...(diff ? { diff } : {}),
@@ -68,9 +69,9 @@ export function runAcpTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
       ...(input.effort && input.command === 'copilot' ? ['--effort', input.effort] : []),
       ...(input.effort && input.command === 'droid' ? ['--reasoning-effort', input.effort] : []),
       ...(input.effort && input.command === 'hermes' ? ['--reasoning', input.effort] : []),
-      ...(input.permissionMode === 'bypass' ? input.command === 'cline' ? ['--auto-approve', 'true'] : input.command === 'cursor' ? ['--force'] : input.command === 'copilot' ? ['--allow-all'] : input.command === 'droid' ? ['--skip-permissions-unsafe'] : input.command === 'hermes' ? ['--yolo'] : [] : []),
+      ...(input.permissionMode === 'bypass' ? input.command === 'cline' ? ['--auto-approve', 'true'] : input.command === 'copilot' ? ['--allow-all'] : input.command === 'droid' ? ['--skip-permissions-unsafe'] : input.command === 'hermes' ? ['--yolo'] : [] : []),
       ...(input.permissionMode === 'auto' && input.command === 'droid' ? ['--auto', 'low'] : []),
-      ...(input.permissionMode === 'auto' ? input.command === 'cline' ? ['--auto-approve', 'true'] : input.command === 'cursor' ? ['--auto-review'] : [] : []),
+      ...(input.permissionMode === 'auto' && input.command === 'cline' ? ['--auto-approve', 'true'] : []),
     ];
     // Droid's model/autonomy flags belong to the `exec` subcommand. Other ACP
     // harnesses publish root-level configuration flags before their ACP mode.

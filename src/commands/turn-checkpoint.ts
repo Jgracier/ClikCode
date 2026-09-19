@@ -55,7 +55,8 @@ export function updatePendingResponse(
 export function recordPendingActivity(session: HarnessSession, event: HarnessActivityEvent, now: string): void {
   const pending = session.pendingTurn;
   if (!pending || event.kind === 'thinking') return;
-  const verb = event.kind === 'tool-done' ? 'completed' : event.kind === 'tool-start' ? 'started' : 'thinking';
+  const verb = event.kind === 'tool-error' ? 'failed'
+    : event.kind === 'tool-done' ? 'completed' : event.kind === 'tool-start' ? 'started' : 'thinking';
   const summary = `${verb} ${event.label}`.trim();
   if (!summary || pending.activities?.[pending.activities.length - 1] === summary) return;
   pending.activities = [...(pending.activities ?? []).slice(-19), summary];

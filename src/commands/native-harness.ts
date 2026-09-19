@@ -255,6 +255,25 @@ export interface NativeHarnessTurnOptions {
   signal?: AbortSignal;
   onStdoutLine?: (line: string) => void;
   onStderrLine?: (line: string) => void;
+  /** Milliseconds of complete silence -- no stdout, no stderr, no exit --
+   * after which the harness is treated as hung. Zero or negative disables it. */
+  idleTimeoutMs?: number;
+}
+
+/** Deliberately an *idle* timeout rather than a wall-clock cap: a legitimate
+ * agentic turn can run for a very long time, but it narrates while it does.
+ * A harness that has said nothing at all for this long is wedged, and without
+ * this the turn blocks forever with only Ctrl+C to break it. */
+export const DEFAULT_TURN_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
+export function turnIdleTimeoutMs(
+  override?: number, environment: NodeJS.ProcessEnv = process.env,
+): number {
+  if (override !== undefined) return override;
+  const configured = Number(environment.CLIKCODE_TURN_IDLE_TIMEOUT_MS);
+  return Number.isFinite(configured) && environment.CLIKCODE_TURN_IDLE_TIMEOUT_MS !== undefined && environment.CLIKCODE_TURN_IDLE_TIMEOUT_MS !== ''
+    ? configured
+    : DEFAULT_TURN_IDLE_TIMEOUT_MS;
 }
 
 /** Run one provider turn without surrendering the ClikCode terminal UI. */
@@ -279,10 +298,23 @@ export async function captureNativeHarnessTurn(
     let stdoutPending = '';
     let stderrPending = '';
     let abortStopTimer: NodeJS.Timeout | undefined;
+    let idleTimer: NodeJS.Timeout | undefined;
+    let timedOut = false;
+    const idleLimit = turnIdleTimeoutMs(options.idleTimeoutMs);
+    const noteActivity = (): void => {
+      if (idleLimit <= 0) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        timedOut = true;
+        forward('SIGTERM');
+      }, idleLimit);
+      idleTimer.unref();
+    };
     const limit = 16 * 1024 * 1024;
     child.stdout!.setEncoding('utf8');
     child.stderr!.setEncoding('utf8');
     const collect = (target: 'stdout' | 'stderr', chunk: string): void => {
+      noteActivity();
       if (target === 'stdout') stdout += chunk;
       else stderr += chunk;
       let pending = (target === 'stdout' ? stdoutPending : stderrPending) + chunk;
@@ -322,12 +354,14 @@ export async function captureNativeHarnessTurn(
       if (process.platform !== 'win32') process.off('SIGHUP', onHangup);
       options.signal?.removeEventListener('abort', onAbort);
       if (abortStopTimer) clearTimeout(abortStopTimer);
+      if (idleTimer) clearTimeout(idleTimer);
     };
     process.once('SIGINT', onInterrupt);
     process.once('SIGTERM', onTerminate);
     if (process.platform !== 'win32') process.once('SIGHUP', onHangup);
     options.signal?.addEventListener('abort', onAbort, { once: true });
     if (options.signal?.aborted) onAbort();
+    noteActivity();
     child.once('error', (error) => {
       cleanup();
       reject(error);
@@ -337,6 +371,7 @@ export async function captureNativeHarnessTurn(
       if (stdoutPending.trim()) options.onStdoutLine?.(stdoutPending);
       if (stderrPending.trim()) options.onStderrLine?.(stderrPending);
       if (exceededLimit) return reject(new Error(`${spec.displayName} turn output exceeded 16 MiB`));
+      if (timedOut) return reject(new Error(`${spec.displayName} produced no output for ${Math.round(idleLimit / 1000)}s and was stopped`));
       if (interrupted) return resolve({ stdout, stderr, exitCode: code ?? 130, interrupted: true });
       if (code !== 0 && !stdout.trim()) {
         const detail = stderr.trim().slice(-4000) || stdout.trim().slice(-4000);

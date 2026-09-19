@@ -10,6 +10,24 @@ import { Lexer, marked, type Token, type Tokens } from 'marked';
 import type { MessageBlock } from './types.js';
 
 
+/** A streaming turn repaints the whole visible transcript about thirty times a
+ * second, and each repaint re-lexes every message in it. Keying on the exact
+ * source text turns the settled messages above the live one into cache hits;
+ * only the message that actually changed pays the lexer again. Results are
+ * immutable by contract -- no caller mutates what it receives. */
+function memoizeByText<T>(compute: (text: string) => T, limit = 256): (text: string) => T {
+  const cache = new Map<string, T>();
+  return (text) => {
+    if (cache.has(text)) return cache.get(text)!;
+    const value = compute(text);
+    cache.set(text, value);
+    // Bounded so a long session cannot retain every revision of every message.
+    // Insertion order makes the oldest key the least recently added.
+    if (cache.size > limit) cache.delete(cache.keys().next().value!);
+    return value;
+  };
+}
+
 /** Applies `style` to each word of `text` individually, leaving whitespace
  * untouched -- not one open/close pair around the whole phrase. wrapWords
  * measures visible width correctly through embedded ANSI codes already, but
@@ -28,7 +46,7 @@ export function styleWords(text: string, style: (word: string) => string): strin
 /** Render CommonMark/GFM inline tokens directly to self-contained ANSI spans.
  * Tokenizing before styling prevents escape sequences from being reparsed as
  * markdown and keeps styling valid when the terminal wraps a line. */
-export function renderInlineMarkdown(text: string): string {
+const renderInlineMarkdownUncached = (text: string): string => {
   type Style = (value: string) => string;
   const render = (tokens: Token[], styles: Style[] = []): string => tokens.map((token) => {
     const apply = (value: string, extra: Style[] = styles): string => styleWords(value, (word) => extra.reduce((result, style) => style(result), word));
@@ -44,14 +62,15 @@ export function renderInlineMarkdown(text: string): string {
     return typeof token.raw === 'string' ? apply(token.raw) : '';
   }).join('');
   return render(Lexer.lexInline(text, { gfm: true, breaks: false }));
-}
+};
+export const renderInlineMarkdown = memoizeByText(renderInlineMarkdownUncached);
 
 
 /** Convert the original CommonMark/GFM block tree into the small semantic
  * document model used by the terminal. Code remains distinct from prose so
  * display-only continuation rows can preserve every byte without pretending
  * those visual wraps are source newlines. */
-export function splitIntoBlocks(text: string): MessageBlock[] {
+const splitIntoBlocksUncached = (text: string): MessageBlock[] => {
   const blocks: MessageBlock[] = [];
   const visit = (tokens: Token[], sourceEnd: number, quoteDepth = 0, listDepth = 0): void => {
     for (const token of tokens) {
@@ -75,15 +94,19 @@ export function splitIntoBlocks(text: string): MessageBlock[] {
       } else if (token.type === 'list') {
         const list = token as Tokens.List;
         list.items.forEach((item: Tokens.ListItem, index: number) => {
-          const content = (item.tokens ?? []).filter((child: Token) => child.type !== 'list');
-          const nested = (item.tokens ?? []).filter((child: Token) => child.type === 'list');
-          const first = content.map((child: Token) => 'text' in child && typeof child.text === 'string' ? child.text : '').filter(Boolean).join(' ');
+          const children = item.tokens ?? [];
+          const primaryIndex = children.findIndex((child: Token) => child.type === 'text' || child.type === 'paragraph');
+          const primary = primaryIndex >= 0 ? children[primaryIndex] : undefined;
+          const first = primary && 'text' in primary && typeof primary.text === 'string' ? primary.text : '';
           blocks.push({
             kind: 'list-item', text: first, depth: listDepth, ordered: list.ordered,
             ...(list.ordered ? { number: Number(list.start || 1) + index } : {}),
             task: item.task, ...(item.task ? { checked: item.checked } : {}), quoteDepth, sourceEnd,
           });
-          visit(nested, sourceEnd, quoteDepth, listDepth + 1);
+          children.forEach((child: Token, childIndex: number) => {
+            if (childIndex === primaryIndex) return;
+            visit([child], sourceEnd, quoteDepth, listDepth + 1);
+          });
         });
       }
     }
@@ -108,9 +131,16 @@ export function splitIntoBlocks(text: string): MessageBlock[] {
     // an event whose offset is inside that construct from being emitted after
     // its first child and visually splitting the Markdown structure.
     for (let index = blockStart; index < blocks.length - 1; index++) blocks[index]!.sourceEnd = sourceStart;
+    // A compound token such as a list or blockquote may create many visual
+    // rows, but only its final row closes the top-level Markdown construct.
+    // The streaming renderer uses this marker to avoid freezing an early
+    // bullet before a later/nested bullet has finished parsing.
+    const finalBlock = blocks[blocks.length - 1];
+    if (finalBlock && blocks.length > blockStart) finalBlock.blockBoundary = true;
   }
   return blocks;
-}
+};
+export const splitIntoBlocks = memoizeByText(splitIntoBlocksUncached);
 
 /** Width-bounded GFM table rendering. Equal columns are predictable while
  * per-cell truncation guarantees the table never destabilizes the frame. */
@@ -143,7 +173,7 @@ export function visibleSlice(value: string, width: number): string {
   // Control sequences are atomic zero-width tokens. Slicing their individual
   // bytes can leave a partial escape in the terminal, causing color bleed,
   // question marks, and adjacent rows that appear to run together.
-  const tokens = value.match(/\u001b\[[0-9;]*m|./gu) ?? [];
+  const tokens = displayTokens(value);
   for (const token of tokens) {
     if (/^\u001b\[[0-9;]*m$/.test(token)) {
       rendered += token;
@@ -168,26 +198,92 @@ export function wrapCodeLine(value: string, width: number): string[] {
   const rows: string[] = [];
   let remaining = value;
   while (remaining && terminalCellWidth(remaining) > safeWidth) {
-    let cut = 0;
-    for (const character of remaining) {
-      if (terminalCellWidth(remaining.slice(0, cut + character.length)) > safeWidth) break;
-      cut += character.length;
-    }
-    cut = Math.max(1, cut);
-    rows.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut);
+    const head = sliceToWidth(remaining, safeWidth);
+    rows.push(head);
+    remaining = remaining.slice(head.length);
   }
   rows.push(remaining);
   return rows;
 }
 
+/** A user-perceived character is a grapheme cluster, not a code point: a
+ * combining accent, a skin-tone modifier, a variation selector, and a ZWJ
+ * family emoji are all several code points the terminal draws -- and the user
+ * edits -- as one unit. Width, cursor motion, and deletion all agree on this
+ * boundary, so backspace can never strand half an emoji in the composer. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** No realistic cluster approaches this many code units, so bounding the
+ * segmented window keeps cursor motion O(1) rather than re-segmenting the
+ * whole buffer on every keystroke -- which the input decoder does once per
+ * pasted character. */
+const CLUSTER_WINDOW = 32;
+
+function isWideCodePoint(code: number): boolean {
+  if (code < 0x1100) return false;
+  return code <= 0x115f || code === 0x2329 || code === 0x232a
+    || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3)
+    || (code >= 0xf900 && code <= 0xfaff)
+    // A regional-indicator pair renders as one two-cell flag.
+    || (code >= 0x1f1e6 && code <= 0x1f1ff)
+    || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd);
+}
+
+/** Split into atomic display tokens: each SGR sequence stays whole (slicing
+ * one leaks a partial escape into the terminal) and each grapheme cluster
+ * stays whole (slicing one strands a dangling joiner or combining mark, which
+ * renders as a broken glyph). Everything that truncates or hard-wraps shares
+ * this so no caller has to rediscover either rule. */
+function displayTokens(value: string): string[] {
+  const tokens: string[] = [];
+  const pushText = (text: string): void => {
+    for (const { segment } of graphemes.segment(text)) tokens.push(segment);
+  };
+  let consumed = 0;
+  for (const match of value.matchAll(/\u001b\[[0-9;]*m/g)) {
+    const start = match.index;
+    if (start > consumed) pushText(value.slice(consumed, start));
+    tokens.push(match[0]);
+    consumed = start + match[0].length;
+  }
+  if (consumed < value.length) pushText(value.slice(consumed));
+  return tokens;
+}
+
+/** Longest prefix of `value` fitting `width` cells, never splitting an SGR
+ * sequence or a grapheme cluster. Zero-width tokens are always carried along,
+ * so a style never survives as a half-written escape in the terminal.
+ *
+ * It always consumes at least one visible cluster: a character wider than the
+ * row (a CJK glyph in a one-column gutter) must still advance, or every caller
+ * that loops on the remainder would spin forever. */
+function sliceToWidth(value: string, width: number): string {
+  let taken = '';
+  let takenWidth = 0;
+  for (const token of displayTokens(value)) {
+    const tokenWidth = terminalCellWidth(token);
+    if (tokenWidth && takenWidth + tokenWidth > width) break;
+    taken += token;
+    takenWidth += tokenWidth;
+  }
+  if (takenWidth > 0) return taken;
+  let forced = '';
+  for (const token of displayTokens(value)) {
+    forced += token;
+    if (terminalCellWidth(token)) return forced;
+  }
+  return value;
+}
+
 export function terminalCellWidth(value: string): number {
   const plain = value.replace(/\u001b\[[0-9;]*m/g, '');
   let width = 0;
-  for (const character of plain) {
-    const code = character.codePointAt(0) ?? 0;
-    if (/\p{Mark}/u.test(character) || code === 0xfe0f) continue;
-    width += code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd)) ? 2 : 1;
+  for (const { segment } of graphemes.segment(plain)) {
+    // The base character decides the cell count; whatever the cluster attaches
+    // to it (marks, variation selectors, joiners) draws inside those cells.
+    const base = String.fromCodePoint(segment.codePointAt(0) ?? 0);
+    if (/\p{Mark}/u.test(base)) continue;
+    width += isWideCodePoint(base.codePointAt(0) ?? 0) ? 2 : 1;
   }
   return width;
 }
@@ -216,16 +312,14 @@ export function wrapWords(text: string, width: number): string[] {
       currentWidth = 0;
     }
     if (wordWidth > safeWidth) {
+      // Hard-breaking used to walk code points and measure the raw prefix,
+      // which sliced an SGR sequence into separate rows on a narrow terminal
+      // and wrote the escape out as literal `ESC [ 1 m` text.
       let remaining = word;
       while (terminalCellWidth(remaining) > safeWidth) {
-        let cut = 0;
-        for (const character of remaining) {
-          if (terminalCellWidth(remaining.slice(0, cut + character.length)) > safeWidth) break;
-          cut += character.length;
-        }
-        cut = Math.max(cut, 1);
-        lines.push(remaining.slice(0, cut));
-        remaining = remaining.slice(cut);
+        const head = sliceToWidth(remaining, safeWidth);
+        lines.push(head);
+        remaining = remaining.slice(head.length);
       }
       current = remaining;
       currentWidth = terminalCellWidth(remaining);
@@ -240,14 +334,16 @@ export function wrapWords(text: string, width: number): string[] {
 
 export function previousCharacterIndex(value: string, index: number): number {
   if (index <= 0) return 0;
-  const code = value.charCodeAt(index - 1);
-  return code >= 0xdc00 && code <= 0xdfff && index > 1 ? index - 2 : index - 1;
+  const start = Math.max(0, index - CLUSTER_WINDOW);
+  let boundary = 0;
+  for (const { index: offset } of graphemes.segment(value.slice(start, index))) boundary = offset;
+  return start + boundary;
 }
 
 export function nextCharacterIndex(value: string, index: number): number {
   if (index >= value.length) return value.length;
-  const code = value.charCodeAt(index);
-  return code >= 0xd800 && code <= 0xdbff && index + 1 < value.length ? index + 2 : index + 1;
+  const [first] = graphemes.segment(value.slice(index, index + CLUSTER_WINDOW));
+  return index + (first ? first.segment.length : 1);
 }
 
 export function composerViewport(value: string, cursor: number, available: number): { text: string; cursorWidth: number } {

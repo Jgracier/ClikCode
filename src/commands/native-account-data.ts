@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from './native-harness.js';
+import { readState, writeState } from './harness-state.js';
 import { localHarnessForProvider, nativeProfileEnvironment } from './native-harness-protocol.js';
 import type {
   AiHarnessAccount, AiLocalHarnessDefinition, HarnessSession, HarnessState, ModelCatalogResult, NativeUsageProbe,
@@ -175,8 +176,19 @@ export async function nativeModelCatalogUncached(
   };
 }
 
-export const nativeUsageCache = new Map<string, { at: number; label?: string }>();
+export const nativeUsageCache = new Map<string, { at: number; label?: string; failed?: boolean }>();
+/** Two readings a minute, per ACCOUNT rather than per chat. The rate that
+ * matters is accounts-in-use divided by this window: the reading now lives on
+ * the account record, so any number of open chats on one login still costs one
+ * request per window. It was per process before, which multiplied by every
+ * open terminal and is what rate-limited the account out of reading its own
+ * usage. The poll interval below divides this, so a tick actually probes
+ * instead of landing inside the previous window. */
 const NATIVE_USAGE_CACHE_TTL_MS = 30_000;
+/** A probe that failed is not the answer "this account has no usage". Retry
+ * well before the success window so a blip recovers quickly, but not so fast
+ * that a rate-limited endpoint keeps being hammered by the retry itself. */
+const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
 
 /** Per-harness live usage probe. Each vendor CLI exposes quota/cost through a different
  * surface (or none at all); adding a harness here is the only step needed to light up
@@ -340,8 +352,9 @@ export async function claudeUsageProbe(_session: HarnessSession, environment: Re
     const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
     token = typeof parsed.claudeAiOauth?.accessToken === 'string' ? parsed.claudeAiOauth.accessToken : undefined;
   } catch {
-    // fail-open-ok: a missing or malformed .credentials.json means this account is not
-    // signed in, so there is no usage to label. Absence is the real answer.
+    // fail-open-ok: this probes for an optional vendor credential file. Absent
+    // or unreadable means this account publishes no usage window, which is a
+    // real answer -- usage is decoration, never a gate on sending a turn.
     return undefined;
   }
   if (!token) return undefined;
@@ -349,20 +362,102 @@ export async function claudeUsageProbe(_session: HarnessSession, environment: Re
     const response = await fetch('https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1', {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     });
+    // An expired credential is a state the user can act on, and it is NOT the
+    // same as "this account publishes no usage". The profile holds its own copy
+    // of the OAuth token; Claude Code refreshes the one in its own config
+    // directory, but nothing refreshes this copy, so it stays stale until the
+    // account is signed in again. Saying so beats a blank status line.
+    if (response.status === 401 || response.status === 403) return 'usage needs re-auth';
+    // The account is briefly over its own quota-endpoint budget. There is no
+    // figure to show, but a bare gap is indistinguishable from a provider that
+    // publishes no usage at all -- name the state so it reads as temporary.
+    if (response.status === 429) return 'usage rate limited';
     if (!response.ok) return undefined;
     const body = await response.json() as {
       five_hour?: { utilization?: number };
       seven_day?: { utilization?: number };
     };
-    const parts: string[] = [];
-    if (typeof body.five_hour?.utilization === 'number') parts.push(`5h ${Math.max(0, Math.min(100, 100 - body.five_hour.utilization))}% left`);
-    if (typeof body.seven_day?.utilization === 'number') parts.push(`weekly ${Math.max(0, Math.min(100, 100 - body.seven_day.utilization))}% left`);
-    return parts.length ? parts.join(' · ') : undefined;
+    return usageWindowsLabel(body.five_hour?.utilization, body.seven_day?.utilization);
   } catch {
-    // fail-open-ok: the usage label is optional chrome on the account chooser. If the probe
-    // cannot reach the endpoint we render no label rather than failing the chooser.
+    // fail-open-ok: an optional quota lookup over the network. Offline, rate
+    // limited, or a changed vendor shape all mean the same thing to the caller
+    // -- no usage label to show -- and must never block or fail a turn.
     return undefined;
   }
+}
+
+/** Shared by the endpoint probe and the stream reader so one account never
+ * shows two differently worded figures depending on which path produced it.
+ * Both arguments are percent USED. */
+function usageWindowsLabel(fiveHourUsed?: number, sevenDayUsed?: number): string | undefined {
+  const left = (used: number): number => Math.max(0, Math.min(100, Math.round(100 - used)));
+  const parts: string[] = [];
+  if (typeof fiveHourUsed === 'number') parts.push(`5h ${left(fiveHourUsed)}% left`);
+  if (typeof sevenDayUsed === 'number') parts.push(`weekly ${left(sevenDayUsed)}% left`);
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
+/** Claude Code reports both quota windows on its own stream-json output, on
+ * every turn (confirmed live):
+ *
+ *   {"type":"rate_limit_event","rate_limit_info":{"status":"allowed",
+ *     "unifiedWindows":{"five_hour":{"utilization":0.25,"resetsAt":...},
+ *                       "seven_day":{"utilization":0.04,"resetsAt":...}}}}
+ *
+ * That is the same figure claudeUsageProbe pays an HTTP request for, arriving
+ * free on a stream already being parsed. It matters because the OAuth usage
+ * endpoint is a per-ACCOUNT budget: several open chats polling it exhausted it
+ * between them, which is what produced "usage rate limited" in the status bar.
+ * Utilization here is a 0..1 fraction, unlike the endpoint's 0..100. */
+function claudeStreamUsage(lineText: string): string | undefined {
+  if (!lineText.includes('rate_limit_event')) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(lineText); } catch {
+    // fail-open-ok: one unparseable line on an optional decoration path. The
+    // turn's own output is read elsewhere and is unaffected.
+    return undefined;
+  }
+  const record = parsed as {
+    type?: unknown;
+    rate_limit_info?: { unifiedWindows?: Record<string, { utilization?: unknown } | undefined> };
+  };
+  if (record.type !== 'rate_limit_event') return undefined;
+  const windows = record.rate_limit_info?.unifiedWindows;
+  if (!windows) return undefined;
+  const percent = (window?: { utilization?: unknown }): number | undefined =>
+    typeof window?.utilization === 'number' ? window.utilization * 100 : undefined;
+  return usageWindowsLabel(percent(windows.five_hour), percent(windows.seven_day));
+}
+
+/** Harnesses that report their own quota on their turn stream. */
+export const NATIVE_STREAM_USAGE: Readonly<Partial<Record<string, (lineText: string) => string | undefined>>> = {
+  claude: claudeStreamUsage,
+};
+
+/** Publish a reading onto the account so every terminal sees it, and into the
+ * in-process cache so this terminal's next paint does not re-probe. */
+async function publishUsageReading(cacheKey: string, accountId: string | null | undefined, label: string): Promise<void> {
+  nativeUsageCache.set(cacheKey, { at: Date.now(), label });
+  if (!accountId) return;
+  const state = await readState();
+  const account = state.accounts.find((item) => item.id === accountId);
+  if (!account) return;
+  account.usage = { at: new Date().toISOString(), label };
+  // writeState merges per record, so this cannot disturb another terminal.
+  await writeState(state).catch(() => undefined);
+}
+
+/** Read usage off a turn's own output line, if this harness reports it there.
+ * A reading taken this way costs nothing and refreshes on every turn, so the
+ * endpoint probe is left to cover only the cold start: a terminal that has not
+ * run a turn yet has no stream to read. */
+export async function recordNativeStreamUsage(session: HarnessSession, lineText: string): Promise<string | undefined> {
+  const read = session.nativeHarness ? NATIVE_STREAM_USAGE[session.nativeHarness] : undefined;
+  const label = read?.(lineText);
+  if (!label) return undefined;
+  const cacheKey = `${session.nativeHarness}:${session.nativeSessionId ?? 'default'}`;
+  await publishUsageReading(cacheKey, session.accountId, label).catch(() => undefined);
+  return label;
 }
 
 export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
@@ -377,11 +472,38 @@ export async function nativeUsageLabel(session: HarnessSession, state: HarnessSt
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const cacheKey = `${session.nativeHarness}:${account?.nativeProfile?.path ?? session.nativeSessionId ?? 'default'}`;
   const cached = nativeUsageCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < NATIVE_USAGE_CACHE_TTL_MS) return cached.label;
+  // The account's own record is the shared reading: every terminal sees it, so
+  // the cost of displaying usage no longer multiplies by the number of open
+  // chats. The in-process map stays in front of it as a fast path for repeated
+  // paints within one terminal.
+  const shared = account?.usage;
+  const entry = cached ?? (shared && {
+    at: Date.parse(shared.at), ...(shared.label === undefined ? {} : { label: shared.label }),
+    ...(shared.failed ? { failed: true } : {}),
+  });
+  const ttl = entry?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;
+  if (entry && Number.isFinite(entry.at) && Date.now() - entry.at < ttl) {
+    nativeUsageCache.set(cacheKey, entry);
+    return entry.label;
+  }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const label = await probe(session, environment).catch(() => undefined);
-  nativeUsageCache.set(cacheKey, { at: Date.now(), ...(label ? { label } : {}) });
-  return label;
+  const next = label === undefined
+    // Carry the last known figure through the failure rather than blanking it.
+    ? { at: Date.now(), failed: true, ...(entry?.label === undefined ? {} : { label: entry.label }) }
+    : { at: Date.now(), label };
+  nativeUsageCache.set(cacheKey, next);
+  if (account) {
+    account.usage = {
+      at: new Date(next.at).toISOString(),
+      ...(next.label === undefined ? {} : { label: next.label }),
+      ...('failed' in next && next.failed ? { failed: true } : {}),
+    };
+    // writeState merges per record, so publishing this reading cannot disturb
+    // anything another terminal changed meanwhile.
+    await writeState(state).catch(() => undefined);
+  }
+  return next.label;
 }
 
 /** Usage is probed per-session above (it needs a native session id for OpenCode);
@@ -411,5 +533,6 @@ export function cachedAccountUsageLabel(account: AiHarnessAccount, state: Harnes
   const related = state.sessions.find((item) => item.accountId === account.id && item.nativeSessionId);
   const cacheKey = `${harness.command}:${account.nativeProfile?.path ?? related?.nativeSessionId ?? 'default'}`;
   const cached = nativeUsageCache.get(cacheKey);
-  return cached && Date.now() - cached.at < NATIVE_USAGE_CACHE_TTL_MS ? cached.label : undefined;
+  const ttl = cached?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;
+  return cached && Date.now() - cached.at < ttl ? cached.label : undefined;
 }

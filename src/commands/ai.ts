@@ -3,7 +3,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { copyFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
@@ -31,13 +31,14 @@ import {
   capDiffLines, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   isCodeChangeLabel, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
   localRouter, nativeActivityPhase, nativeResponseUpdate, nativeSessionIds, nativeTurnResult, parseNativeActivityEvent,
-  compactPath, nativeProfileEnvironment, renderActivityLine, renderActivityPhase, sessionProviderLabel, streamLocalAiTurn,
+  compactPath, nativeProfileEnvironment, renderActivityLine, sessionProviderLabel, streamLocalAiTurn,
 } from './native-harness-protocol.js';
 import {
   accountView, deviceManifest, harnessCommand, harnessStatePath, readState, resolveDefaultSettings, writeState,
 } from './harness-state.js';
 import {
-  accountUsageLabel, cachedAccountUsageLabel, nativeModelCatalog, nativeModelCatalogForPicker, nativeModelLabel, nativeUsageLabel,
+  accountUsageLabel, cachedAccountUsageLabel, nativeModelCatalog, nativeModelCatalogForPicker, nativeModelLabel,
+  nativeUsageLabel, recordNativeStreamUsage,
 } from './native-account-data.js';
 import {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
@@ -116,13 +117,53 @@ export function requiresProviderHandoff(session: HarnessSession, targetHarness: 
   return hasConversationContent(session) && (session.route !== 'local' || session.nativeHarness !== targetHarness);
 }
 
-/** Pick the branch ClikCode should restore when it starts without an explicit
- * session id. Leaving the application keeps the current branch active; only
- * the explicit session-close action removes a branch from this candidate set. */
-export function defaultSessionCandidate(sessions: readonly HarnessSession[]): HarnessSession | undefined {
-  return [...sessions]
-    .filter((session) => session.status === 'active')
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+/** How long a claim survives without a heartbeat. Generous enough that a busy
+ * turn never looks abandoned, short enough that a killed terminal frees its
+ * conversation quickly. */
+export const SESSION_CLAIM_TTL_MS = 90_000;
+
+/** Is another terminal driving this conversation right now?
+ *
+ * A pid is only meaningful on the machine that recorded it, so a claim from a
+ * different host is judged on its heartbeat alone. On this host a dead pid
+ * releases the claim immediately, which is what makes a crashed terminal's
+ * conversation available again without waiting out the TTL. */
+export function sessionClaimIsLive(
+  session: HarnessSession,
+  now = Date.now(),
+  host = hostname(),
+  pidAlive: (pid: number) => boolean = livePid,
+): boolean {
+  const claim = session.claim;
+  if (!claim) return false;
+  if (now - Date.parse(claim.heartbeatAt) > SESSION_CLAIM_TTL_MS) return false;
+  if (claim.host !== host) return true;
+  if (claim.pid === process.pid) return false;
+  return pidAlive(claim.pid);
+}
+
+function livePid(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to another user.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+export function claimSession(session: HarnessSession, now = new Date().toISOString()): void {
+  session.claim = {
+    pid: process.pid, host: hostname(),
+    startedAt: session.claim?.pid === process.pid ? session.claim.startedAt : now,
+    heartbeatAt: now,
+  };
+}
+
+/** Only the owner releases a claim, so a crash-recovered stale claim is never
+ * cleared by a terminal that does not own the conversation. */
+export function releaseSession(session: HarnessSession): void {
+  if (session.claim?.pid === process.pid && session.claim.host === hostname()) delete session.claim;
 }
 
 /** Leaving the foreground application is not the same operation as closing a
@@ -132,26 +173,6 @@ export function markSessionLeftOpen(session: HarnessSession, now: string): void 
   session.status = 'active';
   delete session.closedAt;
   session.updatedAt = now;
-}
-
-/** Historical lookup retained for migration/diagnostics. Normal provider
- * switching no longer reopens an older provider branch because that branch
- * predates the conversation's current tip; a new handoff continues the full
- * latest transcript instead. */
-export function establishedProviderBranch(
-  sessions: readonly HarnessSession[],
-  current: HarnessSession,
-  targetHarness: string,
-): HarnessSession | undefined {
-  return [...sessions]
-    .filter((session) => session.id !== current.id
-      && conversationIdFor(session) === conversationIdFor(current)
-      && session.nativeHarness === targetHarness
-      && Boolean(session.nativeSessionId))
-    .sort((left, right) => {
-      const messageDifference = (right.messages?.length ?? 0) - (left.messages?.length ?? 0);
-      return messageDifference || right.updatedAt.localeCompare(left.updatedAt);
-    })[0];
 }
 
 /** Create a portable child branch. The source keeps its provider-owned
@@ -184,7 +205,7 @@ export function createHandoffBranch(input: {
 }
 
 /** One row per ClikCode conversation. Provider-native hops stay available via
- * the row's right-arrow history instead of appearing as duplicate/fork rows. */
+ * the row's Tab history instead of appearing as duplicate/fork rows. */
 export function sessionPickerOptions(
   sessions: readonly HarnessSession[],
   currentId: string,
@@ -228,9 +249,9 @@ export function sessionPickerOptions(
     const model = nativeModelLabel(latest.nativeHarness, latest.model);
     return {
       label: title,
-      detail: `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''} · ${model ?? 'automatic'} · ${new Date(latest.updatedAt).toLocaleString()}${history.length > 1 ? ` · → ${history.length} history entries` : ''}`,
+      detail: `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''} · ${model ?? 'automatic'} · ${new Date(latest.updatedAt).toLocaleString()}${history.length > 1 ? ` · Tab: ${history.length} history entries` : ''}`,
       value: latest.id,
-      actions: history.length > 1 ? history.map((session) => ({
+      alternates: history.length > 1 ? history.map((session) => ({
         label: `${'  '.repeat(depthFor(session))}${providerLabel(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${new Date(session.updatedAt).toLocaleString()}`,
         value: session.id,
       })) : undefined,
@@ -500,8 +521,9 @@ export async function resolveStandaloneAttachment(
   try {
     return (await stat(path)).isFile() ? path : undefined;
   } catch {
-    // fail-open-ok: this asks "is there a file at this path?". An unstattable path is not
-    // an attachment, which is exactly what undefined means to the caller here.
+    // fail-open-ok: this decides whether typed text names an attachable file.
+    // A path that cannot be stat'd is simply not one, and the text is then
+    // treated as an ordinary prompt -- there is no failure to report.
     return undefined;
   }
 }
@@ -784,8 +806,14 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
         const startedAt = Date.now();
         const turn = await streamLocalAiTurn({ provider: account.provider, model, apiKey: localApiKey(account), credentialSource: 'env', messages: body.messages as Array<{ role: 'user' | 'assistant'; content: string }>, ...(typeof body.effort === 'string' ? { reasoningEffort: body.effort as never } : {}) });
         const invocation = { id: randomUUID(), accountId: account.id, provider: account.provider, model, at: new Date().toISOString(), inputTokens: turn.usage.inputTokens, outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt };
-        state.invocations.push(invocation);
-        await writeState(state);
+        // The turn above can run for minutes, and the interactive CLI writes
+        // real conversation state throughout. `state` is the pre-turn snapshot
+        // of the WHOLE file, so persisting it here would revert every message,
+        // rename, and new conversation written meanwhile. Re-read so appending
+        // one usage record only ever appends.
+        const latest = await readState();
+        latest.invocations.push(invocation);
+        await writeState(latest);
         sendJson(response, 200, { text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation });
         } else {
           sendJson(response, 404, { error: 'not_found' });
@@ -1206,53 +1234,45 @@ export async function aiPermissions(mode?: string): Promise<void> {
   }
 }
 
+/** The very first launch on a machine, with nothing to carry forward. */
+function firstEverSession(state: HarnessState, workspace: string, now: string): HarnessSession {
+  const defaults = resolveDefaultSettings(state, null);
+  const id = randomUUID();
+  return {
+    id, conversationId: id, route: 'local', accountId: null, provider: null, model: null,
+    effort: defaults.effort, permissionMode: defaults.permissionMode,
+    accountFailover: defaults.accountFailover, workspace,
+    createdAt: now, updatedAt: now, status: 'active',
+  };
+}
+
 /**
- * The standalone `clikcode` command is a coding-session entrypoint, not a
- * command browser. Resume the most recently used session, creating the first
- * local session on demand so a fresh install lands directly in the TTY.
+ * The conversation a bare `clikcode` opens. Always a new one: resuming a
+ * specific chat is an explicit act -- `/resume`, or `sessions open <id>` --
+ * never a side effect of opening a terminal. Picking up the most recent chat
+ * meant two terminals opened in a row landed in the same conversation, and it
+ * made "start working" and "reopen yesterday's thread" the same gesture.
+ *
+ * How you work carries over: provider, account, model, effort, permissions.
+ * That is a preference, not a conversation. The workspace deliberately does
+ * not -- a new conversation belongs to the directory it was launched from, not
+ * to wherever the last one happened to run.
  */
+export function launchSession(
+  state: HarnessState, workspace: string, now = new Date().toISOString(),
+): HarnessSession {
+  const previous = [...state.sessions]
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return previous
+    ? { ...newConversationSession(state, previous, now), workspace }
+    : firstEverSession(state, workspace, now);
+}
+
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();
-  let session = defaultSessionCandidate(state.sessions);
-  // Releases before /exit was separated from session-close could leave the
-  // real provider branch closed, then create a second unstarted handoff from
-  // its older parent on the next launch. Recover only that unambiguous shape:
-  // same conversation/provider, no native identity on the selected shell,
-  // and a bound branch containing strictly more history.
-  if (session?.parentSessionId && session.nativeHarness && !session.nativeSessionId) {
-    const established = establishedProviderBranch(state.sessions, session, session.nativeHarness);
-    if (established && (established.messages?.length ?? 0) > (session.messages?.length ?? 0)) {
-      const now = new Date().toISOString();
-      session.status = 'closed';
-      session.closedAt = now;
-      session.updatedAt = now;
-      markSessionLeftOpen(established, now);
-      session = established;
-      await writeState(state);
-    }
-  }
-  if (!session) {
-    // A closed chat must never reopen without an explicit `sessions open`.
-    // Its configuration is still the user's last agent choice, so carry that
-    // forward into a clean chat rather than guessing a provider or model.
-    const previous = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
-    const provider = previous?.provider ?? null;
-    const defaults = resolveDefaultSettings(state, provider);
-    const now = new Date().toISOString();
-    const route = previous?.route ?? 'local';
-    const id = randomUUID();
-    session = {
-      id, conversationId: id, route, accountId: route === 'gateway' ? null : previous?.accountId ?? null,
-      provider: route === 'gateway' ? 'clikdeploy-gateway' : provider,
-      model: route === 'gateway' ? null : (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
-      effort: route === 'gateway' ? 'platform-managed' : defaults.effort,
-      accountFailover: route === 'gateway' ? 'never' : defaults.accountFailover,
-      ...(route === 'local' ? { permissionMode: defaults.permissionMode } : {}),
-      createdAt: now, updatedAt: now, status: 'active',
-    };
-    state.sessions.push(session);
-    await writeState(state);
-  }
+  const session = launchSession(state, process.cwd());
+  state.sessions.push(session);
+  await writeState(state);
   await aiSessionInteractive(config, session.id);
 }
 
@@ -1346,14 +1366,15 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
     return emitHarnessOutput({ panel: 'settings', session, account });
   }
+  // `/reset` is an alias, not an in-place wipe. Clearing the transcript on the
+  // existing record destroyed history with no confirmation. Starting a fresh
+  // conversation gives the same clean slate and keeps the previous one
+  // resumable.
   if (head === 'new' || head === 'reset') {
-    session.messages = [];
-    delete session.pendingTurn;
-    session.nativeSessionId = undefined;
-    session.nativeStartedAt = undefined;
-    session.updatedAt = new Date().toISOString();
+    const created = newConversationSession(state, session);
+    state.sessions.push(created);
     await writeState(state);
-    return emitHarnessOutput({ panel: 'conversation-reset', session });
+    return emitHarnessOutput({ panel: 'conversation-reset', session: created });
   }
   if (head === 'permissions') {
     if (session.route === 'gateway') throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy; Ask, Bypass, and Auto apply only to local harnesses.');
@@ -1682,12 +1703,9 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
   throw new Error(`unknown slash command: /${head}`);
 }
 
-/** actions is deliberately narrow -- a plain label/value pair, not a full
- * nested PickerOption -- since it's rendered by select()'s own generic
- * right-arrow handler for *any* picker, not something built per-caller.
- * A caller (e.g. the account picker) that wants "disconnect"/"reauthenticate"
- * attaches them here; select() has no idea what they mean, it just shows
- * them and returns whichever one was chosen. */
+/** Maintenance actions are deliberately narrow label/value pairs rather than
+ * nested PickerOptions. Non-destructive actions open with Tab; destructive
+ * deleteAction values open only from Delete and are confirmed by select(). */
 
 async function chooseOption<T>(
   rl: HarnessPrompter,
@@ -1716,6 +1734,49 @@ async function chooseOption<T>(
     return undefined;
   }
   return options[index].value;
+}
+
+/** A brand-new conversation root. How you want to work (provider, account,
+ * model, effort, permissions, workspace) carries over; what you were talking
+ * about does not. Crucially it takes a fresh conversationId and no parent, so
+ * it lists as its own row in /resume instead of merging into the conversation
+ * it was started from, and it carries no inherited name. */
+export function newConversationSession(
+  state: HarnessState, source: HarnessSession, now = new Date().toISOString(),
+): HarnessSession {
+  const id = randomUUID();
+  const defaults = resolveDefaultSettings(state, source.provider);
+  return {
+    id, conversationId: id, route: source.route,
+    accountId: source.route === 'gateway' ? null : source.accountId ?? null,
+    provider: source.provider, model: source.model ?? null,
+    effort: source.effort ?? defaults.effort,
+    ...(source.route === 'gateway' ? {} : { permissionMode: source.permissionMode ?? defaults.permissionMode }),
+    accountFailover: source.accountFailover ?? defaults.accountFailover,
+    workspace: source.workspace ?? process.cwd(),
+    ...(source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
+    createdAt: now, updatedAt: now, status: 'active',
+  };
+}
+
+/** Starting a clean conversation leaves the previous one intact and resumable;
+ * the caller switches to the returned id. */
+/** Drop a queued turn that could not start, so a permanent failure cannot
+ * replay forever at the head of the queue. */
+async function releaseQueuedTurn(id: string, queuedTurnId: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (session && consumeSessionTurn(session, queuedTurnId)) await writeState(state);
+}
+
+async function newConversation(currentId: string): Promise<string> {
+  const state = await readState();
+  const current = state.sessions.find((item) => item.id === currentId);
+  if (!current) throw new Error(`AI session "${currentId}" was not found`);
+  const created = newConversationSession(state, current);
+  state.sessions.push(created);
+  await writeState(state);
+  return created.id;
 }
 
 async function newProviderConversation(currentId: string, harnessCommandName: string): Promise<string> {
@@ -1854,16 +1915,18 @@ export function providerAccountPickerOptions(
   return [
     ...[...accounts].sort((left, right) => left.account.label.localeCompare(right.account.label)).map(({ account, usage, usagePending }) => {
       const actions = [
-        ...(harness.logoutArgv && account.authKind === 'vendor-cli' && account.status === 'ready'
-          ? [{ label: 'Disconnect', value: 'disconnect' }] : []),
         ...(harness.loginArgv && account.authKind === 'vendor-cli' && account.status !== 'ready'
           ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
       ];
+      const deleteAction = harness.logoutArgv && account.authKind === 'vendor-cli' && account.status === 'ready'
+        ? { label: 'Disconnect', value: 'disconnect' }
+        : { label: 'Remove', value: 'remove' };
       return {
         label: account.label,
-        detail: `${usage ? `· ${usage} ` : usagePending ? '· checking usage… ' : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(→ for options)')}` : ''}`.trim(),
+        detail: `${usage ? `· ${usage} ` : usagePending ? '· checking usage… ' : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(Tab for options)')}` : ''}`.trim(),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
         actions,
+        deleteAction,
       };
     }),
     ...(harnessCanAddAccount(harness)
@@ -2149,7 +2212,12 @@ async function manageAccountAction(rl: HarnessPrompter, accountId: string, actio
   const state = await readState();
   const account = state.accounts.find((item) => item.id === accountId);
   const harness = account ? localHarnessForProvider(account.provider) : undefined;
-  if (!account || !harness || account.authKind !== 'vendor-cli') return;
+  if (!account || !harness) return;
+  if (action === 'remove') {
+    await aiAccountRemove(account.id);
+    return;
+  }
+  if (account.authKind !== 'vendor-cli') return;
   const environment = nativeProfileEnvironment(account.nativeProfile);
   if (action === 'disconnect' && harness.logoutArgv) {
     await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
@@ -2188,6 +2256,11 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
   // that ClikCode simply never routed a turn through yet.
   const sessions = state.sessions
     .filter((session) => session.id === currentId || sessionTranscriptMessages(session).length > 0 || Boolean(session.nativeSessionId))
+    // A conversation another terminal is driving right now is not resumable:
+    // both terminals would render and steer the same chat. Launching already
+    // never picks one up, and this is the only other way into an existing
+    // conversation, so the guarantee is complete here.
+    .filter((session) => session.id === currentId || !sessionClaimIsLive(session))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   // Conversations that exist only inside a vendor's own history — never opened
   // through ClikCode — are otherwise invisible here entirely: /resume only ever
@@ -2268,7 +2341,7 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
     })),
   ].sort((left, right) => right.sortKey - left.sortKey);
   // Conversation roots and unadopted native sessions share one recency order.
-  // Provider hops stay behind each root row's right-arrow history.
+  // Provider hops stay behind each root row's Tab history.
   const options = optionBlocks.flatMap((block) => block.options);
   const selected = await chooseOption(rl, 'Resume a session', options);
   if (!selected) return undefined;
@@ -2340,7 +2413,7 @@ async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<
   if (value) await aiSessionCommand(id, `/model ${value}`);
 }
 
-async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promise<'resume' | 'exit' | undefined> {
+async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promise<'resume' | 'new' | 'exit' | undefined> {
   const action = await chooseOption(rl, 'Conversations', [
     { label: 'Resume another…', value: 'resume' },
     { label: 'Start clean', detail: 'reset provider context', value: 'new' },
@@ -2351,7 +2424,7 @@ async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promi
   ] as const);
   if (!action) return undefined;
   if (action === 'resume') return 'resume';
-  if (action === 'new') { await aiSessionCommand(id, '/new'); return undefined; }
+  if (action === 'new') return 'new';
   if (action === 'rename') {
     const name = (await rl.question('Conversation name › ')).trim();
     if (name) await aiSessionCommand(id, `/rename ${name}`);
@@ -2542,14 +2615,19 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
 }
 
 async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void> {
-  const state = await readState();
+  // Reassigned whenever a nested flow writes its own state: `session` must stay
+  // a member of whichever snapshot we later hand to writeState, or that write
+  // both reverts the nested flow's work and drops our own edits.
+  let state = await readState();
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (await synchronizeNativeTranscript(state, session)) await writeState(state);
   const commandDetails: Record<string, string> = {
-    '/account': 'switch accounts', '/provider': 'choose a provider', '/settings': 'configure this workspace',
+    '/account': 'switch accounts', '/provider': 'choose a provider',
+    '/resume': 'resume another conversation',
+    '/settings': 'configure this workspace',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'approval behavior',
-    '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
+    '/sessions': 'manage conversations', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
     '/init': 'create agent instructions', '/mention': 'attach a file', '/attachments': 'queued files', '/copy': 'copy last response',
     '/rename': 'rename conversation', '/fork': 'fork conversation', '/archive': 'archive conversation', '/delete': 'delete conversation',
@@ -2591,8 +2669,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       if (!selected) return;
       if (selected !== id) id = selected;
     }
-    const refreshed = await readState();
-    const next = refreshed.sessions.find((item) => item.id === id);
+    // The picker and auto-select each ran their own read/write cycle, so the
+    // snapshot above is stale. Adopt the current one wholesale.
+    state = await readState();
+    const next = state.sessions.find((item) => item.id === id);
     if (!next) return;
     session = next;
   }
@@ -2616,6 +2696,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       }
     }
   }
+  // Take ownership before the first paint so a terminal opened a moment later
+  // skips this conversation instead of attaching to it.
+  claimSession(session);
+  stateChanged = true;
   if (stateChanged) await writeState(state);
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
   if (rl.render) rl.render(session, initialAccount);
@@ -2633,12 +2717,19 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // stale for however long that gap was, well past nativeUsageLabel's own
   // 30s cache window (which bounds *how often this can update*, not
   // *whether anything ever asks it to*). This is what actually asks.
+  const claimInterval = setInterval(() => {
+    void refreshSessionClaim(id).catch(() => undefined);
+  }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
+  claimInterval.unref();
   const usageInterval = rl instanceof TerminalHarnessPrompter ? setInterval(() => {
     void readState().then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
       if (latest) refreshUsage(latest, latestState);
     }).catch(() => { /* Usage is optional provider metadata. */ });
-  }, 20_000) : undefined;
+    // Half the usage window, so every other tick finds the reading expired and
+    // refreshes it. A tick longer than the window would land inside it and
+    // silently halve the real refresh rate.
+  }, 15_000) : undefined;
   let notice: string | undefined;
   let synchronizedSessionId = id;
   try {
@@ -2746,6 +2837,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         else if (command === '/sessions') {
           const action = await interactiveSessionManager(rl, id);
           if (action === 'exit') break;
+          if (action === 'new') { id = await newConversation(id); continue; }
           if (action === 'resume') {
             const selected = await interactiveSessionPicker(rl, id);
             if (selected && selected.id !== id) { id = selected.id; continue; }
@@ -2825,6 +2917,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           if (!rl.render) emitHarnessOutput({ panel: 'attachments', attachments: attachmentSession.attachments ?? [] });
           continue;
         }
+        else if (!queuedTurnId && (command === '/new' || command === '/reset')) {
+          id = await newConversation(id);
+          continue;
+        }
         else if (!queuedTurnId && line.startsWith('/') && !line.includes(' ') && localHarnessForCommand(command.slice(1))) {
           const selected = await newProviderConversation(id, command.slice(1));
           id = selected;
@@ -2873,6 +2969,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
+        // A queued turn is only consumed once its checkpoint starts. Anything
+        // that throws before that -- a removed account, an unavailable model, an
+        // attachment deleted since it was queued -- leaves the same message at
+        // the head of the queue, so the next iteration picks it up and fails
+        // identically: a hot loop that never returns a prompt and can only be
+        // cleared by hand-editing harness-state.json. Release it and hand the
+        // text back so the failure is visible and recoverable.
+        if (queuedTurnId && !cancelled) {
+          await releaseQueuedTurn(id, queuedTurnId).catch(() => undefined);
+          activeTerminalHarness?.restoreDraft(line);
+        }
         if (cancelled && interruptedSubmission && activeTerminalHarness) {
           const outputStarted = activeTerminalHarness.turnOutputStarted();
           const partialResponse = activeTerminalHarness.liveResponseText();
@@ -2888,9 +2995,32 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     }
   } finally {
     if (usageInterval) clearInterval(usageInterval);
+    if (claimInterval) clearInterval(claimInterval);
+    // Hand the conversation back so the next terminal can resume it. Best
+    // effort: a failure here only means the claim expires on its own TTL.
+    await releaseSessionClaim(id).catch(() => undefined);
     if (activeTerminalHarness === rl) activeTerminalHarness = undefined;
     rl.close();
   }
+}
+
+/** Refreshes this terminal's claim on its conversation. Runs on a timer rather
+ * than per turn so a long turn, or a long idle stretch, both keep the claim
+ * alive without any traffic of their own. */
+async function refreshSessionClaim(id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) return;
+  claimSession(session);
+  await writeState(state);
+}
+
+async function releaseSessionClaim(id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session?.claim) return;
+  releaseSession(session);
+  await writeState(state);
 }
 
 /**
@@ -3029,10 +3159,14 @@ export async function aiSessionSend(
             }
             const textPhase = nativeActivityPhase(harness, lineText);
             if (textPhase) activeTerminalHarness?.phase(textPhase);
+            // The harness reports its own quota on this stream. Reading it here
+            // costs nothing and refreshes on every turn, which is what keeps the
+            // shared OAuth usage endpoint -- a per-account budget several open
+            // chats used to exhaust between them -- down to a cold-start probe.
+            void recordNativeStreamUsage(session, lineText).catch(() => undefined);
             const event = parseNativeActivityEvent(harness, lineText);
             if (!event) return;
             checkpoint.activity(event);
-            activeTerminalHarness?.phase(renderActivityPhase(event));
             if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
             else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
           },
@@ -3064,7 +3198,6 @@ export async function aiSessionSend(
             } : undefined),
             onActivity: (event) => {
               checkpoint.activity(event);
-              activeTerminalHarness?.phase(renderActivityPhase(event));
               if (activeTerminalHarness) activeTerminalHarness.activityEvent(event);
               else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
             },
@@ -3372,17 +3505,22 @@ export async function aiGatewaySessionSend(
         // `tool`, not the backend's already-verbed `label`). The phase
         // (spinner text) uses `label` directly instead, since the backend's
         // phrasing ("Restarting the app…") is already the ideal spinner
-        // text and renderActivityPhase's own "running X" wording is for
+        // text and the terminal lifecycle's own "running X" wording is for
         // bare native-harness tool names, not a pre-verbed phrase. There's
         // no 'tool-done' here because AssistantChatEvent has no completion
         // signal to report (verified: 'tool_call' fires once, nothing after
         // it) — a real gap in what the agent loop reports, not something to
         // fake here.
         if (event.type === 'status' && typeof event.label === 'string') {
-          activeTerminalHarness?.phase(event.label);
           const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
           checkpoint.activity(activityEvent);
-          if (activeTerminalHarness) activeTerminalHarness.activityEvent(activityEvent);
+          if (activeTerminalHarness) {
+            activeTerminalHarness.activityEvent(activityEvent);
+            // Gateway labels are already humanized (for example,
+            // "Restarting the app…"). Apply that richer label after the
+            // generic lifecycle updates active-tool tracking.
+            activeTerminalHarness.phase(event.label);
+          }
           else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(activityEvent)) output.write(`${activity}\n`);
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');

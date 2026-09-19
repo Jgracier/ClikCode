@@ -34,6 +34,12 @@ export interface AiHarnessAccount {
   quotaState?: 'available' | 'exhausted';
   quotaRetryAt?: string;
   credentialRef: string;
+  /** Last usage reading for this account, shared across every terminal.
+   * The figure belongs to the account, not to one chat, so caching it per
+   * process meant the cost of displaying it scaled with the number of open
+   * terminals -- which is what rate-limited the account out of reading its
+   * own usage. */
+  usage?: { at: string; label?: string; failed?: boolean };
   nativeProfile?: {
     env: string;
     path: string;
@@ -123,7 +129,7 @@ export interface AiRouterRuntime {
 }
 
 export interface HarnessActivityEvent {
-  kind: 'thinking' | 'tool-start' | 'tool-done';
+  kind: 'thinking' | 'tool-start' | 'tool-done' | 'tool-error';
   label: string;
   /** Vendor tool-call identity, when emitted, lets the TUI update an in-flight
    * row instead of appending a detached completion at the bottom. */
@@ -154,6 +160,10 @@ export interface HarnessSession {
   /** The ClikCode branch this session was created from, when it is a fork or
    * cross-provider handoff. */
   parentSessionId?: string;
+  /** The terminal currently driving this conversation. Present only while a
+   * process has it open, so a second terminal can tell a live chat from an
+   * idle one and never attach to the same conversation twice. */
+  claim?: { pid: number; host: string; startedAt: string; heartbeatAt: string };
   /** Describes a portable handoff; the source native session remains intact. */
   handoff?: { fromSessionId: string; fromHarness: string; at: string };
   route: AiHarnessRoute;
@@ -254,11 +264,22 @@ export interface HarnessPrompter {
 }
 
 export type MessageBlock =
-  | { kind: 'paragraph'; text: string; quoteDepth: number; indent: number; sourceEnd: number }
-  | { kind: 'heading'; text: string; level: number; quoteDepth: number; sourceEnd: number }
-  | { kind: 'rule'; quoteDepth: number; sourceEnd: number }
-  | { kind: 'code'; lines: string[]; language?: string; quoteDepth: number; indent: number; sourceEnd: number }
-  | { kind: 'table'; header: string[]; rows: string[][]; align: Array<'left' | 'center' | 'right' | null>; quoteDepth: number; sourceEnd: number }
-  | { kind: 'list-item'; text: string; depth: number; ordered: boolean; number?: number; task: boolean; checked?: boolean; quoteDepth: number; sourceEnd: number };
+  | { kind: 'paragraph'; text: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean }
+  | { kind: 'heading'; text: string; level: number; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
+  | { kind: 'rule'; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
+  | { kind: 'code'; lines: string[]; language?: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean }
+  | { kind: 'table'; header: string[]; rows: string[][]; align: Array<'left' | 'center' | 'right' | null>; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
+  | { kind: 'list-item'; text: string; depth: number; ordered: boolean; number?: number; task: boolean; checked?: boolean; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean };
 
-export interface PickerOption<T> { label: string; detail?: string; value: T; actions?: readonly { label: string; value: string }[] }
+export interface PickerOption<T> {
+  label: string;
+  detail?: string;
+  value: T;
+  /** Alternate values represented by the same logical row (for example a
+   * conversation's provider-history branches). Opened with Tab. */
+  alternates?: readonly { label: string; value: T }[];
+  /** Non-destructive maintenance actions such as reauthentication. */
+  actions?: readonly { label: string; value: string }[];
+  /** Destructive row action. The terminal picker always confirms it first. */
+  deleteAction?: { label: string; value: string };
+}

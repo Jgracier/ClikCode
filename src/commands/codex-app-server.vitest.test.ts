@@ -6,6 +6,8 @@ describe('Codex app-server protocol mapping', () => {
     const item = { type: 'commandExecution', id: 'tool-1', command: 'git status' };
     expect(codexActivityForItem(item, false)).toEqual({ kind: 'tool-start', label: 'git status', id: 'tool-1' });
     expect(codexActivityForItem(item, true)).toEqual({ kind: 'tool-done', label: 'git status', id: 'tool-1' });
+    expect(codexActivityForItem({ ...item, exitCode: 1 }, true))
+      .toEqual({ kind: 'tool-error', label: 'git status', id: 'tool-1' });
   });
 
   it('maps Ask, Auto, and Bypass without weakening their approval policy', () => {
