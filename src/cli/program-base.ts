@@ -26,6 +26,7 @@ import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { bindGlobalFlags } from '../utils/global-flags.js';
 import { emitJson } from '../utils/structured-output.js';
 import type { LifecycleLock } from '../utils/lifecycle-lock.js';
+import { restoreTerminal } from '../commands/terminal-restore.js';
 
 export const CLI_VERSION: string = (() => {
   try {
@@ -122,12 +123,18 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
   const banner = options.banner ?? BANNER;
   let activeLifecycleLock: LifecycleLock | null = null;
 
+  // Restore the terminal FIRST. The ClikCode UI runs in raw mode with the
+  // cursor hidden, autowrap off and bracketed paste on; an error printed into
+  // that state is unreadable and the shell it returns to is unusable. A no-op
+  // when no terminal UI was ever started.
   process.on('unhandledRejection', (err) => {
+    restoreTerminal();
     logCrashToDisk('unhandledRejection', err);
     handleCommandError(err);
     process.exit(process.exitCode || 1);
   });
   process.on('uncaughtException', (err) => {
+    restoreTerminal();
     logCrashToDisk('uncaughtException', err);
     handleCommandError(err);
     process.exit(process.exitCode || 1);
