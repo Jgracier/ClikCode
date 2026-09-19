@@ -872,7 +872,19 @@ export interface AiHarnessAcpLaunchInput {
 
 /** Spawn contract for the shared ACP client, built only from declarations.
  * `ask` adds nothing: the protocol's own permission requests implement it. */
-export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHarnessAcpLaunchInput = {}): { binary: string; argv: string[] } | undefined {
+export interface AiHarnessAcpLaunch {
+  binary: string;
+  /** Complete spawn argv: `modeArgv` and `optionArgv` in the declared order. */
+  argv: string[];
+  /** The declared ACP mode argv alone. */
+  modeArgv: string[];
+  /** Model / effort / permission flags alone, for a client that places them itself. */
+  optionArgv: string[];
+  optionPlacement: 'before' | 'after';
+  experimental: boolean;
+}
+
+export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHarnessAcpLaunchInput = {}): AiHarnessAcpLaunch | undefined {
   const acp = harness.acp;
   if (!acp) return undefined;
   const options: string[] = [];
@@ -883,7 +895,12 @@ export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHar
     options.push(...(acp.permissionArgv?.[input.permissionMode]
       ?? (harness.permissionModes?.includes(input.permissionMode) ? harness.permissionArgv?.[input.permissionMode]?.argv : undefined) ?? []));
   }
-  return { binary: acp.binary ?? harness.binary, argv: acp.optionPlacement === 'after' ? [...acp.argv, ...options] : [...options, ...acp.argv] };
+  const optionPlacement = acp.optionPlacement ?? 'before';
+  return {
+    binary: acp.binary ?? harness.binary,
+    argv: optionPlacement === 'after' ? [...acp.argv, ...options] : [...options, ...acp.argv],
+    modeArgv: [...acp.argv], optionArgv: options, optionPlacement, experimental: acp.experimental === true,
+  };
 }
 
 /** The transport to use for THIS turn. An experimental ACP declaration never
