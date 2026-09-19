@@ -67,6 +67,12 @@ export interface AiLocalHarnessDefinition {
   effortArgvPrefix?: readonly string[];
   effortConfigKey?: string;
   permissionModes?: readonly AiHarnessPermissionMode[];
+  permissionArgv?: Readonly<Partial<Record<AiHarnessPermissionMode, {
+    argv: readonly string[];
+    placement?: 'root' | 'turn';
+  }>>>;
+  imageArgvPrefix?: readonly string[];
+  imageArgvStyle?: 'separate' | 'concatenated';
   profileEnv?: string;
   turn?: {
     startArgv: readonly string[];
