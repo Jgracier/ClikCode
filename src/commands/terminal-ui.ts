@@ -1364,7 +1364,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\r' || key === '\n') {
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
             const command = options[selected].value;
-            this.clearInteractiveFrame();
+            // Deliberately NOT cleared here. Blanking the region on submit
+            // leaves the screen empty for however long the command takes to
+            // produce its first frame, which read as "the composer vanished".
+            // The palette rows stay up for the moment in between and are
+            // replaced by whatever the command paints next.
             return finish(command);
           }
           return finish(value);
@@ -1393,8 +1397,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         }
         if (key === '\u001b[C') {
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
+            // Right Arrow is deliberately identical to Enter, including the
+            // decision above not to blank the region while the command runs.
             const command = options[selected].value;
-            this.clearInteractiveFrame();
             return finish(command);
           }
           const paletteValue = composerRightArrowValue(value, options.length > 0, settings?.rightArrowPalette);
