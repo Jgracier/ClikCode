@@ -585,6 +585,9 @@ export function inlineFrameDiff(
 export function upsertActivityEvent(
   entries: readonly ActivityEntry[], anchor: number, responseOffset: number | undefined, event: HarnessActivityEvent, sequence?: number,
 ): ActivityEntry[] {
+  // A thought is never a transcript row: reasoning summaries arrive dozens per
+  // turn and would bury the answer. The prompter shows the latest one on a
+  // single live row instead (see TerminalHarnessPrompter.activityEvent).
   if (event.kind === 'thinking') return [...entries];
   // Tool labels, output and diffs are untrusted text. They are cleaned before
   // renderActivityLine styles them, so the only escapes left in a row are the
@@ -793,6 +796,30 @@ export function approvalBlockRows(
   return [...title.slice(0, Math.max(1, maxRows - 1)), ...body, answer];
 }
 
+export type PlanEntry = { content: string; status?: 'pending' | 'in_progress' | 'completed' };
+const PLAN_MAX_ROWS = 6;
+
+/** A compact todo block: at most PLAN_MAX_ROWS rows, windowed around the step
+ * in progress so a long plan never crowds the conversation out of view. */
+export function planBlockRows(entries: readonly PlanEntry[], width: number, maxRows = PLAN_MAX_ROWS): string[] {
+  if (!entries.length || maxRows < 1) return [];
+  const done = entries.filter((entry) => entry.status === 'completed').length;
+  const capacity = Math.max(1, Math.min(maxRows, PLAN_MAX_ROWS));
+  let visible = entries.map((entry, index) => ({ entry, index }));
+  if (visible.length > capacity) {
+    const active = Math.max(0, entries.findIndex((entry) => entry.status !== 'completed'));
+    const start = Math.max(0, Math.min(active - 1, entries.length - (capacity - 1)));
+    visible = visible.slice(start, start + capacity - 1);
+  }
+  const rows = visible.map(({ entry }) => {
+    const text = visibleSlice(sanitizeTerminalText(entry.content, { singleLine: true }).trim(), Math.max(4, width - 6));
+    return entry.status === 'completed' ? `  ${chalk.green('☑')} ${chalk.dim(text)}`
+      : entry.status === 'in_progress' ? `  ${chalk.cyan('◐')} ${chalk.bold(text)}` : `  ☐ ${text}`;
+  });
+  if (visible.length < entries.length) rows.push(`  ${chalk.dim(`  ${done}/${entries.length} done · ${entries.length - visible.length} more`)}`);
+  return rows;
+}
+
 const compactCount = (count: number): string => (count < 1000 ? String(count)
   : count < 1_000_000 ? `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k` : `${(count / 1_000_000).toFixed(1)}M`);
 
@@ -870,6 +897,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private transientNotice?: string;
   private transientNoticeTimer?: NodeJS.Timeout;
   private turnUsage?: { inputTokens?: number; outputTokens?: number };
+  private latestThought?: string;
+  private planEntries: readonly PlanEntry[] = [];
   /** Laid-out rows of settled messages, keyed by everything that shapes them.
    * A spinner tick or a keystroke repaints with forty cache hits instead of
    * re-parsing and re-wrapping forty messages. */
@@ -987,6 +1016,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   render(session: HarnessSession, account?: string, notice?: string): void {
     if (this.currentSession?.id !== session.id) {
       this.activityEntries = [];
+      this.planEntries = [];
       this.inlinePermanentLines = [];
       this.resetInlineScreen = 'history';
     }
@@ -1008,6 +1038,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // about to retry on another account. Appends with no content remain a
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
+    // The thought led to this text; once the answer is arriving it is stale.
+    if (text) this.latestThought = undefined;
     if (mode === 'replace') {
       this.activityEntries = rebaseActivityOffsets(this.activityEntries, this.activityAnchor, this.liveResponse, text);
       this.liveResponse = text;
@@ -1028,7 +1060,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
+  /** Optional: the agent's current plan/todo list, shown as a compact block in
+   * the live region. Pass an empty list to remove it. */
+  setPlan(entries: readonly PlanEntry[]): void {
+    this.planEntries = entries.map((entry) => ({ ...entry }));
+    this.schedulePaint();
+  }
+
   activityEvent(event: HarnessActivityEvent): void {
+    if (event.kind === 'thinking') {
+      // Collapsed to the most recent thought, on one live row, never in the
+      // transcript. A bare "thinking" label says nothing the spinner does not.
+      const thought = sanitizeTerminalText(event.label, { singleLine: true }).replace(/\s+/g, ' ').trim();
+      this.latestThought = thought && thought.toLowerCase() !== 'thinking' ? thought : this.latestThought;
+    } else if (event.kind === 'tool-start') this.latestThought = undefined;
     const anchor = this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
     const responseOffset = this.waitingLabel ? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
@@ -1073,6 +1118,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingFrame = 0;
     this.waitingStartedAt = Date.now();
     this.turnUsage = undefined;
+    this.latestThought = undefined;
     if (input.isTTY) {
       const listen = (): void => {
         input.setRawMode(true);
@@ -1117,6 +1163,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingCancelled = false;
     this.settleApprovals();
     this.waitingLabel = '';
+    this.latestThought = undefined;
     if (refresh && !this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
@@ -1336,7 +1383,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         needsFocus: approval.needsFocus, focused: approval.focused, queued: this.approvalQueue.length,
       })
       : [];
-    const maxComposerRows = Math.max(1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length);
+    let liveBandBudget = Math.max(0, optionalRows - paletteRows - approvalRows.length - 2);
+    const thoughtRows = this.waitingLabel && this.latestThought && !approval && liveBandBudget > 0
+      ? [`  ${chalk.dim(chalk.italic(visibleSlice(`✻ ${this.latestThought}`, Math.max(1, inner))))}`] : [];
+    liveBandBudget -= thoughtRows.length;
+    const planRows = paletteRows || this.selecting ? [] : planBlockRows(this.planEntries, width, liveBandBudget);
+    const maxComposerRows = Math.max(
+      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - planRows.length,
+    );
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     const conversation: Array<{ text: string }> = [];
     let stableConversationBoundary = 0;
@@ -1546,7 +1600,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       for (let index = windowed.length; index < visibleRows; index++) footer.push('');
       footer.push(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
-    footer.push(...approvalRows);
+    footer.push(...planRows, ...approvalRows, ...thoughtRows);
     if (waitingRows) {
       footer.push(`  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
