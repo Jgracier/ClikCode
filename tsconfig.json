@@ -13,6 +13,6 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../cli/src/types/**/*.d.ts"],
   "exclude": ["node_modules", "dist"]
 }
