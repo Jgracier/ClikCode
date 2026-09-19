@@ -1694,10 +1694,9 @@ async function chooseOption<T>(
   title: string,
   options: readonly PickerOption<T>[],
   onAction?: (value: T, action: string) => Promise<void>,
-  onExpand?: (value: T) => Promise<T | undefined>,
 ): Promise<T | undefined> {
   if (options.length === 0) return undefined;
-  if (rl.select) return rl.select(title, options, onAction, onExpand);
+  if (rl.select) return rl.select(title, options, onAction);
   output.write(`\n${chalk.bold(title)}\n`);
   options.forEach((option, index) => {
     output.write(`  ${chalk.cyan(String(index + 1).padStart(2))}  ${option.label}${option.detail ? ` ${chalk.dim(option.detail)}` : ''}\n`);
@@ -1806,8 +1805,8 @@ function integrationLabel(harness: AiLocalHarnessDefinition): string {
   } as const)[harnessIntegrationLevel(harness)];
 }
 
-/** Keep the first level deliberately sparse. Choosing a provider opens its
- * account list instead of mixing every account from every vendor together. */
+/** Keep the provider list deliberately sparse. Account switching belongs to
+ * the composer shortcut and /account, not this provider-only menu. */
 export function providerPickerOptions(
   available: ReadonlyArray<{ harness: AiLocalHarnessDefinition; inspection: { installed: boolean; version?: string } }>,
   session: HarnessSession,
@@ -1828,7 +1827,7 @@ export function providerPickerOptions(
       label: harness.displayName,
       detail: `${inspection.installed
         ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
-        : harness.npmPackage ? '· install when needed' : '· vendor install required'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''} · → accounts`,
+        : harness.npmPackage ? '· install when needed' : '· vendor install required'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''}`,
       value: { kind: 'provider' as const, harness: harness.command },
     })), ...(hiddenCount > 0 ? [{ label: 'More providers…', detail: `· ${hiddenCount} available to install`, value: { kind: 'more' as const } }] : []),
   ];
@@ -1867,6 +1866,28 @@ export function providerAccountPickerOptions(
   ];
 }
 
+/** One flat account list for the composer shortcut. Provider ownership stays
+ * visible as metadata, but the user does not have to navigate through a
+ * provider before choosing the account they already know they want. */
+export function accountPickerOptions(
+  accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string }>,
+  session: HarnessSession,
+  harnesses: readonly AiLocalHarnessDefinition[],
+): PickerOption<ProviderAccountChoice>[] {
+  return accounts.flatMap(({ account, usage }) => {
+    const harness = harnesses.find((item) => item.provider === account.provider);
+    if (!harness) return [];
+    const option = providerAccountPickerOptions(harness, [{ account, usage }], session)
+      .find((item) => item.value.kind === 'account');
+    if (!option) return [];
+    return [{
+      ...option,
+      detail: `· ${harness.displayName} ${option.detail ?? ''}`.trim(),
+    }];
+  }).sort((left, right) => left.label.localeCompare(right.label)
+    || (left.detail ?? '').localeCompare(right.detail ?? ''));
+}
+
 async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id: string, selected: string): Promise<string> {
   if (selected === '__gateway__') return newGatewayConversation(config, rl, id);
   const state = await readState();
@@ -1879,34 +1900,33 @@ async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id:
   return newProviderConversation(id, selected);
 }
 
-/** Account selection is an optional child of provider selection. Enter on a
- * provider selects the provider; Right Arrow calls this focused chooser. */
-async function interactiveProviderAccountPicker(
+async function interactiveAccountPicker(
   config: Conf,
   rl: HarnessPrompter,
   id: string,
-  harness: AiLocalHarnessDefinition,
-  installed: boolean,
 ): Promise<string | undefined> {
   for (;;) {
-    const accountState = await readState();
-    const current = accountState.sessions.find((item) => item.id === id);
-    if (!current) throw new Error(`AI session "${id}" was not found`);
-    const providerAccounts = accountState.accounts.filter((account) => account.provider === harness.provider);
-    if (rl instanceof TerminalHarnessPrompter && providerAccounts.some((account) => account.authKind === 'vendor-cli')) {
-      rl.startWaiting(`loading ${harness.displayName} account usage…`);
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    if (!session) throw new Error(`AI session "${id}" was not found`);
+    if (!state.accounts.length) {
+      rl.panel?.('Accounts', 'No accounts are connected. Use /accounts login <provider> <label> to add one.');
+      return undefined;
+    }
+    if (rl instanceof TerminalHarnessPrompter && state.accounts.some((account) => account.authKind === 'vendor-cli')) {
+      rl.startWaiting('loading account usage…');
     }
     let accountsWithUsage: Array<{ account: AiHarnessAccount; usage?: string }>;
     try {
-      accountsWithUsage = await Promise.all(providerAccounts.map(async (account) => ({
-        account, usage: await accountUsageLabel(account, accountState),
+      accountsWithUsage = await Promise.all(state.accounts.map(async (account) => ({
+        account, usage: await accountUsageLabel(account, state),
       })));
     } finally {
       if (rl instanceof TerminalHarnessPrompter) rl.stopWaiting();
     }
     let actionPerformed = false;
     const selected = await chooseOption(
-      rl, `${harness.displayName} accounts`, providerAccountPickerOptions(harness, accountsWithUsage, current),
+      rl, 'Choose an account', accountPickerOptions(accountsWithUsage, session, localRouter().AI_LOCAL_HARNESSES),
       async (choice, action) => {
         if (choice.kind !== 'account') return;
         actionPerformed = true;
@@ -1914,21 +1934,9 @@ async function interactiveProviderAccountPicker(
       },
     );
     if (actionPerformed) continue;
-    if (!selected) return undefined;
-    if (selected.kind === 'account') {
-      const targetId = await selectProviderConversation(config, rl, id, selected.harness);
-      await aiSessionCommand(targetId, `/settings account ${selected.accountId}`);
-      return targetId;
-    }
-    if (!installed) {
-      activeTerminalHarness?.startWaiting(`installing ${harness.displayName}…`);
-      try { await ensureNativeHarness(harness); } finally { activeTerminalHarness?.stopWaiting(); }
-      installed = true;
-    }
-    const accountLabel = await addAccountForHarness(rl, harness);
-    if (!accountLabel) continue;
-    const targetId = await selectProviderConversation(config, rl, id, harness.command);
-    await aiSessionCommand(targetId, `/settings account ${accountLabel}`);
+    if (!selected || selected.kind !== 'account') return undefined;
+    const targetId = await selectProviderConversation(config, rl, id, selected.harness);
+    await aiSessionCommand(targetId, `/settings account ${selected.accountId}`);
     return targetId;
   }
 }
@@ -1943,32 +1951,14 @@ async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: st
     if (!session) throw new Error(`AI session "${id}" was not found`);
     const gatewayConnected = Boolean(ApiClient.getApiKeyForUrl(config, ApiClient.getApiUrl(config)));
     const configuredProviders = new Set(state.accounts.map((account) => account.provider));
-    let expandedSessionId: string | undefined;
-    const expandProvider = async (choice: ProviderChoice): Promise<ProviderChoice | undefined> => {
-      if (choice.kind !== 'provider') return undefined;
-      const entry = available.find((item) => item.harness.command === choice.harness);
-      if (!entry) return undefined;
-      expandedSessionId = await interactiveProviderAccountPicker(
-        config, rl, id, entry.harness, entry.inspection.installed,
-      );
-      return expandedSessionId ? choice : undefined;
-    };
-    let provider = await chooseOption(
-      rl,
-      'Choose a provider',
-      providerPickerOptions(available, session, gatewayConnected, configuredProviders),
-      undefined,
-      expandProvider,
-    );
-    if (expandedSessionId) return expandedSessionId;
+    let provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected, configuredProviders));
     if (!provider) return undefined;
     if (provider.kind === 'more') {
       const primaryHarnesses = new Set(providerPickerOptions(available, session, gatewayConnected, configuredProviders)
         .flatMap((option) => option.value.kind === 'provider' ? [option.value.harness] : []));
       const more = providerPickerOptions(available, session, gatewayConnected, configuredProviders, true)
         .filter((option) => option.value.kind === 'provider' && !primaryHarnesses.has(option.value.harness));
-      provider = await chooseOption(rl, 'More providers', more, undefined, expandProvider);
-      if (expandedSessionId) return expandedSessionId;
+      provider = await chooseOption(rl, 'More providers', more);
       if (!provider) continue;
     }
     if (provider.kind === 'gateway') return selectProviderConversation(config, rl, id, '__gateway__');
@@ -2551,7 +2541,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (await synchronizeNativeTranscript(state, session)) await writeState(state);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider or one of its accounts', '/settings': 'configure this workspace',
+    '/provider': 'choose a provider', '/account': 'switch directly between accounts', '/settings': 'configure this workspace',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'approval behavior',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
@@ -2668,7 +2658,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           line = queued.text;
           queuedTurnId = queued.id;
           notice = 'Running queued message';
-        } else line = (await rl.question('› ', slashCommandsFor(latest))).trim();
+        } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowCommand: '/account' })).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.
@@ -2692,7 +2682,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           if (selected && selected !== id) { id = selected; continue; }
         }
         else if (command === '/account' || command === '/accounts') {
-          const selected = await interactiveEnginePicker(config, rl, id);
+          const selected = await interactiveAccountPicker(config, rl, id);
           if (selected && selected !== id) { id = selected; continue; }
         }
         else if (command === '/model') await interactiveModelPicker(rl, id);
