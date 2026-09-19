@@ -141,7 +141,7 @@ describe('incremental native tool activity', () => {
       item: { id: 'call-1', type: 'command_execution', command: 'git status', aggregated_output: 'one\ntwo\nthree\nfour' },
     }));
     expect(event).toEqual({ kind: 'tool-done', label: 'git status', id: 'call-1', output: ['one', 'two', 'three', '… 1 more line'] });
-    expect(renderActivityLine(event!)).toHaveLength(5);
+    expect(renderActivityLine(event!)).toHaveLength(4);
   });
 
   it('pairs Claude tool starts and partial results by tool-use id', () => {
@@ -164,6 +164,17 @@ describe('incremental native tool activity', () => {
     }));
     expect(start).toEqual({ kind: 'tool-start', label: 'search', id: 'call-2' });
     expect(done).toEqual({ kind: 'tool-done', label: 'search', id: 'call-2' });
+  });
+
+  it('pairs generic file changes instead of creating a detached completion row', () => {
+    const start = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.started', item: { id: 'edit-1', type: 'file_change' },
+    }));
+    const done = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.completed', item: { id: 'edit-1', type: 'file_change' },
+    }));
+    expect(start).toEqual({ kind: 'tool-start', label: 'files updated', id: 'edit-1' });
+    expect(done).toEqual({ kind: 'tool-done', label: 'files updated', id: 'edit-1' });
   });
 
   it('does not put raw structured command output into the human activity feed', () => {

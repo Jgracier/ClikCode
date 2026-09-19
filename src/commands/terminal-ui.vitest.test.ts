@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, interleaveResponseContent, rightLabeledRule, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
+import { commandPaletteMatches, interleaveResponseContent, rightLabeledRule, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
 
 describe('full-screen waiting input', () => {
   it('alternates opposite dots in a stable ASCII square', () => {
@@ -31,6 +31,40 @@ describe('streamed response chronology', () => {
       { kind: 'activity', lines: ['done read file'] },
       { kind: 'text', text: 'The issue is fixed.' },
     ]);
+  });
+
+  it('updates repeated tool progress in place and ignores reasoning as chat activity', () => {
+    const started = upsertActivityEvent([], 3, 12, { kind: 'tool-start', id: 'call-1', label: 'search\nrepository' });
+    const repeated = upsertActivityEvent(started, 3, 12, { kind: 'tool-start', id: 'call-1', label: 'search repository' });
+    const completed = upsertActivityEvent(repeated, 3, 18, { kind: 'tool-done', id: 'call-1', label: 'search repository' });
+    const withThinking = upsertActivityEvent(completed, 3, 18, { kind: 'thinking', label: 'internal summary' });
+
+    expect(started).toHaveLength(1);
+    expect(repeated).toHaveLength(1);
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.event).toMatchObject({ kind: 'tool-done', id: 'call-1', label: 'search repository' });
+    expect(withThinking).toEqual(completed);
+  });
+
+  it('collapses a tool-only burst instead of letting it dominate the viewport', () => {
+    const parts = interleaveResponseContent('Done.', Array.from({ length: 7 }, (_, index) => ({
+      responseOffset: 0, lines: [`done tool ${index + 1}`],
+    })));
+    expect(parts).toEqual([
+      { kind: 'activity', lines: ['… 3 earlier tool calls'] },
+      { kind: 'activity', lines: ['done tool 4'] },
+      { kind: 'activity', lines: ['done tool 5'] },
+      { kind: 'activity', lines: ['done tool 6'] },
+      { kind: 'activity', lines: ['done tool 7'] },
+      { kind: 'text', text: 'Done.' },
+    ]);
+  });
+
+  it('creates the live assistant anchor before prose so tools appear as they happen', () => {
+    const entries = upsertActivityEvent([], 3, 0, { kind: 'tool-start', id: 'call-1', label: 'inspect' });
+    expect(transientAssistantRequired('', true, 3, entries)).toBe(true);
+    expect(transientAssistantRequired('', false, 3, entries)).toBe(false);
+    expect(transientAssistantRequired('A', true, 3, [])).toBe(true);
   });
 });
 
