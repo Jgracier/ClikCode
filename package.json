@@ -15,6 +15,7 @@
     "build": "node scripts/build.mjs",
     "build:analyze": "node scripts/build.mjs --analyze",
     "build:strict": "node scripts/build.mjs --analyze --strict",
+    "build:no-strict": "node scripts/build.mjs --analyze --no-strict",
     "type-check": "tsc --noEmit -p tsconfig.json",
     "test": "pnpm run build && node dist/index.js --help && node dist/index.js --human doctor",
     "test:pack": "node scripts/test-pack.mjs",
@@ -25,16 +26,11 @@
     "the build if one is missing and warns about extras. chalk, commander, conf, cross-spawn",
     "and marked are inlined into dist/index.js, and @clikdeploy/clikrouter (a private, source-",
     "only workspace package) is bundled into dist/*.cjs, so all of those are devDependencies.",
-    "axios, axios-retry, inquirer and ora are only reachable through the legacy deployment",
-    "imports in apps/cli/src/commands/ai.ts; once those are gone the build warning says so",
-    "and they move to devDependencies (or out) too."
+    "The build is --strict by default: a deployment-CLI source (and with it axios, inquirer,",
+    "ora) landing in dist/index.js fails the build. Pass --no-strict to investigate one."
   ],
   "dependencies": {
-    "@basetenlabs/performance-client": "0.0.10",
-    "axios": "^1.19.0",
-    "axios-retry": "^4.5.0",
-    "inquirer": "^14.0.2",
-    "ora": "^9.4.1"
+    "@basetenlabs/performance-client": "0.0.10"
   },
   "devDependencies": {
     "@clikdeploy/clikrouter": "file:../../packages/clikrouter",
