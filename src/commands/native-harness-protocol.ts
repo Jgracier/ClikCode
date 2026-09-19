@@ -187,6 +187,16 @@ export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText
   } catch {
     return undefined;
   }
+  if (harness.command === 'codex' && value.type === 'item.completed') {
+    const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
+    if (item?.type === 'agent_message' && typeof item.text === 'string' && item.text) {
+      // `codex exec --json` does not expose token deltas, but it does publish
+      // each completed agent-message item immediately. Showing those items as
+      // they arrive keeps commentary/final prose visible among tool activity
+      // instead of withholding every natural-language update until process exit.
+      return { text: `${item.text}\n\n`, mode: 'append' };
+    }
+  }
   if (harness.command === 'antigravity' && value.event === 'step_update') {
     const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
     if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string' && step.text_delta) {
@@ -255,8 +265,19 @@ export function capDiffLines(text: string, max: number): { lines: string[]; trun
 }
 
 function cappedActivityOutput(text: string): string[] | undefined {
-  if (!text.trim()) return undefined;
-  const capped = capDiffLines(text.trim(), 3);
+  const normalized = text.trim();
+  if (!normalized) return undefined;
+  // Machine-readable tool output belongs to the native event protocol, not
+  // the human transcript. Printing JSON/JSONL here was the reason a working
+  // turn looked like a wall of tool-call envelopes until the final response
+  // replaced it. Keep the useful tool label/status and omit its raw payload.
+  const records = normalized.split(/\r?\n/).filter(Boolean);
+  const isJson = (candidate: string): boolean => {
+    if (!/^(?:\{|\[)/.test(candidate.trim())) return false;
+    try { JSON.parse(candidate); return true; } catch { return false; }
+  };
+  if (isJson(normalized) || (records.length > 0 && records.every(isJson))) return undefined;
+  const capped = capDiffLines(normalized, 3);
   return [...capped.lines, ...(capped.truncated ? [`… ${capped.truncated} more line${capped.truncated === 1 ? '' : 's'}`] : [])];
 }
 
@@ -307,7 +328,10 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
   if (/file_change/.test(itemType) && /completed/.test(type)) return { kind: 'tool-done', label: 'files updated' };
   if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
     const name = String(item?.name ?? item?.server ?? 'tool');
-    return { kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: name };
+    return {
+      kind: type.endsWith('completed') ? 'tool-done' : 'tool-start', label: name,
+      ...(typeof item?.id === 'string' ? { id: item.id } : {}),
+    };
   }
   if (harness.command === 'claude') {
     if (type === 'system' && value.subtype === 'init') return undefined;
