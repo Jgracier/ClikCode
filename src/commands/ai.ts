@@ -286,6 +286,54 @@ async function copyToClipboard(text: string): Promise<void> {
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
+/** Decode a path as entered or dragged into a terminal without invoking a
+ * shell. Drag-and-drop commonly adds quotes or backslashes before spaces. */
+export function decodeAttachmentPath(input: string): string {
+  let value = input.trim();
+  const quoted = value.match(/^(?:"([\s\S]*)"|'([\s\S]*)')$/);
+  if (quoted) value = quoted[1] ?? quoted[2] ?? '';
+  if (value.startsWith('file://')) {
+    try { return fileURLToPath(value); } catch { return value; }
+  }
+  // Backslashes are path separators on Windows, but terminal escape
+  // characters on the Unix platforms where drag-and-drop produces them.
+  return process.platform === 'win32' ? value : value.replace(/\\(.)/g, '$1');
+}
+
+/** Resolve a standalone input only when it clearly looks like a file
+ * reference and names an existing regular file. This preserves slash
+ * commands while allowing absolute image paths such as /home/me/photo.png. */
+export async function resolveStandaloneAttachment(
+  input: string,
+  workspace: string,
+): Promise<string | undefined> {
+  const raw = input.trim();
+  const decoded = decodeAttachmentPath(raw);
+  const explicitlyQuoted = /^(?:"[\s\S]*"|'[\s\S]*')$/.test(raw);
+  const looksLikePath = raw.startsWith('file://')
+    || isAbsolute(decoded)
+    || decoded.startsWith('./')
+    || decoded.startsWith('../')
+    || decoded.startsWith('~/')
+    || explicitlyQuoted
+    || IMAGE_EXTENSIONS.has(extname(decoded).toLowerCase());
+  if (!looksLikePath) return undefined;
+  const expanded = decoded === '~' ? homedir() : decoded.startsWith('~/') ? join(homedir(), decoded.slice(2)) : decoded;
+  const path = isAbsolute(expanded) ? resolve(expanded) : resolve(workspace, expanded);
+  try {
+    return (await stat(path)).isFile() ? path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function queueAttachment(session: HarnessSession, path: string): Promise<void> {
+  const info = await stat(path);
+  if (!info.isFile()) throw new Error('Attachments must be files.');
+  if (info.size > 1024 * 1024) throw new Error('Attachments are limited to 1 MiB each.');
+  session.attachments = [...new Set([...(session.attachments ?? []), path])].slice(-10);
+}
+
 async function prepareAttachments(paths: readonly string[]): Promise<{ textContext: string; images: string[] }> {
   const blocks: string[] = [];
   const images: string[] = [];
@@ -1158,13 +1206,11 @@ export async function aiSessionCommand(id: string, input: string): Promise<void>
     if (action === 'clear') {
       session.attachments = [];
     } else {
-      const unquoted = action.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, '$1$2');
+      const unquoted = decodeAttachmentPath(action);
       const workspace = session.workspace ?? process.cwd();
-      const path = isAbsolute(unquoted) ? resolve(unquoted) : resolve(workspace, unquoted);
-      const info = await stat(path);
-      if (!info.isFile()) throw new Error('Attachments must be files.');
-      if (info.size > 1024 * 1024) throw new Error('Attachments are limited to 1 MiB each.');
-      session.attachments = [...new Set([...(session.attachments ?? []), path])].slice(-10);
+      const expanded = unquoted === '~' ? homedir() : unquoted.startsWith('~/') ? join(homedir(), unquoted.slice(2)) : unquoted;
+      const path = isAbsolute(expanded) ? resolve(expanded) : resolve(workspace, expanded);
+      await queueAttachment(session, path);
     }
     session.updatedAt = new Date().toISOString();
     await writeState(state);
@@ -2356,10 +2402,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   try {
     while (true) {
       let line: string;
+      let activeWorkspace = process.cwd();
       try {
         const latestState = await readState();
         const latest = latestState.sessions.find((item) => item.id === id);
         if (!latest) break;
+        activeWorkspace = latest.workspace ?? process.cwd();
         if (synchronizedSessionId !== id) {
           if (await synchronizeNativeTranscript(latestState, latest)) await writeState(latestState);
           synchronizedSessionId = id;
@@ -2382,6 +2430,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       }
       try {
         const command = line.toLowerCase();
+        const standaloneAttachment = await resolveStandaloneAttachment(line, activeWorkspace);
         if (command === '/switch' || command === '/engine' || command === '/provider') {
           const selected = await interactiveEnginePicker(config, rl, id);
           if (selected && selected !== id) { id = selected; continue; }
@@ -2504,6 +2553,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           activeFullScreenHarness?.startWaiting('thinking', () => turnController.abort());
           try { await aiGatewaySessionSend(config, id, task, turnController.signal); }
           finally { activeFullScreenHarness?.stopWaiting(); }
+        }
+        else if (standaloneAttachment) {
+          const attachmentState = await readState();
+          const attachmentSession = attachmentState.sessions.find((item) => item.id === id);
+          if (!attachmentSession) throw new Error(`AI session "${id}" was not found`);
+          await queueAttachment(attachmentSession, standaloneAttachment);
+          attachmentSession.updatedAt = new Date().toISOString();
+          await writeState(attachmentState);
+          notice = `Attached ${compactPath(standaloneAttachment)} for the next request`;
+          if (!rl.render) emitHarnessOutput({ panel: 'attachments', attachments: attachmentSession.attachments ?? [] });
+          continue;
         }
         else if (line.startsWith('/') && !line.includes(' ') && localHarnessForCommand(command.slice(1))) {
           const selected = await newProviderConversation(id, command.slice(1));
