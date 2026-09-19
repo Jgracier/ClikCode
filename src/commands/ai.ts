@@ -72,6 +72,43 @@ export function requiresProviderHandoff(session: HarnessSession, targetHarness: 
   return hasConversationContent(session) && (session.route !== 'local' || session.nativeHarness !== targetHarness);
 }
 
+/** Pick the branch ClikCode should restore when it starts without an explicit
+ * session id. Leaving the application keeps the current branch active; only
+ * the explicit session-close action removes a branch from this candidate set. */
+export function defaultSessionCandidate(sessions: readonly HarnessSession[]): HarnessSession | undefined {
+  return [...sessions]
+    .filter((session) => session.status === 'active')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+}
+
+/** Leaving the foreground application is not the same operation as closing a
+ * conversation. Touch the current branch so it remains the default branch on
+ * the next launch, without changing its provider-owned session identity. */
+export function markSessionLeftOpen(session: HarnessSession, now: string): void {
+  session.status = 'active';
+  delete session.closedAt;
+  session.updatedAt = now;
+}
+
+/** Find the most complete already-established branch for a provider within
+ * one ClikCode conversation. Provider selection resumes this branch; creating
+ * an alternative continuation remains the explicit /fork operation. */
+export function establishedProviderBranch(
+  sessions: readonly HarnessSession[],
+  current: HarnessSession,
+  targetHarness: string,
+): HarnessSession | undefined {
+  return [...sessions]
+    .filter((session) => session.id !== current.id
+      && conversationIdFor(session) === conversationIdFor(current)
+      && session.nativeHarness === targetHarness
+      && Boolean(session.nativeSessionId))
+    .sort((left, right) => {
+      const messageDifference = (right.messages?.length ?? 0) - (left.messages?.length ?? 0);
+      return messageDifference || right.updatedAt.localeCompare(left.updatedAt);
+    })[0];
+}
+
 /** Create a portable child branch. The source keeps its provider-owned
  * identity; the child carries the ClikCode-owned transcript into its target. */
 export function createHandoffBranch(input: {
@@ -951,9 +988,24 @@ export async function aiPermissions(mode?: string): Promise<void> {
  */
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();
-  let session = [...state.sessions]
-    .filter((item) => item.status === 'active')
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  let session = defaultSessionCandidate(state.sessions);
+  // Releases before /exit was separated from session-close could leave the
+  // real provider branch closed, then create a second unstarted handoff from
+  // its older parent on the next launch. Recover only that unambiguous shape:
+  // same conversation/provider, no native identity on the selected shell,
+  // and a bound branch containing strictly more history.
+  if (session?.parentSessionId && session.nativeHarness && !session.nativeSessionId) {
+    const established = establishedProviderBranch(state.sessions, session, session.nativeHarness);
+    if (established && (established.messages?.length ?? 0) > (session.messages?.length ?? 0)) {
+      const now = new Date().toISOString();
+      session.status = 'closed';
+      session.closedAt = now;
+      session.updatedAt = now;
+      markSessionLeftOpen(established, now);
+      session = established;
+      await writeState(state);
+    }
+  }
   if (!session) {
     // A closed chat must never reopen without an explicit `sessions open`.
     // Its configuration is still the user's last agent choice, so carry that
@@ -1034,6 +1086,17 @@ export async function aiSessionClose(id: string): Promise<void> {
     await writeState(state);
   }
   emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
+}
+
+/** Save-and-leave lifecycle used by /exit. This deliberately does not call
+ * aiSessionClose: closing a terminal must not make startup fall back to an
+ * older provider branch of the same conversation. */
+async function aiSessionLeave(id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  markSessionLeftOpen(session, new Date().toISOString());
+  await writeState(state);
 }
 
 /** Shared slash-command grammar for a future TTY client and the headless CLI. */
@@ -1426,6 +1489,12 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   if (current.route === 'local' && current.nativeHarness === harness.command) return current.id;
+  const established = establishedProviderBranch(state.sessions, current, harness.command);
+  if (established) {
+    markSessionLeftOpen(established, new Date().toISOString());
+    await writeState(state);
+    return established.id;
+  }
   // Refresh the source before freezing its portable ClikCode history into a
   // child branch. The source native session remains untouched after this.
   if (await synchronizeNativeTranscript(state, current)) await writeState(state);
@@ -2307,7 +2376,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       }
       if (!line) continue;
       if (line === '/exit' || line === '/quit') {
-        await aiSessionClose(id);
+        await aiSessionLeave(id);
         break;
       }
       try {
