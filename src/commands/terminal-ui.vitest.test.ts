@@ -38,8 +38,8 @@ describe('command palette layout', () => {
 
 describe('composer border labels', () => {
   it('right-aligns usage and title labels without changing the border width', () => {
-    expect(rightLabeledRule(30, '5h 12% · weekly 34%')).toBe('─'.repeat(10) + ' 5h 12% · weekly 34%');
-    expect(terminalCellWidth(rightLabeledRule(30, '5h 12% · weekly 34%'))).toBe(30);
+    expect(rightLabeledRule(40, '5h 12% used · weekly 34% used')).toBe('─'.repeat(10) + ' 5h 12% used · weekly 34% used');
+    expect(terminalCellWidth(rightLabeledRule(40, '5h 12% used · weekly 34% used'))).toBe(40);
     expect(rightLabeledRule(30, 'Fix session persistence')).toBe('─'.repeat(6) + ' Fix session persistence');
   });
 
