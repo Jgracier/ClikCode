@@ -567,6 +567,80 @@ export function streamingMarkdownBoundary(
   return /\n[ \t]*\n$/.test(content.slice(0, part.block.sourceEnd));
 }
 
+/** How long an approval ignores every key after it appears. A person typing
+ * into the composer cannot stop within a frame of a prompt popping up; without
+ * this the `y` of whatever word they were on approved a tool call. */
+export const APPROVAL_GUARD_MS = 400;
+
+export type ApprovalPreview = {
+  /** Either unified-diff style lines, or the two sides of an edit. */
+  diff?: readonly string[] | { removed: readonly string[]; added: readonly string[] };
+};
+type ApprovalRequest = { title: string; detail?: string; preview?: ApprovalPreview; resolve: (accepted: boolean) => void };
+const APPROVAL_DIFF_PREVIEW_LINES = 8;
+
+/** What one key means to a pending approval. The rule, in full:
+ *  - every key is ignored for the first APPROVAL_GUARD_MS;
+ *  - Esc and Ctrl+C always deny (neither can be part of a draft);
+ *  - if the composer held a draft when the approval appeared, Tab must be
+ *    pressed first to focus the approval -- until then y/n/Enter are ignored,
+ *    because they are exactly the characters the user is in the middle of
+ *    typing;
+ *  - then y/Y allows once, n/N and Enter (the default) deny.
+ * Nothing typed while an approval is pending ever reaches the draft. */
+export function approvalKeyAction(
+  key: string, elapsedMs: number, needsFocus: boolean, focused: boolean,
+): 'allow' | 'deny' | 'focus' | 'ignore' {
+  if (elapsedMs < APPROVAL_GUARD_MS) return 'ignore';
+  if (key === '\u001b' || key === '\u0003') return 'deny';
+  if (needsFocus && !focused) return key === '\t' ? 'focus' : 'ignore';
+  if (key === 'y' || key === 'Y') return 'allow';
+  if (key === 'n' || key === 'N' || key === '\r' || key === '\n') return 'deny';
+  return 'ignore';
+}
+
+/** The approval as its own block of rows. The full command/path is wrapped,
+ * never clipped to a fragment of one status line, and the answer row is never
+ * truncated: what is being approved and how to answer are the two things this
+ * prompt exists to show. When the block cannot fit, detail rows are dropped
+ * from the middle and the count of hidden rows is stated. */
+export function approvalBlockRows(
+  request: { title: string; detail?: string; preview?: ApprovalPreview }, width: number, maxRows: number,
+  state: { guarded: boolean; needsFocus: boolean; focused: boolean; queued: number },
+): string[] {
+  const inner = Math.max(8, width - 4);
+  const clean = (text: string): string => sanitizeTerminalText(text);
+  const title = wrapWords(`${clean(request.title).replace(/\s+/g, ' ').trim()}${state.queued ? `  (+${state.queued} waiting)` : ''}`, inner - 2)
+    .map((line, index) => `  ${index === 0 ? chalk.yellow('?') : ' '} ${chalk.bold(line)}`);
+  const detail = request.detail === undefined ? []
+    : clean(request.detail).split('\n').flatMap((line) => wrapCodeLine(line, inner - 2)).map((line) => `    ${line}`);
+  const diffSource = request.preview?.diff;
+  const diffLines = !diffSource ? []
+    : Array.isArray(diffSource) ? (diffSource as readonly string[]).map((line) => clean(line))
+      : [
+        ...(diffSource as { removed: readonly string[] }).removed.map((line) => `- ${clean(line)}`),
+        ...(diffSource as { added: readonly string[] }).added.map((line) => `+ ${clean(line)}`),
+      ];
+  const shownDiff = diffLines.slice(0, APPROVAL_DIFF_PREVIEW_LINES).map((line) => {
+    const clipped = visibleSlice(line.replace(/\n/g, ' '), inner - 2);
+    return `    ${line.startsWith('+') ? chalk.green(clipped) : line.startsWith('-') ? chalk.red(clipped) : clipped}`;
+  });
+  if (diffLines.length > shownDiff.length) shownDiff.push(`    ${chalk.dim(`+${diffLines.length - shownDiff.length} more`)}`);
+  const keys = width >= 46 ? '[y] yes  [n] no  [esc] deny' : '[y] [n] [esc]';
+  const question = state.needsFocus && !state.focused
+    ? (width >= 72 ? `Draft kept. Press [tab] to answer, then ${keys}` : `[tab] to answer · ${keys}`)
+    : `Allow once? ${keys}`;
+  const answer = `  ${state.guarded ? chalk.dim(question) : chalk.bold(question)}`;
+  const body = [...detail, ...shownDiff];
+  const room = Math.max(0, maxRows - title.length - 1);
+  if (body.length > room) {
+    const kept = Math.max(0, room - 1);
+    const hidden = body.length - kept;
+    body.splice(kept, body.length - kept, ...(room > 0 ? [`    ${chalk.dim(`… ${hidden} more row${hidden === 1 ? '' : 's'}`)}`] : []));
+  }
+  return [...title.slice(0, Math.max(1, maxRows - 1)), ...body, answer];
+}
+
 export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
   private history: string[] = [];
@@ -626,20 +700,26 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private paletteActive = false;
   private cancelWaiting?: (restoreDraft: boolean) => void;
   private waitingCancelled = false;
-  private pendingApproval?: { resolve: (accepted: boolean) => void };
+  private pendingApproval?: ApprovalRequest & { shownAt: number; needsFocus: boolean; focused: boolean };
+  private approvalGuardTimer?: NodeJS.Timeout;
   /** Providers fan out parallel tool calls, so a second request can arrive
    * while the first is still on screen. Queueing asks them one at a time;
    * resolving the extras false meant silently denying a tool the user was
    * never shown. */
-  private approvalQueue: Array<{ title: string; detail?: string; resolve: (accepted: boolean) => void }> = [];
+  private approvalQueue: ApprovalRequest[] = [];
   private approvalRestoreLabel?: string;
   private readonly onWaitingKey = (key: string): void => {
     if (this.pendingApproval) {
-      const answer = key.toLowerCase();
-      if (answer === 'y' || answer === 'n' || answer === '\r' || answer === '\n' || answer === '\u001b' || answer === '\u0003') {
-        const pending = this.pendingApproval;
+      // The draft is never edited from here: every key is either an answer or
+      // dropped, so the composer is exactly as the user left it afterwards.
+      const pending = this.pendingApproval;
+      const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused);
+      if (action === 'focus') {
+        pending.focused = true;
+        this.updateWaiting();
+      } else if (action === 'allow' || action === 'deny') {
         this.pendingApproval = undefined;
-        pending.resolve(answer === 'y');
+        pending.resolve(action === 'allow');
         if (!this.presentNextApproval()) {
           this.waitingLabel = this.approvalRestoreLabel || 'thinking';
           this.approvalRestoreLabel = undefined;
@@ -847,14 +927,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   phase(message: string): void {
     if (!this.waitingLabel || this.waitingCancelled || this.waitingLabel === message) return;
+    // The band says "waiting for approval" while one is up; remember the phase
+    // for when it is answered instead of replacing that.
+    if (this.pendingApproval) { this.approvalRestoreLabel = message; return; }
     this.waitingLabel = message;
     this.updateWaiting();
   }
 
-  approval(title: string, detail?: string): Promise<boolean> {
+  approval(title: string, detail?: string, preview?: ApprovalPreview): Promise<boolean> {
     return new Promise((resolveApproval) => {
       if (!this.pendingApproval) this.approvalRestoreLabel = this.waitingLabel;
-      this.approvalQueue.push({ title, ...(detail === undefined ? {} : { detail }), resolve: resolveApproval });
+      this.approvalQueue.push({
+        title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }), resolve: resolveApproval,
+      });
       if (!this.pendingApproval) this.presentNextApproval();
     });
   }
@@ -864,8 +949,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private presentNextApproval(): boolean {
     const next = this.approvalQueue.shift();
     if (!next) return false;
-    this.pendingApproval = { resolve: next.resolve };
-    this.waitingLabel = `${next.title}${next.detail ? ` · ${visibleSlice(next.detail.replace(/\s+/g, ' '), 90)}` : ''} · approve? [y/N]`;
+    // Each approval gets its own guard window and its own focus requirement:
+    // answering the first of two must not let the same keypress, or the next
+    // character of a sentence, answer the second.
+    this.pendingApproval = { ...next, shownAt: Date.now(), needsFocus: this.waitingDraft.length > 0, focused: false };
+    this.waitingLabel = 'waiting for approval';
+    if (this.approvalGuardTimer) clearTimeout(this.approvalGuardTimer);
+    // Repaint when the guard lifts so the answer row visibly becomes live.
+    this.approvalGuardTimer = setTimeout(() => { this.approvalGuardTimer = undefined; this.updateWaiting(); }, APPROVAL_GUARD_MS);
+    this.approvalGuardTimer.unref();
     this.updateWaiting();
     return true;
   }
@@ -875,6 +967,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * it waiting on a promise that could never settle. */
   private settleApprovals(): void {
     const outstanding = [this.pendingApproval, ...this.approvalQueue];
+    if (this.approvalGuardTimer) clearTimeout(this.approvalGuardTimer);
+    this.approvalGuardTimer = undefined;
     this.pendingApproval = undefined;
     this.approvalQueue = [];
     this.approvalRestoreLabel = undefined;
@@ -1029,7 +1123,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The software keyboard can make a mobile SSH viewport dramatically
     // shorter between two keystrokes. Bound the composer by what remains in
     // this exact frame so it can never create a physical terminal scroll.
-    const maxComposerRows = Math.max(1, targetHeight - 3 - paletteRows - noticeRows - waitingRows);
+    const approval = this.pendingApproval;
+    const approvalRows = approval && optionalRows - paletteRows >= 2
+      ? approvalBlockRows(approval, width, Math.min(optionalRows - paletteRows, Math.max(6, Math.floor(targetHeight * 0.6))), {
+        guarded: Date.now() - approval.shownAt < APPROVAL_GUARD_MS,
+        needsFocus: approval.needsFocus, focused: approval.focused, queued: this.approvalQueue.length,
+      })
+      : [];
+    const maxComposerRows = Math.max(1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length);
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     const conversation: Array<{ text: string }> = [];
     let stableConversationBoundary = 0;
@@ -1223,6 +1324,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       for (let index = windowed.length; index < visibleRows; index++) footer.push('');
       footer.push(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
+    footer.push(...approvalRows);
     if (waitingRows) {
       footer.push(`  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
