@@ -9,26 +9,18 @@
  * functions. apps/clikcode/scripts/build.mjs bundles this entry to
  * dist/harness-catalog.cjs and fails the build if an AI SDK ever leaks in.
  *
- * Every export here is also exported, under the same name, by
- * ai-router-runtime.ts, so this is a drop-in for the catalog members of
- * `AiRouterRuntime` (see HarnessCatalogRuntime below).
+ * Every catalog export of ai-router-runtime.ts is exported here under the same
+ * name, so this is a drop-in for the catalog members of `AiRouterRuntime` (see
+ * HarnessCatalogRuntime below).
  */
 import type { AiRouterRuntime } from './commands/types.js';
 
-export {
-  AI_LOCAL_HARNESS_ADAPTER_VERSION,
-  AI_LOCAL_HARNESSES,
-  AI_LOCAL_HARNESS_CAPABILITIES,
-  harnessSupportsEffort,
-  harnessSupportsImages,
-  harnessIntegrationLevel,
-  harnessSupportsPermissionMode,
-  localHarnessForCommand,
-  localHarnessCapabilityManifest,
-  localHarnessForProvider,
-  nativeHarnessLaunchArgv,
-  nativeHarnessTurnArgv,
-} from '@clikdeploy/clikrouter/ai-local-harness';
+// `export *`, not a name list: ai-router-runtime.ts re-exports a growing subset
+// of this module, and a wildcard is a superset of any such list by
+// construction, so the two entries cannot drift apart. It also matters that ALL
+// catalog calls go through one bundle: registerCustomHarnesses() keeps module
+// state, and a second copy inside ai-router-runtime.cjs would not see it.
+export * from '@clikdeploy/clikrouter/ai-local-harness';
 
 /** What dist/harness-catalog.cjs provides: everything except model streaming. */
 export type HarnessCatalogRuntime = Omit<AiRouterRuntime, 'streamAiChatTurn'>;

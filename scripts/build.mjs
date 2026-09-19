@@ -164,6 +164,15 @@ const catalogDependencies = Object.keys(catalog.metafile.inputs).filter((path) =
 if (catalogDependencies.length) failures.push(`harness-catalog.cjs must be dependency-free, but bundles: ${catalogDependencies.slice(0, 5).join(', ')}`);
 if (runtimeExternals(catalog.metafile, 'dist/harness-catalog.cjs').length) failures.push('harness-catalog.cjs must not import packages at runtime');
 
+// Load it the way harness-runtime.ts will: it must evaluate standalone and carry the catalog.
+{
+  const { createRequire } = await import('node:module');
+  const loaded = createRequire(import.meta.url)(join(root, 'dist/harness-catalog.cjs'));
+  if (!Array.isArray(loaded.AI_LOCAL_HARNESSES) || loaded.AI_LOCAL_HARNESSES.length === 0 || typeof loaded.localHarnessForCommand !== 'function') {
+    failures.push('harness-catalog.cjs loaded but does not export the harness catalog');
+  }
+}
+
 const indexInputs = Object.entries(index.metafile.outputs['dist/index.js'].inputs);
 if (indexInputs.some(([path]) => /utils\/lifecycle-lock\.ts$/.test(path))) failures.push('utils/lifecycle-lock.ts was inlined into index.js');
 
