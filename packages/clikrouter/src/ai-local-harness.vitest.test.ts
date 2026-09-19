@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
+import { afterEach, describe, expect, it } from 'vitest';
+import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv, selectLocalHarnessRoute, type AiHarnessAccount } from './ai-local-harness';
 
 const account: AiHarnessAccount = {
   id: 'local-codex',
@@ -42,14 +42,15 @@ describe('selectLocalHarnessRoute', () => {
 
 describe('local harness catalog', () => {
   it('publishes a versioned adapter contract', () => {
-    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(6);
+    expect(AI_LOCAL_HARNESS_ADAPTER_VERSION).toBe(7);
   });
 
   it('reports integration depth without overstating compatibility adapters', () => {
     expect(harnessIntegrationLevel(localHarnessForCommand('codex')!)).toBe('native');
     expect(harnessIntegrationLevel(localHarnessForCommand('cursor')!)).toBe('structured');
     expect(harnessIntegrationLevel(localHarnessForCommand('aider')!)).toBe('compatibility');
-    expect(harnessIntegrationLevel(localHarnessForCommand('roo')!)).toBe('editor-only');
+    expect(harnessIntegrationLevel(localHarnessForCommand('copilot')!)).toBe('structured');
+    expect(harnessIntegrationLevel(localHarnessForCommand('crush')!)).toBe('compatibility');
   });
 
   it('uses the documented Kiro auth and OpenCode discovery contracts', () => {
@@ -62,13 +63,13 @@ describe('local harness catalog', () => {
   it('uses one reversible command/provider mapping for every supported local harness', () => {
     expect(AI_LOCAL_HARNESSES.map((item) => item.command)).toEqual([
       'claude', 'codex', 'gemini', 'opencode', 'copilot', 'aider', 'goose', 'amp', 'antigravity', 'pi',
-      'droid', 'kiro', 'qwen', 'cline', 'roo', 'kilo', 'cursor', 'windsurf', 'crush',
-      'hermes', 'command',
+      'droid', 'kiro', 'qwen', 'cline', 'kilo', 'cursor', 'crush',
+      'hermes', 'command', 'kimi', 'auggie', 'vibe', 'openhands', 'cn',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(localHarnessForCommand(harness.command)).toEqual(harness);
       expect(localHarnessForProvider(harness.provider)).toEqual(harness);
-      expect(['terminal', 'editor-extension']).toContain(harness.surface);
+      expect(harness.surface).toBe('terminal');
     }
   });
 
@@ -80,9 +81,11 @@ describe('local harness catalog', () => {
     expect(localHarnessForCommand('aider')?.session).toEqual({ idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'] });
   });
 
-  it('does not advertise editor extensions as terminal harnesses', () => {
-    expect(localHarnessForCommand('roo')?.surface).toBe('editor-extension');
-    expect(localHarnessForCommand('windsurf')?.surface).toBe('editor-extension');
+  it('carries no editor-extension-only product and binds the real terminal binaries', () => {
+    expect(localHarnessForCommand('roo')).toBeUndefined();
+    expect(localHarnessForCommand('windsurf')).toBeUndefined();
+    expect(AI_LOCAL_HARNESS_CAPABILITIES.roo).toBeUndefined();
+    expect(AI_LOCAL_HARNESS_CAPABILITIES.windsurf).toBeUndefined();
     expect(localHarnessForCommand('cursor')).toMatchObject({ surface: 'terminal', binary: 'cursor-agent' });
     expect(localHarnessForCommand('kiro')).toMatchObject({ surface: 'terminal', binary: 'kiro-cli' });
     expect(localHarnessForCommand('command')).toMatchObject({ surface: 'terminal', binary: 'cmdc' });
@@ -109,7 +112,7 @@ describe('local harness catalog', () => {
   it('maps only declared provider options into argv and rejects unknown values', () => {
     const claude = localHarnessForCommand('claude')!;
     expect(nativeHarnessTurnArgv(claude, { prompt: 'inspect', options: { 'safe-mode': true, 'add-dir': ['/one', '/two'] } }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--safe-mode', '--add-dir', '/one', '--add-dir', '/two', 'inspect']);
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--safe-mode', '--add-dir', '/one', '--add-dir', '/two']);
     expect(() => nativeHarnessTurnArgv(claude, { prompt: 'inspect', options: { invented: true } }))
       .toThrow('does not declare option "invented"');
     const cursor = localHarnessForCommand('cursor')!;
@@ -144,11 +147,11 @@ describe('local harness catalog', () => {
   it('builds headless Claude create and resume turns', () => {
     const claude = localHarnessForCommand('claude')!;
     expect(nativeHarnessTurnArgv(claude, { prompt: 'hello', nativeSessionId: 'new-id', createdHere: true, effort: 'high' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--session-id', 'new-id', '--effort', 'high', 'hello']);
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--session-id', 'new-id', '--effort', 'high']);
     expect(nativeHarnessTurnArgv(claude, { prompt: 'again', nativeSessionId: 'old-id' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--resume', 'old-id', 'again']);
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--resume', 'old-id']);
     expect(nativeHarnessTurnArgv(claude, { prompt: 'safe edit', permissionMode: 'ask' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--permission-mode', 'manual', '--permission-prompts', 'none', 'safe edit']);
+      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--permission-mode', 'manual', '--permission-prompts', 'none']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', permissionMode: 'ask' }))
       .toEqual(['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request', 'exec', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'continue', nativeSessionId: 'thread-id', permissionMode: 'bypass' }))
@@ -246,7 +249,7 @@ describe('local harness catalog', () => {
 
   it('hides native aliases that could contradict the normalized permission setting', () => {
     const aliases: Record<string, string[]> = {
-      gemini: ['approval-mode'], opencode: ['auto-approve'], copilot: ['allow-all'],
+      gemini: ['approval-mode'], opencode: ['auto-approve'],
       qwen: ['approval-mode'], cline: ['auto-approve'], cursor: ['auto-review', 'force'], hermes: ['yolo'],
     };
     for (const [command, ids] of Object.entries(aliases)) {
@@ -254,6 +257,22 @@ describe('local harness catalog', () => {
       const visible = localHarnessCapabilityManifest(harness).options.map((option) => option.id);
       for (const id of ids) expect(visible, `${command}:${id}`).not.toContain(id);
       expect(() => nativeHarnessTurnArgv(harness, { prompt: 'hi', permissionMode: 'ask', options: Object.fromEntries(ids.map((id) => [id, true])) })).not.toThrow();
+    }
+  });
+
+  it('ignores an option id retired from an adapter instead of failing an upgraded session', () => {
+    const copilot = localHarnessForCommand('copilot')!;
+    expect(AI_LOCAL_HARNESS_CAPABILITIES.copilot!.options.map((option) => option.id)).not.toContain('allow-all');
+    expect(copilot.normalizedPermissionOptionIds).toBeUndefined();
+    expect(copilot.retiredOptionIds).toEqual(['allow-all']);
+    expect(nativeHarnessTurnArgv(copilot, { prompt: 'hi', options: { 'allow-all': true } })).not.toContain('--allow-all');
+  });
+
+  it('declares only permission aliases that exist as live options', () => {
+    for (const harness of AI_LOCAL_HARNESSES) {
+      const declared = new Set((AI_LOCAL_HARNESS_CAPABILITIES[harness.command]?.options ?? []).map((option) => option.id));
+      for (const id of harness.normalizedPermissionOptionIds ?? []) expect(declared.has(id), `${harness.command}:${id}`).toBe(true);
+      for (const id of harness.retiredOptionIds ?? []) expect(declared.has(id), `${harness.command}:${id}`).toBe(false);
     }
   });
 
@@ -291,5 +310,194 @@ describe('local harness catalog', () => {
     const cline = localHarnessForCommand('cline')!;
     expect(nativeHarnessLaunchArgv(cline, { nativeSessionId: 'session-id', model: 'openai/gpt-5', workspace: '/repo', effort: 'high' }))
       .toEqual(['--id', 'session-id', '--model', 'openai/gpt-5', '--cwd', '/repo', '--thinking', 'high']);
+  });
+
+  it('declares transport, integration, tier, parser and memory file on every entry', () => {
+    const transports = ['codex-app-server', 'acp', 'structured-cli', 'text-cli'];
+    const parsers = ['claude-stream-json', 'codex-items', 'opencode-json', 'gemini-stream-json', 'cursor-stream-json', 'pi-json', 'cline-json', 'antigravity', 'goose', 'generic-json', 'text'];
+    for (const harness of AI_LOCAL_HARNESSES) {
+      expect(transports, harness.command).toContain(harness.transport);
+      expect(['native', 'structured', 'compatibility'], harness.command).toContain(harness.integration);
+      expect(['primary', 'more', 'experimental'], harness.command).toContain(harness.tier);
+      expect(parsers, harness.command).toContain(harness.parser);
+      expect(harness.memoryFile, harness.command).toMatch(/\.md$/);
+      expect(typeof harness.nativeSlashPassthrough, harness.command).toBe('boolean');
+      expect(harnessIntegrationLevel(harness), harness.command).toBe(harness.integration);
+      // The declared level agrees with the structural reading of the contract.
+      expect(harnessIntegrationLevel({ ...harness, integration: undefined }), harness.command).toBe(harness.integration);
+      // A text parser and a text contract are the same statement.
+      expect(harness.parser === 'text', harness.command).toBe(harness.turn?.output === 'text');
+      if (harness.effortArgvPrefix) expect(harness.effortValues?.length, harness.command).toBeGreaterThan(0);
+      else expect(harness.effortValues, harness.command).toBeUndefined();
+    }
+  });
+
+  it('leaves no entry without a turn, and no capability row without an entry', () => {
+    for (const harness of AI_LOCAL_HARNESSES) {
+      expect(harness.turn, harness.command).toBeDefined();
+      expect(harnessCanRunTurns(harness), harness.command).toBe(true);
+    }
+    const commands = new Set(AI_LOCAL_HARNESSES.map((item) => item.command));
+    for (const command of Object.keys(AI_LOCAL_HARNESS_CAPABILITIES)) expect(commands.has(command), command).toBe(true);
+  });
+
+  it('declares ACP argv in the catalog, including the proven four and the experimental ones', () => {
+    const acp = Object.fromEntries(AI_LOCAL_HARNESSES.filter((item) => item.acp).map((item) => [item.command, item.acp!]));
+    expect(acp.cline).toMatchObject({ argv: ['--acp'] });
+    expect(acp.copilot).toMatchObject({ argv: ['--acp', '--stdio'] });
+    expect(acp.droid).toMatchObject({ argv: ['exec', '--output-format', 'acp'], optionPlacement: 'after' });
+    expect(acp.hermes).toMatchObject({ argv: ['acp'] });
+    for (const command of ['cline', 'copilot', 'droid', 'hermes']) {
+      expect(acp[command]!.experimental, command).toBeUndefined();
+      expect(localHarnessForCommand(command)!.transport, command).toBe('acp');
+    }
+    for (const [command, argv] of Object.entries({ gemini: ['--experimental-acp'], opencode: ['acp'], goose: ['acp'], qwen: ['--experimental-acp'], kiro: ['acp'], kilo: ['acp'], auggie: ['--acp'] })) {
+      expect(acp[command], command).toMatchObject({ argv, experimental: true });
+      expect(localHarnessForCommand(command)!.transport, command).not.toBe('acp');
+    }
+    expect(acp.kimi).toMatchObject({ argv: ['--acp'] });
+    expect(acp.vibe).toEqual({ binary: 'vibe-acp', argv: [] });
+    expect(acp.openhands).toMatchObject({ argv: ['acp'] });
+    for (const harness of AI_LOCAL_HARNESSES) {
+      if (harness.transport === 'acp') expect(harness.acp, harness.command).toBeDefined();
+      if (harness.acp) expect(Array.isArray(harness.acp.argv), harness.command).toBe(true);
+    }
+  });
+
+  it('builds the ACP spawn contract from declarations only', () => {
+    expect(harnessAcpLaunch(localHarnessForCommand('droid')!, { model: 'gpt-5', effort: 'high', permissionMode: 'auto' }))
+      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp', '--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'] });
+    expect(harnessAcpLaunch(localHarnessForCommand('copilot')!, { model: 'gpt-5', effort: 'high', permissionMode: 'bypass' }))
+      .toEqual({ binary: 'copilot', argv: ['--model', 'gpt-5', '--effort', 'high', '--allow-all', '--acp', '--stdio'] });
+    expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { effort: 'low', permissionMode: 'auto' }))
+      .toEqual({ binary: 'cline', argv: ['--thinking', 'low', '--auto-approve', 'true', '--acp'] });
+    expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { permissionMode: 'ask' })).toEqual({ binary: 'cline', argv: ['--acp'] });
+    expect(harnessAcpLaunch(localHarnessForCommand('hermes')!, { permissionMode: 'bypass', effort: 'max' }))
+      .toEqual({ binary: 'hermes', argv: ['--reasoning', 'max', '--yolo', 'acp'] });
+    expect(harnessAcpLaunch(localHarnessForCommand('vibe')!)).toEqual({ binary: 'vibe-acp', argv: [] });
+    expect(harnessAcpLaunch(localHarnessForCommand('claude')!)).toBeUndefined();
+  });
+
+  it('prefers the proven transport and falls back from ACP for image turns', () => {
+    expect(harnessTurnTransport(localHarnessForCommand('codex')!)).toBe('codex-app-server');
+    expect(harnessTurnTransport(localHarnessForCommand('copilot')!)).toBe('acp');
+    expect(harnessTurnTransport(localHarnessForCommand('copilot')!, { hasImages: true })).toBe('text-cli');
+    expect(harnessTurnTransport(localHarnessForCommand('droid')!, { hasImages: true })).toBe('structured-cli');
+    expect(harnessTurnTransport(localHarnessForCommand('gemini')!)).toBe('structured-cli');
+    expect(harnessTurnTransport(localHarnessForCommand('gemini')!, { allowExperimentalAcp: true })).toBe('acp');
+    expect(harnessTurnTransport(localHarnessForCommand('aider')!)).toBe('text-cli');
+    expect(harnessTurnTransport(customAcpHarness({ command: 'zed-agent', binary: 'zed-agent', argv: [] }))).toBe('acp');
+  });
+
+  it('orders pickers by declared tier and keeps basic adapters behind More', () => {
+    for (const command of ['aider', 'amp', 'crush', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']) expect(localHarnessForCommand(command)!.tier, command).toBe('more');
+    expect(localHarnessForCommand('claude')!.tier).toBe('primary');
+    expect(harnessTierRank(localHarnessForCommand('codex')!)).toBeLessThan(harnessTierRank(localHarnessForCommand('aider')!));
+  });
+
+  it('declares parser borrowing instead of name-mapping it', () => {
+    expect(localHarnessForCommand('qwen')!.parser).toBe(localHarnessForCommand('claude')!.parser);
+    expect(localHarnessForCommand('amp')!.parser).toBe('claude-stream-json');
+    expect(localHarnessForCommand('kilo')!.parser).toBe(localHarnessForCommand('opencode')!.parser);
+  });
+
+  it('derives Kilo from the shared OpenCode base, differing only where declared', () => {
+    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, ...opencode } = localHarnessForCommand('opencode')!;
+    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, ...kilo } = localHarnessForCommand('kilo')!;
+    expect(kilo).toEqual(opencode);
+    expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
+  });
+
+  it('upgrades Amp to stream-json while keeping the text contract as its fallback', () => {
+    const amp = localHarnessForCommand('amp')!;
+    expect(amp).toMatchObject({ transport: 'structured-cli', integration: 'structured', experimental: true });
+    expect(nativeHarnessTurnArgv(amp, { prompt: 'hi' })).toEqual(['--stream-json', '-x', 'hi']);
+    expect(nativeHarnessTurnArgv(amp, { prompt: 'hi', nativeSessionId: 'T-1' })).toEqual(['threads', 'continue', 'T-1', '--stream-json', '-x', 'hi']);
+    expect(nativeHarnessTurnArgv({ ...amp, turn: amp.fallbackTurn }, { prompt: 'hi', nativeSessionId: 'T-1' })).toEqual(['threads', 'continue', 'T-1', '-x', 'hi']);
+  });
+
+  it('pipes the prompt where the vendor reads stdin and never leaves it in argv', () => {
+    const claude = nativeHarnessTurnArgv(localHarnessForCommand('claude')!, { prompt: '--dangerously-skip-permissions' });
+    expect(claude).not.toContain('--dangerously-skip-permissions');
+    expect(claude).not.toContain('-');
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: '--oss' }).at(-1)).toBe('-');
+    expect(promptExceedsArgvLimit(localHarnessForCommand('claude')!, 'x'.repeat(maxPromptArgvBytes + 1))).toBe(false);
+  });
+
+  it('guards an argv prompt that begins with a dash', () => {
+    expect(maxPromptArgvBytes).toBe(96 * 1024);
+    // Positional prompt on a parser that honors `--`.
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('opencode')!, { prompt: '--help me' })).toEqual(['run', '--format', 'json', '--', '--help me']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('cursor')!, { prompt: '-f' }).slice(-2)).toEqual(['--', '-f']);
+    // A prompt that is a FLAG VALUE can never take `--`; it gets the space guard.
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('gemini')!, { prompt: '--yolo' }).slice(-2)).toEqual(['-p', ' --yolo']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('aider')!, { prompt: '-x' }).slice(-2)).toEqual(['--message', ' -x']);
+    // Positional, but `--` support undeclared: space guard.
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('droid')!, { prompt: '-rf' }).at(-1)).toBe(' -rf');
+    expect(guardedPromptArgv({ promptGuard: 'double-dash', promptArgvPrefix: ['-p'] }, '-x')).toEqual([' -x']);
+    expect(guardedPromptArgv({}, 'plain - dash inside')).toEqual(['plain - dash inside']);
+    for (const harness of AI_LOCAL_HARNESSES) {
+      if (harness.turn?.promptInput === 'stdin') continue;
+      const argv = nativeHarnessTurnArgv(harness, { prompt: '--version' });
+      expect(argv.at(-1) === ' --version' || (argv.at(-2) === '--' && argv.at(-1) === '--version'), harness.command).toBe(true);
+      expect(argv.filter((arg) => arg === '--version'), harness.command).toHaveLength(argv.at(-2) === '--' ? 1 : 0);
+    }
+    expect(promptExceedsArgvLimit(localHarnessForCommand('gemini')!, 'é'.repeat(maxPromptArgvBytes / 2 + 1))).toBe(true);
+    expect(promptExceedsArgvLimit(localHarnessForCommand('gemini')!, 'short')).toBe(false);
+  });
+
+  it('lists what a HOME-redirected account must carry so tools still act as the user', () => {
+    const redirected = AI_LOCAL_HARNESSES.filter((item) => item.profileEnv === 'HOME');
+    expect(redirected.map((item) => item.command)).toEqual(['antigravity', 'command']);
+    for (const harness of redirected) {
+      expect(harness.profileEnvPassthrough, harness.command).toEqual(expect.arrayContaining(['GIT_CONFIG_GLOBAL', 'SSH_AUTH_SOCK', 'NPM_CONFIG_USERCONFIG']));
+      for (const name of harness.profileEnvPassthrough!) expect(name in HOME_REDIRECT_ENV_DEFAULTS, name).toBe(true);
+    }
+    for (const harness of AI_LOCAL_HARNESSES.filter((item) => item.profileEnv !== 'HOME')) expect(harness.profileEnvPassthrough, harness.command).toBeUndefined();
+    expect(HOME_REDIRECT_ENV_DEFAULTS.GIT_CONFIG_GLOBAL).toBe('~/.gitconfig');
+    expect(HOME_REDIRECT_ENV_DEFAULTS.SSH_AUTH_SOCK).toBeNull();
+  });
+
+  it('declares vendor custom-command directories and native slash passthrough', () => {
+    expect(localHarnessForCommand('claude')).toMatchObject({ memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'] });
+    expect(localHarnessForCommand('codex')).toMatchObject({ memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['~/.codex/prompts'] });
+    expect(localHarnessForCommand('gemini')).toMatchObject({ memoryFile: 'GEMINI.md', customCommandDirs: ['.gemini/commands', '~/.gemini/commands'] });
+    expect(AI_LOCAL_HARNESSES.filter((item) => item.nativeSlashPassthrough).map((item) => item.command)).toEqual(['claude']);
+  });
+});
+
+describe('custom ACP harnesses', () => {
+  afterEach(() => { registerCustomHarnesses([]); });
+
+  it('builds a valid definition with no vendor code', () => {
+    const harness = customAcpHarness({ command: '/Claude-ACP', binary: 'claude-code-acp', argv: [], displayName: 'Claude (ACP)' });
+    expect(harness).toMatchObject({
+      command: 'claude-acp', provider: 'acp:claude-acp', displayName: 'Claude (ACP)', surface: 'terminal',
+      transport: 'acp', integration: 'structured', tier: 'more', parser: 'text', binary: 'claude-code-acp', acp: { argv: [] },
+    });
+    expect(harness.turn).toBeUndefined();
+    expect(harnessCanRunTurns(harness)).toBe(true);
+    expect(harnessIntegrationLevel(harness)).toBe('structured');
+    expect(harnessAcpLaunch(customAcpHarness({ command: 'codex-acp', binary: 'npx', argv: ['-y', '@zed-industries/codex-acp'] })))
+      .toEqual({ binary: 'npx', argv: ['-y', '@zed-industries/codex-acp'] });
+    expect(localHarnessCapabilityManifest(harness).options).toEqual([]);
+    expect(() => customAcpHarness({ command: 'bad name; rm', binary: 'x', argv: [] })).toThrow('simple lowercase name');
+    expect(() => customAcpHarness({ command: 'ok', binary: ' ', argv: [] })).toThrow('needs a binary');
+  });
+
+  it('resolves registered harnesses by command and provider without shadowing the catalog', () => {
+    const mine = customAcpHarness({ command: 'my-agent', binary: 'my-agent', argv: ['--stdio'] });
+    const shadow = customAcpHarness({ command: 'claude', binary: 'evil', argv: [] });
+    const providerShadow = customAcpHarness({ command: 'sneaky', binary: 'evil', argv: [], provider: 'anthropic' });
+    expect(localHarnessForCommand('my-agent')).toBeUndefined();
+    expect(registerCustomHarnesses([mine, shadow, providerShadow, mine])).toEqual([mine]);
+    expect(localHarnessForCommand('/my-agent')).toEqual(mine);
+    expect(localHarnessForProvider('acp:my-agent')).toEqual(mine);
+    expect(localHarnessForCommand('claude')!.binary).toBe('claude');
+    expect(localHarnessForProvider('anthropic')!.command).toBe('claude');
+    expect(allLocalHarnesses()).toHaveLength(AI_LOCAL_HARNESSES.length + 1);
+    registerCustomHarnesses([]);
+    expect(localHarnessForCommand('my-agent')).toBeUndefined();
+    expect(allLocalHarnesses()).toBe(AI_LOCAL_HARNESSES);
   });
 });
