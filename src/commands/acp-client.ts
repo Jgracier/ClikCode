@@ -52,13 +52,15 @@ export interface AcpTurnInput {
    * `promptCapabilities.image`. Otherwise the turn fails before the prompt
    * with `acpSafeToFallback` so the caller can use its image-capable CLI. */
   images?: readonly string[];
-  /** Catalog-driven ACP launch argv. Falls back to the local table. */
+  /** Catalog-driven ACP mode argv (harnessAcpLaunch().modeArgv). When given,
+   * no model/effort/permission flags are derived locally: pass them as
+   * `extraArgv` (harnessAcpLaunch().optionArgv). Absent: the local table. */
   argv?: readonly string[];
   /** Where options go relative to `argv`. Default: `after` for droid (its
    * flags belong to the `exec` subcommand), `before` for everything else. */
   optionPlacement?: 'before' | 'after';
-  /** Extra per-harness options, appended to the locally derived model /
-   * effort / permission flags (which only exist for locally known commands). */
+  /** Per-harness options. With `argv` these are the only options; without it
+   * they are appended to the locally derived model/effort/permission flags. */
   extraArgv?: readonly string[];
   /** Setup request timeout (initialize, session/new|resume|load). */
   setupTimeoutMs?: number;
@@ -210,17 +212,18 @@ export function acpSpawnArgv(input: Pick<AcpTurnInput, 'command' | 'model' | 'ef
   const argv = input.argv ?? acpArgvForHarness(input.command);
   if (!argv) return undefined;
   const { command, effort, permissionMode } = input;
-  // Flags are only known for the locally verified commands. A catalog-only
-  // harness gets exactly what its catalog entry (extraArgv) says.
-  const known = ACP_ARGV[command] !== undefined;
+  // The local flag table is only a fallback. A caller that supplies `argv`
+  // (catalog-driven launch) owns the options too and passes them as extraArgv
+  // -- deriving them here as well would duplicate every flag.
+  const known = input.argv === undefined && ACP_ARGV[command] !== undefined;
   const options = [
     ...(known && input.model ? ['--model', input.model] : []),
-    ...(effort && command === 'cline' ? ['--thinking', effort] : []),
-    ...(effort && command === 'copilot' ? ['--effort', effort] : []),
-    ...(effort && command === 'droid' ? ['--reasoning-effort', effort] : []),
-    ...(effort && command === 'hermes' ? ['--reasoning', effort] : []),
-    ...(permissionMode === 'bypass' ? command === 'cline' ? ['--auto-approve', 'true'] : command === 'copilot' ? ['--allow-all'] : command === 'droid' ? ['--skip-permissions-unsafe'] : command === 'hermes' ? ['--yolo'] : [] : []),
-    ...(permissionMode === 'auto' && command === 'droid' ? ['--auto', 'low'] : []),
+    ...(known && effort && command === 'cline' ? ['--thinking', effort] : []),
+    ...(known && effort && command === 'copilot' ? ['--effort', effort] : []),
+    ...(known && effort && command === 'droid' ? ['--reasoning-effort', effort] : []),
+    ...(known && effort && command === 'hermes' ? ['--reasoning', effort] : []),
+    ...(known && permissionMode === 'bypass' ? command === 'cline' ? ['--auto-approve', 'true'] : command === 'copilot' ? ['--allow-all'] : command === 'droid' ? ['--skip-permissions-unsafe'] : command === 'hermes' ? ['--yolo'] : [] : []),
+    ...(known && permissionMode === 'auto' && command === 'droid' ? ['--auto', 'low'] : []),
     ...(input.extraArgv ?? []),
   ];
   // Droid's model/autonomy flags belong to the `exec` subcommand. Other ACP
