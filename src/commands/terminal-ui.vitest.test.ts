@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { interleaveResponseContent, palettePaintMode, waitingInputActions } from './terminal-ui';
+import { commandPaletteMatches, interleaveResponseContent, waitingInputActions } from './terminal-ui';
 
 describe('full-screen waiting input', () => {
   it('keeps scrolling available while a provider turn is running', () => {
@@ -29,8 +29,8 @@ describe('streamed response chronology', () => {
 
 describe('command palette layout', () => {
   it('fully reclaims the palette rows as soon as the slash is deleted', () => {
-    expect(palettePaintMode(12, false)).toBe('palette');
-    expect(palettePaintMode(0, true)).toBe('full');
-    expect(palettePaintMode(0, false)).toBe('composer');
+    const commands = [{ label: '/help', value: '/help' }, { label: '/model', value: '/model' }];
+    expect(commandPaletteMatches('/', commands)).toHaveLength(2);
+    expect(commandPaletteMatches('', commands)).toEqual([]);
   });
 });

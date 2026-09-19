@@ -135,11 +135,24 @@ export function visibleSlice(value: string, width: number): string {
   if (terminalCellWidth(value) <= width) return value;
   const available = Math.max(0, width - 1);
   let rendered = '';
-  for (const character of value) {
-    if (terminalCellWidth(rendered + character) > available) break;
-    rendered += character;
+  let renderedWidth = 0;
+  let sawAnsi = false;
+  // Control sequences are atomic zero-width tokens. Slicing their individual
+  // bytes can leave a partial escape in the terminal, causing color bleed,
+  // question marks, and adjacent rows that appear to run together.
+  const tokens = value.match(/\u001b\[[0-9;]*m|./gu) ?? [];
+  for (const token of tokens) {
+    if (/^\u001b\[[0-9;]*m$/.test(token)) {
+      rendered += token;
+      sawAnsi = true;
+      continue;
+    }
+    const tokenWidth = terminalCellWidth(token);
+    if (renderedWidth + tokenWidth > available) break;
+    rendered += token;
+    renderedWidth += tokenWidth;
   }
-  return `${rendered}…`;
+  return `${rendered}${sawAnsi ? '\u001b[0m' : ''}…`;
 }
 
 export function terminalCellWidth(value: string): number {
