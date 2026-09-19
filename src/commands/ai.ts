@@ -49,6 +49,7 @@ import {
   nativeAccountContext, setEmitHarnessOutput,
 } from './account-management.js';
 import { FullScreenHarnessPrompter } from './terminal-ui.js';
+import { runCodexAppServerTurn } from './codex-app-server.js';
 export {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
   aiAccountStatus, aiDoctor,
@@ -2642,40 +2643,59 @@ export async function aiSessionSend(id: string, prompt: string, signal?: AbortSi
       // and synthesizing a failed result lets the SAME classification and
       // recovery logic below handle both shapes of failure identically.
       let caughtTurnFailure: Error | undefined;
-      let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>>;
+      let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>> = { stdout: '', stderr: '', exitCode: 0 };
+      let result: { text: string; nativeSessionId?: string; isError?: boolean; statusCode?: number } | undefined;
       try {
-        turnOutput = await captureNativeHarnessTurn(
-          harness, argv, environment, {
-            cwd: session.workspace,
-            signal,
-            stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
-            onStdoutLine: (lineText) => {
-              const responseUpdate = nativeResponseUpdate(harness, lineText);
-              if (responseUpdate) activeFullScreenHarness?.response(responseUpdate.text, responseUpdate.mode);
-              const textPhase = nativeActivityPhase(harness, lineText);
-              if (textPhase) activeFullScreenHarness?.phase(textPhase);
-              // isJsonDefaultMode() guard lives here now (not inside the parser)
-              // since the parser is also used for phase updates, which apply
-              // in every mode -- only the persistent activity *log line* is
-              // JSON-mode's business to suppress.
-              const event = parseNativeActivityEvent(harness, lineText);
-              if (!event) return;
+        if (harness.command === 'codex') {
+          result = await runCodexAppServerTurn({
+            binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
+            cwd: session.workspace, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
+            images, environment, signal,
+            onSessionId: async (nativeSessionId) => {
+              if (session.nativeSessionId === nativeSessionId) return;
+              session.nativeSessionId = nativeSessionId;
+              await writeState(state);
+            },
+            onResponseDelta: (delta) => activeFullScreenHarness?.response(delta, 'append'),
+            onPhase: (phase) => activeFullScreenHarness?.phase(phase),
+            onApproval: (title, detail) => activeFullScreenHarness?.approval(title, detail) ?? Promise.resolve(false),
+            onActivity: (event) => {
               activeFullScreenHarness?.phase(renderActivityPhase(event));
               if (isJsonDefaultMode()) return;
               if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(event);
               else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
             },
-          },
-        );
+          });
+        } else {
+          turnOutput = await captureNativeHarnessTurn(
+            harness, argv, environment, {
+              cwd: session.workspace,
+              signal,
+              stdinText: harness.turn.promptInput === 'stdin' ? turnText : undefined,
+              onStdoutLine: (lineText) => {
+                const responseUpdate = nativeResponseUpdate(harness, lineText);
+                if (responseUpdate) activeFullScreenHarness?.response(responseUpdate.text, responseUpdate.mode);
+                const textPhase = nativeActivityPhase(harness, lineText);
+                if (textPhase) activeFullScreenHarness?.phase(textPhase);
+                const event = parseNativeActivityEvent(harness, lineText);
+                if (!event) return;
+                activeFullScreenHarness?.phase(renderActivityPhase(event));
+                if (isJsonDefaultMode()) return;
+                if (activeFullScreenHarness) activeFullScreenHarness.activityEvent(event);
+                else for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
+              },
+            },
+          );
+          if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+          result = nativeTurnResult(harness, turnOutput.stdout);
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError') throw error;
         caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
-        turnOutput = { stdout: '', stderr: '', exitCode: 1 };
       }
-      if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-      const result = caughtTurnFailure
+      result = caughtTurnFailure
         ? { isError: true, text: caughtTurnFailure.message, statusCode: undefined as number | undefined, nativeSessionId: undefined as string | undefined }
-        : nativeTurnResult(harness, turnOutput.stdout);
+        : result!;
       if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
       // A non-zero exit code alone is not treated as failure here: by this
       // point nativeTurnResult has already thrown if it found no genuine

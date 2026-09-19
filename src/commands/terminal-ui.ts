@@ -72,7 +72,19 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private paletteActive = false;
   private cancelWaiting?: () => void;
   private waitingCancelled = false;
+  private pendingApproval?: { resolve: (accepted: boolean) => void; previousLabel: string };
   private readonly onWaitingInput = (chunk: Buffer | string): void => {
+    if (this.pendingApproval) {
+      const key = String(chunk).toLowerCase();
+      if (key === 'y' || key === 'n' || key === '\r' || key === '\n' || key === '\u001b' || key === '\u0003') {
+        const pending = this.pendingApproval;
+        this.pendingApproval = undefined;
+        this.waitingLabel = pending.previousLabel || 'thinking';
+        pending.resolve(key === 'y');
+        this.updateWaiting();
+      }
+      return;
+    }
     for (const action of waitingInputActions(chunk)) {
       if (action === 'cancel') {
         if (this.waitingCancelled) continue;
@@ -203,6 +215,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     if (input.isTTY) input.setRawMode(false);
     this.cancelWaiting = undefined;
     this.waitingCancelled = false;
+    this.pendingApproval = undefined;
     this.waitingLabel = '';
     if (refresh && !this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
@@ -211,6 +224,15 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     if (!this.waitingLabel || this.waitingCancelled || this.waitingLabel === message) return;
     this.waitingLabel = message;
     this.updateWaiting();
+  }
+
+  approval(title: string, detail?: string): Promise<boolean> {
+    if (this.pendingApproval) return Promise.resolve(false);
+    return new Promise((resolveApproval) => {
+      this.pendingApproval = { resolve: resolveApproval, previousLabel: this.waitingLabel };
+      this.waitingLabel = `${title}${detail ? ` · ${visibleSlice(detail.replace(/\s+/g, ' '), 90)}` : ''} · approve? [y/N]`;
+      this.updateWaiting();
+    });
   }
 
   usage(label?: string): void {
