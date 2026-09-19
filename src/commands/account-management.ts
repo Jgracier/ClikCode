@@ -6,9 +6,10 @@
  * same as every other headless-callable ai* function. */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { lstat, mkdir, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
 import { emitJson } from '../utils/structured-output.js';
@@ -16,6 +17,7 @@ import {
   captureNativeHarnessOutput, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand,
 } from './native-harness.js';
 import { localHarnessForCommand, localHarnessForProvider, localRouter, nativeProfileEnvironment } from './native-harness-protocol.js';
+import { homeRedirectEnvironment } from './harness-runtime.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from './native-session-discovery.js';
 import { accountView, harnessCommand, harnessStatePath, readState, writeState } from './harness-state.js';
 import { accountUsageLabel } from './native-account-data.js';
@@ -262,12 +264,117 @@ export async function syncAccountIdentityAfterLogin(
  * account info once the credential file actually exists, that replaces the
  * placeholder -- removing the old interactive "Account name [...]" prompt this
  * used to require without falling back to an arbitrary made-up name. */
+/** "Codex 2" after removing "Codex 1" of two used to collide with the surviving
+ * "Codex 2" (the number was just count + 1) and fail the login with "already
+ * exists". The first number nobody holds is always free. */
+export function firstUnusedAccountLabel(displayName: string, accounts: readonly Pick<AiHarnessAccount, 'label'>[]): string {
+  const taken = new Set(accounts.map((account) => account.label.toLowerCase()));
+  for (let number = 1; ; number += 1) {
+    const candidate = `${displayName} ${number}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+/** The environment a vendor process runs under for this account: its isolated
+ * profile root, plus -- when that root IS `HOME` -- the user's real git, npm,
+ * gh, docker and gpg configuration (catalog HOME_REDIRECT_ENV_DEFAULTS), so a
+ * turn can still commit, push and install as the user. SSH_AUTH_SOCK and
+ * GIT_SSH_COMMAND are inherited from the caller's environment unchanged. XDG_*
+ * is deliberately left alone: pointing XDG_CONFIG_HOME at the real home would
+ * hand a HOME-isolated CLI the shared config its isolation exists to avoid. */
+export function profileEnvironment(
+  harness: AiLocalHarnessDefinition, account: Pick<AiHarnessAccount, 'nativeProfile'> | undefined,
+): Record<string, string> {
+  return homeRedirectEnvironment(harness, nativeProfileEnvironment(account?.nativeProfile), { home: homedir(), exists: existsSync });
+}
+
+/** Root of every profile directory ClikCode itself created. Nothing outside it
+ * is ever deleted by account removal or garbage collection. */
+export function clikcodeProfilesRoot(): string {
+  return resolve(join(harnessStatePath(), '..', 'profiles'));
+}
+
+/** Resolves `profilePath` to a directory that is safe to delete, or explains
+ * why it is not. Safe means: lexically `<root>/<harness>/<profile>` exactly, a
+ * real directory (not a symlink), and still inside the root once every symlink
+ * on the way is resolved. */
+export async function resolvePurgeableProfile(profilePath: string): Promise<{ path: string } | { refused: string }> {
+  const root = clikcodeProfilesRoot();
+  const target = resolve(profilePath);
+  const inside = relative(root, target);
+  if (!inside || inside.startsWith('..') || resolve(root, inside) !== target) return { refused: 'outside the ClikCode profiles directory' };
+  const segments = inside.split(sep);
+  if (segments.length !== 2 || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    return { refused: 'not a <harness>/<profile> directory' };
+  }
+  let info;
+  try { info = await lstat(target); } catch { return { refused: 'already gone' }; }
+  if (info.isSymbolicLink()) return { refused: 'a symbolic link' };
+  if (!info.isDirectory()) return { refused: 'not a directory' };
+  try {
+    const [realRoot, realTarget] = await Promise.all([realpath(root), realpath(target)]);
+    if (realTarget !== join(realRoot, ...segments)) return { refused: 'resolves outside the ClikCode profiles directory' };
+  } catch {
+    return { refused: 'could not be resolved' };
+  }
+  return { path: target };
+}
+
+/** Deletes an account's ClikCode-created profile directory (vendor credentials
+ * included). Refuses anything outside the profiles root and anything another
+ * account still points at. Returns the removed path, if any. */
+export async function purgeAccountProfile(
+  account: Pick<AiHarnessAccount, 'nativeProfile'>, remainingAccounts: readonly AiHarnessAccount[],
+): Promise<string | undefined> {
+  const profilePath = account.nativeProfile?.path;
+  if (!profilePath) return undefined;
+  const target = resolve(profilePath);
+  if (remainingAccounts.some((other) => other.nativeProfile?.path && resolve(other.nativeProfile.path) === target)) return undefined;
+  const verdict = await resolvePurgeableProfile(profilePath);
+  if ('refused' in verdict) return undefined;
+  await rm(verdict.path, { recursive: true, force: true });
+  return verdict.path;
+}
+
+/** Profile directories no account refers to: abandoned logins, accounts removed
+ * by a build that did not purge, profiles replaced by a re-login. A directory
+ * younger than `minAgeMs` is left alone -- a login in progress has created its
+ * directory but not yet saved its account. */
+export async function collectOrphanProfiles(options: { dryRun?: boolean; minAgeMs?: number; now?: number } = {}): Promise<{ removed: string[]; kept: string[] }> {
+  const minAgeMs = options.minAgeMs ?? 60 * 60_000;
+  const now = options.now ?? Date.now();
+  const root = clikcodeProfilesRoot();
+  const state = await readState();
+  const referenced = new Set(state.accounts.flatMap((account) => account.nativeProfile?.path ? [resolve(account.nativeProfile.path)] : []));
+  const removed: string[] = [];
+  const kept: string[] = [];
+  const list = async (directory: string): Promise<string[]> => {
+    try { return (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch {
+      // fail-open-ok: no profiles directory means there is nothing to collect.
+      return [];
+    }
+  };
+  for (const harnessName of await list(root)) {
+    for (const profileName of await list(join(root, harnessName))) {
+      const candidate = join(root, harnessName, profileName);
+      const verdict = await resolvePurgeableProfile(candidate);
+      const info = 'path' in verdict ? await stat(verdict.path).catch(() => undefined) : undefined;
+      if (referenced.has(resolve(candidate)) || !('path' in verdict) || !info || now - info.mtimeMs < minAgeMs) {
+        kept.push(candidate);
+        continue;
+      }
+      if (!options.dryRun) await rm(verdict.path, { recursive: true, force: true });
+      removed.push(verdict.path);
+    }
+  }
+  return { removed, kept };
+}
+
 export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<string> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   const state = await readState();
-  const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
-  const placeholder = `${harness.displayName} ${existingForProvider + 1}`;
+  const placeholder = firstUnusedAccountLabel(harness.displayName, state.accounts);
   const explicit = label?.trim();
   let accountLabel = explicit || placeholder;
   if (!accountLabel) throw new Error('account label cannot be empty');
@@ -335,7 +442,7 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
     : undefined;
   let loginError: unknown;
   try {
-    await loginNativeHarness(harness, nativeProfileEnvironment(nativeProfile));
+    await loginNativeHarness(harness, profileEnvironment(harness, { nativeProfile }));
   } catch (error) {
     // Antigravity's login command (-p 'hi' ...) doesn't just verify
     // authentication -- it also runs a real chat turn, so ANY unrelated
@@ -373,8 +480,14 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
       const existingMatch = state.accounts.find((account) => account.provider === harness.provider && account.label.toLowerCase() === derived.toLowerCase());
       if (existingMatch) {
         existingMatch.status = 'ready';
+        const replacedProfile = nativeProfile ? existingMatch.nativeProfile : undefined;
         if (nativeProfile) existingMatch.nativeProfile = nativeProfile;
         await writeState(state);
+        // The profile this login replaces holds the stale credentials; nothing
+        // references it any more, so it goes rather than lingering on disk.
+        if (replacedProfile && replacedProfile.path !== nativeProfile?.path) {
+          await purgeAccountProfile({ nativeProfile: replacedProfile }, state.accounts).catch(() => undefined);
+        }
         emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });
         return existingMatch.label;
       }
@@ -415,7 +528,7 @@ export function nativeAccountContext(state: HarnessState, labelOrId: string): { 
   if (account.authKind !== 'vendor-cli') throw new Error(`account "${account.label}" is not owned by a vendor CLI`);
   const harness = localHarnessForProvider(account.provider);
   if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
-  const environment = nativeProfileEnvironment(account.nativeProfile);
+  const environment = profileEnvironment(harness, account);
   return { account, harness, environment };
 }
 
@@ -494,12 +607,43 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   emitJson({ account: accountView(account), credentialBoundary: 'local-only' });
 }
 
-export async function aiAccountRemove(labelOrId: string): Promise<void> {
+export interface AccountRemoveOptions {
+  /** Delete the account's profile directory (its vendor credentials). Defaults
+   * to true, and only ever applies to a directory ClikCode created under its
+   * own profiles root -- anything else is left exactly where it is. */
+  purgeProfile?: boolean;
+  /** Run the vendor's own logout first, where the catalog declares one.
+   * Defaults to true for an isolated profile (the token is about to be deleted
+   * anyway; revoking it is the clean end) and false otherwise: an account on
+   * the vendor's shared default profile is the user's own CLI login, and
+   * removing it from ClikCode must not sign them out of that tool. */
+  logout?: boolean;
+}
+
+export async function aiAccountRemove(labelOrId: string, options: AccountRemoveOptions = {}): Promise<void> {
   const state = await readState();
   const index = state.accounts.findIndex((account) => account.id === labelOrId || account.label === labelOrId);
   if (index < 0) throw new Error(`local AI account "${labelOrId}" was not found`);
   const [removed] = state.accounts.splice(index, 1);
+  const isolated = Boolean(removed.nativeProfile?.path) && 'path' in await resolvePurgeableProfile(removed.nativeProfile!.path);
+  let loggedOut = false;
+  if (removed.authKind === 'vendor-cli' && (options.logout ?? isolated)) {
+    let harness: AiLocalHarnessDefinition | undefined;
+    try { harness = localHarnessForProvider(removed.provider); } catch {
+      // fail-open-ok: without the catalog there is no declared logout to run; removal itself must still succeed.
+      harness = undefined;
+    }
+    if (harness?.logoutArgv) {
+      // Best effort and bounded: an offline or already-expired login must
+      // never make an account impossible to remove.
+      loggedOut = await captureNativeHarnessOutput(harness, harness.logoutArgv, profileEnvironment(harness, removed), 10_000)
+        .then(() => true, () => false);
+    }
+  }
   state.sessions = state.sessions.map((session) => session.accountId === removed.id ? { ...session, accountId: null } : session);
+  // The registry first, the directory second: a crash in between leaves an
+  // orphan for collectOrphanProfiles, never an account pointing at nothing.
   await writeState(state);
-  emitHarnessOutput({ panel: 'account-removed', account: removed.label });
+  const purged = options.purgeProfile === false ? undefined : await purgeAccountProfile(removed, state.accounts).catch(() => undefined);
+  emitHarnessOutput({ panel: 'account-removed', account: removed.label, loggedOut, ...(purged ? { profileRemoved: purged } : {}) });
 }
