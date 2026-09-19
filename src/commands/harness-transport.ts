@@ -1,4 +1,4 @@
-import { acpArgvForHarness } from './acp-client.js';
+import { harnessPreferredTransport } from './harness-runtime.js';
 import type { AiLocalHarnessDefinition } from './types.js';
 
 export type HarnessTurnTransport = 'codex-app-server' | 'acp' | 'structured-cli' | 'text-cli';
@@ -11,15 +11,19 @@ export interface HarnessTurnTransportOptions {
    * Without this opt-in an image turn keeps using the CLI adapter, because a
    * caller that does not pass the images along would silently drop them. */
   acpImages?: boolean;
+  /** Opt an `acp.experimental` declaration into ACP. Off by default: an
+   * unverified ACP mode must not displace a working structured CLI. */
+  allowExperimentalAcp?: boolean;
 }
 
-/** One transport decision for every harness. Provider definitions remain
- * declarative; orchestration no longer grows another command-name branch each
- * time a harness adopts ACP or another shared protocol. */
+/** One transport decision for every harness, read from the catalog
+ * declaration (`transport` + `acp`), never from the harness name. Adopting
+ * ACP is a catalog edit, not another branch here. */
 export function harnessTurnTransport(
   harness: AiLocalHarnessDefinition, hasImages = false, options: HarnessTurnTransportOptions = {},
 ): HarnessTurnTransport {
-  if (harness.command === 'codex') return 'codex-app-server';
-  if ((!hasImages || options.acpImages === true) && acpArgvForHarness(harness.command)) return 'acp';
-  return harness.turn?.output === 'text' ? 'text-cli' : 'structured-cli';
+  return harnessPreferredTransport(harness, {
+    hasImages: hasImages && options.acpImages !== true,
+    ...(options.allowExperimentalAcp === true ? { allowExperimentalAcp: true } : {}),
+  });
 }
