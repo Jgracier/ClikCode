@@ -7,7 +7,7 @@ import {
   aiSessionClose, aiSessionCreate, aiSessionInteractive, aiSessionResume, aiSessionSet, aiSessionShow,
   aiSessionsList, aiStart, aiStatus, aiStop, aiUsage,
 } from '../commands/ai.js';
-import { login } from '../commands/auth.js';
+import { gatewayLogin } from '../commands/gateway-login.js';
 
 export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('start').description('Start the optional loopback-only control API')
@@ -40,7 +40,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   gateway.command('status').description('Show the ClikDeploy Gateway connection state').action(() => aiGatewayStatus(config));
   gateway.command('login').description('Sign in to ClikDeploy for optional Gateway model access')
     .option('--github', 'Use GitHub OAuth instead of Google OAuth')
-    .action((options) => login(config, { google: !options.github, github: Boolean(options.github) }));
+    .action(async (options) => { await gatewayLogin(config, { google: !options.github, github: Boolean(options.github) }); });
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(aiSessionsList);
   sessions.command('show <id>').description('Show a saved session').action(aiSessionShow);
