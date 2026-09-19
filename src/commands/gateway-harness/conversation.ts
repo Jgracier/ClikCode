@@ -86,6 +86,7 @@ export class ConversationStore {
       if (!line.trim()) continue;
       let record: unknown;
       try { record = JSON.parse(line); } catch { continue; }
+      if (!record || typeof record !== 'object') continue;
       const entry = record as Partial<TranscriptRecord> & Record<string, unknown>;
       if (entry.kind === 'item' && isItem(entry.item)) items.push(entry.item);
       else if (entry.kind === 'compaction' && typeof entry.summary === 'string') {
@@ -102,8 +103,8 @@ export class ConversationStore {
     const items: ConversationItem[] = [];
     for (const line of raw.split('\n')) {
       try {
-        const entry = JSON.parse(line) as { kind?: string; item?: unknown };
-        if (entry.kind === 'item' && isItem(entry.item)) items.push(entry.item);
+        const entry = JSON.parse(line) as { kind?: string; item?: unknown } | null;
+        if (entry && entry.kind === 'item' && isItem(entry.item)) items.push(entry.item);
       } catch { /* torn line */ }
     }
     return items;
