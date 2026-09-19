@@ -232,13 +232,13 @@ export interface HarnessPrompter {
   question(
     prompt: string,
     commands?: readonly PickerOption<string>[],
-    settings?: { cancellable?: boolean; rightArrowCommand?: string },
+    settings?: { cancellable?: boolean; rightArrowPalette?: boolean },
   ): Promise<string>;
   select?<T>(
     title: string,
     options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
-    settings?: { leftArrowSelect?: boolean },
+    settings?: { onBack?: () => void; onEscape?: () => void },
   ): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
   response?(text: string, mode?: 'append' | 'replace'): void;

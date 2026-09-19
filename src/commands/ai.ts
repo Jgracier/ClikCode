@@ -1694,7 +1694,7 @@ async function chooseOption<T>(
   title: string,
   options: readonly PickerOption<T>[],
   onAction?: (value: T, action: string) => Promise<void>,
-  settings?: { leftArrowSelect?: boolean },
+  settings?: { onBack?: () => void; onEscape?: () => void },
 ): Promise<T | undefined> {
   if (options.length === 0) return undefined;
   if (rl.select) return rl.select(title, options, onAction, settings);
@@ -1913,6 +1913,7 @@ async function interactiveAccountPicker(
     }));
     void Promise.all(providerAccounts.map((account) => accountUsageLabel(account, state))).catch(() => undefined);
     let actionPerformed = false;
+    let backedOut = false;
     const selected = await chooseOption(
       rl, `${harness.displayName} accounts`, accountPickerOptions(accountsWithUsage, session, harness),
       async (choice, action) => {
@@ -1920,8 +1921,12 @@ async function interactiveAccountPicker(
         actionPerformed = true;
         await manageAccountAction(rl, choice.accountId, action);
       },
-      { leftArrowSelect: true },
+      { onBack: () => { backedOut = true; } },
     );
+    if (backedOut) {
+      if (rl instanceof TerminalHarnessPrompter) rl.restoreDraft('/');
+      return undefined;
+    }
     if (actionPerformed) continue;
     if (!selected || selected.kind !== 'account') return undefined;
     await aiSessionCommand(id, `/settings account ${selected.accountId}`);
@@ -2529,7 +2534,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (await synchronizeNativeTranscript(state, session)) await writeState(state);
   const commandDetails: Record<string, string> = {
-    '/provider': 'choose a provider', '/account': 'switch directly between accounts', '/settings': 'configure this workspace',
+    '/account': 'switch accounts', '/provider': 'choose a provider', '/settings': 'configure this workspace',
     '/model': 'choose or view a model', '/effort': 'reasoning level', '/permissions': 'approval behavior',
     '/sessions': 'manage conversations', '/resume': 'resume another conversation', '/new': 'start clean',
     '/history': 'show transcript', '/diff': 'show project changes', '/review': 'review project changes',
@@ -2646,7 +2651,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           line = queued.text;
           queuedTurnId = queued.id;
           notice = 'Running queued message';
-        } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowCommand: '/account' })).trim();
+        } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true })).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.
