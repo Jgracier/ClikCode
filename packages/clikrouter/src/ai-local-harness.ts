@@ -29,7 +29,7 @@ export interface AiHarnessOptionDefinition {
   values?: readonly string[];
   /** Explicit argv mapping. `repeat` emits the prefix once per list value. */
   argv?: readonly string[];
-  argvStyle?: 'value' | 'flag' | 'repeat' | 'config';
+  argvStyle?: 'value' | 'flag' | 'repeat' | 'csv' | 'config';
   /** Some CLIs only accept a flag before their turn subcommand. */
   argvPlacement?: 'root' | 'turn';
   configKey?: string;
@@ -99,9 +99,16 @@ export interface AiLocalHarnessDefinition {
    * no-op for this harness — declared here so callers can say so instead of
    * silently accepting a setting that changes nothing. */
   permissionModes?: readonly AiHarnessPermissionMode[];
+  /** Exact vendor argv for each normalized permission choice. An empty argv is
+   * deliberate: it means the vendor's unflagged default implements that mode. */
+  permissionArgv?: Readonly<Partial<Record<AiHarnessPermissionMode, {
+    argv: readonly string[];
+    placement?: 'root' | 'turn';
+  }>>>;
   /** Argv that precedes each image path on a turn, e.g. `['--image']`. Absent
    * means this vendor CLI has no attach-an-image flag ClikCode knows about. */
   imageArgvPrefix?: readonly string[];
+  imageArgvStyle?: 'separate' | 'concatenated';
   /** Vendor-supported configuration root used for isolated local accounts. */
   profileEnv?: string;
   /** One-shot, non-interactive invocation used by the persistent ClikCode UI. */
@@ -140,11 +147,11 @@ export interface AiLocalHarnessDefinition {
   };
 }
 
-export const AI_LOCAL_HARNESS_ADAPTER_VERSION = 4;
+export const AI_LOCAL_HARNESS_ADAPTER_VERSION = 5;
 
 export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
-  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
-  { command: 'codex', provider: 'openai', displayName: 'Codex', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'codex', npmPackage: '@openai/codex', loginArgv: ['login'], statusArgv: ['login', 'status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cd'], effortArgvPrefix: ['--config'], effortConfigKey: 'model_reasoning_effort', permissionModes: ['ask', 'bypass', 'auto'], imageArgvPrefix: ['--image'], profileEnv: 'CODEX_HOME', turn: { startArgv: ['exec', '--json', '--skip-git-repo-check'], resumeArgv: ['exec', 'resume'], resumeIdSuffix: ['--json', '--skip-git-repo-check'], promptInput: 'stdin', output: 'json-lines', responseFields: ['text'], resumeSupportsWorkspaceSelector: false }, session: { resumeIdPrefix: ['resume'], continueArgv: ['resume', '--last'] } },
+  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'] }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'] } }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'codex', provider: 'openai', displayName: 'Codex', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'codex', npmPackage: '@openai/codex', loginArgv: ['login'], statusArgv: ['login', 'status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cd'], effortArgvPrefix: ['--config'], effortConfigKey: 'model_reasoning_effort', permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'], placement: 'root' }, bypass: { argv: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'never'], placement: 'root' }, auto: { argv: ['--approve-for-me'], placement: 'root' } }, imageArgvPrefix: ['--image'], profileEnv: 'CODEX_HOME', turn: { startArgv: ['exec', '--json', '--skip-git-repo-check'], resumeArgv: ['exec', 'resume'], resumeIdSuffix: ['--json', '--skip-git-repo-check'], promptInput: 'stdin', output: 'json-lines', responseFields: ['text'], resumeSupportsWorkspaceSelector: false }, session: { resumeIdPrefix: ['resume'], continueArgv: ['resume', '--last'] } },
   // No loginArgv value actually performs a login non-interactively -- Gemini
   // CLI's real auth commands (/auth, /auth login, /auth logout) are slash
   // commands typed inside its own interactive session, not CLI flags
@@ -157,11 +164,11 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // user into gemini's own interactive session where they can type
   // `/auth login` themselves, instead of ClikCode silently assuming
   // "logged in" and only surfacing the problem as a raw turn failure.
-  { command: 'gemini', provider: 'google', displayName: 'Gemini CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'gemini', npmPackage: '@google/gemini-cli', loginArgv: [], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass'], turn: { startArgv: ['--output-format', 'stream-json'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json-lines', responseFields: ['response', 'result', 'text', 'content'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--resume', 'latest'], discoverArgv: ['--list-sessions'], discoverFormat: 'numbered-list' } },
-  { command: 'opencode', provider: 'opencode', displayName: 'OpenCode', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'opencode', loginArgv: ['auth', 'login'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--dir'], effortArgvPrefix: ['--variant'], permissionModes: ['ask', 'bypass'], turn: { startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list'], discoverFormat: 'text' } },
-  { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], continueArgv: ['--continue'] } },
-  { command: 'aider', provider: 'aider', displayName: 'Aider', surface: 'terminal', localAuth: ['api-key', 'vendor-cli'], binary: 'aider', modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models', ''], permissionModes: ['ask', 'bypass'], turn: { startArgv: [], createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'], promptArgvPrefix: ['--message'], output: 'text' }, session: { idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'] } },
-  { command: 'goose', provider: 'goose', displayName: 'Goose', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', turn: { startArgv: ['run'], resumeIdPrefix: ['--resume', '--session-id'], promptArgvPrefix: ['--text'], output: 'text' }, session: { resumeIdPrefix: ['session', '--resume', '--session-id'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' } },
+  { command: 'gemini', provider: 'google', displayName: 'Gemini CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'gemini', npmPackage: '@google/gemini-cli', loginArgv: [], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--approval-mode', 'default'] }, bypass: { argv: ['--approval-mode', 'yolo'] }, auto: { argv: ['--approval-mode', 'auto_edit'] } }, turn: { startArgv: ['--output-format', 'stream-json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json-lines', responseFields: ['response', 'result', 'text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--resume', 'latest'], discoverArgv: ['--list-sessions'], discoverFormat: 'numbered-list' } },
+  { command: 'opencode', provider: 'opencode', displayName: 'OpenCode', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'opencode', loginArgv: ['auth', 'login'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--dir'], effortArgvPrefix: ['--variant'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--auto'] } }, imageArgvPrefix: ['--file'], turn: { startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list'], discoverFormat: 'text' } },
+  { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['-C'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--allow-all'] } }, imageArgvPrefix: ['--attachment'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], continueArgv: ['--continue'] } },
+  { command: 'aider', provider: 'aider', displayName: 'Aider', surface: 'terminal', localAuth: ['api-key', 'vendor-cli'], binary: 'aider', modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models', ''], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yes-always'] } }, imageArgvPrefix: ['--file'], turn: { startArgv: [], createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'], promptArgvPrefix: ['--message'], output: 'text' }, session: { idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'] } },
+  { command: 'goose', provider: 'goose', displayName: 'Goose', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', modelArgvPrefix: ['--model'], turn: { startArgv: ['run', '--output-format', 'stream-json'], createIdPrefix: ['--name'], resumeIdPrefix: ['--resume', '--name'], promptArgvPrefix: ['--text'], output: 'json-lines', responseFields: ['text', 'content', 'response'] }, session: { idKind: 'uuid', createIdPrefix: ['--name'], resumeIdPrefix: ['session', '--resume', '--name'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' } },
   { command: 'amp', provider: 'amp', displayName: 'Amp', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'amp', npmPackage: '@ampcode/cli', loginArgv: ['login'], versionArgv: ['version'], turn: { startArgv: [], resumeArgv: ['threads', 'continue'], promptArgvPrefix: ['-x'], output: 'text' }, session: { resumeIdPrefix: ['threads', 'continue'] } },
   // Verified against Antigravity's own official headless-mode docs
   // (antigravity.google/docs/cli/headless/): -p/--print for a single
@@ -219,19 +226,19 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // stdio: 'inherit' via suspend/resume, same as Claude Code/Codex --
   // real output on screen, including the actual prompt a fresh user needs
   // to complete it, at the cost of the raw JSON dump this doesn't hide.
-  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
-  { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
-  { command: 'droid', provider: 'factory', displayName: 'Factory Droid', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'droid', modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], permissionModes: ['ask', 'bypass', 'auto'], turn: { startArgv: ['exec', '--output-format', 'json'], resumeIdPrefix: ['--resume'], output: 'json', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'] } },
-  { command: 'kiro', provider: 'kiro', displayName: 'Kiro CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'kiro-cli', launchArgv: ['chat'], permissionModes: ['ask', 'bypass'], turn: { startArgv: ['chat', '--no-interactive'], resumeIdPrefix: ['--resume-id'], output: 'text' }, session: { resumeIdPrefix: ['chat', '--resume-id'], continueArgv: ['chat', '--resume'] } },
-  { command: 'qwen', provider: 'qwen', displayName: 'Qwen Code', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'qwen', modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass', 'auto'], profileEnv: 'QWEN_HOME', turn: { startArgv: ['-p', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--json'], discoverFormat: 'json-lines' } },
-  { command: 'cline', provider: 'cline', displayName: 'Cline CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', loginArgv: ['auth'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], profileEnv: 'CLINE_DATA_DIR', turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['--id'] } },
+  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--dangerously-skip-permissions'] } }, profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
+  { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
+  { command: 'droid', provider: 'factory', displayName: 'Factory Droid', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'droid', modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--skip-permissions-unsafe'] }, auto: { argv: ['--auto', 'low'] } }, turn: { startArgv: ['exec', '--output-format', 'json'], resumeIdPrefix: ['--session-id'], output: 'json', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--session-id'] } },
+  { command: 'kiro', provider: 'kiro', displayName: 'Kiro CLI', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'kiro-cli', launchArgv: ['chat'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--trust-all-tools'] } }, turn: { startArgv: ['chat', '--no-interactive', '--agent-engine', 'v3', '--output-format', 'stream-json'], resumeIdPrefix: ['--resume-id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['chat', '--resume-id'], continueArgv: ['chat', '--resume'], discoverArgv: ['chat', '--list-sessions'], discoverFormat: 'text' } },
+  { command: 'qwen', provider: 'qwen', displayName: 'Qwen Code', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'qwen', modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--approval-mode', 'default'] }, bypass: { argv: ['--approval-mode', 'yolo'] }, auto: { argv: ['--approval-mode', 'auto'] } }, profileEnv: 'QWEN_HOME', turn: { startArgv: ['-p', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--json'], discoverFormat: 'json-lines' } },
+  { command: 'cline', provider: 'cline', displayName: 'Cline CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', loginArgv: ['auth'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--auto-approve', 'false'] }, bypass: { argv: ['--auto-approve', 'true'] } }, turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['--id'] } },
   { command: 'roo', provider: 'roo', displayName: 'Roo Code', surface: 'editor-extension', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'roo' },
-  { command: 'kilo', provider: 'kilo', displayName: 'Kilo Code CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'kilo', npmPackage: '@kilocode/cli', loginArgv: ['auth', 'login'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], permissionModes: ['ask', 'bypass'], turn: { startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' } },
-  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'cursor-agent', loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], turn: { startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'kilo', provider: 'kilo', displayName: 'Kilo Code CLI', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'kilo', npmPackage: '@kilocode/cli', loginArgv: ['auth', 'login'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--dir'], effortArgvPrefix: ['--variant'], permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['--auto'] } }, imageArgvPrefix: ['--file'], turn: { startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' } },
+  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'cursor-agent', loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--force'] }, auto: { argv: ['--auto-review'] } }, turn: { startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   { command: 'windsurf', provider: 'windsurf', displayName: 'Windsurf Cascade', surface: 'editor-extension', localAuth: ['oauth', 'vendor-cli'], binary: 'windsurf' },
-  { command: 'crush', provider: 'crush', displayName: 'Crush', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'crush', npmPackage: '@charmland/crush', permissionModes: ['ask', 'bypass'], turn: { startArgv: ['run'], resumeIdPrefix: ['--session'], output: 'text' }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'], discoverArgv: ['session', 'list', '--json'], discoverFormat: 'json' } },
-  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--oneshot', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
-  { command: 'command', provider: 'command-code', displayName: 'Command Code', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'cmdc', npmPackage: 'command-code', loginArgv: ['login'], statusArgv: ['status', '--json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], profileEnv: 'HOME', turn: { startArgv: ['--print', '--output-format', 'json', '--skip-onboarding', '--no-auto-update'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'crush', provider: 'crush', displayName: 'Crush', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'crush', npmPackage: '@charmland/crush', modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'], placement: 'root' } }, turn: { startArgv: ['run', '--quiet'], resumeIdPrefix: ['--session'], output: 'text' }, session: { resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
+  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
+  { command: 'command', provider: 'command-code', displayName: 'Command Code', surface: 'terminal', localAuth: ['oauth', 'vendor-cli'], binary: 'cmdc', npmPackage: 'command-code', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'standard'] }, bypass: { argv: ['--yolo'] }, auto: { argv: ['--permission-mode', 'auto-accept'] } }, profileEnv: 'HOME', turn: { startArgv: ['--print', '--output-format', 'json', '--skip-onboarding', '--no-auto-update'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
 ];
 
 const flag = (
@@ -252,9 +259,9 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   claude: {
     options: [
       value('agent', 'Agent', 'Use a configured Claude agent', 'mode', ['--agent']),
-      value('tools', 'Built-in tools', 'Choose the built-in tools available to the session', 'tools', ['--tools'], 'string-list'),
-      value('allowed-tools', 'Allowed tools', 'Tool patterns allowed without prompting', 'permissions', ['--allowed-tools'], 'string-list'),
-      value('disallowed-tools', 'Denied tools', 'Tool patterns that must not run', 'permissions', ['--disallowed-tools'], 'string-list'),
+      value('tools', 'Built-in tools', 'Choose the built-in tools available to the session', 'tools', ['--tools'], 'string-list', { argvStyle: 'csv' }),
+      value('allowed-tools', 'Allowed tools', 'Tool patterns allowed without prompting', 'permissions', ['--allowed-tools'], 'string-list', { argvStyle: 'csv' }),
+      value('disallowed-tools', 'Denied tools', 'Tool patterns that must not run', 'permissions', ['--disallowed-tools'], 'string-list', { argvStyle: 'csv' }),
       value('add-dir', 'Additional directories', 'Additional directories Claude may access', 'context', ['--add-dir'], 'path-list', { argvStyle: 'repeat' }),
       value('fallback-model', 'Fallback models', 'Ordered models used when the primary is unavailable', 'model', ['--fallback-model']),
       value('max-budget-usd', 'Maximum budget (USD)', 'Maximum API spend for a print-mode turn', 'safety', ['--max-budget-usd'], 'number'),
@@ -322,21 +329,125 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   copilot: {
     options: [
       value('agent', 'Agent', 'Custom Copilot agent', 'mode', ['--agent']),
-      value('add-dir', 'Additional directories', 'Trusted roots and their skills/agents', 'context', ['--add-dir'], 'path-list', { argvStyle: 'repeat' }),
       value('additional-mcp-config', 'Additional MCP config', 'Per-session MCP JSON or @file', 'tools', ['--additional-mcp-config']),
       value('allow-tool', 'Allowed tools', 'Tool or MCP permission patterns', 'permissions', ['--allow-tool'], 'string-list', { argvStyle: 'repeat' }),
       value('deny-tool', 'Denied tools', 'Tool or MCP denial patterns', 'permissions', ['--deny-tool'], 'string-list', { argvStyle: 'repeat' }),
-      flag('allow-all', 'Allow everything', 'Allow all tools, paths, and URLs', 'permissions', ['--allow-all'], { dangerous: true }),
+      value('context-tier', 'Context tier', 'Context-window tier for supported models', 'model', ['--context'], 'enum', { values: ['default', 'long_context'] }),
+      value('max-autopilot-continues', 'Autopilot continuation limit', 'Maximum automatic continuation messages', 'safety', ['--max-autopilot-continues'], 'number'),
+      flag('plan', 'Plan mode', 'Start in read-only planning mode', 'mode', ['--plan']),
+      flag('no-ask-user', 'Disable questions', 'Prevent the agent from asking clarifying questions', 'mode', ['--no-ask-user']),
+      flag('sandbox', 'Shell sandbox', 'Enable Copilot’s OS-level shell sandbox', 'safety', ['--sandbox']),
+      flag('no-custom-instructions', 'Ignore custom instructions', 'Do not load repository instruction files', 'context', ['--no-custom-instructions']),
+      flag('no-remote', 'Disable remote access', 'Disable remote control for this session', 'safety', ['--no-remote']),
+      flag('no-remote-export', 'Disable remote export', 'Do not export this session to GitHub remote clients', 'safety', ['--no-remote-export']),
+      flag('worktree', 'Managed worktree', 'Run in a separate managed Git worktree', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
     managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list', '--json'], manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, agents: { label: 'Instructions and agents', manageArgv: ['instruction'] } },
     features: ['skills', 'custom agents', 'hooks', 'plugins', 'built-in GitHub MCP'],
   },
-  aider: { options: [], features: ['architect/ask/code modes', 'lint and test commands', 'repository map', 'voice'] },
-  goose: { options: [], managers: { mcp: { label: 'Extensions and MCP', manageArgv: ['configure'] } }, features: ['extensions', 'recipes', 'tool permissions'] },
-  amp: { options: [value('mcp-config', 'MCP configuration', 'Per-turn MCP server configuration', 'tools', ['--mcp-config'])], managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } }, features: ['skills', 'plugins', 'orbs', 'settings layers'] },
-  pi: { options: [], features: ['extensions', 'skills', 'prompt templates', 'provider/model registry'] },
-  droid: { options: [], managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } }, features: ['skills', 'custom droids', 'hooks', 'missions', 'auto/spec modes'] },
-  kiro: { options: [], managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] } }, features: ['skills', 'custom agents', 'hooks', 'steering', 'powers', 'plan mode'] },
+  aider: {
+    options: [
+      value('edit-format', 'Edit format', 'Editing protocol used by the primary model', 'mode', ['--edit-format']),
+      value('weak-model', 'Weak model', 'Model used for commits and history summarization', 'model', ['--weak-model']),
+      value('editor-model', 'Editor model', 'Model used for editor tasks', 'model', ['--editor-model']),
+      value('file', 'Editable files', 'Files added to the editable chat context', 'context', ['--file'], 'path-list', { argvStyle: 'repeat' }),
+      value('read', 'Read-only files', 'Files added as read-only context', 'context', ['--read'], 'path-list', { argvStyle: 'repeat' }),
+      value('lint-command', 'Lint command', 'Command Aider runs to lint changes', 'tools', ['--lint-cmd']),
+      value('test-command', 'Test command', 'Command Aider runs for tests', 'tools', ['--test-cmd']),
+      value('map-tokens', 'Repository map tokens', 'Token budget for the repository map', 'context', ['--map-tokens'], 'number'),
+      value('map-refresh', 'Repository map refresh', 'When Aider refreshes its repository map', 'context', ['--map-refresh'], 'enum', { values: ['auto', 'always', 'files', 'manual'] }),
+      value('max-history-tokens', 'History token limit', 'Soft limit before chat-history summarization', 'session', ['--max-chat-history-tokens'], 'number'),
+      flag('architect', 'Architect mode', 'Use architect/editor two-stage changes', 'mode', ['--architect']),
+      flag('dry-run', 'Dry run', 'Analyze without modifying files', 'safety', ['--dry-run']),
+      flag('no-git', 'Disable Git integration', 'Do not inspect or modify Git state', 'safety', ['--no-git']),
+      flag('no-auto-commits', 'Disable auto commits', 'Do not automatically commit agent changes', 'safety', ['--no-auto-commits']),
+      flag('cache-prompts', 'Prompt caching', 'Enable provider prompt caching', 'advanced', ['--cache-prompts']),
+    ],
+    features: ['architect/ask/code modes', 'lint and test commands', 'repository map', 'voice'],
+  },
+  goose: {
+    options: [
+      value('provider', 'Inference provider', 'Provider used for this run', 'model', ['--provider']),
+      value('system', 'Additional instructions', 'Additional system instructions for the agent', 'context', ['--system']),
+      value('max-tool-repetitions', 'Tool repetition limit', 'Maximum identical consecutive tool calls', 'safety', ['--max-tool-repetitions'], 'number'),
+      value('max-turns', 'Maximum turns', 'Maximum autonomous turns without user input', 'safety', ['--max-turns'], 'number'),
+      value('container', 'Extension container', 'Run extensions in the selected Docker container', 'safety', ['--container']),
+      value('with-extension', 'Stdio extensions', 'Additional stdio extension commands', 'tools', ['--with-extension'], 'string-list', { argvStyle: 'repeat' }),
+      value('with-http-extension', 'HTTP extensions', 'Additional Streamable HTTP extension URLs', 'tools', ['--with-streamable-http-extension'], 'string-list', { argvStyle: 'repeat' }),
+      value('with-builtin', 'Built-in extensions', 'Built-in extensions enabled for the run', 'tools', ['--with-builtin'], 'string-list'),
+      flag('ephemeral', 'Ephemeral session', 'Do not store the Goose session', 'session', ['--no-session'], { requiresNewSession: true }),
+    ],
+    managers: { mcp: { label: 'Extensions and MCP', manageArgv: ['configure'] }, skills: { label: 'Skills', listArgv: ['skills', 'list'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    features: ['extensions', 'recipes', 'ACP', 'scheduled recipes', 'session export'],
+  },
+  amp: {
+    options: [
+      value('mcp-config', 'MCP configuration', 'Per-turn MCP server configuration', 'tools', ['--mcp-config']),
+      flag('fast', 'Fast mode', 'Use Amp Fast mode for this invocation', 'mode', ['--fast']),
+      value('plugin-ready-timeout', 'Plugin startup timeout', 'Wait this many seconds for plugins before starting', 'tools', ['--plugin-ready-timeout'], 'number'),
+    ],
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } },
+    features: ['skills', 'plugins', 'orbs', 'settings layers'],
+  },
+  antigravity: {
+    options: [
+      value('agent', 'Agent', 'Agent used for the current session', 'mode', ['--agent']),
+      value('add-dir', 'Additional directories', 'Additional directories included in the workspace', 'context', ['--add-dir'], 'path-list', { argvStyle: 'repeat' }),
+      value('json-schema', 'Output schema', 'JSON schema string or file for the final result', 'output', ['--json-schema']),
+      value('print-timeout', 'Turn timeout', 'Maximum print-mode duration, such as 15m', 'safety', ['--print-timeout']),
+      value('project', 'Project', 'Project id or name for this session', 'context', ['--project'], 'string', { requiresNewSession: true }),
+      value('mode', 'Execution mode', 'Use edit-accepting or read-only planning behavior', 'mode', ['--mode'], 'enum', { values: ['accept-edits', 'plan'] }),
+      flag('sandbox', 'Terminal sandbox', 'Run terminal commands with sandbox restrictions', 'safety', ['--sandbox']),
+      flag('disable-skills', 'Disable skills', 'Disable slash-command and skill expansion', 'tools', ['--disable-slash-commands']),
+    ],
+    managers: {
+      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] },
+      plugins: { label: 'Plugins', listArgv: ['plugin', 'list'], manageArgv: ['plugin'] },
+      agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
+    },
+    features: ['skills', 'plugins', 'custom agents', 'remote control', 'sandbox'],
+  },
+  pi: {
+    options: [
+      value('provider', 'Inference provider', 'Provider used for this turn', 'model', ['--provider']),
+      value('tools', 'Allowed tools', 'Allowlist built-in, extension, and custom tools', 'tools', ['--tools'], 'string-list', { argvStyle: 'csv' }),
+      value('exclude-tools', 'Excluded tools', 'Disable matching tool names', 'tools', ['--exclude-tools'], 'string-list', { argvStyle: 'csv' }),
+      value('models', 'Model cycle', 'Models available for in-session cycling', 'model', ['--models'], 'string-list', { argvStyle: 'csv' }),
+      value('session-dir', 'Session directory', 'Custom directory for native session storage', 'session', ['--session-dir'], 'path', { requiresNewSession: true }),
+      value('session-name', 'Session name', 'Name assigned to a new native session', 'session', ['--name'], 'string', { appliesTo: 'start' }),
+      flag('no-builtin-tools', 'Disable built-in tools', 'Keep extension tools but disable built-in tools', 'tools', ['--no-builtin-tools']),
+      flag('no-tools', 'Disable all tools', 'Start without any tools enabled', 'tools', ['--no-tools']),
+      flag('ephemeral', 'Ephemeral session', 'Do not save a native session', 'session', ['--no-session'], { requiresNewSession: true }),
+    ],
+    managers: { plugins: { label: 'Packages and extensions', listArgv: ['list'], manageArgv: ['config'] } },
+    features: ['extensions', 'skills', 'prompt templates', 'provider/model registry'],
+  },
+  droid: {
+    options: [
+      value('restrict-tools', 'Restricted tools', 'Allow only the selected tool ids', 'tools', ['--restrict-tools'], 'string-list'),
+      value('additional-tools', 'Additional tools', 'Enable tools beyond the defaults', 'tools', ['--additional-tools'], 'string-list'),
+      value('disabled-tools', 'Disabled tools', 'Disable selected tool ids', 'tools', ['--disabled-tools'], 'string-list'),
+      value('spec-model', 'Specification model', 'Model used during specification planning', 'model', ['--spec-model']),
+      value('spec-effort', 'Specification effort', 'Reasoning effort used during specification planning', 'reasoning', ['--spec-reasoning-effort']),
+      value('append-system-prompt', 'Additional instructions', 'Append text to Droid’s system prompt', 'context', ['--append-system-prompt']),
+      value('append-system-prompt-file', 'Instruction file', 'Append a file to Droid’s system prompt', 'context', ['--append-system-prompt-file'], 'path'),
+      flag('spec-mode', 'Specification mode', 'Plan in read-only specification mode before execution', 'mode', ['--use-spec']),
+      flag('disable-builtin-skills', 'Disable built-in skills', 'Hide Factory-provided skills while retaining other skill sources', 'tools', ['--disable-builtin-skills']),
+      flag('worktree', 'Managed worktree', 'Run in an isolated Droid worktree', 'session', ['--worktree'], { requiresNewSession: true }),
+      flag('mission', 'Mission mode', 'Run multi-agent mission orchestration', 'mode', ['--mission']),
+    ],
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    features: ['skills', 'custom droids', 'hooks', 'missions', 'auto/spec modes', 'JSON-RPC permission transport'],
+  },
+  kiro: {
+    options: [
+      value('agent-engine', 'Agent engine', 'Headless engine version', 'advanced', ['--agent-engine'], 'enum', { values: ['v1', 'v2', 'v3'], requiresNewSession: true }),
+      value('trusted-tools', 'Trusted tools', 'Tool categories approved in advance', 'permissions', ['--trust-tools'], 'string-list', { argvStyle: 'csv' }),
+      flag('require-mcp-startup', 'Require MCP startup', 'Fail the run if any MCP server cannot start', 'tools', ['--require-mcp-startup']),
+    ],
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] } },
+    features: ['skills', 'custom agents', 'hooks', 'steering', 'powers', 'plan mode'],
+  },
   qwen: {
     options: [
       value('approval-mode', 'Approval mode', 'Tool-call approval policy', 'permissions', ['--approval-mode'], 'enum', { values: ['plan', 'default', 'auto-edit', 'auto', 'yolo'] }),
@@ -354,11 +465,30 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('provider', 'Inference provider', 'Cline inference provider id', 'model', ['--provider']),
       value('system-prompt', 'System prompt', 'Override the default system prompt', 'context', ['--system']),
       value('auto-approve', 'Auto approve', 'Whether Cline auto-approves tool use', 'permissions', ['--auto-approve'], 'enum', { values: ['true', 'false'], dangerous: true }),
+      value('compaction', 'Context compaction', 'Context compaction strategy', 'session', ['--compaction'], 'enum', { values: ['agentic', 'basic', 'off'] }),
+      value('retries', 'Retry limit', 'Maximum consecutive mistakes before stopping', 'safety', ['--retries'], 'number'),
+      value('timeout', 'Turn timeout', 'Maximum run time in seconds; zero disables the limit', 'safety', ['--timeout'], 'number'),
+      value('data-dir', 'Data directory', 'Isolated Cline state directory', 'session', ['--data-dir'], 'path', { requiresNewSession: true }),
+      value('hooks-dir', 'Hooks directory', 'Additional runtime hooks directory', 'tools', ['--hooks-dir'], 'path'),
+      flag('plan', 'Plan mode', 'Run read-only planning behavior', 'mode', ['--plan']),
+      flag('worktree', 'Managed worktree', 'Run in a detached managed worktree', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, hooks: { label: 'Hooks', manageArgv: ['hook'] } },
     features: ['skills', 'rules', 'checkpoints', 'plan/act modes', 'schedules'],
   },
-  kilo: { options: [], managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } }, features: ['skills', 'architect/ask/debug/orchestrator modes', 'custom agents'] },
+  kilo: {
+    options: [
+      value('agent', 'Agent', 'Agent configuration used for the turn', 'mode', ['--agent']),
+      value('title', 'Session title', 'Title assigned to a new native session', 'session', ['--title'], 'string', { appliesTo: 'start' }),
+      flag('pure', 'Pure mode', 'Run without external plugins', 'safety', ['--pure']),
+      flag('thinking-output', 'Show thinking events', 'Include provider thinking blocks in event output', 'output', ['--thinking']),
+      flag('fork-native-session', 'Fork native session', 'Fork before continuing the selected session', 'session', ['--fork'], { appliesTo: 'resume', requiresNewSession: true }),
+      flag('cloud-fork', 'Fork cloud session', 'Fetch and fork the selected cloud session locally', 'session', ['--cloud-fork'], { appliesTo: 'resume', requiresNewSession: true }),
+      flag('share', 'Share session', 'Publish the native session through Kilo', 'session', ['--share']),
+    ],
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    features: ['skills', 'architect/ask/debug/orchestrator modes', 'custom agents'],
+  },
   cursor: {
     options: [
       value('mode', 'Execution mode', 'Read-only plan or question mode', 'mode', ['--mode'], 'enum', { values: ['plan', 'ask'] }),
@@ -374,7 +504,13 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['plugins', 'rules', 'worktrees', 'plan/ask modes'],
   },
-  crush: { options: [], features: ['MCP', 'LSP', 'provider/model configuration'] },
+  crush: {
+    options: [
+      value('data-dir', 'Data directory', 'Custom Crush state directory', 'session', ['--data-dir'], 'path', { requiresNewSession: true }),
+      value('small-model', 'Small model', 'Model used for lightweight tasks', 'model', ['--small-model']),
+    ],
+    features: ['MCP', 'LSP', 'provider/model configuration', 'tool allow/deny rules'],
+  },
   hermes: {
     options: [
       value('provider', 'Inference provider', 'Override the inference provider', 'model', ['--provider']),
@@ -389,7 +525,24 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, tools: { label: 'Tools', manageArgv: ['tools'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
     features: ['skills', 'bundles', 'plugins', 'hooks', 'memory', 'fallback providers', 'toolsets'],
   },
-  command: { options: [], features: ['commands', 'MCP', 'provider settings'] },
+  command: {
+    options: [
+      value('max-turns', 'Maximum turns', 'Maximum turns in print mode', 'safety', ['--max-turns'], 'number'),
+      value('add-dir', 'Additional directories', 'Additional directories in workspace context', 'context', ['--add-dir'], 'path-list', { argvStyle: 'repeat' }),
+      value('mod', 'Mods', 'Mod files or directories loaded for this session', 'tools', ['--mod'], 'path-list', { argvStyle: 'repeat' }),
+      value('mod-option', 'Mod options', 'Mod-declared name=value settings', 'tools', ['--mod-option'], 'string-list', { argvStyle: 'repeat' }),
+      value('skill', 'Skill paths', 'Additional skill directories', 'tools', ['--skill'], 'path-list', { argvStyle: 'repeat' }),
+      flag('plan', 'Plan mode', 'Start in read-only planning mode', 'mode', ['--plan']),
+      flag('local-only', 'Local-only inference', 'Use BYOK providers without Command Code traffic', 'safety', ['--local-only']),
+      flag('trust', 'Trust project', 'Skip the initial workspace trust prompt', 'permissions', ['--trust'], { dangerous: true }),
+      flag('tools-all', 'Enable all tools', 'Enable tools normally withheld in headless mode', 'tools', ['--tools-all'], { dangerous: true }),
+      flag('no-skills', 'Disable skills', 'Skip automatic skill discovery', 'tools', ['--no-skills']),
+      flag('worktree', 'Managed worktree', 'Run in an isolated managed worktree', 'session', ['--worktree'], { requiresNewSession: true }),
+      flag('ephemeral', 'Ephemeral session', 'Do not persist the native session', 'session', ['--no-session'], { requiresNewSession: true }),
+    ],
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Mods', manageArgv: ['mods'] } },
+    features: ['skills', 'mods', 'taste learning', 'MCP', 'managed worktrees', 'plan mode'],
+  },
   roo: { options: [], features: ['editor extension only'] },
   windsurf: { options: [], features: ['editor extension only'] },
 };
@@ -415,9 +568,12 @@ const EFFORT_VALUES: Readonly<Record<string, readonly string[]>> = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   opencode: ['minimal', 'low', 'medium', 'high', 'max'],
-  pi: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+  kilo: ['minimal', 'low', 'medium', 'high', 'max'],
+  pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  crush: ['low', 'medium', 'high'],
   droid: ['low', 'medium', 'high', 'xhigh'],
-  cline: ['low', 'medium', 'high'],
+  kiro: ['low', 'medium', 'high', 'xhigh', 'max'],
+  cline: ['none', 'low', 'medium', 'high', 'xhigh'],
   hermes: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   command: ['low', 'medium', 'high'],
 };
@@ -491,10 +647,15 @@ function appendDeclaredHarnessOptions(
       continue;
     }
     const items = Array.isArray(raw) ? raw : [raw];
-    for (const item of items) {
-      const rendered = String(item).trim();
-      if (!rendered) continue;
+    const renderedItems = items.map((item) => String(item).trim()).filter(Boolean);
+    for (const rendered of renderedItems) {
       if (option.values?.length && !option.values.includes(rendered)) throw new Error(`${option.label} must be one of ${option.values.join(', ')}`);
+    }
+    if (option.argvStyle === 'csv') {
+      if (renderedItems.length) append(...option.argv, renderedItems.join(','));
+      continue;
+    }
+    for (const rendered of renderedItems) {
       if (option.argvStyle === 'config') append(...option.argv, `${option.configKey}=${JSON.stringify(rendered)}`);
       else append(...option.argv, rendered);
     }
@@ -515,66 +676,18 @@ export function nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: 
   if (input.workspace && harness.workspaceArgvPrefix && (!resumed || harness.turn.resumeSupportsWorkspaceSelector !== false)) argv.push(...harness.workspaceArgvPrefix, input.workspace);
   if (input.effort && harness.effortArgvPrefix) argv.push(...harness.effortArgvPrefix, harness.effortConfigKey ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
   if (input.permissionMode && harness.permissionModes?.includes(input.permissionMode)) {
-    if (harness.command === 'codex') {
-      const permissionArgs = input.permissionMode === 'ask'
-        ? ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request']
-        : input.permissionMode === 'bypass'
-          ? ['--sandbox', 'danger-full-access', '--ask-for-approval', 'never']
-          : ['--approve-for-me'];
-      // Approval policy is a root Codex option (not an `exec` option), so the
-      // whole permission profile must precede `exec`. Keeping sandbox and
-      // approval together also gives create and resume identical semantics.
-      argv.unshift(...permissionArgs);
-    } else if (harness.command === 'claude') {
-      const mode = input.permissionMode === 'ask' ? 'manual' : input.permissionMode === 'bypass' ? 'bypassPermissions' : 'auto';
-      argv.push('--permission-mode', mode, '--permission-prompts', 'none');
-      if (input.permissionMode === 'bypass') argv.push('--allow-dangerously-skip-permissions');
-    } else if (harness.command === 'opencode') {
-      // OpenCode's unflagged default asks; --auto bypasses prompts that are
-      // not explicitly denied. It has no independent auto-reviewer mode.
-      if (input.permissionMode === 'bypass') argv.push('--auto');
-    } else if (harness.command === 'cursor') {
-      // Cursor's unflagged default asks, --force bypasses, and --auto-review
-      // delegates approval decisions to Cursor's own reviewer.
-      if (input.permissionMode === 'bypass') argv.push('--force');
-      else if (input.permissionMode === 'auto') argv.push('--auto-review');
-    } else if (harness.command === 'hermes') {
-      // Hermes asks by default; --yolo is its explicit bypass mode. It does
-      // not publish an automatic reviewer.
-      if (input.permissionMode === 'bypass') argv.push('--yolo');
-    } else if (harness.command === 'antigravity') {
-      // The unflagged default requests review. Headless requests that cannot
-      // be answered are denied; accept-edits would silently weaken Ask.
-      if (input.permissionMode === 'bypass') argv.push('--dangerously-skip-permissions');
-    } else if (harness.command === 'gemini') {
-      argv.push('--approval-mode', input.permissionMode === 'bypass' ? 'yolo' : 'default');
-    } else if (harness.command === 'qwen') {
-      argv.push('--approval-mode', input.permissionMode === 'bypass' ? 'yolo' : input.permissionMode === 'auto' ? 'auto' : 'default');
-    } else if (harness.command === 'copilot') {
-      if (input.permissionMode === 'bypass') argv.push('--allow-all');
-    } else if (harness.command === 'aider') {
-      if (input.permissionMode === 'bypass') argv.push('--yes-always');
-    } else if (harness.command === 'kiro') {
-      if (input.permissionMode === 'bypass') argv.push('--trust-all-tools');
-    } else if (harness.command === 'cline') {
-      // Cline defaults this option to true, so Ask must explicitly turn it
-      // off instead of relying on the unflagged default.
-      argv.push('--auto-approve', input.permissionMode === 'bypass' ? 'true' : 'false');
-    } else if (harness.command === 'kilo') {
-      if (input.permissionMode === 'bypass') argv.push('--dangerously-skip-permissions');
-    } else if (harness.command === 'droid') {
-      if (input.permissionMode === 'bypass') argv.push('--skip-permissions-unsafe');
-      else if (input.permissionMode === 'auto') argv.push('--auto', 'low');
-    } else if (harness.command === 'crush') {
-      // Crush currently defines --yolo on the root command rather than the
-      // run subcommand, so it must precede `run` to be honored headlessly.
-      if (input.permissionMode === 'bypass') argv.unshift('--yolo');
-    } else if (harness.command === 'command') {
-      if (input.permissionMode === 'bypass') argv.push('--yolo');
-    }
+    const mapping = harness.permissionArgv?.[input.permissionMode];
+    if (!mapping) throw new Error(`${harness.displayName} has no argv mapping for ${input.permissionMode} permissions`);
+    if (mapping.placement === 'root') argv.unshift(...mapping.argv);
+    else argv.push(...mapping.argv);
   }
   appendDeclaredHarnessOptions(argv, harness, input.options, resumed);
-  if (harness.imageArgvPrefix) for (const image of input.images ?? []) argv.push(...harness.imageArgvPrefix, image);
+  if (harness.imageArgvPrefix) for (const image of input.images ?? []) {
+    if (harness.imageArgvStyle === 'concatenated') {
+      const prefix = harness.imageArgvPrefix.join('');
+      argv.push(`${prefix}${image}`);
+    } else argv.push(...harness.imageArgvPrefix, image);
+  }
   if (harness.turn.promptArgvPrefix) argv.push(...harness.turn.promptArgvPrefix);
   argv.push(harness.turn.promptInput === 'stdin' ? '-' : input.prompt);
   return argv;
