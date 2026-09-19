@@ -16,6 +16,7 @@ import {
   captureNativeHarnessOutput, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand,
 } from './native-harness.js';
 import { localHarnessForCommand, localHarnessForProvider, localRouter, nativeProfileEnvironment } from './native-harness-protocol.js';
+import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from './native-session-discovery.js';
 import { accountView, harnessCommand, harnessStatePath, readState, writeState } from './harness-state.js';
 import { accountUsageLabel } from './native-account-data.js';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition, HarnessState } from './types.js';
@@ -66,7 +67,9 @@ export async function aiDoctor(): Promise<void> {
         permissionModeSelection: (harness.permissionModes?.length ?? 0) > 0,
         permissionModes: harness.permissionModes ?? [],
         exactResume: Boolean(harness.session?.resumeIdPrefix),
-        automaticSessionIdentity: Boolean(harness.session?.createIdPrefix || harness.session?.createSessionArgv || harness.session?.discoverArgv),
+        preallocatedSessionIdentity: Boolean(harness.session?.createIdPrefix || harness.session?.createSessionArgv),
+        sessionDiscovery: Boolean(harness.session?.discoverArgv || FS_SESSION_DISCOVERY[harness.command]),
+        transcriptImport: Boolean(ADOPTED_TRANSCRIPT_READERS[harness.command]),
         continueLatest: Boolean(harness.session?.continueArgv),
       },
     };
