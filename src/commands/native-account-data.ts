@@ -11,7 +11,8 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from './native-harness.js';
 import { readState, writeState } from './harness-state.js';
-import { localHarnessForProvider, nativeProfileEnvironment } from './native-harness-protocol.js';
+import { localHarnessForCommand, localHarnessForProvider, nativeProfileEnvironment } from './native-harness-protocol.js';
+import { CLI_VERSION } from '../cli/program-base.js';
 import type {
   AiHarnessAccount, AiLocalHarnessDefinition, HarnessSession, HarnessState, ModelCatalogResult, NativeUsageProbe,
 } from './types.js';
@@ -176,7 +177,80 @@ export async function nativeModelCatalogUncached(
   };
 }
 
-export const nativeUsageCache = new Map<string, { at: number; label?: string; failed?: boolean }>();
+/** One quota window as the vendor reported it. `usedPct` is the unrounded
+ * percentage used (0..100+); the display label rounds, this does not, so
+ * "99.6% used" is never mistaken for exhausted. */
+export interface UsageWindow { name: string; usedPct: number; resetsAt?: string }
+/** A usage reading: the structured windows plus the label the UI shows. */
+export interface UsageReading { windows: UsageWindow[]; label?: string }
+/** What is stored on `account.usage`. `windows` is persisted alongside the
+ * typed fields; types.ts only declares `at`/`label`/`failed` today. */
+export type AccountUsageReading = NonNullable<AiHarnessAccount['usage']> & { windows?: UsageWindow[] };
+interface UsageCacheEntry { at: number; label?: string; failed?: boolean; windows?: UsageWindow[] }
+
+export const nativeUsageCache = new Map<string, UsageCacheEntry>();
+
+/** One key for every path that produces or reads a usage figure. The stream
+ * reader used `harness:nativeSessionId` while the probe used
+ * `harness:profilePath`, so a free reading taken during a turn never satisfied
+ * the next paint, which then paid for a probe anyway. Usage belongs to the
+ * account; a session is only the fallback when there is no account. */
+export function usageCacheKey(harnessCommand: string | undefined, accountId: string | null | undefined, nativeSessionId?: string): string {
+  return accountId ? `${harnessCommand}:account:${accountId}` : `${harnessCommand}:session:${nativeSessionId ?? 'default'}`;
+}
+
+function resetTime(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString();
+  }
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    // Vendors publish epoch seconds; tolerate milliseconds.
+    return new Date(value < 1e12 ? value * 1000 : value).toISOString();
+  }
+  return undefined;
+}
+
+function usageWindow(name: string, usedPct: unknown, resetsAt?: unknown): UsageWindow | undefined {
+  if (typeof usedPct !== 'number' || !Number.isFinite(usedPct)) return undefined;
+  const reset = resetTime(resetsAt);
+  return { name, usedPct, ...(reset ? { resetsAt: reset } : {}) };
+}
+
+/** The single wording for a set of windows, whichever path produced them. */
+export function usageReadingLabel(windows: readonly UsageWindow[]): string | undefined {
+  const parts = windows.map((window) => `${window.name} ${Math.max(0, Math.min(100, Math.round(100 - window.usedPct)))}% left`);
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
+function usageReading(windows: Array<UsageWindow | undefined>): UsageReading | undefined {
+  const known = windows.filter((window): window is UsageWindow => Boolean(window));
+  return known.length ? { windows: known, label: usageReadingLabel(known) } : undefined;
+}
+
+/** A figure describes a window; once that window has reset it describes
+ * nothing, and showing it would present last period's quota as current. */
+export function usageReadingIsCurrent(reading: { windows?: readonly UsageWindow[] } | undefined, now = Date.now()): boolean {
+  return !(reading?.windows ?? []).some((window) => window.resetsAt !== undefined && Date.parse(window.resetsAt) <= now);
+}
+
+/** Is this account out of quota right now?
+ *
+ * Decided on the unrounded `usedPct >= 100`, never on the display string
+ * ("0% left" is also what 99.6% used rounds to). Clears itself once every
+ * exhausted window's `resetsAt` has passed, so an account is not left parked
+ * after its quota came back. A failover-recorded `quotaState: 'exhausted'`
+ * holds when no structured reading exists to say otherwise. */
+export function accountIsExhausted(account: AiHarnessAccount, now: number = Date.now()): boolean {
+  const windows = (account.usage as AccountUsageReading | undefined)?.windows ?? [];
+  const spent = windows.filter((window) => window.usedPct >= 100);
+  const stillSpent = spent.filter((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > now);
+  if (stillSpent.length) return true;
+  if (account.quotaState !== 'exhausted') return false;
+  // Marked exhausted by a failed turn. A window that was spent and has since
+  // reset is the trustworthy signal that the mark is obsolete.
+  return spent.length === 0;
+}
 /** Two readings a minute, per ACCOUNT rather than per chat. The rate that
  * matters is accounts-in-use divided by this window: the reading now lives on
  * the account record, so any number of open chats on one login still costs one
@@ -194,6 +268,17 @@ const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
  * surface (or none at all); adding a harness here is the only step needed to light up
  * its usage footer, everything else (caching, dispatch, rendering) is shared. */
 
+/** The executable the catalog declares for a harness (`harness.binary`), never a
+ * name assumed from the command: forks and renamed installs differ. */
+function harnessBinary(command: string, fallback: string = command): string {
+  try {
+    return localHarnessForCommand(command)?.binary ?? fallback;
+  } catch {
+    // fail-open-ok: the catalog runtime is unavailable; the documented default binary name is the best remaining answer.
+    return fallback;
+  }
+}
+
 export function formatTokenCount(total: number): string {
   if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M`;
   if (total >= 1_000) return `${Math.round(total / 1_000)}K`;
@@ -202,9 +287,11 @@ export function formatTokenCount(total: number): string {
 
 /** Parse just the `info` object out of `opencode export <id>` without waiting for (or
  * buffering) the full transcript, which can be arbitrarily large and isn't needed here. */
-export async function captureOpencodeSessionSummary(sessionId: string): Promise<{ cost: number; tokens: { input: number; output: number } } | undefined> {
+export async function captureOpencodeSessionSummary(
+  sessionId: string, binary: string = harnessBinary('opencode'), environment: Readonly<Record<string, string>> = {},
+): Promise<{ cost: number; tokens: { input: number; output: number } } | undefined> {
   return new Promise((resolveSummary) => {
-    const child = spawn('opencode', ['export', sessionId], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(binary, ['export', sessionId], { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...environment } });
     let buffer = '';
     let settled = false;
     const finish = (value?: { cost: number; tokens: { input: number; output: number } }): void => {
@@ -258,9 +345,11 @@ export async function captureOpencodeSessionSummary(sessionId: string): Promise<
   });
 }
 
-export async function opencodeUsageProbe(session: HarnessSession): Promise<string | undefined> {
+export async function opencodeUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>> = {}): Promise<string | undefined> {
   if (!session.nativeSessionId) return undefined;
-  const summary = await captureOpencodeSessionSummary(session.nativeSessionId);
+  // Kilo and other forks share this probe; the binary comes from the catalog.
+  const binary = harnessBinary(session.nativeHarness ?? 'opencode', 'opencode');
+  const summary = await captureOpencodeSessionSummary(session.nativeSessionId, binary, environment);
   if (!summary) return undefined;
   const total = summary.tokens.input + summary.tokens.output;
   if (!total) return undefined;
@@ -268,9 +357,14 @@ export async function opencodeUsageProbe(session: HarnessSession): Promise<strin
   return summary.cost > 0 ? `${tokenLabel} · $${summary.cost.toFixed(2)}` : tokenLabel;
 }
 
-export async function codexUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+export async function codexUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+  return (await codexUsageReading(session, environment))?.label;
+}
+
+export async function codexUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
+  const binary = harnessBinary('codex');
   const response = await new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
-    const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
+    const child = spawn(binary, ['app-server', '--listen', 'stdio://'], {
       stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...environment },
     });
     let buffer = '';
@@ -310,22 +404,12 @@ export async function codexUsageProbe(_session: HarnessSession, environment: Rea
     });
     child.once('error', () => finish());
     child.once('exit', () => finish());
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'clikcode', version: '1.0.34' } } });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'clikcode', version: CLI_VERSION } } });
     send({ method: 'initialized', params: {} });
     const timer = setTimeout(() => finish(), 8_000);
     timer.unref();
   });
-  const snapshot = response?.rateLimits && typeof response.rateLimits === 'object'
-    ? response.rateLimits as Record<string, unknown> : undefined;
-  const windows = [snapshot?.primary, snapshot?.secondary].filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object'));
-  const parts = windows.flatMap((window) => {
-    const used = typeof window.usedPercent === 'number' ? window.usedPercent : undefined;
-    const minutes = typeof window.windowDurationMins === 'number' ? window.windowDurationMins : undefined;
-    if (used === undefined || minutes === undefined) return [];
-    const period = minutes === 300 ? '5h' : minutes === 10_080 ? 'weekly' : minutes < 1_440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1_440)}d`;
-    return [`${period} ${Math.max(0, Math.min(100, 100 - used))}% left`];
-  });
-  return parts.length ? parts.join(' · ') : undefined;
+  return codexRateLimitsReading(response?.rateLimits);
 }
 
 /** Claude Code has no public CLI flag or subcommand for this (confirmed:
@@ -338,7 +422,11 @@ export async function codexUsageProbe(_session: HarnessSession, environment: Rea
  * what the interactive session shows. This reads an already-authenticated
  * user's own token to display their own account's own usage, the same data
  * the vendor's own client already shows them — not a new grant of access. */
-export async function claudeUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+export async function claudeUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+  return (await claudeUsageReading(session, environment))?.label;
+}
+
+export async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   // Real bug, not a hypothetical: this ignored both its parameters entirely
   // and always read the default ~/.claude path, so every Claude Code
   // account -- including genuinely isolated ones under their own
@@ -362,39 +450,31 @@ export async function claudeUsageProbe(_session: HarnessSession, environment: Re
     const response = await fetch('https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1', {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     });
-    // An expired credential is a state the user can act on, and it is NOT the
-    // same as "this account publishes no usage". The profile holds its own copy
-    // of the OAuth token; Claude Code refreshes the one in its own config
-    // directory, but nothing refreshes this copy, so it stays stale until the
-    // account is signed in again. Saying so beats a blank status line.
-    if (response.status === 401 || response.status === 403) return 'usage needs re-auth';
+    // The profile holds its own copy of the OAuth token; Claude Code refreshes
+    // it whenever it runs. A 401 here therefore does NOT mean the user must
+    // sign in again -- the very next turn refreshes the token and reports usage
+    // on its own stream. Saying "needs re-auth" sent people to log in to an
+    // account that was working.
+    if (response.status === 401 || response.status === 403) return { windows: [], label: 'usage refreshes on next turn' };
     // The account is briefly over its own quota-endpoint budget. There is no
     // figure to show, but a bare gap is indistinguishable from a provider that
     // publishes no usage at all -- name the state so it reads as temporary.
-    if (response.status === 429) return 'usage rate limited';
+    if (response.status === 429) return { windows: [], label: 'usage rate limited' };
     if (!response.ok) return undefined;
     const body = await response.json() as {
-      five_hour?: { utilization?: number };
-      seven_day?: { utilization?: number };
+      five_hour?: { utilization?: number; resets_at?: unknown; resetsAt?: unknown };
+      seven_day?: { utilization?: number; resets_at?: unknown; resetsAt?: unknown };
     };
-    return usageWindowsLabel(body.five_hour?.utilization, body.seven_day?.utilization);
+    return usageReading([
+      usageWindow('5h', body.five_hour?.utilization, body.five_hour?.resets_at ?? body.five_hour?.resetsAt),
+      usageWindow('weekly', body.seven_day?.utilization, body.seven_day?.resets_at ?? body.seven_day?.resetsAt),
+    ]);
   } catch {
     // fail-open-ok: an optional quota lookup over the network. Offline, rate
     // limited, or a changed vendor shape all mean the same thing to the caller
     // -- no usage label to show -- and must never block or fail a turn.
     return undefined;
   }
-}
-
-/** Shared by the endpoint probe and the stream reader so one account never
- * shows two differently worded figures depending on which path produced it.
- * Both arguments are percent USED. */
-function usageWindowsLabel(fiveHourUsed?: number, sevenDayUsed?: number): string | undefined {
-  const left = (used: number): number => Math.max(0, Math.min(100, Math.round(100 - used)));
-  const parts: string[] = [];
-  if (typeof fiveHourUsed === 'number') parts.push(`5h ${left(fiveHourUsed)}% left`);
-  if (typeof sevenDayUsed === 'number') parts.push(`weekly ${left(sevenDayUsed)}% left`);
-  return parts.length ? parts.join(' · ') : undefined;
 }
 
 /** Claude Code reports both quota windows on its own stream-json output, on
@@ -409,7 +489,7 @@ function usageWindowsLabel(fiveHourUsed?: number, sevenDayUsed?: number): string
  * endpoint is a per-ACCOUNT budget: several open chats polling it exhausted it
  * between them, which is what produced "usage rate limited" in the status bar.
  * Utilization here is a 0..1 fraction, unlike the endpoint's 0..100. */
-function claudeStreamUsage(lineText: string): string | undefined {
+function claudeStreamReading(lineText: string): UsageReading | undefined {
   if (!lineText.includes('rate_limit_event')) return undefined;
   let parsed: unknown;
   try { parsed = JSON.parse(lineText); } catch {
@@ -419,14 +499,18 @@ function claudeStreamUsage(lineText: string): string | undefined {
   }
   const record = parsed as {
     type?: unknown;
-    rate_limit_info?: { unifiedWindows?: Record<string, { utilization?: unknown } | undefined> };
+    rate_limit_info?: { unifiedWindows?: Record<string, { utilization?: unknown; resetsAt?: unknown; resets_at?: unknown } | undefined> };
   };
   if (record.type !== 'rate_limit_event') return undefined;
   const windows = record.rate_limit_info?.unifiedWindows;
   if (!windows) return undefined;
-  const percent = (window?: { utilization?: unknown }): number | undefined =>
-    typeof window?.utilization === 'number' ? window.utilization * 100 : undefined;
-  return usageWindowsLabel(percent(windows.five_hour), percent(windows.seven_day));
+  const window = (name: string, value?: { utilization?: unknown; resetsAt?: unknown; resets_at?: unknown }): UsageWindow | undefined =>
+    usageWindow(name, typeof value?.utilization === 'number' ? value.utilization * 100 : undefined, value?.resetsAt ?? value?.resets_at);
+  return usageReading([window('5h', windows.five_hour), window('weekly', windows.seven_day)]);
+}
+
+function claudeStreamUsage(lineText: string): string | undefined {
+  return claudeStreamReading(lineText)?.label;
 }
 
 /** Vendors describe a quota window by its length, not by a name. 300 minutes
@@ -445,18 +529,29 @@ export function usageWindowName(minutes: number): string {
  * spawning an ENTIRE SECOND `codex app-server` process -- handshake, a 250ms
  * settle, one request, teardown -- on every refresh, per account, per terminal.
  * usedPercent here is already a percent, unlike Claude's 0..1 fraction. */
-export function codexRateLimitsLabel(rateLimits: unknown): string | undefined {
-  const windows = rateLimits as {
-    primary?: { usedPercent?: unknown; windowDurationMins?: unknown };
-    secondary?: { usedPercent?: unknown; windowDurationMins?: unknown };
-  } | undefined;
-  const part = (window?: { usedPercent?: unknown; windowDurationMins?: unknown }): string | undefined => {
+export function codexRateLimitsReading(rateLimits: unknown): UsageReading | undefined {
+  type Window = { usedPercent?: unknown; windowDurationMins?: unknown; resetsAt?: unknown; resetsInSeconds?: unknown };
+  const windows = rateLimits && typeof rateLimits === 'object' ? rateLimits as { primary?: Window; secondary?: Window } : undefined;
+  const part = (window?: Window): UsageWindow | undefined => {
     if (typeof window?.usedPercent !== 'number' || typeof window.windowDurationMins !== 'number') return undefined;
-    const left = Math.max(0, Math.min(100, Math.round(100 - window.usedPercent)));
-    return `${usageWindowName(window.windowDurationMins)} ${left}% left`;
+    const resetsAt = window.resetsAt ?? (typeof window.resetsInSeconds === 'number' ? Date.now() + window.resetsInSeconds * 1000 : undefined);
+    return usageWindow(usageWindowName(window.windowDurationMins), window.usedPercent, resetsAt);
   };
-  const parts = [part(windows?.primary), part(windows?.secondary)].filter((value): value is string => Boolean(value));
-  return parts.length ? parts.join(' · ') : undefined;
+  return usageReading([part(windows?.primary), part(windows?.secondary)]);
+}
+
+/** Label form, for callers that still pass a string to recordDerivedUsage. The
+ * structured reading behind the label is remembered briefly so that path keeps
+ * `usedPct`/`resetsAt` too; passing codexRateLimitsReading() directly is better. */
+const recentReadingByLabel = new Map<string, UsageReading>();
+export function codexRateLimitsLabel(rateLimits: unknown): string | undefined {
+  const reading = codexRateLimitsReading(rateLimits);
+  if (reading?.label) {
+    recentReadingByLabel.delete(reading.label);
+    recentReadingByLabel.set(reading.label, reading);
+    if (recentReadingByLabel.size > 8) recentReadingByLabel.delete(recentReadingByLabel.keys().next().value as string);
+  }
+  return reading?.label;
 }
 
 /** Harnesses that report their own quota on their turn stream. */
@@ -464,16 +559,32 @@ export const NATIVE_STREAM_USAGE: Readonly<Partial<Record<string, (lineText: str
   claude: claudeStreamUsage,
 };
 
+/** Structured counterpart of NATIVE_STREAM_USAGE. */
+export const NATIVE_STREAM_USAGE_READINGS: Readonly<Partial<Record<string, (lineText: string) => UsageReading | undefined>>> = {
+  claude: claudeStreamReading,
+};
+
+function accountUsageFrom(entry: UsageCacheEntry): AccountUsageReading {
+  return {
+    at: new Date(entry.at).toISOString(),
+    ...(entry.label === undefined ? {} : { label: entry.label }),
+    ...(entry.failed ? { failed: true } : {}),
+    ...(entry.windows?.length ? { windows: entry.windows } : {}),
+  };
+}
+
 /** Publish a reading onto the account so every terminal sees it, and into the
  * in-process cache so this terminal's next paint does not re-probe. */
-async function publishUsageReading(cacheKey: string, accountId: string | null | undefined, label: string): Promise<void> {
-  nativeUsageCache.set(cacheKey, { at: Date.now(), label });
+async function publishUsageReading(cacheKey: string, accountId: string | null | undefined, reading: UsageReading): Promise<void> {
+  const entry: UsageCacheEntry = { at: Date.now(), ...(reading.label === undefined ? {} : { label: reading.label }), ...(reading.windows.length ? { windows: reading.windows } : {}) };
+  nativeUsageCache.set(cacheKey, entry);
   if (!accountId) return;
   const state = await readState();
   const account = state.accounts.find((item) => item.id === accountId);
   if (!account) return;
-  account.usage = { at: new Date().toISOString(), label };
-  // writeState merges per record, so this cannot disturb another terminal.
+  account.usage = accountUsageFrom(entry);
+  // writeState merges usage by newest `at`, so this cannot disturb another
+  // terminal or be reverted by one holding an older snapshot.
   await writeState(state).catch(() => undefined);
 }
 
@@ -482,17 +593,21 @@ async function publishUsageReading(cacheKey: string, accountId: string | null | 
  * endpoint probe is left to cover only the cold start: a terminal that has not
  * run a turn yet has no stream to read. */
 export async function recordNativeStreamUsage(session: HarnessSession, lineText: string): Promise<string | undefined> {
-  const read = session.nativeHarness ? NATIVE_STREAM_USAGE[session.nativeHarness] : undefined;
-  return recordDerivedUsage(session, read?.(lineText));
+  if (!session.nativeHarness) return undefined;
+  const structured = NATIVE_STREAM_USAGE_READINGS[session.nativeHarness]?.(lineText);
+  return recordDerivedUsage(session, structured ?? NATIVE_STREAM_USAGE[session.nativeHarness]?.(lineText));
 }
 
 /** Publish a reading the harness gave us for free during a turn, from whichever
- * transport it arrived on -- a stdout line, or an app-server notification. */
-export async function recordDerivedUsage(session: HarnessSession, label: string | undefined): Promise<string | undefined> {
-  if (!label) return undefined;
-  const cacheKey = `${session.nativeHarness}:${session.nativeSessionId ?? 'default'}`;
-  await publishUsageReading(cacheKey, session.accountId, label).catch(() => undefined);
-  return label;
+ * transport it arrived on -- a stdout line, or an app-server notification.
+ * Accepts a structured reading (preferred) or just its label. */
+export async function recordDerivedUsage(session: HarnessSession, usage: string | UsageReading | undefined): Promise<string | undefined> {
+  if (!usage) return undefined;
+  const reading: UsageReading = typeof usage === 'string' ? recentReadingByLabel.get(usage) ?? { windows: [], label: usage } : usage;
+  if (!reading.label) return undefined;
+  const cacheKey = usageCacheKey(session.nativeHarness, session.accountId, session.nativeSessionId);
+  await publishUsageReading(cacheKey, session.accountId, reading).catch(() => undefined);
+  return reading.label;
 }
 
 export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
@@ -501,44 +616,71 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsagePro
   claude: claudeUsageProbe,
 };
 
-export async function nativeUsageLabel(session: HarnessSession, state: HarnessState): Promise<string | undefined> {
+export type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
+/** Structured probes for the harnesses whose label probe above is the built-in
+ * one. A probe registered only in NATIVE_USAGE_PROBES still works; it simply
+ * yields a label without windows. */
+export const NATIVE_USAGE_READING_PROBES: Readonly<Partial<Record<string, { label: NativeUsageProbe; reading: NativeUsageReadingProbe }>>> = {
+  codex: { label: codexUsageProbe, reading: codexUsageReading },
+  claude: { label: claudeUsageProbe, reading: claudeUsageReading },
+};
+
+/** The structured reading behind nativeUsageLabel: same caching, same sharing. */
+export async function nativeUsageReading(session: HarnessSession, state: HarnessState): Promise<UsageReading | undefined> {
   const probe = session.nativeHarness ? NATIVE_USAGE_PROBES[session.nativeHarness] : undefined;
   if (!probe) return undefined;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  const cacheKey = `${session.nativeHarness}:${account?.nativeProfile?.path ?? session.nativeSessionId ?? 'default'}`;
+  const cacheKey = usageCacheKey(session.nativeHarness, account?.id, session.nativeSessionId);
   const cached = nativeUsageCache.get(cacheKey);
   // The account's own record is the shared reading: every terminal sees it, so
   // the cost of displaying usage no longer multiplies by the number of open
   // chats. The in-process map stays in front of it as a fast path for repeated
   // paints within one terminal.
-  const shared = account?.usage;
-  const entry = cached ?? (shared && {
+  const shared = account?.usage as AccountUsageReading | undefined;
+  const sharedEntry: UsageCacheEntry | undefined = shared && {
     at: Date.parse(shared.at), ...(shared.label === undefined ? {} : { label: shared.label }),
-    ...(shared.failed ? { failed: true } : {}),
-  });
+    ...(shared.failed ? { failed: true } : {}), ...(shared.windows?.length ? { windows: shared.windows } : {}),
+  };
+  // Whichever is newer: another terminal may have published since this
+  // process last cached.
+  const entry = cached && sharedEntry ? (sharedEntry.at > cached.at ? sharedEntry : cached) : cached ?? sharedEntry;
   const ttl = entry?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;
-  if (entry && Number.isFinite(entry.at) && Date.now() - entry.at < ttl) {
+  if (entry && Number.isFinite(entry.at) && Date.now() - entry.at < ttl && usageReadingIsCurrent(entry)) {
     nativeUsageCache.set(cacheKey, entry);
-    return entry.label;
+    return { windows: entry.windows ?? [], ...(entry.label === undefined ? {} : { label: entry.label }) };
   }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
-  const label = await probe(session, environment).catch(() => undefined);
-  const next = label === undefined
-    // Carry the last known figure through the failure rather than blanking it.
-    ? { at: Date.now(), failed: true, ...(entry?.label === undefined ? {} : { label: entry.label }) }
-    : { at: Date.now(), label };
+  const structured = session.nativeHarness ? NATIVE_USAGE_READING_PROBES[session.nativeHarness] : undefined;
+  const reading: UsageReading | undefined = structured && structured.label === probe
+    ? await structured.reading(session, environment).catch(() => undefined)
+    : await probe(session, environment).then((label) => (label === undefined ? undefined : { windows: [], label })).catch(() => undefined);
+  // Carry the last known figure through a failure rather than blanking it --
+  // but never past its own reset, when it stops describing anything.
+  const carried = entry && usageReadingIsCurrent(entry) ? entry : undefined;
+  const next: UsageCacheEntry = reading?.label === undefined
+    ? { at: Date.now(), failed: true, ...(carried?.label === undefined ? {} : { label: carried.label }), ...(carried?.windows?.length ? { windows: carried.windows } : {}) }
+    : { at: Date.now(), label: reading.label, ...(reading.windows.length ? { windows: reading.windows } : {}) };
   nativeUsageCache.set(cacheKey, next);
   if (account) {
-    account.usage = {
-      at: new Date(next.at).toISOString(),
-      ...(next.label === undefined ? {} : { label: next.label }),
-      ...('failed' in next && next.failed ? { failed: true } : {}),
-    };
-    // writeState merges per record, so publishing this reading cannot disturb
+    account.usage = accountUsageFrom(next);
+    // writeState merges per field, so publishing this reading cannot disturb
     // anything another terminal changed meanwhile.
     await writeState(state).catch(() => undefined);
   }
-  return next.label;
+  return { windows: next.windows ?? [], ...(next.label === undefined ? {} : { label: next.label }) };
+}
+
+export async function nativeUsageLabel(session: HarnessSession, state: HarnessState): Promise<string | undefined> {
+  return (await nativeUsageReading(session, state))?.label;
+}
+
+function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, harnessCommand: string): HarnessSession {
+  const related = state.sessions.find((item) => item.accountId === account.id && item.nativeSessionId);
+  return related ?? {
+    id: `account:${account.id}`, route: 'local', accountId: account.id, provider: account.provider,
+    model: null, effort: 'medium', accountFailover: 'never', createdAt: '', updatedAt: '', status: 'active',
+    nativeHarness: harnessCommand,
+  };
 }
 
 /** Usage is probed per-session above (it needs a native session id for OpenCode);
@@ -547,16 +689,14 @@ export async function nativeUsageLabel(session: HarnessSession, state: HarnessSt
  * argument entirely, and a stand-in with no nativeSessionId simply yields no
  * OpenCode label rather than a wrong one. */
 export async function accountUsageLabel(account: AiHarnessAccount, state: HarnessState): Promise<string | undefined> {
+  return (await accountUsageReading(account, state))?.label;
+}
+
+export async function accountUsageReading(account: AiHarnessAccount, state: HarnessState): Promise<UsageReading | undefined> {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
   if (!harness || !NATIVE_USAGE_PROBES[harness.command]) return undefined;
-  const related = state.sessions.find((item) => item.accountId === account.id && item.nativeSessionId);
-  const pseudoSession: HarnessSession = related ?? {
-    id: `account:${account.id}`, route: 'local', accountId: account.id, provider: account.provider,
-    model: null, effort: 'medium', accountFailover: 'never', createdAt: '', updatedAt: '', status: 'active',
-    nativeHarness: harness.command,
-  };
-  return nativeUsageLabel(pseudoSession, state);
+  return nativeUsageReading(accountPseudoSession(account, state, harness.command), state);
 }
 
 /** Return only already-known usage. Account pickers render from this and warm
@@ -565,9 +705,8 @@ export function cachedAccountUsageLabel(account: AiHarnessAccount, state: Harnes
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
   if (!harness || !NATIVE_USAGE_PROBES[harness.command]) return undefined;
-  const related = state.sessions.find((item) => item.accountId === account.id && item.nativeSessionId);
-  const cacheKey = `${harness.command}:${account.nativeProfile?.path ?? related?.nativeSessionId ?? 'default'}`;
-  const cached = nativeUsageCache.get(cacheKey);
+  void state;
+  const cached = nativeUsageCache.get(usageCacheKey(harness.command, account.id));
   const ttl = cached?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;
-  return cached && Date.now() - cached.at < ttl ? cached.label : undefined;
+  return cached && Date.now() - cached.at < ttl && usageReadingIsCurrent(cached) ? cached.label : undefined;
 }
