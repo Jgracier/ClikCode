@@ -725,8 +725,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
         const needle = query.toLowerCase();
         return options.filter((option) =>
           option.label.toLowerCase().includes(needle)
-          || (option.detail ?? '').toLowerCase().includes(needle)
-          || (option.searchText ?? '').toLowerCase().includes(needle));
+          || (option.detail ?? '').toLowerCase().includes(needle));
       };
       const draw = (): void => {
         const visible = visibleOptions();
