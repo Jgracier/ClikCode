@@ -19,6 +19,15 @@ export type WaitingInputAction = 'cancel-edit' | 'cancel-stop' | 'scroll-up' | '
 
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
 
+export function terminalUiSupported(
+  stdinTty = Boolean(input.isTTY), stdoutTty = Boolean(output.isTTY), environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  // `TERM=dumb` explicitly promises no cursor addressing. The line-oriented
+  // fallback remains usable in CI consoles, IDE output panes, Emacs shells,
+  // and other pseudo-terminals that expose a TTY without ANSI capabilities.
+  return stdinTty && stdoutTty && environment.TERM?.toLowerCase() !== 'dumb';
+}
+
 function waitingInputAction(key: string): WaitingInputAction | undefined {
   if (key === '\u001b') return 'cancel-edit';
   if (key === '\u0003') return 'cancel-stop';

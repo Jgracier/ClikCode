@@ -1,7 +1,8 @@
 /** Native coding-harness delegation. Credentials and agent state stay with the vendor CLI. */
-import { spawn } from 'node:child_process';
+import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
-import { delimiter, join } from 'node:path';
+import { delimiter, extname, isAbsolute, join } from 'node:path';
+import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
 
 export interface NativeHarnessSpec {
   command: string;
@@ -14,9 +15,32 @@ export interface NativeHarnessSpec {
   versionArgv?: readonly string[];
 }
 
-async function binaryOnPath(binary: string): Promise<boolean> {
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-    try { await access(join(dir, binary)); return true; } catch { /* try next */ }
+export function executableNames(
+  binary: string,
+  platform: NodeJS.Platform = process.platform,
+  pathExt = process.env.PATHEXT,
+): string[] {
+  if (platform !== 'win32' || extname(binary)) return [binary];
+  const extensions = (pathExt || '.COM;.EXE;.BAT;.CMD').split(';').map((value) => value.trim()).filter(Boolean);
+  return [binary, ...extensions.map((extension) => `${binary}${extension.startsWith('.') ? extension : `.${extension}`}`)];
+}
+
+export async function binaryOnPath(
+  binary: string,
+  options: { platform?: NodeJS.Platform; path?: string; pathExt?: string } = {},
+): Promise<boolean> {
+  const platform = options.platform ?? process.platform;
+  const names = executableNames(binary, platform, options.pathExt ?? process.env.PATHEXT);
+  const directories = isAbsolute(binary) ? [''] : (options.path ?? process.env.PATH ?? '').split(platform === 'win32' ? ';' : delimiter);
+  for (const rawDirectory of directories) {
+    const directory = rawDirectory.replace(/^"|"$/g, '') || '.';
+    for (const name of names) {
+      const candidate = isAbsolute(name) ? name : join(directory, name);
+      try {
+        await access(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK);
+        return true;
+      } catch { /* try next candidate */ }
+    }
   }
   return false;
 }
@@ -75,7 +99,7 @@ async function inspectNativeHarnessUncached(spec: NativeHarnessSpec, timeoutMs: 
       else finish({ installed: true, ...(version ? { version } : {}), error: signal ? `version probe stopped (${signal})` : `version probe exited ${code ?? 1}` });
     });
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
+      terminatePortable(child);
       finish({ installed: true, error: 'version probe timed out' });
     }, timeoutMs);
     timer.unref();
@@ -92,7 +116,7 @@ function run(command: string, args: readonly string[], envOverrides: Readonly<Re
     // generic "run agy to log in" error instead of ever showing the prompt.
     const child = spawn(command, [...args], { stdio: 'inherit', env: { ...process.env, ...envOverrides } });
     const forward = (signal: NodeJS.Signals): void => {
-      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+      terminatePortable(child, signal);
     };
     const onInterrupt = () => forward('SIGINT');
     const onTerminate = () => forward('SIGTERM');
@@ -100,11 +124,11 @@ function run(command: string, args: readonly string[], envOverrides: Readonly<Re
     const cleanup = (): void => {
       process.off('SIGINT', onInterrupt);
       process.off('SIGTERM', onTerminate);
-      process.off('SIGHUP', onHangup);
+      if (process.platform !== 'win32') process.off('SIGHUP', onHangup);
     };
     process.once('SIGINT', onInterrupt);
     process.once('SIGTERM', onTerminate);
-    process.once('SIGHUP', onHangup);
+    if (process.platform !== 'win32') process.once('SIGHUP', onHangup);
     child.once('error', (error) => {
       cleanup();
       reject(error);
@@ -188,7 +212,7 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
       stdout += chunk;
       if (stdout.length > 64 * 1024) {
         exceededLimit = true;
-        child.kill('SIGTERM');
+        terminatePortable(child);
       }
     });
     child.stderr.on('data', (chunk: string) => { if (stderr.length < 16 * 1024) stderr += chunk; });
@@ -199,7 +223,7 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
       finish();
     });
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
+      terminatePortable(child);
       finish(new Error(`${spec.displayName} helper timed out`));
     }, timeoutMs);
     timer.unref();
@@ -258,7 +282,7 @@ export async function captureNativeHarnessTurn(
       if (callback) for (const line of lines) if (line.trim()) callback(line);
       if (stdout.length + stderr.length > limit) {
         exceededLimit = true;
-        child.kill('SIGTERM');
+        terminatePortable(child);
       }
     };
     child.stdout!.on('data', (chunk: string) => collect('stdout', chunk));
@@ -269,7 +293,7 @@ export async function captureNativeHarnessTurn(
       if (process.platform !== 'win32' && child.pid) {
         try { process.kill(-child.pid, signal); return; } catch { /* fall back to the direct child */ }
       }
-      child.kill(signal);
+      terminatePortable(child, signal);
     };
     const onInterrupt = () => { interrupted = true; forward('SIGINT'); };
     const onAbort = () => {
@@ -283,13 +307,13 @@ export async function captureNativeHarnessTurn(
     const cleanup = (): void => {
       process.off('SIGINT', onInterrupt);
       process.off('SIGTERM', onTerminate);
-      process.off('SIGHUP', onHangup);
+      if (process.platform !== 'win32') process.off('SIGHUP', onHangup);
       options.signal?.removeEventListener('abort', onAbort);
       if (abortStopTimer) clearTimeout(abortStopTimer);
     };
     process.once('SIGINT', onInterrupt);
     process.once('SIGTERM', onTerminate);
-    process.once('SIGHUP', onHangup);
+    if (process.platform !== 'win32') process.once('SIGHUP', onHangup);
     options.signal?.addEventListener('abort', onAbort, { once: true });
     if (options.signal?.aborted) onAbort();
     child.once('error', (error) => {
