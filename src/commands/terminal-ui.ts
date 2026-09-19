@@ -689,14 +689,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   };
 
   constructor() {
-    // Take the whole terminal. `2J` clears the viewport and `3J` clears the
-    // scrollback behind it, so the shell prompt, the typed command, and
-    // whatever ran before it are not left sitting above the UI.
-    //
-    // Only ever here, at startup: the reset path in flushInlineFrame clears the
-    // viewport alone, because scrollback is where the conversation itself
-    // lives and a resize must never destroy it.
-    output.write('\u001b[2J\u001b[3J\u001b[H\u001b[?25h');
+    // Nothing is cleared. The user's scrollback and whatever the shell printed
+    // above are theirs; the first frame simply begins at the cursor. (`3J`
+    // here used to wipe the terminal's entire scrollback on launch.)
+    output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
   }
 
@@ -1266,19 +1262,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Synchronized output (DEC 2026): the terminal presents the whole frame at
     // once instead of tearing mid-repaint. Terminals without it ignore the pair.
     let frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l\r`;
-    if (reset === 'viewport' || (reset === 'history' && this.inlineStarted)) {
-      // `2J` clears the viewport only. Scrollback is where the conversation
-      // lives and is never cleared by this UI.
+    if (reset === 'viewport') {
+      // `2J` clears the viewport only, and only rows this UI is about to
+      // repaint. Scrollback is never cleared by this UI.
       frame += '\u001b[2J\u001b[H';
-      const rows = reset === 'history'
-        ? [...state.permanent, ...state.dynamic]
-        // Exactly one viewport, bottom-anchored. Emitting the whole retained
-        // prefix would re-dump the transcript into scrollback on every resize.
-        : bottomAnchoredLines([...state.permanent, ...state.dynamic], state.targetHeight).slice(-state.targetHeight);
+      // Exactly one viewport, bottom-anchored. Emitting the whole retained
+      // prefix would re-dump the transcript into scrollback on every resize.
+      const rows = bottomAnchoredLines([...state.permanent, ...state.dynamic], state.targetHeight).slice(-state.targetHeight);
       frame += inlineFrameDiff([], 0, rows.slice(0, rows.length - state.dynamic.length), state.dynamic, state.cursorRow, state.cursorColumn);
     } else if (reset === 'history') {
-      // First frame of the process: begin at the cursor, below whatever the
-      // shell already printed, and write the windowed history once.
+      // The first frame of the process begins at the cursor, below whatever
+      // the shell already printed. A newly opened session first removes the
+      // old live region and scrolls the previous conversation up into
+      // scrollback -- preserved, not erased -- so the new one starts on a
+      // clean viewport. Either way the windowed history is written once.
+      if (this.inlineStarted) {
+        const up = this.inlinePaintedCursorRow;
+        frame += `${up > 0 ? `\u001b[${up}A` : ''}\r\u001b[J\u001b[${state.targetHeight};1H${'\n'.repeat(state.targetHeight)}\u001b[H`;
+      }
       frame += inlineFrameDiff([], 0, state.permanent, state.dynamic, state.cursorRow, state.cursorColumn);
     } else {
       frame += inlineFrameDiff(
@@ -1661,11 +1662,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     process.off('SIGWINCH', this.onResize);
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    // Hand the terminal back the way it was taken: the whole conversation was
-    // this application's screen, so leaving it behind would drop the shell
-    // prompt at the bottom of a full screen of chat. The transcript is
-    // persisted and resumable, so nothing is lost by clearing it.
-    output.write(`${DISABLE_BRACKETED_PASTE}\u001b[?7h\u001b[2J\u001b[3J\u001b[H\u001b[?25h`);
+    // The conversation stays in the terminal's scrollback where the user can
+    // still read and copy it. Only this UI's own live region (composer, status
+    // rows) is removed, and the shell prompt resumes directly beneath the chat.
+    output.write(`${this.eraseLiveRegion()}${DISABLE_BRACKETED_PASTE}\u001b[?7h\u001b[?25h`);
   }
 
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
@@ -1685,7 +1685,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
-    // alt-screen -> main buffer) and the child process starting to read --
+    // bracketed paste off; this UI never uses the alternate screen) and the
+    // child process starting to read --
     // both writes above are fire-and-forget from Node's side, with no way to
     // know when the terminal itself has caught up. A short settle window
     // before the caller spawns anything costs nothing on the success path
