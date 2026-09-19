@@ -46,6 +46,11 @@ describe('terminal waiting input', () => {
     expect(inlineConversationPlan(['old one', 'old two'], ['temporary mismatch'], false, 20)).toEqual({
       reset: false, dynamic: [], permanent: ['old one', 'old two'],
     });
+    expect(inlineConversationPlan(
+      ['old'], ['old', 'complete block', 'unfinished one', 'unfinished two'], false, 2, 2,
+    )).toEqual({
+      reset: false, dynamic: ['unfinished one', 'unfinished two'], permanent: ['old', 'complete block'],
+    });
   });
 
   it('keeps escape and control-c as cancellation without treating other keys as actions', () => {

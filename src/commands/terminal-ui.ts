@@ -202,6 +202,7 @@ export function rightLabeledRule(width: number, label?: string): string {
 
 export function inlineConversationPlan(
   permanent: readonly string[], current: readonly string[], commit: boolean, maxDynamic: number,
+  promoteThrough = permanent.length,
 ): { reset: boolean; dynamic: string[]; permanent: string[] } {
   const prefixMatches = permanent.every((line, index) => current[index] === line);
   // A transient state can briefly omit the pending assistant between
@@ -211,7 +212,9 @@ export function inlineConversationPlan(
     return { reset: false, dynamic: [], permanent: [...permanent] };
   }
   const previous = prefixMatches ? [...permanent] : [];
-  const nextPermanent = commit ? [...current] : previous;
+  const overflowBoundary = Math.max(previous.length, current.length - Math.max(0, maxDynamic));
+  const promotedBoundary = Math.min(promoteThrough, overflowBoundary);
+  const nextPermanent = commit ? [...current] : current.slice(0, Math.max(previous.length, promotedBoundary));
   const uncommitted = commit ? [] : current.slice(previous.length);
   return {
     reset: !prefixMatches,
@@ -718,6 +721,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const maxComposerRows = Math.max(1, targetHeight - 3 - paletteRows - noticeRows - waitingRows);
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     const conversation: Array<{ text: string }> = [];
+    let stableConversationBoundary = 0;
     const ensureBlankConversationRow = (): void => {
       if (conversation.length && conversation[conversation.length - 1]?.text !== '') conversation.push({ text: '' });
     };
@@ -738,7 +742,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     appendActivity(messageStart);
     for (const [messageIndex, message] of messages.entries()) {
       const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
-      const appendMarkdownContent = (content: string, messageMarker: string, events: readonly InlineResponseEvent[] = []): void => {
+      const appendMarkdownContent = (
+        content: string, messageMarker: string, events: readonly InlineResponseEvent[] = [], trackStableTail = false,
+      ): void => {
         let firstLine = true;
         const appendBlock = (block: MessageBlock): void => {
           const quotePrefix = block.quoteDepth ? chalk.dim('│ '.repeat(block.quoteDepth)) : '';
@@ -787,7 +793,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
             conversation.push({ text: `${linePrefix()}${indentation}${rendered}` });
           }
         };
-        for (const part of responseTimeline(content, events)) {
+        const timeline = responseTimeline(content, events);
+        for (const [partIndex, part] of timeline.entries()) {
           if (part.kind === 'markdown') appendBlock(part.block);
           else if (part.kind === 'activity') appendActivityGroup(part.lines);
           else {
@@ -796,6 +803,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
             conversation.push({ text: `  ${chalk.dim('↳ steered into active turn')}` });
             ensureBlankConversationRow();
           }
+          // Everything before the final live timeline part is structurally
+          // complete. It can enter native scrollback if the replaceable tail
+          // would otherwise exceed the viewport; the unfinished last block
+          // remains editable as more streamed Markdown arrives.
+          if (trackStableTail && partIndex < timeline.length - 1) stableConversationBoundary = conversation.length;
         }
       };
       const absoluteMessageIndex = messageStart + messageIndex;
@@ -812,7 +824,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           && !durableTexts.has(item.text))
           .map((item) => ({ kind: 'steer' as const, responseOffset: item.responseOffset, sequence: item.sequence, text: item.text })));
       }
-      appendMarkdownContent(message.content, marker, embeddedEvents);
+      const transientAssistant = hasTransientAssistant && absoluteMessageIndex === persistedMessages.length;
+      appendMarkdownContent(message.content, marker, embeddedEvents, transientAssistant);
       if (message.queueState) {
         const status = message.queueState === 'steered' ? 'steered into active turn'
           : message.queueState === 'sending' ? 'submitting…'
@@ -865,7 +878,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
     const commit = this.commitConversationOnNextPaint;
     const maxDynamicConversation = Math.max(0, targetHeight - footer.length);
-    const plan = inlineConversationPlan(this.inlinePermanentLines, conversationLines, commit, maxDynamicConversation);
+    const plan = inlineConversationPlan(
+      this.inlinePermanentLines, conversationLines, commit, maxDynamicConversation,
+      commit ? conversationLines.length : stableConversationBoundary,
+    );
     const reset = this.resetInlineScreen || plan.reset;
     const dynamicConversation = plan.dynamic;
     const dynamic = [...dynamicConversation, ...footer];
