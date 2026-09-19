@@ -16,6 +16,23 @@ import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActiv
 import { CLAUDE_ALIAS_LABELS } from './native-account-data.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, PickerOption } from './types.js';
 
+export type WaitingInputAction = 'cancel' | 'scroll-up' | 'scroll-down' | 'page-up' | 'page-down';
+
+/** Decode only keys that remain meaningful while a provider turn owns the
+ * composer. Keeping this separate from cancellation prevents arrow/page keys
+ * from being swallowed during generation. */
+export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[] {
+  const keys = String(chunk).match(/\u001b\[[AB]|\u001b\[[56]~|[\s\S]/g) ?? [];
+  return keys.flatMap((key): WaitingInputAction[] => {
+    if (key === '\u001b' || key === '\u0003') return ['cancel'];
+    if (key === '\u001b[A') return ['scroll-up'];
+    if (key === '\u001b[B') return ['scroll-down'];
+    if (key === '\u001b[5~') return ['page-up'];
+    if (key === '\u001b[6~') return ['page-down'];
+    return [];
+  });
+}
+
 export class FullScreenHarnessPrompter implements HarnessPrompter {
   private closed = false;
   private history: string[] = [];
@@ -42,7 +59,6 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
    * message index: paging by whole screens needs to know how many wrapped
    * lines actually fit, which messages alone don't tell you. */
   private historyScroll = 0;
-  private waitingScreenRow?: number;
   private usageLabel?: string;
   private selecting = false;
   /** True while the slash palette (inside question()) has its own fixed-capacity
@@ -57,12 +73,27 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   private cancelWaiting?: () => void;
   private waitingCancelled = false;
   private readonly onWaitingInput = (chunk: Buffer | string): void => {
-    const key = String(chunk);
-    if (this.waitingCancelled || (key !== '\u001b' && key !== '\u0003')) return;
-    this.waitingCancelled = true;
-    this.waitingLabel = 'stopping…';
-    this.updateWaiting();
-    this.cancelWaiting?.();
+    for (const action of waitingInputActions(chunk)) {
+      if (action === 'cancel') {
+        if (this.waitingCancelled) continue;
+        this.waitingCancelled = true;
+        this.waitingLabel = 'stopping…';
+        this.updateWaiting();
+        this.cancelWaiting?.();
+      } else if (action === 'scroll-up') {
+        this.historyScroll += 3;
+        this.updateWaiting();
+      } else if (action === 'scroll-down') {
+        this.historyScroll = Math.max(0, this.historyScroll - 3);
+        this.updateWaiting();
+      } else if (action === 'page-up') {
+        this.historyScroll += 10;
+        this.updateWaiting();
+      } else if (action === 'page-down') {
+        this.historyScroll = Math.max(0, this.historyScroll - 10);
+        this.updateWaiting();
+      }
+    }
   };
   private readonly onResize = (): void => {
     if (!this.closed) {
@@ -173,7 +204,6 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     this.cancelWaiting = undefined;
     this.waitingCancelled = false;
     this.waitingLabel = '';
-    this.waitingScreenRow = undefined;
     if (refresh && !this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
@@ -227,14 +257,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
   }
 
   private updateWaiting(): void {
-    if (!this.waitingLabel || !this.waitingScreenRow) return;
-    // No -1 margin here: DEC autowrap is disabled for the whole frame this
-    // row belongs to, so writing all the way to the terminal's real last
-    // column is safe and doesn't trigger a wrap.
-    const width = Math.max(12, output.columns || 100);
-    // Hiding the cursor for this one write keeps it from visibly jumping to the
-    // activity row and back every ~90ms while the spinner ticks.
-    output.write(`\u001b[?25l\u001b7\u001b[${this.waitingScreenRow};1H\u001b[2K  ${chalk.cyan('●')} ${chalk.dim(visibleSlice(this.waitingText(), width - 6))}\u001b8\u001b[?25h`);
+    if (!this.waitingLabel || this.closed || this.selecting || this.paletteActive) return;
+    // Spinner ticks, stream updates, activity changes, and scrolling all use
+    // the same atomic frame. The former direct absolute-row write could race a
+    // frame whose conversation height had just changed, leaving a duplicate
+    // status/footer line at the old row until the turn completed.
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
   }
 
   /** `palette` fixes the reserved footer band to `capacity` rows for the whole time a
@@ -295,12 +323,12 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
     // rows expand upward and reduce transcript space instead of scrolling
     // horizontally off-screen.
     const rows = Math.max(1, targetHeight - 3 - composerRows.rows.length - paletteRows - noticeRows);
-    const conversation: Array<{ text: string; waiting?: boolean }> = [];
+    const conversation: Array<{ text: string }> = [];
     const appendActivity = (anchor: number): void => {
       for (const entry of this.activityEntries.filter((item) => item.anchor === anchor)) {
         for (const activity of entry.lines) conversation.push({ text: `${chalk.dim('·')} ${visibleSlice(activity, Math.max(1, conversationInner - 2))}` });
       }
-      if (this.waitingLabel && anchor === this.activityAnchor) conversation.push({ text: `${chalk.cyan('●')} ${chalk.dim(this.waitingText())}`, waiting: true });
+      if (this.waitingLabel && anchor === this.activityAnchor) conversation.push({ text: `${chalk.cyan('●')} ${chalk.dim(this.waitingText())}` });
     };
     appendActivity(messageStart);
     for (const [messageIndex, message] of messages.entries()) {
@@ -365,11 +393,7 @@ export class FullScreenHarnessPrompter implements HarnessPrompter {
       frame += `\u001b[${rows + noticeRows + 1};1H`;
     } else {
       frame += '\u001b[H';
-      this.waitingScreenRow = undefined;
-      if (shown.length) for (const [index, row] of shown.entries()) {
-        screenLine(row.text);
-        if (row.waiting) this.waitingScreenRow = index + 1;
-      }
+      if (shown.length) for (const row of shown) screenLine(row.text);
       else {
         screenLine();
         screenLine(`  ${chalk.dim('Start a conversation. Type / to open the command palette.')}`);

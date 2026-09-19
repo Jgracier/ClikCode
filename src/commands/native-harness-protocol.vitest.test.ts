@@ -99,6 +99,15 @@ describe('native harness response streams', () => {
     expect(nativeResponseUpdate(harness('goose'), JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'E' }] } })))
       .toEqual({ text: 'E', mode: 'append' });
   });
+
+  it('shows Codex agent messages as they arrive without rendering tool JSON as response text', () => {
+    expect(nativeResponseUpdate(harness('codex'), JSON.stringify({
+      type: 'item.completed', item: { type: 'agent_message', text: 'I am checking that now.' },
+    }))).toEqual({ text: 'I am checking that now.\n\n', mode: 'append' });
+    expect(nativeResponseUpdate(harness('codex'), JSON.stringify({
+      type: 'item.completed', item: { type: 'mcp_tool_call', name: 'search', arguments: { query: 'test' } },
+    }))).toBeUndefined();
+  });
 });
 
 describe('incremental native tool activity', () => {
@@ -120,5 +129,24 @@ describe('incremental native tool activity', () => {
     }));
     expect(start).toMatchObject({ kind: 'tool-start', label: 'Bash', id: 'tool-1' });
     expect(done).toEqual({ kind: 'tool-done', label: 'tool', id: 'tool-1', output: ['clean'] });
+  });
+
+  it('pairs generic structured tool events by their native item id', () => {
+    const start = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.started', item: { id: 'call-2', type: 'mcp_tool_call', name: 'search' },
+    }));
+    const done = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.completed', item: { id: 'call-2', type: 'mcp_tool_call', name: 'search' },
+    }));
+    expect(start).toEqual({ kind: 'tool-start', label: 'search', id: 'call-2' });
+    expect(done).toEqual({ kind: 'tool-done', label: 'search', id: 'call-2' });
+  });
+
+  it('does not put raw structured command output into the human activity feed', () => {
+    const event = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'call-3', type: 'command_execution', command: 'inspect', aggregated_output: '{"ok":true}' },
+    }));
+    expect(event).toEqual({ kind: 'tool-done', label: 'inspect', id: 'call-3' });
   });
 });
