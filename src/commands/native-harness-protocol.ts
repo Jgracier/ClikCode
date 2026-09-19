@@ -52,12 +52,14 @@ export function streamLocalAiTurn(input: Record<string, unknown>): Promise<any> 
 }
 
 export function nativeSessionIds(outputText: string, format: 'json' | 'json-lines' | 'text' = 'text'): Set<string> {
-  const ids = new Set<string>();
+  const explicitIds = new Set<string>();
+  const genericIds = new Set<string>();
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) return value.forEach(visit);
     if (!value || typeof value !== 'object') return;
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      if (/^(?:id|session_?id|thread_?id|chat_?id|conversation_?id|session)$/i.test(key) && typeof child === 'string' && child.trim()) ids.add(child.trim());
+      if (/^(?:session_?id|thread_?id|chat_?id|conversation_?id|session)$/i.test(key) && typeof child === 'string' && child.trim()) explicitIds.add(child.trim());
+      else if (/^id$/i.test(key) && typeof child === 'string' && child.trim()) genericIds.add(child.trim());
       else visit(child);
     }
   };
@@ -70,6 +72,7 @@ export function nativeSessionIds(outputText: string, format: 'json' | 'json-line
     // A vendor changing its documented JSON shape must not make us attach a
     // guessed session. The stable textual identifiers below are still safe.
   }
+  const ids = new Set<string>([...explicitIds, ...genericIds]);
   for (const match of outputText.matchAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi)) ids.add(match[0]);
   return ids;
 }
@@ -141,6 +144,17 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
         : [];
     }).join('')
     : '';
+  const gooseStreamText = harness.command === 'goose'
+    ? values.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const record = value as Record<string, unknown>;
+      const message = record.message && typeof record.message === 'object' ? record.message as Record<string, unknown> : undefined;
+      if (record.type !== 'message' || message?.role !== 'assistant' || !Array.isArray(message.content)) return [];
+      return message.content.flatMap((part) => part && typeof part === 'object'
+        && (part as Record<string, unknown>).type === 'text' && typeof (part as Record<string, unknown>).text === 'string'
+        ? [String((part as Record<string, unknown>).text)] : []);
+    }).join('')
+    : '';
   // Some harnesses report a bare string `error` without also setting an
   // is_error flag or top-level failed status. When no assistant message was
   // produced, that string is still a turn failure rather than a successful
@@ -151,7 +165,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   // text -- a turn that produced actual output before failing partway
   // through should still show that output, not the failure reason instead
   // of it.
-  const text = geminiStreamText.trim() || messages[messages.length - 1]?.trim() || errorMessage;
+  const text = geminiStreamText.trim() || gooseStreamText.trim() || messages[messages.length - 1]?.trim() || errorMessage;
   if (!text) throw new Error(`${harness.displayName} returned no assistant text in its structured output`);
   const ids = nativeSessionIds(stdout, harness.turn.output);
   return { text, nativeSessionId: [...ids][0], ...(isError ? { isError } : {}), ...(statusCode ? { statusCode } : {}) };
@@ -199,6 +213,21 @@ export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText
   if (harness.command === 'cline' && value.type === 'say' && typeof value.text === 'string' && value.text) {
     // Cline's partial `say` records are snapshots of the current message.
     return { text: value.text, mode: 'replace' };
+  }
+  if (harness.command === 'pi' && value.type === 'message_update') {
+    const event = value.assistantMessageEvent && typeof value.assistantMessageEvent === 'object'
+      ? value.assistantMessageEvent as Record<string, unknown> : undefined;
+    if (event?.type === 'text_delta' && typeof event.delta === 'string' && event.delta) {
+      return { text: event.delta, mode: 'append' };
+    }
+  }
+  if (harness.command === 'goose' && value.type === 'message') {
+    const message = value.message && typeof value.message === 'object' ? value.message as Record<string, unknown> : undefined;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    const text = message?.role === 'assistant' ? content.flatMap((part) => part && typeof part === 'object'
+      && (part as Record<string, unknown>).type === 'text' && typeof (part as Record<string, unknown>).text === 'string'
+      ? [String((part as Record<string, unknown>).text)] : []).join('') : '';
+    if (text) return { text, mode: 'append' };
   }
   return undefined;
 }
@@ -322,8 +351,14 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
   // verified from its own docs (packages/coding-agent/docs/json.md), but
   // the docs excerpt available didn't name a paired completion event, so
   // (same as Command Code above) this only ever reports 'tool-start'.
-  if (harness.command === 'pi' && type === 'toolcall_start') {
-    return { kind: 'tool-start', label: String(value.toolName ?? 'tool') };
+  if (harness.command === 'pi') {
+    if (type === 'tool_execution_start') return { kind: 'tool-start', label: String(value.toolName ?? 'tool') };
+    if (type === 'tool_execution_end') return { kind: 'tool-done', label: String(value.toolName ?? 'tool') };
+    if (type === 'message_update') {
+      const event = value.assistantMessageEvent && typeof value.assistantMessageEvent === 'object'
+        ? value.assistantMessageEvent as Record<string, unknown> : undefined;
+      if (event?.type === 'toolcall_start') return { kind: 'tool-start', label: String(event.toolName ?? 'tool') };
+    }
   }
   return undefined;
 }

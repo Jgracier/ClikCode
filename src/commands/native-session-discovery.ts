@@ -34,6 +34,34 @@ export interface DiscoveredNativeSession {
   updatedAtMs?: number;
 }
 
+export type NativeTranscriptMessage = { role: 'user' | 'assistant'; content: string };
+
+/** Reconcile a cached ClikCode transcript with the vendor-owned source without
+ * destroying context carried across providers. Native transcripts are often
+ * bounded windows, so replacement is unsafe: find the longest suffix of the
+ * cache that occurs in the source window and append only source messages that
+ * follow it. With no overlap, retain the cache; with no cache, adopt source. */
+export function mergeNativeTranscript(
+  cached: readonly NativeTranscriptMessage[], source: readonly NativeTranscriptMessage[],
+): NativeTranscriptMessage[] {
+  if (!cached.length) return [...source];
+  if (!source.length) return [...cached];
+  const equal = (left: NativeTranscriptMessage, right: NativeTranscriptMessage): boolean =>
+    left.role === right.role && left.content === right.content;
+  const maxOverlap = Math.min(cached.length, source.length);
+  for (let length = maxOverlap; length > 0; length -= 1) {
+    const cachedStart = cached.length - length;
+    for (let sourceStart = source.length - length; sourceStart >= 0; sourceStart -= 1) {
+      let matches = true;
+      for (let offset = 0; offset < length; offset += 1) {
+        if (!equal(cached[cachedStart + offset]!, source[sourceStart + offset]!)) { matches = false; break; }
+      }
+      if (matches) return [...cached, ...source.slice(sourceStart + length)];
+    }
+  }
+  return [...cached];
+}
+
 async function readFilePrefix(path: string, maxBytes: number): Promise<string> {
   const handle = await open(path, 'r');
   try {
@@ -82,7 +110,25 @@ function extractMessageText(content: unknown): string {
   return content.map((part) => typeof (part as { text?: unknown })?.text === 'string' ? (part as { text: string }).text : '').join(' ').trim();
 }
 
-const ADOPTED_TRANSCRIPT_LIMIT = 40;
+/** Remove client-owned context envelopes from a native user turn while
+ * retaining the actual prompt. Codex records IDE context as part of the user
+ * item; importing that wrapper verbatim makes the ClikCode transcript look as
+ * if the same request was pasted several times. Unknown content is preserved. */
+function visibleNativeUserText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.startsWith('<')) return '';
+  if (trimmed.startsWith('# Context from my IDE setup:')) {
+    const marker = '\n## My request:\n';
+    const requestStart = trimmed.indexOf(marker);
+    if (requestStart >= 0) return trimmed.slice(requestStart + marker.length).trim();
+  }
+  return trimmed;
+}
+
+// Large enough that an externally continued thread still overlaps ClikCode's
+// cached suffix; bounded so opening a years-long vendor history cannot bloat
+// the local state file without limit.
+const ADOPTED_TRANSCRIPT_LIMIT = 200;
 
 /** Claude Code has no CLI command that lists past sessions (`--resume` with no
  * id opens an interactive TUI picker only), but it writes one real, stable
@@ -90,8 +136,14 @@ const ADOPTED_TRANSCRIPT_LIMIT = 40;
  * the cwd path (`/` becomes `-`) — directly observed on disk, not guessed. The
  * first line is often `{"type":"ai-title","aiTitle":"..."}`; older sessions
  * without one fall back to the first `type":"user"` message's own text. */
-async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
-  const dir = join(homedir(), '.claude', 'projects', workspace.replace(/\//g, '-'));
+export type NativeSessionEnvironment = Readonly<Record<string, string>>;
+
+function nativeDataRoot(environment: NativeSessionEnvironment, variable: string, fallback: string): string {
+  return environment[variable]?.trim() || fallback;
+}
+
+async function discoverClaudeFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
+  const dir = join(nativeDataRoot(environment, 'CLAUDE_CONFIG_DIR', join(homedir(), '.claude')), 'projects', workspace.replace(/\//g, '-'));
   const files = await walkFilesRecursive(dir, 0, '.jsonl');
   const recent = await newestFiles(files, 15);
   const sessions: DiscoveredNativeSession[] = [];
@@ -106,12 +158,12 @@ async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNa
       if (record.type === 'ai-title' && typeof record.aiTitle === 'string') { title = record.aiTitle; break; }
       const message = record.message as { content?: unknown } | undefined;
       if (!title && record.type === 'user') {
-        const text = extractMessageText(message?.content);
+        const text = visibleNativeUserText(extractMessageText(message?.content));
         // Claude Code also injects synthetic wrapper turns (e.g. a
         // "<local-command-caveat>" note about a slash command's own output) as
         // literal role:"user" messages — the same reason Codex's fallback below
         // skips anything starting with "<".
-        if (text && !text.startsWith('<')) title = conversationTitle(text);
+        if (text) title = conversationTitle(text);
       }
     }
     sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
@@ -127,8 +179,8 @@ async function discoverClaudeFsSessions(workspace: string): Promise<DiscoveredNa
  * the most recent messages for the same reason failoverPrompt caps replay:
  * an adoption is a one-time read, not something that should scale with a
  * session's total lifetime size. */
-async function readClaudeFsTranscript(nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
-  const path = join(homedir(), '.claude', 'projects', workspace.replace(/\//g, '-'), `${nativeId}.jsonl`);
+async function readClaudeFsTranscript(nativeId: string, workspace: string, environment: NativeSessionEnvironment = {}): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+  const path = join(nativeDataRoot(environment, 'CLAUDE_CONFIG_DIR', join(homedir(), '.claude')), 'projects', workspace.replace(/\//g, '-'), `${nativeId}.jsonl`);
   let raw: string;
   try { raw = await readFile(path, 'utf8'); } catch {
     // fail-open-ok: an optional native transcript that disappeared during discovery contributes no messages.
@@ -141,8 +193,9 @@ async function readClaudeFsTranscript(nativeId: string, workspace: string): Prom
     try { record = JSON.parse(line); } catch { continue; }
     if (record.type !== 'user' && record.type !== 'assistant') continue;
     const message = record.message as { content?: unknown } | undefined;
-    const text = extractMessageText(message?.content);
-    if (!text || text.startsWith('<')) continue;
+    const extracted = extractMessageText(message?.content);
+    const text = record.type === 'user' ? visibleNativeUserText(extracted) : extracted;
+    if (!text) continue;
     messages.push({ role: record.type, content: text });
   }
   return messages.slice(-ADOPTED_TRANSCRIPT_LIMIT);
@@ -154,8 +207,8 @@ async function readClaudeFsTranscript(nativeId: string, workspace: string): Prom
  * no title field; the first real user message (skipping synthetic `<...>`
  * wrapper turns Codex injects, like recommended-plugin notices) stands in for
  * one, same convention ClikCode's own conversationTitle already uses. */
-async function discoverCodexFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
-  const root = join(homedir(), '.codex', 'sessions');
+async function discoverCodexFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
+  const root = join(nativeDataRoot(environment, 'CODEX_HOME', join(homedir(), '.codex')), 'sessions');
   const files = await walkFilesRecursive(root, 4, '.jsonl');
   const recent = await newestFiles(files, 25);
   const sessions: DiscoveredNativeSession[] = [];
@@ -173,8 +226,8 @@ async function discoverCodexFsSessions(workspace: string): Promise<DiscoveredNat
         sessionId = typeof payload?.session_id === 'string' ? payload.session_id : undefined;
         cwd = typeof payload?.cwd === 'string' ? payload.cwd : undefined;
       } else if (!title && record.type === 'response_item' && payload?.role === 'user') {
-        const text = extractMessageText(payload.content);
-        if (text && !text.startsWith('<')) title = conversationTitle(text);
+        const text = visibleNativeUserText(extractMessageText(payload.content));
+        if (text) title = conversationTitle(text);
       }
     }
     if (!sessionId || (workspace && cwd && cwd !== workspace)) continue;
@@ -188,8 +241,8 @@ async function discoverCodexFsSessions(workspace: string): Promise<DiscoveredNat
  * rather than re-scanning every file's session_meta again. Reads every
  * response_item user/assistant turn from the full file (the discovery pass
  * above only scans a bounded prefix, enough for a title, not a transcript). */
-async function readCodexFsTranscript(nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
-  const root = join(homedir(), '.codex', 'sessions');
+async function readCodexFsTranscript(nativeId: string, workspace: string, environment: NativeSessionEnvironment = {}): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+  const root = join(nativeDataRoot(environment, 'CODEX_HOME', join(homedir(), '.codex')), 'sessions');
   const files = await walkFilesRecursive(root, 4, '.jsonl');
   const path = files.find((file) => file.endsWith(`${nativeId}.jsonl`));
   if (!path) return [];
@@ -207,8 +260,9 @@ async function readCodexFsTranscript(nativeId: string, workspace: string): Promi
     const payload = record.payload as Record<string, unknown> | undefined;
     const role = payload?.role;
     if (role !== 'user' && role !== 'assistant') continue;
-    const text = extractMessageText(payload?.content);
-    if (!text || text.startsWith('<')) continue;
+    const extracted = extractMessageText(payload?.content);
+    const text = role === 'user' ? visibleNativeUserText(extracted) : extracted;
+    if (!text) continue;
     messages.push({ role, content: text });
   }
   void workspace; // Codex sessions aren't project-scoped by path; discovery already filtered by cwd.
@@ -293,8 +347,9 @@ async function discoverCursorFsSessions(workspace: string): Promise<DiscoveredNa
  * `cwd`-like field when one is present (rather than assuming a specific
  * escaping scheme for the directory itself) and duck-typing the name field
  * keeps a wrong guess a silent no-op instead of a wrong result. */
-async function discoverPiFsSessions(workspace: string): Promise<DiscoveredNativeSession[]> {
-  const root = join(homedir(), '.pi', 'agent', 'sessions');
+async function discoverPiFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
+  const configuredRoot = environment.PI_CODING_AGENT_DIR?.trim();
+  const root = configuredRoot ? join(configuredRoot, 'sessions') : join(homedir(), '.pi', 'agent', 'sessions');
   const files = await walkFilesRecursive(root, 3, '.jsonl');
   const recent = await newestFiles(files, 15);
   const sessions: DiscoveredNativeSession[] = [];
@@ -322,7 +377,7 @@ async function discoverPiFsSessions(workspace: string): Promise<DiscoveredNative
  * not a declarative catalog field like discoverArgv, because unlike a shell
  * command's argv, each vendor's own on-disk layout (path, format, title
  * source) is a real, unrelated shape with nothing left to normalize. */
-export const FS_SESSION_DISCOVERY: Readonly<Record<string, (workspace: string) => Promise<DiscoveredNativeSession[]>>> = {
+export const FS_SESSION_DISCOVERY: Readonly<Record<string, (workspace: string, environment?: NativeSessionEnvironment) => Promise<DiscoveredNativeSession[]>>> = {
   claude: discoverClaudeFsSessions,
   codex: discoverCodexFsSessions,
   cursor: discoverCursorFsSessions,
@@ -336,9 +391,9 @@ export const FS_SESSION_DISCOVERY: Readonly<Record<string, (workspace: string) =
  * is real either way, and the underlying vendor thread has its own full
  * memory regardless — it just starts blank in ClikCode's own transcript view
  * until the next turn, the same as it did for every harness before this. */
-export const ADOPTED_TRANSCRIPT_READERS: Readonly<Record<string, (harness: AiLocalHarnessDefinition, nativeId: string, workspace: string) => Promise<Array<{ role: 'user' | 'assistant'; content: string }>>>> = {
-  claude: (_harness, nativeId, workspace) => readClaudeFsTranscript(nativeId, workspace),
-  codex: (_harness, nativeId, workspace) => readCodexFsTranscript(nativeId, workspace),
+export const ADOPTED_TRANSCRIPT_READERS: Readonly<Record<string, (harness: AiLocalHarnessDefinition, nativeId: string, workspace: string, environment?: NativeSessionEnvironment) => Promise<Array<{ role: 'user' | 'assistant'; content: string }>>>> = {
+  claude: (_harness, nativeId, workspace, environment) => readClaudeFsTranscript(nativeId, workspace, environment),
+  codex: (_harness, nativeId, workspace, environment) => readCodexFsTranscript(nativeId, workspace, environment),
   opencode: readOpencodeTranscript,
 };
 
