@@ -91,9 +91,10 @@ export function markSessionLeftOpen(session: HarnessSession, now: string): void 
   session.updatedAt = now;
 }
 
-/** Find the most complete already-established branch for a provider within
- * one ClikCode conversation. Provider selection resumes this branch; creating
- * an alternative continuation remains the explicit /fork operation. */
+/** Historical lookup retained for migration/diagnostics. Normal provider
+ * switching no longer reopens an older provider branch because that branch
+ * predates the conversation's current tip; a new handoff continues the full
+ * latest transcript instead. */
 export function establishedProviderBranch(
   sessions: readonly HarnessSession[],
   current: HarnessSession,
@@ -131,21 +132,19 @@ export function createHandoffBranch(input: {
     route: 'local', accountId: input.accountId, provider: input.target.provider, model: input.model,
     effort: input.defaults.effort, permissionMode: input.defaults.permissionMode, accountFailover: input.defaults.accountFailover,
     workspace: input.source.workspace ?? process.cwd(), nativeHarness: input.target.command,
-    ...(base ? { name: `${base} (from ${input.sourceDisplayName ?? sourceCommand})` } : {}),
+    ...(base ? { name: base } : {}),
     ...(input.source.messages?.length ? { messages: input.source.messages.map((message) => ({ ...message })) } : {}),
     createdAt: input.now, updatedAt: input.now, status: 'active',
   };
 }
 
-/** Flatten conversation trees for terminals that only support a flat picker.
- * Roots are ordered by their most recently active branch; descendants remain
- * directly beneath their root so a handoff never looks like a duplicate chat. */
+/** One row per ClikCode conversation. Provider-native hops stay available via
+ * the row's right-arrow history instead of appearing as duplicate/fork rows. */
 export function sessionPickerOptions(
   sessions: readonly HarnessSession[],
   currentId: string,
   providerLabel: (session: HarnessSession) => string = sessionProviderLabel,
 ): PickerOption<string>[] {
-  const byId = new Map(sessions.map((session) => [session.id, session]));
   const groups = new Map<string, HarnessSession[]>();
   for (const session of sessions) {
     const root = conversationIdFor(session);
@@ -157,41 +156,50 @@ export function sessionPickerOptions(
     const value = Date.parse(session.updatedAt);
     return Number.isNaN(value) ? -Infinity : value;
   };
+  const createdTimestamp = (session: HarnessSession): number => {
+    const value = Date.parse(session.createdAt);
+    return Number.isNaN(value) ? timestamp(session) : value;
+  };
   const orderedGroups = [...groups.values()].sort((left, right) =>
     Math.max(...right.map(timestamp)) - Math.max(...left.map(timestamp)));
 
-  return orderedGroups.flatMap((group) => {
-    const groupIds = new Set(group.map((session) => session.id));
-    const children = new Map<string, HarnessSession[]>();
-    const roots: HarnessSession[] = [];
-    for (const session of group) {
-      if (session.parentSessionId && groupIds.has(session.parentSessionId)) {
-        const siblings = children.get(session.parentSessionId) ?? [];
-        siblings.push(session);
-        children.set(session.parentSessionId, siblings);
-      } else roots.push(session);
-    }
-    const ordered: Array<{ session: HarnessSession; depth: number }> = [];
-    const visit = (session: HarnessSession, depth: number): void => {
-      ordered.push({ session, depth });
-      for (const child of (children.get(session.id) ?? []).sort((a, b) => timestamp(a) - timestamp(b))) visit(child, depth + 1);
-    };
-    for (const root of roots.sort((a, b) => timestamp(a) - timestamp(b))) visit(root, 0);
-
-    return ordered.map(({ session, depth }) => {
-      const model = nativeModelLabel(session.nativeHarness, session.model);
-      const parent = session.parentSessionId ? byId.get(session.parentSessionId) : undefined;
-      const source = session.handoff?.fromHarness
-        ? (parent ? providerLabel(parent) : session.handoff.fromHarness)
-        : undefined;
-      const branchKind = source ? `handoff from ${source}` : session.parentSessionId ? 'fork' : `${group.length} ${group.length === 1 ? 'branch' : 'branches'}`;
-      return {
-        label: `${depth ? `${'  '.repeat(depth - 1)}↳ ` : ''}${providerLabel(session)} • ${session.name ?? 'Untitled chat'}`,
-        detail: `· ${session.id === currentId ? 'current · ' : ''}${branchKind} · ${model ?? 'automatic'} · ${session.status} · ${new Date(session.updatedAt).toLocaleString()}`,
+  return orderedGroups.map((group) => {
+    const history = [...group].sort((left, right) => createdTimestamp(left) - createdTimestamp(right));
+    const active = group.filter((session) => session.status === 'active');
+    const latest = [...(active.length ? active : group)].sort((left, right) => timestamp(right) - timestamp(left))[0]!;
+    const title = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || 'Untitled chat';
+    const model = nativeModelLabel(latest.nativeHarness, latest.model);
+    return {
+      label: title,
+      detail: `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''} · ${model ?? 'automatic'} · ${new Date(latest.updatedAt).toLocaleString()}${history.length > 1 ? ` · → ${history.length} provider sessions` : ''}`,
+      value: latest.id,
+      actions: history.length > 1 ? history.map((session, index) => ({
+        label: `${providerLabel(session)} · ${session.id === latest.id ? 'latest' : index === 0 ? 'original' : 'continued'} · ${new Date(session.updatedAt).toLocaleString()}`,
         value: session.id,
-      };
-    });
+      })) : undefined,
+    };
   });
+}
+
+export function interruptedTurnMessages(
+  messages: NonNullable<HarnessSession['messages']>, prompt: string, partialResponse: string, outputStarted: boolean,
+): NonNullable<HarnessSession['messages']> {
+  if (!outputStarted) return messages;
+  const next = [...messages, { role: 'user' as const, content: prompt }];
+  if (partialResponse) next.push({ role: 'assistant', content: partialResponse });
+  return next;
+}
+
+async function preserveInterruptedTurn(id: string, prompt: string, partialResponse: string, outputStarted: boolean): Promise<void> {
+  if (!outputStarted) return;
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) return;
+  session.messages = interruptedTurnMessages(session.messages ?? [], prompt, partialResponse, outputStarted);
+  session.name ??= conversationTitle(prompt);
+  session.attachments = [];
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
 }
 
 /** Pull turns added directly in a vendor CLI back into an already-linked
@@ -1531,12 +1539,6 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   if (current.route === 'local' && current.nativeHarness === harness.command) return current.id;
-  const established = establishedProviderBranch(state.sessions, current, harness.command);
-  if (established) {
-    markSessionLeftOpen(established, new Date().toISOString());
-    await writeState(state);
-    return established.id;
-  }
   // Refresh the source before freezing its portable ClikCode history into a
   // child branch. The source native session remains untouched after this.
   if (await synchronizeNativeTranscript(state, current)) await writeState(state);
@@ -2024,8 +2026,8 @@ async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string):
       }],
     })),
   ].sort((left, right) => right.sortKey - left.sortKey);
-  // Conversation trees and unadopted native sessions share one recency order,
-  // while every known branch remains immediately beneath its root.
+  // Conversation roots and unadopted native sessions share one recency order.
+  // Provider hops stay behind each root row's right-arrow history.
   const options = optionBlocks.flatMap((block) => block.options);
   const selected = await chooseOption(rl, 'Resume a session', options);
   if (!selected) return undefined;
@@ -2427,6 +2429,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         await aiSessionLeave(id);
         break;
       }
+      let interruptedSubmission: { text: string; restoreOnEscape: boolean } | undefined;
       try {
         const command = line.toLowerCase();
         const standaloneAttachment = await resolveStandaloneAttachment(line, activeWorkspace);
@@ -2590,7 +2593,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             };
             rl.render(pending, activeAccount);
             const turnController = new AbortController();
-            activeFullScreenHarness?.startWaiting('thinking', () => turnController.abort());
+            interruptedSubmission = { text: line, restoreOnEscape: false };
+            activeFullScreenHarness?.startWaiting('thinking', (restoreDraft) => {
+              interruptedSubmission!.restoreOnEscape = restoreDraft;
+              turnController.abort();
+            });
             try { await aiGatewaySessionSend(config, id, line, turnController.signal); }
             finally { activeFullScreenHarness?.stopWaiting(); }
             continue;
@@ -2602,7 +2609,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
-        if (rl.render) notice = cancelled ? 'Stopped' : `Error: ${message}`;
+        if (cancelled && interruptedSubmission && activeFullScreenHarness) {
+          const outputStarted = activeFullScreenHarness.turnOutputStarted();
+          const partialResponse = activeFullScreenHarness.liveResponseText();
+          if (outputStarted) await preserveInterruptedTurn(id, interruptedSubmission.text, partialResponse, true);
+          else if (interruptedSubmission.restoreOnEscape) activeFullScreenHarness.restoreDraft(interruptedSubmission.text);
+          notice = outputStarted ? 'Stopped' : interruptedSubmission.restoreOnEscape ? 'Stopped · draft restored' : 'Stopped';
+        } else if (rl.render) notice = cancelled ? 'Stopped' : `Error: ${message}`;
         else emitHarnessOutput({ panel: 'error', message });
       }
     }

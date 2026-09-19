@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { commandPaletteMatches, interleaveResponseContent, rightLabeledRule, waitingInputActions } from './terminal-ui';
+import { commandPaletteMatches, interleaveResponseContent, rightLabeledRule, waitingInputActions, waitingSpinnerFrame } from './terminal-ui';
 
 describe('full-screen waiting input', () => {
+  it('alternates opposite dots in a stable ASCII square', () => {
+    expect([waitingSpinnerFrame(0), waitingSpinnerFrame(1), waitingSpinnerFrame(2)]).toEqual([
+      '[o . / . o]', '[. o / o .]', '[o . / . o]',
+    ]);
+  });
+
   it('keeps scrolling available while a provider turn is running', () => {
     expect(waitingInputActions('\u001b[A\u001b[5~\u001b[B\u001b[6~')).toEqual([
       'scroll-up', 'page-up', 'scroll-down', 'page-down',
@@ -10,7 +16,7 @@ describe('full-screen waiting input', () => {
   });
 
   it('keeps escape and control-c as cancellation without treating other keys as actions', () => {
-    expect(waitingInputActions(`x\u001b\u0003`)).toEqual(['cancel', 'cancel']);
+    expect(waitingInputActions(`x\u001b\u0003`)).toEqual(['cancel-edit', 'cancel-stop']);
   });
 });
 
