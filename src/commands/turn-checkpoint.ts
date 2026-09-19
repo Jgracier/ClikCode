@@ -6,8 +6,101 @@ import type { LiveTurnSubmission } from './live-turn-input.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
 
-function activitySummary(activities: readonly string[]): string {
-  return `Interrupted turn activity: ${activities.join('; ')}. Inspect the current workspace before continuing.`;
+/** The persisted pending turn plus the replay hints this module records. The
+ * extra fields are optional and JSON-serializable, so they ride along in the
+ * same session state without a schema change. */
+export type PendingTurnWithHints = NonNullable<HarnessSession['pendingTurn']> & {
+  /** Files the interrupted turn is known to have started changing. */
+  touchedFiles?: string[];
+  /** Sticky: some recorded activity may have changed the workspace. Kept
+   * separately because `activities` is a rolling window of the newest 20. */
+  mutatingActivity?: boolean;
+};
+
+const MAX_TOUCHED_FILES = 40;
+
+const READ_ONLY_TOOL = /^(?:read|view|open|cat|ls|list(?:_?(?:dir|directory|files))?|glob|grep|search|find|fetch|web_?(?:fetch|search)|(?:notebook|file)_?read|read_?(?:file|many_files|notebook)|codebase_?search|semantic_?search|todo_?(?:read|write)|update_?(?:todos?|plan)|task|agent|think|toolsearch|get_\w+|describe_\w+|lsp\w*)$/i;
+const CODE_CHANGE_TOOL = /^(?:edit|multi_?edit|write|create|patch|apply_?patch|str_?replace\w*|replace|notebook_?edit|(?:edit|write|create|delete|update|replace_in)_?file|delete|remove|rename|move)$/i;
+const READ_ONLY_COMMAND = /^(?:ls|ll|cat|bat|head|tail|wc|pwd|cd|which|type|file|stat|du|df|tree|rg|grep|egrep|fgrep|ag|fd|find|echo|printf|true|test|\[|date|whoami|uname|env|printenv|nl|sort|uniq|cut|tr|column|diff|cmp|jq|yq|basename|dirname|realpath|readlink)$/;
+const READ_ONLY_GIT = /^git\s+(?:-C\s+\S+\s+)?(?:status|diff|log|show|branch(?:\s+(?:-a|-r|-v|-vv|--list|--show-current))*\s*$|rev-parse|ls-files|blame|describe|remote(?:\s+-v)?\s*$|grep|shortlog|reflog|cat-file|ls-tree|merge-base)\b/;
+
+function commandIsReadOnly(command: string): boolean {
+  let text = command.trim();
+  // `/bin/bash -lc '...'` wrappers (Codex) say nothing about the real command.
+  const wrapped = /^(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]*)\1\s*$/.exec(text);
+  if (wrapped) text = wrapped[2]!.trim();
+  if (!text) return false;
+  // Output redirection to a file, substitution, or a truncated label we cannot
+  // see the end of: cannot be vouched for.
+  if (/>|\$\(|`|…|\.\.\.$/.test(text.replace(/\d?>\s*\/dev\/null|\d>&\d/g, ''))) return false;
+  return text.split(/\s*(?:&&|\|\||;|\|)\s*/).filter(Boolean).every((segment) => {
+    const part = segment.replace(/^(?:\w+=\S*\s+)+/, '').trim();
+    if (READ_ONLY_GIT.test(part)) return true;
+    const [program = '', ...rest] = part.split(/\s+/);
+    const name = program.replace(/^.*\//, '');
+    if (name === 'sed') return rest.includes('-n') && !rest.some((argument) => /^-[a-z]*i/.test(argument));
+    if (name === 'find' || name === 'fd') return !rest.some((argument) => /^-(?:delete|exec|execdir|ok|fprint|fls)$|^--exec/.test(argument));
+    if (name === 'sort' || name === 'tree' || name === 'yq' || name === 'jq') return !rest.some((argument) => /^(?:-o|--output|-i|--inplace|--in-place)/.test(argument));
+    return READ_ONLY_COMMAND.test(name);
+  });
+}
+
+/** Whether an activity label describes something that cannot have changed the
+ * workspace. Deliberately conservative: anything unrecognised is NOT read-only,
+ * because the cost of a wrong "safe" is silently re-running edits. */
+export function activityLabelIsReadOnly(label: string): boolean {
+  const text = label.trim();
+  if (!text) return true;
+  const call = /^([\w.:-]+)\(([\s\S]*)\)$/.exec(text);
+  const name = (call?.[1] ?? text).replace(/^mcp__\w+?__|^\w+__/, '');
+  if (/^(?:bash|shell|sh|exec|execute|run|terminal|command|run_?(?:shell_?)?command|run_?terminal_?cmd|execute_?command|developer__shell)$/i.test(call?.[1] ?? '') || /shell$/i.test(call?.[1] ?? '')) {
+    return commandIsReadOnly(call?.[2] ?? '');
+  }
+  if (call || /^[\w.:-]+$/.test(text)) return READ_ONLY_TOOL.test(name) && !CODE_CHANGE_TOOL.test(name);
+  // A bare command line (Codex labels a command_execution with the command).
+  return commandIsReadOnly(text);
+}
+
+/** File an activity is changing, when its label or diff says so. */
+export function touchedFileFromActivity(event: HarnessActivityEvent): string | undefined {
+  const call = /^([\w.:-]+)\(([\s\S]*)\)$/.exec(event.label.trim());
+  if (!call) return undefined;
+  const name = call[1]!.replace(/^mcp__\w+?__|^\w+__/, '');
+  const target = call[2]!.trim();
+  if (!target || (!event.diff && !CODE_CHANGE_TOOL.test(name))) return undefined;
+  // toolLabel() also puts commands/patterns/urls in this slot.
+  if (/\s/.test(target) && !/[\\/]/.test(target)) return undefined;
+  return target;
+}
+
+function activitySummary(activities: readonly string[], touchedFiles: readonly string[] = []): string {
+  const files = touchedFiles.length ? ` Files it started changing: ${touchedFiles.join(', ')}.` : '';
+  return `Interrupted turn activity: ${activities.join('; ')}.${files} Inspect the current workspace before continuing.`;
+}
+
+/** Steer offsets index the STREAMED response. When a different final text is
+ * about to replace it, re-anchor each offset so the steer still lands where
+ * the user interjected:
+ *  1. inside the prefix both texts share -> unchanged;
+ *  2. otherwise, where the streamed text just before the steer reappears in
+ *     the final text (the usual case: same prose, different whitespace);
+ *  3. otherwise 0. The final text is then something the model wrote after
+ *     hearing the steer (a vendor's "final answer only" result), so the steer
+ *     precedes it. It is never placed after the reply: a transcript ending in
+ *     a user message reads as an unanswered prompt to the next provider. */
+export function remapSteerOffset(streamed: string, final: string, offset: number): number {
+  const clamped = Math.max(0, Math.min(streamed.length, offset));
+  if (streamed === final || clamped === 0) return Math.min(clamped, final.length);
+  let shared = 0;
+  const limit = Math.min(streamed.length, final.length);
+  while (shared < limit && streamed.charCodeAt(shared) === final.charCodeAt(shared)) shared += 1;
+  if (clamped <= shared) return clamped;
+  const context = streamed.slice(Math.max(0, clamped - 48), clamped).trim();
+  if (context.length >= 8) {
+    const at = final.indexOf(context);
+    if (at >= 0 && final.indexOf(context, at + 1) < 0) return at + context.length;
+  }
+  return 0;
 }
 
 /** Materialize an in-flight turn without mutating the session. This is used by
@@ -29,7 +122,7 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   }
   const remaining = response.slice(responseOffset);
   if (remaining.trim()) messages.push({ role: 'assistant', content: remaining });
-  else if (!response.trim() && pending.activities?.length) messages.push({ role: 'assistant', content: activitySummary(pending.activities) });
+  else if (!response.trim() && pending.activities?.length) messages.push({ role: 'assistant', content: activitySummary(pending.activities, (pending as PendingTurnWithHints).touchedFiles) });
   return messages;
 }
 
@@ -45,6 +138,10 @@ export function updatePendingResponse(
 ): void {
   const pending = session.pendingTurn;
   if (!pending || (!text && mode === 'append')) return;
+  if (mode === 'replace' && pending.steers?.length && (pending.response ?? '') !== text) {
+    const streamed = pending.response ?? '';
+    pending.steers = pending.steers.map((steer) => ({ ...steer, responseOffset: remapSteerOffset(streamed, text, steer.responseOffset ?? 0) }));
+  }
   if (!text) delete pending.response;
   else pending.response = mode === 'replace' ? text : `${pending.response ?? ''}${text}`;
   pending.outputStarted = Boolean(text || pending.activities?.length);
@@ -55,6 +152,14 @@ export function updatePendingResponse(
 export function recordPendingActivity(session: HarnessSession, event: HarnessActivityEvent, now: string): void {
   const pending = session.pendingTurn;
   if (!pending || event.kind === 'thinking') return;
+  const hints = pending as PendingTurnWithHints;
+  // Hints first: the de-duplication below must not skip them, and they must
+  // outlive the 20-entry activity window.
+  const touched = touchedFileFromActivity(event);
+  if (touched && !hints.touchedFiles?.includes(touched)) hints.touchedFiles = [...(hints.touchedFiles ?? []), touched].slice(-MAX_TOUCHED_FILES);
+  // A completion is reported under a generic label by some vendors ("tool");
+  // its start already carried the real identity.
+  if (Boolean(event.diff) || (!(event.kind !== 'tool-start' && event.label === 'tool') && !activityLabelIsReadOnly(event.label))) hints.mutatingActivity = true;
   const verb = event.kind === 'tool-error' ? 'failed'
     : event.kind === 'tool-done' ? 'completed' : event.kind === 'tool-start' ? 'started' : 'thinking';
   const summary = `${verb} ${event.label}`.trim();
@@ -93,8 +198,14 @@ export function consumeSessionTurn(session: HarnessSession, id: string): boolean
 export function finishPendingTurn(session: HarnessSession, response: string | undefined, now: string): void {
   if (!session.pendingTurn) return;
   if (response?.trim()) {
-    session.pendingTurn.response = response.trim();
-    session.pendingTurn.outputStarted = true;
+    const pending = session.pendingTurn;
+    const streamed = pending.response ?? '';
+    const final = response.trim();
+    if (pending.steers?.length && streamed !== final) {
+      pending.steers = pending.steers.map((steer) => ({ ...steer, responseOffset: remapSteerOffset(streamed, final, steer.responseOffset ?? 0) }));
+    }
+    pending.response = final;
+    pending.outputStarted = true;
   }
   session.messages = sessionTranscriptMessages(session);
   delete session.pendingTurn;
