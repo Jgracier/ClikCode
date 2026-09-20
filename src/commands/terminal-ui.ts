@@ -1417,6 +1417,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * asks to look at what went past. Drawing on the alternate screen took the
    * terminal's own scrollback away; this is what replaces it. */
   private alternateScrollback = 0;
+  /** Rows the last frame gave the transcript above the live region. The
+   * scroll offset is bounded by it, and it changes with the screen. */
+  private alternateAbove = 0;
   private readonly alternateScreen = !classicScreen() && output.isTTY;
 
   constructor() {
@@ -2282,11 +2285,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const height = this.viewportRows();
     const live = pending.live.slice(-height);
     const above = Math.max(0, height - live.length);
+    this.alternateAbove = above;
     // Scrolled back, the live region gives up its rows to the transcript:
     // looking at what went past is the whole point, and the composer is not
     // what is being read. A frame at offset zero is the conversation as it
     // happens.
-    const scrolled = Math.min(this.alternateScrollback, Math.max(0, this.alternateTranscript.length - above));
+    // How far back this screen can actually show, which is not how far back
+    // the offset is allowed to go: `above` is the rows the transcript gets,
+    // and it grows with the screen. A phone hiding its keyboard hands back a
+    // third of the screen at once, so an offset that was inside the range a
+    // moment ago is suddenly past its end -- and every further swipe moves a
+    // number while the view stays pinned at the top, which reads as scrolling
+    // having stopped working. The offset is clamped to what can be shown.
+    const furthest = Math.max(0, this.alternateTranscript.length - above);
+    this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
+    const scrolled = this.alternateScrollback;
     const rows = scrolled > 0
       ? [
         ...this.alternateTranscript.slice(
@@ -2377,7 +2390,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * key that cannot scroll any further still means something to the caller. */
   scrollTranscript(rows: number): boolean {
     if (!this.alternateScreen) return false;
-    const furthest = Math.max(0, this.alternateTranscript.length - 1);
+    // Bounded by what the CURRENT screen can show -- see flushAlternateFrame.
+    // Bounding it by the transcript's length instead let the offset run past
+    // the end of what any frame would draw, and the rows a reader then had to
+    // swipe back through before the view moved again were rows that were
+    // never on it.
+    const furthest = Math.max(0, this.alternateTranscript.length - this.alternateAbove);
     const next = Math.max(0, Math.min(furthest, this.alternateScrollback + rows));
     if (next === this.alternateScrollback) return false;
     this.alternateScrollback = next;
