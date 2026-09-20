@@ -64,42 +64,132 @@ export function settledToolRows(
   return { settled, live, emitted };
 }
 
+/** A tool row carries the response offset it started at, so a tool that
+ * settles in the same frame as the prose around it lands where it happened
+ * rather than after everything. Nothing is ever re-ordered once written: a
+ * tool that completes late is appended where it became final, which is what
+ * append-only means. */
+export type SettlingTool = {
+  id: string; done: boolean; lines: readonly string[]; responseOffset?: number;
+};
+
+export type BlockRenderer = (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
+
+/** Merge newly settled tool rows into newly settled prose by response offset,
+ * using the same rule responseTimeline uses on screen: a tool belongs after
+ * the first block its offset falls inside, and an offset of zero belongs
+ * before any prose at all. */
+function interleave(
+  blocks: readonly MessageBlock[], tools: readonly SettlingTool[],
+  render: BlockRenderer, startsMessage: boolean,
+): string[] {
+  const offset = (tool: SettlingTool): number => tool.responseOffset ?? Number.POSITIVE_INFINITY;
+  const pending = [...tools].sort((left, right) => offset(left) - offset(right));
+  const out: string[] = [];
+  let first = startsMessage;
+  let run: MessageBlock[] = [];
+  const flush = (): void => {
+    if (!run.length) return;
+    out.push(...render(run, first));
+    first = false;
+    run = [];
+  };
+  const take = (limit: number): void => {
+    while (pending.length && offset(pending[0]!) <= limit) out.push(...pending.shift()!.lines);
+  };
+  take(0);
+  for (const block of blocks) {
+    run.push(block);
+    if (pending.length && offset(pending[0]!) <= block.sourceEnd) {
+      flush();
+      take(block.sourceEnd);
+    }
+  }
+  flush();
+  for (const tool of pending) out.push(...tool.lines);
+  return out;
+}
+
 /** Tracks what a turn has already retired, so each frame emits only what is
  * newly final. Reset per turn; it holds no history beyond the current one
  * because scrollback holds everything else. */
 export class TurnTranscript {
   private emittedBlocks = 0;
   private readonly emittedTools = new Set<string>();
+  /** Source lines of the open code fence already retired. A fence is the one
+   * construct whose completed lines are final before the block itself is: each
+   * wraps independently of the ones after it. Without this an answer whose code
+   * block is taller than the viewport could never retire its head rows. */
+  private openCodeLines = 0;
+  /** Whether anything at all has been written for this message, which is what
+   * decides the leading marker -- not the block count, which is still zero
+   * while the head of an open fence is being retired line by line. */
+  private started = false;
 
   /** Rows newly settled since the last call, plus what is still live.
    * `renderBlocks` and the tool lines come from the caller so this stays free
    * of any dependency on how a row is painted. */
   advance(input: {
     content: string;
-    tools: readonly { id: string; done: boolean; lines: readonly string[] }[];
+    tools: readonly SettlingTool[];
     turnEnded: boolean;
-    renderBlocks: (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
+    renderBlocks: BlockRenderer;
+    /** Optional separate renderer for the block still receiving tokens. */
+    renderLive?: BlockRenderer;
   }): { finished: string[]; live: string[] } {
     const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded);
-    const tools = settledToolRows(input.tools, this.emittedTools, input.turnEnded);
+    // Same rule as settledToolRows, kept grouped so a tool's rows can be
+    // placed at the offset it started at rather than after all of the prose.
+    const isSettled = (tool: SettlingTool): boolean => tool.done || input.turnEnded;
+    const owing = input.tools.filter((tool) => !this.emittedTools.has(tool.id));
+    const settledTools = owing.filter(isSettled);
+    const liveToolLines = owing.filter((tool) => !isSettled(tool)).flatMap((tool) => [...tool.lines]);
+    const renderLive = input.renderLive ?? input.renderBlocks;
 
-    const startsMessage = this.emittedBlocks === 0;
-    const finished = [
-      ...(answer.settled.length ? input.renderBlocks(answer.settled, startsMessage) : []),
-      ...tools.settled,
-    ];
-    const live = [
-      ...(answer.live.length ? input.renderBlocks(answer.live, startsMessage && !answer.settled.length) : []),
-      ...tools.live,
-    ];
+    // The head of an open fence was already retired line by line; only the
+    // lines after it are still owed when the block itself finally settles.
+    let settled = answer.settled;
+    const head = settled[0];
+    if (this.openCodeLines > 0 && head) {
+      if (head.kind === 'code') {
+        const owed = head.lines.slice(this.openCodeLines);
+        settled = owed.length ? [{ ...head, lines: owed, language: undefined }, ...settled.slice(1)] : settled.slice(1);
+      }
+      this.openCodeLines = 0;
+    }
 
+    const finished = interleave(settled, settledTools, input.renderBlocks, !this.started);
+    if (finished.length) this.started = true;
     this.emittedBlocks = answer.emitted;
-    for (const id of tools.emitted) this.emittedTools.add(id);
+    for (const tool of settledTools) this.emittedTools.add(tool.id);
+
+    // An open fence retires every source line but the one still being typed.
+    const open = answer.live.length === 1 ? answer.live[0]! : undefined;
+    let live: string[] = [];
+    if (open?.kind === 'code' && open.lines.length > 1) {
+      const complete = open.lines.slice(this.openCodeLines, open.lines.length - 1);
+      if (complete.length) {
+        const head = { ...open, lines: complete, ...(this.openCodeLines ? { language: undefined } : {}) };
+        const rows = input.renderBlocks([head], !this.started);
+        if (rows.length) this.started = true;
+        finished.push(...rows);
+        this.openCodeLines = open.lines.length - 1;
+      }
+      live = renderLive(
+        [{ ...open, lines: [open.lines[open.lines.length - 1]!], ...(this.openCodeLines ? { language: undefined } : {}) }],
+        !this.started,
+      );
+    } else if (answer.live.length) {
+      live = renderLive(answer.live, !this.started);
+    }
+    live.push(...liveToolLines);
     return { finished, live };
   }
 
   reset(): void {
     this.emittedBlocks = 0;
     this.emittedTools.clear();
+    this.openCodeLines = 0;
+    this.started = false;
   }
 }
