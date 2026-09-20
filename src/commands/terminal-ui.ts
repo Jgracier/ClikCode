@@ -1284,6 +1284,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */
   private readonly alternateTranscript: string[] = [];
+  /** Exactly the rows the last alternate-screen frame left on screen, so the
+   * next one writes only what differs. */
+  private alternatePrevious: string[] = [];
   private readonly alternateScreen = !classicScreen() && output.isTTY;
 
   constructor() {
@@ -2070,17 +2073,28 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const above = Math.max(0, height - live.length);
     const rows = [...this.alternateTranscript.slice(-above), ...live];
     while (rows.length < height) rows.unshift('');
-    // `EL` after each row: the row is replaced, not overprinted, so a shorter
-    // one cannot leave the tail of a longer one behind it.
-    const screen = rows.map((row) => `${row}\u001b[K`).join('\r\n');
+    // Only what changed. A keystroke changes the composer's row and nothing
+    // else, and rewriting the whole screen for it costs kilobytes per key on
+    // a phone link -- long enough for a client's own prediction popup to
+    // appear in the gap before the echo lands. Each row is addressed, so a
+    // partial update is exactly as safe as a whole one, which is the point of
+    // drawing here. `EL` per row: replaced, never overprinted.
+    const full = this.alternatePrevious.length !== rows.length;
+    const updates: string[] = [];
+    for (const [index, row] of rows.entries()) {
+      if (!full && this.alternatePrevious[index] === row) continue;
+      updates.push(`\u001b[${index + 1};1H${row}\u001b[K`);
+    }
+    this.alternatePrevious = rows;
     const composerRow = rows.length - live.length + pending.cursorRow + 1;
     const park = pending.hideCursor
       ? ''
       : `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
-    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l\u001b[H${screen}\u001b[?7h${park}${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
+    if (!updates.length && !park) return;
+    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l${updates.join('')}\u001b[?7h${park}${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
     this.frameInFlight = true;
     terminalModes.painted = true;
-    logCursorEvent(`alternate frame: height=${height} live=${live.length} composer=${composerRow} col=${pending.cursorColumn}`);
+    logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
     output.write(frame, () => {
       this.frameInFlight = false;
       if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
@@ -2126,6 +2140,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Forget where on screen the live block sits: whoever writes next (the
    * shell, a vendor CLI, a resize) decides that now. */
   private forgetScreenPosition(): void {
+    this.alternatePrevious = [];
     this.blockTopRow = undefined;
     resetCursorQueries();
   }
