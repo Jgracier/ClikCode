@@ -154,6 +154,7 @@ const ALTERNATE_TRANSCRIPT_ROWS = 2000;
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
+  logCursorEvent('input modes: bracketed paste, wheel reporting, theme notifications, focus reporting');
   let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
   terminalModes.bracketedPaste = true;
   terminalModes.focusReporting = true;
@@ -498,6 +499,12 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
   let flushTimer: NodeJS.Timeout | undefined;
   const deliver = (keys: readonly string[]): void => {
     for (const key of keys) {
+      // Escape sequences only -- never typed text, which is the user's message.
+      // What a client sends for a swipe cannot be read from this end any other
+      // way, and "scrolling does nothing" has three possible causes that look
+      // identical from here: no report sent, a report in an encoding we do not
+      // decode, or a report decoded and then dropped.
+      if (key.startsWith('\u001b')) logCursorEvent(`input ${JSON.stringify(key)}`);
       // A DSR reply is the terminal talking back, not the user typing.
       const report = cursorPositionReport(key);
       if (report) {
