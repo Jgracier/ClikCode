@@ -841,10 +841,6 @@ export const TOOL_CATEGORY_STYLE: Record<ToolCategory, { paint: (text: string) =
   fetch: { paint: (text) => chalk.green(text), verb: 'fetching' },
 };
 
-/** An unclassified tool keeps exactly the dim bullet it has always had. */
-export const paintToolGlyph = (category: ToolCategory | undefined, glyph: string): string =>
-  (category ? TOOL_CATEGORY_STYLE[category].paint(glyph) : chalk.dim(glyph));
-
 export function activityLifecyclePhase(
   activeTools: ReadonlyMap<string, { label: string; category?: ToolCategory }>, event: HarnessActivityEvent,
 ): { activeTools: Map<string, { label: string; category?: ToolCategory }>; phase: string; category?: ToolCategory } {
@@ -1757,8 +1753,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
     };
     const userMarker = chalk.bold('›');
+    // No marker in front of a tool row. The bullet was there to carry the
+    // category colour, and it cost a glyph on every line of every call --
+    // including each line of captured output, which made a transcript of
+    // real work read as a column of dots. The label already says `Bash(...)`
+    // and carries the colour itself; the spinner in the waiting band is
+    // where the category still shows while a call runs.
     const activityRows = (lines: readonly string[], category?: ToolCategory): string[] => (lines.length
-      ? ['', ...lines.map((line) => `${paintToolGlyph(category, '·')} ${visibleSlice(line, Math.max(1, conversationInner - 2))}`), '']
+      ? ['', ...lines.map((line, index) => {
+        const text = visibleSlice(line, Math.max(1, conversationInner - 2));
+        return `  ${index === 0 && category ? TOOL_CATEGORY_STYLE[category].paint(text) : text}`;
+      }), '']
       : []);
     const messageRows = (content: string, marker: string): string[] =>
       renderMessageBlocks(splitIntoBlocks(sanitizeTerminalText(content)), marker, conversationInner);
