@@ -1559,36 +1559,32 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.resizePaintTimer.unref();
   }
 
-  /** Timers holding the re-asserts that follow a resize, so a burst of them
-   * (a keyboard sliding away resizes more than once) asks once per settle
-   * rather than once per SIGWINCH. */
-  private modeReassertTimers: NodeJS.Timeout[] = [];
 
-  /** Ask for the input modes again, now and after the client has settled.
-   * Now is not enough on its own -- see onResize. */
+  /** Ask for the input modes again. Once.
+   *
+   * This used to ask four times -- at the resize and again at 250ms, 750ms and
+   * 1500ms -- on the theory that the client resets its emulator across a
+   * resize and a single ask lands underneath that reset. The theory was never
+   * confirmed, and a controlled capture argues against it: driven through the
+   * same 32-to-63-row resize under a local pty, Claude Code re-asserts nothing
+   * at all and scrolls on this client anyway, and a bare script that asks
+   * exactly once receives the gesture too. Asking four times is the one thing
+   * this UI did that neither of them does -- 224 bytes of mode flipping spread
+   * across a second and a half, while the client is deciding what a finger on
+   * the glass means.
+   *
+   * Raw mode is deliberately not a precondition, and that part stands on its
+   * own: `setTerminalRawMode(false)` runs at the end of every prompt, picker
+   * and palette, so whether raw mode is on when a keyboard slides away is
+   * incidental, and a resize landing in one of those gaps used to re-assert
+   * nothing at all. Setting a mode is not asking a question -- DSR is what
+   * must never go into a cooked terminal, because the line discipline echoes
+   * the answer into the draft, and `?1000h` has no answer to echo. */
   private reassertMouseTracking(): void {
-    for (const timer of this.modeReassertTimers) clearTimeout(timer);
-    this.modeReassertTimers = [];
-    // Raw mode is deliberately NOT a precondition. It used to be, and that is
-    // how the wheel got lost: `setTerminalRawMode(false)` runs at the end of
-    // every prompt, picker and palette, so whether raw mode happens to be on
-    // at the instant a keyboard slides away is incidental -- and a resize that
-    // arrived in one of those gaps re-asserted nothing at all, leaving mouse
-    // reporting off for the rest of the session. Setting a mode is not asking
-    // a question: DSR is what must never go into a cooked terminal, because
-    // the line discipline echoes the answer into the draft. `?1000h` has no
-    // answer to echo, so it is safe in either mode.
-    const ask = (): void => {
-      if (this.closed || this.suspended) return;
-      output.write(reassertInputModes(this.alternateScreen));
-    };
-    ask();
-    for (const delay of [250, 750, 1500]) {
-      const timer = setTimeout(ask, delay);
-      timer.unref();
-      this.modeReassertTimers.push(timer);
-    }
+    if (this.closed || this.suspended) return;
+    output.write(reassertInputModes(this.alternateScreen));
   }
+
 
   /** One probe in flight at a time; the answer repaints at the real height. */
   private remeasureViewport(): void {
@@ -3193,8 +3189,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.frameGeometry = undefined;
     this.blockTopRow = undefined;
     resetCursorQueries();
-    for (const timer of this.modeReassertTimers) clearTimeout(timer);
-    this.modeReassertTimers = [];
     this.stopWaiting(false);
     this.clearTransientNotice();
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
