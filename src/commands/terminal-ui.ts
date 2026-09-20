@@ -142,36 +142,26 @@ const EXIT_CONFIRM_MS = 2000;
  * reader would notice missing. */
 const RESIZE_SETTLE_MS = 120;
 
-/** The alternate screen, and why it is the default again.
+/** The main screen, where the conversation is the terminal's own scrollback.
  *
- * It was entered once to fix the cursor, then abandoned for one reason: a
- * swipe. A terminal's own scrollback is what a phone client scrolls, the
- * alternate screen has none, and the input log showed the client sending
- * nothing at all for a swipe -- so the conversation became unreadable above
- * the fold, and the main screen came back with every relative-motion problem
- * it has.
+ * This is the default, and the alternate screen is now the opt-in
+ * (`CLIKCODE_ALT_SCREEN=1`). The reason is the whole reason a swipe would not
+ * scroll this UI with a phone keyboard hidden, and it is architectural rather
+ * than anything in a byte stream.
  *
- * That conclusion rested on a premise and a bug. The premise -- "Claude Code
- * and Codex both draw on the main screen, which is why a swipe reads their
- * transcripts" -- is false: captured from Claude Code v2.1.276 in the user's
- * own Termius session, it enters the alternate screen (`?1049h`, `2J`, `H`)
- * and turns on full mouse tracking (`?1000h ?1002h ?1003h ?1006h`), then
- * scrolls its own transcript from the wheel events that come back. The bug:
- * ClikCode set a `wheelReporting` flag and never sent the sequence, and what
- * it would have sent was click tracking anyway. A client reports no wheel
- * under a finger that nothing asked to track, which is exactly what the input
- * log recorded.
+ * Read out of Claude Code's own settings schema: `tui` is "default" or
+ * "fullscreen", where "fullscreen" is the alt-screen renderer with virtualised
+ * scrollback and "default" is the classic main-screen renderer -- and
+ * fullscreen is still being upsold (fullscreenUpsellSeenCount), so default is
+ * what it ships with. On the main screen the conversation lives in the
+ * client's real scrollback, and a one-finger swipe pans that buffer: no bytes
+ * are sent, no mouse mode is involved, and it works in any keyboard position
+ * because the application is not part of the gesture at all.
  *
- * So both halves come back together: this screen, and the modes that make a
- * swipe arrive as wheel events for the transcript this renderer already keeps
- * (see alternateTranscript). With them, the terminal is owned outright --
- * every row has an address, the cursor is placed and not walked to, nothing
- * of the shell shows above, and a client has no reason to read the composer
- * as a shell prompt and offer its own command history over it.
- *
- * `CLIKCODE_MAIN_SCREEN=1` keeps the old behaviour for a terminal where the
- * native scrollback is worth more than any of that. */
-export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
+ * Behind an alternate screen there is no scrollback to pan, so the client has
+ * nothing to do with the swipe and sends nothing. Every byte-level comparison
+ * against Claude Code was comparing two different rendering architectures. */
+export function classicScreen(): boolean { return process.env.CLIKCODE_ALT_SCREEN !== '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 /** The opening handshake, transcribed sequence for sequence from Claude Code
  * running in this user's own terminal.
