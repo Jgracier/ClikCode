@@ -2293,6 +2293,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const page = Math.max(1, this.viewportRows() - 3);
     if (key === '\u001b[5~') { this.scrollTranscript(page); return true; }
     if (key === '\u001b[6~') { this.scrollTranscript(-page); return true; }
+    // Ctrl+B and Ctrl+F, a page at a time, as less and vi have always read.
+    //
+    // They exist because everything else here depends on the client: the one
+    // in the reports sends no mouse report in any encoding, has no page keys
+    // on its keyboard, and -- per its own input log -- sends nothing at all
+    // for a screen swipe. A phone key bar does have ctrl, so these two are
+    // reachable by hand on a terminal where nothing else is.
+    if (key === '\u0002') { this.scrollTranscript(page); return true; }
+    if (key === '\u0006') { if (!this.scrollTranscript(-page)) this.noteReadingDirection(); return true; }
     // Arrows, while a turn runs and the draft is empty. Recorded from a real
     // client: it sends no mouse report for a swipe in any encoding, however
     // the mode is requested -- it sends an arrow key. A phone keyboard has no
@@ -2321,7 +2330,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private noteReadingDirection(): boolean {
     if (this.scrolledBack || this.alternateTranscript.length === 0) return false;
     this.showTransientNotice(
-      '↑ to read earlier messages',
+      '↑ or Ctrl+B to read earlier messages',
       2000,
       () => this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette),
     );
