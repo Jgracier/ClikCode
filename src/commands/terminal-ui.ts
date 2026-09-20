@@ -73,14 +73,17 @@ function waitingInputAction(key: string): WaitingInputAction | undefined {
  * fences the payload and the whole thing arrives as one key. */
 export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
-/** DECCKM. Arrow keys then arrive as SS3 (`ESC O A`), which the decoder
- * already folds back, and that is the point: it is the oldest signal a
- * terminal has that an application -- not a shell -- owns the screen.
- * Clients that layer their own shell helpers on top (history popups, path
- * completion over the composer) key off signals like this one and bracketed
- * paste to stay out of the way. */
-export const ENABLE_APPLICATION_CURSOR_KEYS = '\u001b[?1h';
-export const DISABLE_APPLICATION_CURSOR_KEYS = '\u001b[?1l';
+/** Focus reporting: the terminal sends `CSI I` / `CSI O` as the window gains
+ * and loses focus. ClikCode does not use the events -- it is enabled for what
+ * announcing it means. A client that layers its own shell helpers over the
+ * remote (a history popup, path completion drawn across the composer) decides
+ * whether a shell or an application is reading the line from the modes the
+ * remote sets, and this is the one both Claude Code and Codex set that
+ * ClikCode did not. Captured from each of them in a pty, not guessed. */
+export const ENABLE_FOCUS_REPORTING = '\u001b[?1004h';
+export const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
+/** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
+const FOCUS_EVENT = /^\u001b\[[IO]$/;
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
@@ -88,9 +91,9 @@ const EXIT_CONFIRM_MS = 2000;
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
-  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_APPLICATION_CURSOR_KEYS}`;
+  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_FOCUS_REPORTING}`;
   terminalModes.bracketedPaste = true;
-  terminalModes.applicationCursorKeys = true;
+  terminalModes.focusReporting = true;
   terminalModes.rawMode = true;
   if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
     sequence += PUSH_KITTY_KEYBOARD;
@@ -100,10 +103,10 @@ function enterInputModes(): string {
 }
 
 function leaveInputModes(): string {
-  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_APPLICATION_CURSOR_KEYS}`;
+  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_FOCUS_REPORTING}`;
   terminalModes.kittyKeyboard = false;
   terminalModes.bracketedPaste = false;
-  terminalModes.applicationCursorKeys = false;
+  terminalModes.focusReporting = false;
   return sequence;
 }
 
@@ -416,6 +419,8 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
         for (const waiter of [...cursorReportWaiters]) waiter(report);
         continue;
       }
+      // Focus in/out, likewise: enabled for what it announces, not to be read.
+      if (FOCUS_EVENT.test(key)) continue;
       onKey(key);
     }
   };
