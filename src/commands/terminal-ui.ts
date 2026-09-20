@@ -167,9 +167,6 @@ const EXIT_CONFIRM_MS = 2000;
 export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
-/** Home, erase the screen, erase the saved lines. Written once at startup on
- * the main screen. */
-const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[H\u001b[2J\u001b[3J';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
@@ -1245,9 +1242,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * first frame of a newly opened session. */
   private reseedTranscript: false | 'first' | 'scroll-away' = 'first';
   private lastColumns = output.columns || 0;
-  /** The screen height the last frame was laid out against, so a resize can be
-   * told from a repaint. */
-  private lastRows = output.rows || 0;
   /** The terminal's real height when it answers DSR; see measureViewportRows. */
   private measuredRows?: number;
   private measuring = false;
@@ -1382,33 +1376,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // was written and never guessed upward. Both reference implementations
       // have this same limit, for this same reason.
       this.lastColumns = output.columns || 0;
-      const previousRows = this.lastRows;
-      const previousTop = this.blockTopRow;
-      const previousBlockRows = this.stream.liveRows;
-      this.lastRows = output.rows || 0;
       this.measuredRows = undefined;
       this.forgetScreenPosition();
-      // A phone's keyboard hands back a third of the screen when it goes down
-      // and takes it again when it comes up. Either way the block belongs on
-      // the new bottom edge: that is where a composer goes, and after a
-      // resize it is the one row on the screen this code can still name --
-      // the terminal has just reflowed everything else.
-      //
-      // On a resize only. A block that re-pinned every time its own height
-      // changed would walk the conversation off the top, one palette at a
-      // time, because growing means scrolling the rows above away and nothing
-      // can ever scroll them back.
-      const rows = output.rows || 0;
-      if (previousRows && rows !== previousRows && previousTop && previousBlockRows) {
-        // Erased from where it was, not from where it is going: the frame
-        // below draws at the new bottom edge and erases from there down, which
-        // would leave the old block sitting above it. A screen that shrank may
-        // have taken that row with it, so the erase starts no lower than the
-        // last row there now is.
-        output.write(`\u001b[${Math.max(1, Math.min(previousTop, rows))};1H\u001b[J`);
-        this.stream.forgetLiveRegion();
-        this.blockTopRow = Math.max(1, rows - previousBlockRows + 1);
-      }
       this.remeasureViewport();
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
@@ -1455,38 +1424,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
     }
-    // The screen and the saved lines are cleared once, here.
-    //
-    // Two reasons, and the second is the one that matters. A swipe scrolls the
-    // terminal's own scrollback, which is where this UI keeps the
-    // conversation -- and which the shell shares, so scrolling back through a
-    // conversation ran out of conversation and into a login banner, a prompt,
-    // and the command that started this. And with the screen cleared the
-    // cursor is home, on a screen nothing else has written to, so the first
-    // frame KNOWS the row it draws from: it places the composer outright
-    // instead of writing its block and walking back up by a row count the
-    // terminal may not agree with. A walk that comes up two rows short lands
-    // on the status line, which is where the caret sits in every screenshot of
-    // "the cursor is under the composer" -- and a fresh chat, whose first
-    // frame is the one with nothing above it to anchor to, is where it shows.
-    //
-    // Exactly once. Nothing after this clears anything: a frame that wiped the
-    // screen mid-conversation would take the transcript with it.
-    // `CLIKCODE_KEEP_SCROLLBACK=1` keeps the shell's history instead, for a
-    // terminal where that history is worth more than either of those.
-    else if (process.env.CLIKCODE_KEEP_SCROLLBACK !== '1') {
-      output.write(CLEAR_SCREEN_AND_SCROLLBACK);
-      // And the first frame starts on the LAST row, not the first. A block is
-      // written from wherever the cursor is, so starting at the bottom edge
-      // puts the composer there -- and keeps it there, because the transcript
-      // is appended directly above it and the screen scrolls up to make room.
-      // Starting at the top left a composer at the top of an empty screen with
-      // everything below it blank until the conversation had grown tall enough
-      // to push it down.
-      const lastRow = Math.max(1, output.rows || 24);
-      output.write(`\u001b[${lastRow};1H`);
-      this.blockTopRow = lastRow;
-    }
+    // Nothing is cleared on the main screen: whatever the shell printed above
+    // is the user's, and this renderer is the fallback for a terminal where
+    // that scrollback is the point.
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
