@@ -50,12 +50,25 @@ export async function carryNativeSession(input: CarryNativeSessionInput): Promis
   if (!source) return undefined;
   const destination = join(target, relative(source.root, source.path));
   try {
-    if (await stat(destination).then(() => true, () => false)) return destination;
+    // A conversation that went A -> B -> A finds its own earlier copy waiting
+    // in A, one switch out of date: everything the thread said while B owned
+    // it is only in B's file. Returning the copy as-is would resume the older
+    // transcript and silently drop that work. A vendor transcript is an
+    // append-only log, so the newer, longer file is the current one, and it
+    // replaces what is there; an identical one is left alone.
+    const [here, there] = await Promise.all([
+      stat(destination).catch(() => undefined),
+      stat(source.path).catch(() => undefined),
+    ]);
+    if (!there) return undefined;
+    if (here && here.size >= there.size && here.mtimeMs >= there.mtimeMs) return destination;
     await mkdir(dirname(destination), { recursive: true });
     // Through a temporary name in the destination directory: a half-copied
     // transcript that a resume then read would be worse than no transcript.
     const staged = `${destination}.clikcode-carry`;
     await copyFile(source.path, staged);
+    // rename() replaces an existing destination atomically, so a resume can
+    // never read a file that is half one transcript and half the other.
     await rename(staged, destination);
     return destination;
   } catch {
