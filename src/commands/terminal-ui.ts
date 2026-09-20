@@ -200,7 +200,15 @@ export function setTerminalRawMode(on: boolean): void {
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
   logCursorEvent('input modes: bracketed paste, wheel reporting, theme notifications, focus reporting');
-  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_MOUSE_TRACKING}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
+  // Mouse tracking is NOT among these. Asking for it tells the client to hand
+  // its wheel to this program instead of scrolling its own buffer -- and on
+  // the main screen that buffer is the conversation, scrolled by a swipe with
+  // no bytes sent, in any keyboard state. Taking the wheel there trades a
+  // scroll that always works for one that depends on the client forwarding a
+  // gesture it often does not. The alternate screen has no such buffer, so
+  // the overlay that takes that screen asks for the wheel with it.
+  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
+  if (!classicScreen()) sequence += ENABLE_MOUSE_TRACKING;
   terminalModes.bracketedPaste = true;
   terminalModes.focusReporting = true;
   terminalModes.wheelReporting = true;
@@ -1429,15 +1437,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (wanted === this.overlayActive) return;
     this.overlayActive = wanted;
     if (wanted) {
-      // The region goes with it: a program that takes the screen takes it
-      // whole, and a region left set would confine what draws next.
-      output.write(`${this.eraseLiveRegion()}${ENTER_ALTERNATE_SCREEN}`);
+      // The wheel comes with the screen: there is no scrollback behind an
+      // alternate screen for the client to scroll, so this program does the
+      // scrolling and needs the events to do it with.
+      output.write(`${this.eraseLiveRegion()}${ENTER_ALTERNATE_SCREEN}${ENABLE_MOUSE_TRACKING}`);
       terminalModes.alternateScreen = true;
       this.alternateScreen = true;
       this.alternatePrevious = [];
       this.alternateScrollback = 0;
     } else {
-      output.write(LEAVE_ALTERNATE_SCREEN);
+      // And the wheel goes back to the client with it, so a swipe scrolls the
+      // conversation the terminal is holding.
+      output.write(`${DISABLE_MOUSE_TRACKING}${LEAVE_ALTERNATE_SCREEN}`);
       terminalModes.alternateScreen = false;
       this.alternateScreen = false;
       this.alternatePrevious = [];
