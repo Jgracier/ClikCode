@@ -2483,7 +2483,11 @@ async function interactiveAccountPicker(
       session,
       harness,
     );
-    const usageRefresh = Promise.allSettled(providerAccounts.map((account) => accountUsageLabel(account, state)))
+    // The one reading a harness cannot give us: an account this session has
+    // not driven has no stream to have reported on. Asking the vendor for it
+    // happens here and only here -- when someone opened the account picker to
+    // compare accounts -- rather than on every paint of every terminal.
+    const usageRefresh = Promise.allSettled(providerAccounts.map((account) => accountUsageLabel(account, state, { network: true })))
       .then(() => { usagePending = false; });
     let actionPerformed = false;
     let backedOut = false;
@@ -3333,8 +3337,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     while (true) {
       let line: string;
       let queuedTurnId: string | undefined;
-      /** Shown while THIS turn runs, unlike `notice`, which the next frame shows. */
-      let turnNotice: string | undefined;
       let activeWorkspace = process.cwd();
       // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
       // handoff, resume) closes the child it had.
@@ -3358,13 +3360,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         notice = undefined;
         const queued = latest.queuedTurns?.[0];
         if (queued) {
+          // No notice: a queued message is echoed into the conversation as the
+          // user message it is, and the waiting row underneath says a turn is
+          // running. Announcing it a third time said nothing the screen did
+          // not already say.
           line = queued.text;
           queuedTurnId = queued.id;
-          // Carried into the turn's own render rather than left for the next
-          // pass of this loop: a notice set here is not painted until the
-          // frame after the turn, which is to say it announced a queued
-          // message as running only once it had finished running.
-          turnNotice = 'Running queued message';
         } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true })).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
@@ -3391,8 +3392,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               ? { queuedTurns: active.queuedTurns?.filter((item) => item.id !== turn.queuedTurnId) }
               : {}),
           };
-          rl.render(pending, activeAccount, turnNotice);
-          turnNotice = undefined;
+          rl.render(pending, activeAccount);
           const turnController = new AbortController();
           const liveInput = new LiveTurnInputBroker();
           interruptedSubmission = { text: promptText, restoreOnEscape: false };
