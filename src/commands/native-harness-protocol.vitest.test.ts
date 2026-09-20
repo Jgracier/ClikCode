@@ -185,8 +185,8 @@ describe('incremental native tool activity', () => {
     const done = parseNativeActivityEvent(codex, JSON.stringify({
       type: 'item.completed', item: { id: 'call-2', type: 'mcp_tool_call', name: 'search' },
     }));
-    expect(start).toEqual({ kind: 'tool-start', label: 'search', id: 'call-2' });
-    expect(done).toEqual({ kind: 'tool-done', label: 'search', id: 'call-2' });
+    expect(start).toEqual({ kind: 'tool-start', label: 'search', category: 'search', id: 'call-2' });
+    expect(done).toEqual({ kind: 'tool-done', label: 'search', category: 'search', id: 'call-2' });
   });
 
   it('pairs generic file changes instead of creating a detached completion row', () => {

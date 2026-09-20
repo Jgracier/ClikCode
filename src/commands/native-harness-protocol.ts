@@ -11,7 +11,7 @@ import { localHarnessForCommand } from './harness-runtime.js';
 export { nativeResponseUpdate, type NativeResponseUpdate } from './harness-event-adapters.js';
 import type {
   AiHarnessAccount, AiLocalHarnessDefinition,
-  HarnessActivityEvent, HarnessSession,
+  HarnessActivityEvent, HarnessSession, ToolCategory,
 } from './types.js';
 export {
   harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
@@ -385,6 +385,52 @@ export function toolLabel(name: string, input?: Record<string, unknown>): string
   return firstLine ? `${name}(${visibleSlice(firstLine, 72)})` : name;
 }
 
+/** Vendors do not agree on tool names, but they agree on verbs. Matched
+ * against the name with separators and case removed, so `str_replace_editor`,
+ * `strReplaceEditor` and `STR-REPLACE-EDITOR` are one entry. Web surfaces come
+ * first: a `web_search` is a fetch, not a repository search. */
+const TOOL_NAME_CATEGORIES: ReadonlyArray<readonly [ToolCategory, RegExp]> = [
+  ['fetch', /^(webfetch|websearch|webbrowse|webread|browse|curl|httpget|http|fetchurl)$/],
+  ['edit', /^(edit|write|patch|applypatch|strreplace|strreplaceeditor|multiedit|createfile|updatefile|writefile|filewrite|notebookedit|insert|append)$/],
+  ['read', /^(read|view|open|cat|readfile|getfile|fileread|viewfile|openfile|notebookread)$/],
+  ['run', /^(bash|sh|shell|exec|execute|run|runcommand|runterminalcmd|terminal|command|process|localshell)$/],
+  ['search', /^(grep|glob|find|search|rg|ripgrep|listdir|ls|listfiles|codebasesearch|filesearch|searchfiles|findfiles|todoread)$/],
+  ['fetch', /^(fetch|request|download)$/],
+];
+
+/** Which input key carried the target, for a tool whose name says nothing.
+ * This is the vendor-agnostic half: an ACP agent advertising names nobody has
+ * ever seen still classifies, because a `command` is a command everywhere. A
+ * bare path is deliberately absent -- it does not say whether the file was
+ * read or written, and guessing is what made the old label regex untrustworthy. */
+const TOOL_INPUT_CATEGORIES: ReadonlyArray<readonly [ToolCategory, string]> = [
+  ['run', 'command'], ['search', 'pattern'], ['search', 'query'], ['fetch', 'url'],
+];
+
+/** Spread form: contributes nothing at all when the evidence does not settle
+ * it, so an unclassified tool's event is byte-identical to what it was before
+ * categories existed. */
+function categoryOf(name: string, input?: Record<string, unknown>): { category?: ToolCategory } {
+  const category = toolCategory(name, input);
+  return category ? { category } : {};
+}
+
+/** What a tool call does, from evidence, in order of how much it proves:
+ * a diff the harness actually reported, then the tool's own name, then the
+ * shape of its input. Undefined when none of the three settles it. */
+export function toolCategory(
+  name: string, input?: Record<string, unknown>, hasDiff = false,
+): ToolCategory | undefined {
+  if (hasDiff) return 'edit';
+  const normalized = name.toLowerCase().replace(/[^a-z]/g, '');
+  for (const [category, pattern] of TOOL_NAME_CATEGORIES) if (pattern.test(normalized)) return category;
+  for (const [category, key] of TOOL_INPUT_CATEGORIES) {
+    const value = input?.[key];
+    if (typeof value === 'string' && value.trim()) return category;
+  }
+  return undefined;
+}
+
 export function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
   const all = text.split(/\r?\n/);
   return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
@@ -435,15 +481,18 @@ function claudeToolStart(tool: JsonRecord): NativeActivityEvent {
     const removed = capDiffLines(input.old_string, DIFF_CAPTURE_LINES);
     const added = capDiffLines(input.new_string, DIFF_CAPTURE_LINES);
     return {
-      kind: 'tool-start', label: toolLabel(name, input), ...identity,
+      kind: 'tool-start', label: toolLabel(name, input), category: toolCategory(name, input, true), ...identity,
       diff: { removed: [...removed.lines, ...truncationNote(removed.truncated)], added: [...added.lines, ...truncationNote(added.truncated)] },
     };
   }
   if (name === 'Write' && typeof input?.content === 'string') {
     const added = capDiffLines(input.content, DIFF_CAPTURE_LINES);
-    return { kind: 'tool-start', label: toolLabel(name, input), ...identity, diff: { removed: [], added: [...added.lines, ...truncationNote(added.truncated)] } };
+    return {
+      kind: 'tool-start', label: toolLabel(name, input), category: toolCategory(name, input, true), ...identity,
+      diff: { removed: [], added: [...added.lines, ...truncationNote(added.truncated)] },
+    };
   }
-  return { kind: 'tool-start', label: toolLabel(name, input), ...identity };
+  return { kind: 'tool-start', label: toolLabel(name, input), ...categoryOf(name, input), ...identity };
 }
 
 /** Every activity one record describes. A single Claude message routinely
@@ -539,8 +588,9 @@ function gooseActivity(value: JsonRecord): NativeActivityEvent[] | undefined {
       const call = asRecord(block.toolCall);
       const detail = asRecord(call?.value) ?? call;
       const name = String(detail?.name ?? 'tool');
-      if (call?.status === 'error') return [{ kind: 'tool-error', label: name, ...identity }];
-      return [{ kind: 'tool-start', label: toolLabel(name, asRecord(detail?.arguments)), ...identity }];
+      const args = asRecord(detail?.arguments);
+      if (call?.status === 'error') return [{ kind: 'tool-error', label: name, ...categoryOf(name, args), ...identity }];
+      return [{ kind: 'tool-start', label: toolLabel(name, args), ...categoryOf(name, args), ...identity }];
     }
     if (block?.type === 'toolResponse') {
       const result = asRecord(block.toolResult);
@@ -565,6 +615,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       return {
         kind: /error|fail/i.test(state) ? 'tool-error' : state === 'DONE' ? 'tool-done' : 'tool-start',
         label: String(step.tool_name ?? 'tool'),
+        ...categoryOf(String(step.tool_name ?? 'tool')),
       };
     }
   }
@@ -595,7 +646,8 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     // keyed by its id; the completion upserts the real label and output onto
     // this same row, at the position where the tool actually began.
     if (!command) {
-      return type.endsWith('completed') || !startedId ? undefined : { kind: 'tool-start', label: 'tool', id: startedId };
+      return type.endsWith('completed') || !startedId ? undefined
+        : { kind: 'tool-start', label: 'tool', category: 'run', id: startedId };
     }
     const rawOutput = typeof item?.aggregated_output === 'string' ? item.aggregated_output
       : typeof item?.output === 'string' ? item.output : '';
@@ -623,7 +675,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     return {
       kind: type.endsWith('completed')
         ? (item?.status === 'failed' || item?.status === 'error' ? 'tool-error' : 'tool-done')
-        : 'tool-start', label: name,
+        : 'tool-start', label: name, ...categoryOf(name),
       ...(typeof item?.id === 'string' ? { id: item.id } : {}),
     };
   }
@@ -641,7 +693,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     const output = typeof state?.output === 'string' ? cappedActivityOutput(state.output) : undefined;
     return {
       kind: /error|fail/i.test(status) ? 'tool-error' : status === 'completed' ? 'tool-done' : 'tool-start',
-      label: toolLabel(name, asRecord(state?.input)),
+      label: toolLabel(name, asRecord(state?.input)), ...categoryOf(name, asRecord(state?.input)),
       ...(typeof part?.callID === 'string' ? { id: part.callID } : typeof part?.id === 'string' ? { id: part.id } : {}),
       ...(output?.length ? { output } : {}),
     };
@@ -667,6 +719,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       const output = cappedActivityOutput(rawOutput);
       return {
         kind, label: kind === 'tool-start' && description ? `${name}(${visibleSlice(description, 72)})` : name,
+        ...categoryOf(name),
         ...(typeof inner.toolCallId === 'string' ? { id: inner.toolCallId } : {}),
         ...(output?.length ? { output } : {}),
       };
@@ -677,7 +730,9 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   // the docs excerpt available didn't name a paired completion event, so
   // (same as Command Code above) this only ever reports 'tool-start'.
   if (harness.command === 'pi') {
-    if (type === 'tool_execution_start') return { kind: 'tool-start', label: String(value.toolName ?? 'tool') };
+    if (type === 'tool_execution_start') {
+      return { kind: 'tool-start', label: String(value.toolName ?? 'tool'), ...categoryOf(String(value.toolName ?? 'tool')) };
+    }
     if (type === 'tool_execution_end') return {
       kind: value.isError === true || value.error ? 'tool-error' : 'tool-done',
       label: String(value.toolName ?? 'tool'),
@@ -685,7 +740,9 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     if (type === 'message_update') {
       const event = value.assistantMessageEvent && typeof value.assistantMessageEvent === 'object'
         ? value.assistantMessageEvent as Record<string, unknown> : undefined;
-      if (event?.type === 'toolcall_start') return { kind: 'tool-start', label: String(event.toolName ?? 'tool') };
+      if (event?.type === 'toolcall_start') {
+        return { kind: 'tool-start', label: String(event.toolName ?? 'tool'), ...categoryOf(String(event.toolName ?? 'tool')) };
+      }
     }
   }
   return undefined;
