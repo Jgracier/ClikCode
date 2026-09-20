@@ -6,13 +6,15 @@ import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import {
-  composerLayout, createStreamingBlockParser, LruCache, nextCharacterIndex, previousCharacterIndex,
+  closeOpenHyperlink, composerLayout, createStreamingBlockParser, LruCache, nextCharacterIndex, previousCharacterIndex,
   renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock,
   sanitizeTerminalText, splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
 } from './markdown-render.js';
 import { restoreTerminal, terminalModes } from './terminal-restore.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
+import { TranscriptStream } from './transcript-stream.js';
+import { TurnTranscript, type SettlingTool } from './turn-transcript.js';
 import { nativeModelLabel } from './native-account-data.js';
 import type { LiveTurnInputResult } from './live-turn-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBlock, PickerOption } from './types.js';
@@ -921,6 +923,73 @@ export function formatTurnUsage(usage?: { inputTokens?: number; outputTokens?: n
   return parts.length ? `${parts.join(' ')} tokens` : '';
 }
 
+/** Rows for a run of parsed Markdown blocks, exactly as they appear in the
+ * transcript.
+ *
+ * Append-only: a row this returns is written into the terminal's own
+ * scrollback once and never addressed again, so the same blocks must produce
+ * the same rows whether they are rendered while an answer streams or when its
+ * persisted copy arrives. `firstOfMessage` puts the message's marker on the
+ * very first row; every later row is indented under it. `live` renders the
+ * final block with the streaming inline renderer, whose output does not change
+ * shape as the rest of a construct arrives.
+ */
+export function renderMessageBlocks(
+  blocks: readonly MessageBlock[], marker: string, width: number, firstOfMessage = true, live = false,
+): string[] {
+  const rows: string[] = [];
+  let firstLine = firstOfMessage;
+  const linePrefix = (): string => {
+    const prefix = firstLine ? `${marker} ` : '  ';
+    firstLine = false;
+    return prefix;
+  };
+  for (const [index, block] of blocks.entries()) {
+    const streaming = live && index === blocks.length - 1;
+    const quotePrefix = block.quoteDepth ? chalk.dim('│ '.repeat(block.quoteDepth)) : '';
+    if (block.kind === 'code') {
+      const structural = `${quotePrefix}${'  '.repeat(block.indent)}`;
+      for (const codeLine of [...(block.language ? [chalk.dim(`[${block.language}]`)] : []), ...block.lines]) {
+        const segments = wrapCodeLine(codeLine, Math.max(1, width - terminalCellWidth(structural) - 2));
+        for (const [segmentIndex, segment] of segments.entries()) {
+          const continuation = segmentIndex ? chalk.dim('↳ ') : '  ';
+          rows.push(`${linePrefix()}${structural}${continuation}${chalk.cyan(segment)}`);
+        }
+      }
+      continue;
+    }
+    if (block.kind === 'table') {
+      const available = Math.max(1, width - terminalCellWidth(quotePrefix));
+      for (const tableLine of renderTableBlock(block.header, block.rows, available, block.align)) {
+        rows.push(`${linePrefix()}${quotePrefix}${tableLine}`);
+      }
+      continue;
+    }
+    if (block.kind === 'rule') {
+      const available = Math.max(1, width - terminalCellWidth(quotePrefix));
+      rows.push(`${linePrefix()}${quotePrefix}${chalk.dim('─'.repeat(available))}`);
+      continue;
+    }
+    const listPrefix = block.kind === 'list-item'
+      ? `${'  '.repeat(block.depth)}${block.task ? chalk.cyan(block.checked ? '☑' : '☐') : block.ordered ? chalk.dim(`${block.number}.`) : chalk.dim('•')} `
+      : block.kind === 'paragraph' ? '  '.repeat(block.indent) : '';
+    const structural = `${quotePrefix}${listPrefix}`;
+    const hangIndent = ' '.repeat(terminalCellWidth(structural));
+    const text = block.kind === 'heading' || block.kind === 'paragraph' || block.kind === 'list-item' ? block.text : '';
+    // The block still receiving tokens has a new text on every frame; the
+    // streaming renderer keeps an unterminated span from reflowing later.
+    const styled = (streaming ? renderInlineMarkdownLive : renderInlineMarkdown)(text || ' ');
+    const budget = Math.max(1, width - terminalCellWidth(structural));
+    for (const [lineIndex, line] of wrapWords(styled, budget).entries()) {
+      const indentation = lineIndex === 0 ? structural : hangIndent;
+      rows.push(`${linePrefix()}${indentation}${block.kind === 'heading'
+        ? block.level <= 2 ? chalk.cyanBright(chalk.bold(line)) : chalk.bold(line)
+        : line}`);
+    }
+  }
+  return rows;
+}
+
 export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
   private history: string[] = [];
@@ -943,7 +1012,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
-  private pendingInlineFrame?: InlineFrameState;
   private queuedDraft?: string;
   private waitingDraft = '';
   private waitingCursor = 0;
@@ -955,19 +1023,33 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private suspended = false;
   private readonly reducedMotion = reducedMotion();
   private activityAnchor = 0;
-  /** Persisted conversation lines already emitted into the terminal's native
-   * scrollback. Only the changing response/composer below them is repainted. */
-  private inlinePermanentLines: string[] = [];
-  private inlineWrittenPermanentLines: string[] = [];
-  /** Exactly the live rows the last flushed frame left on screen, and the row
-   * of them the cursor was parked on. Every repaint is relative to these. */
-  private inlinePaintedRows: string[] = [];
-  private inlinePaintedCursorRow = 0;
-  private inlineStarted = false;
+  /** Everything this UI writes goes through one append-only stream: finished
+   * rows into native scrollback, one small live region below them. */
+  private frameBuffer = '';
+  private readonly stream = new TranscriptStream((data) => { this.frameBuffer += data; });
+  private pendingFinished: string[] = [];
+  private pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean };
+  /** The last row retired, so a blank separator is never doubled across the
+   * boundary between one frame and the next. */
+  private lastFinishedRow?: string;
+  /** Persisted messages already in scrollback, and the standalone activity
+   * rows already written. Everything before `emittedMessages` belongs to the
+   * terminal now; this UI never addresses it again. */
+  private emittedMessages = 0;
+  private readonly emittedActivity = new Set<string>();
+  /** Where the answer currently streaming will land once it is persisted, so
+   * the persisted copy adds only what the stream had not already retired. */
+  private liveAssistantIndex?: number;
+  private readonly turnTranscript = new TurnTranscript();
+  /** Timeline sequence this turn started at, so activity left over from an
+   * earlier turn at the same anchor is never adopted into it. */
+  private turnSequenceFloor = 0;
+  /** Write the windowed history once: the first frame of the process, and the
+   * first frame of a newly opened session. */
+  private reseedTranscript: false | 'first' | 'scroll-away' = 'first';
   private lastColumns = output.columns || 0;
-  private commitConversationOnNextPaint = false;
-  private resetInlineScreen: InlineReset = 'history';
   private usageLabel?: string;
+  private usageResetLabel?: string;
   private selecting = false;
   /** True while the slash palette (inside question()) has its own fixed-capacity
    * footer band open. usage()/activity() are called from fire-and-forget async
@@ -989,10 +1071,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private latestThought?: string;
   private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
-  /** Laid-out rows of settled messages, keyed by everything that shapes them.
-   * A spinner tick or a keystroke repaints with forty cache hits instead of
-   * re-parsing and re-wrapping forty messages. */
-  private readonly messageRowCache = new LruCache<string, readonly string[]>(256);
   private streamingBlocks = createStreamingBlockParser();
   /** Re-installs the key listener and raw mode after Ctrl+Z / `fg`. */
   private resumeInput?: () => void;
@@ -1075,17 +1153,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   };
   private readonly onResize = (): void => {
     if (!this.closed) {
-      // Only a width change invalidates what is on screen (every row re-wraps).
-      // A height change leaves the rows around the cursor intact, so the
-      // ordinary cursor-relative repaint is still correct -- unless the old
-      // live region no longer fits, when its top is off screen and unreachable.
-      const columns = output.columns || 0;
-      const widthChanged = columns !== this.lastColumns;
-      this.lastColumns = columns;
-      if (widthChanged || this.inlinePaintedRows.length > (output.rows || 30)) {
-        this.resetInlineScreen = this.resetInlineScreen || 'viewport';
-        this.commitConversationOnNextPaint = true;
-      }
+      // A resize invalidates the wrapping of the live region only. Rows already
+      // in scrollback keep the wrapping they were written with -- exactly as
+      // Ink and ratatui behave, and precisely why neither of them re-dumps the
+      // transcript on every resize. The live region is redrawn at the new width
+      // by the ordinary frame below.
+      this.lastColumns = output.columns || 0;
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
   };
@@ -1108,8 +1181,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.activityEntries = [];
       this.planEntries = [];
       this.panelState = undefined;
-      this.inlinePermanentLines = [];
-      this.resetInlineScreen = 'history';
+      // The previous conversation is scrolled up into scrollback -- preserved,
+      // not erased -- so the new one starts on a clean viewport.
+      this.reseedTranscript = this.emittedMessages ? 'scroll-away' : 'first';
     }
     if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
@@ -1120,7 +1194,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     this.liveResponse = '';
-    this.commitConversationOnNextPaint = true;
     this.paint('', [], 0, '› ', 0);
   }
 
@@ -1233,6 +1306,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.turnUsage = undefined;
     this.latestThought = undefined;
     this.panelState = undefined;
+    // Whatever the previous turn retired belongs to the terminal now. This one
+    // starts owing everything it produces, and nothing from before it.
+    this.turnTranscript.reset();
+    this.liveAssistantIndex = undefined;
+    this.turnSequenceFloor = this.timelineSequence;
+    this.streamingBlocks = createStreamingBlockParser();
     if (input.isTTY) {
       const listen = (): void => {
         input.setRawMode(true);
@@ -1338,9 +1417,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
-  usage(label?: string): void {
-    if (this.usageLabel === label) return;
+  usage(label?: string, resetLabel?: string): void {
+    if (this.usageLabel === label && this.usageResetLabel === resetLabel) return;
     this.usageLabel = label;
+    this.usageResetLabel = resetLabel;
     this.schedulePaint();
   }
 
@@ -1386,7 +1466,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const label = `${this.waitingLabel} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
       + `${this.cancelWaiting && !this.pendingApproval ? ' · esc to interrupt' : ''}`
       + `${this.waitingSubmit ? ' · type and press Enter to send' : ''}`;
-    return `${chalk.cyanBright(waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame))}  ${chalk.dim(label)}`;
+    // What the agent is doing is essential and stays at full contrast; only the
+    // counters and key hints after it are dimmed.
+    const split = label.indexOf(' (');
+    return `${chalk.cyanBright(waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame))}  ${label.slice(0, split)}${chalk.dim(label.slice(split))}`;
   }
 
   private updateWaiting(): void {
@@ -1425,7 +1508,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.draftCursor = cursor;
     this.draftPalette = palette ? { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } : undefined;
     // No -1 margin: DEC autowrap is off for this whole frame (see the
-    // `[?7l` at the top of it), so the real last column is safe to
+    // `\u001b[?7l` at the top of it), so the real last column is safe to
     // use, not just columns-1.
     const width = Math.max(12, output.columns || 100);
     const inner = width - 4;
@@ -1451,24 +1534,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const hasTransientAssistant = transientAssistantRequired(
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
     ) || Boolean(pending?.steers?.length);
-    const transientAssistant = hasTransientAssistant
-      ? { role: 'assistant' as const, content: this.liveResponse }
-      : undefined;
     const storedQueued = session.queuedTurns ?? [];
     const queuedMessages = [
       ...storedQueued.map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
       ...this.waitingSubmissions.filter((item) => item.state !== 'steered')
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
     ];
-    // 40, not 6: matches the same replay/adoption cap used elsewhere
-    // (failoverPrompt, ADOPTED_TRANSCRIPT_LIMIT) and — now that the
-    // conversation area supports scrolling — gives Page Up somewhere real to
-    // go instead of a pool too small to scroll through at all. Transient and
-    // queued rows sit outside that cap so they cannot shift the persisted
-    // prefix while a turn is streaming.
-    const { messages, messageStart } = conversationMessageWindow<{
-      role: 'user' | 'assistant'; content: string; queueState?: string;
-    }>(persistedMessages, transientAssistant, queuedMessages);
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.
@@ -1523,194 +1594,146 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - planRows.length - panelRows.length,
     );
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
-    const conversation: Array<{ text: string }> = [];
-    let stableConversationBoundary = 0;
-    // Where provisional rows begin. The live assistant and any queued turns are
-    // drawn from state that is about to change -- a queued turn becomes a real
-    // user message the moment it is sent -- so they must stay in the repainted
-    // region until they are persisted, never in native scrollback.
-    let provisionalConversationStart = Number.POSITIVE_INFINITY;
-    // Rows of a still-open block that can no longer change: everything above
-    // the final Markdown part, plus every completed source line of an open code
-    // fence. Without this only a CLOSED block could leave the live region, so a
-    // code block taller than the viewport showed just its tail while streaming
-    // and its head rows never reached scrollback at all.
-    let lineStableConversationBoundary = 0;
-    const ensureBlankConversationRow = (): void => {
-      if (conversation.length && conversation[conversation.length - 1]?.text !== '') conversation.push({ text: '' });
-    };
-    const appendActivityGroup = (lines: readonly string[]): void => {
-      if (!lines.length) return;
-      ensureBlankConversationRow();
-      for (const activity of lines) {
-        conversation.push({ text: `${chalk.dim('·')} ${visibleSlice(activity, Math.max(1, conversationInner - 2))}` });
+    // -------------------------------------------------------------------
+    // The append-only transcript. A finished row is handed to the terminal's
+    // own scrollback exactly once and is never addressed again; only the live
+    // region below it -- the block still receiving tokens, queued turns and
+    // the footer -- is erased and redrawn. Nothing here rebuilds the
+    // conversation to work out which prefix is safe to promote. TurnTranscript
+    // decides what can no longer change, and that is the whole decision.
+    // -------------------------------------------------------------------
+    const finished: string[] = [];
+    const emit = (rows: readonly string[]): void => {
+      for (const row of rows) {
+        const last = finished.length ? finished[finished.length - 1] : this.lastFinishedRow;
+        // One blank row between things, never two, and never a leading one.
+        if (row === '' && (last === '' || last === undefined)) continue;
+        finished.push(row);
       }
-      ensureBlankConversationRow();
     };
-    const appendActivity = (anchor: number): void => {
-      const lines = this.activityEntries
-        .filter((item) => item.anchor === anchor && item.responseOffset === undefined)
-        .flatMap((entry) => entry.lines);
-      appendActivityGroup(lines);
+    const userMarker = chalk.bold('›');
+    const activityRows = (lines: readonly string[]): string[] => (lines.length
+      ? ['', ...lines.map((line) => `${chalk.dim('·')} ${visibleSlice(line, Math.max(1, conversationInner - 2))}`), '']
+      : []);
+    const messageRows = (content: string, marker: string): string[] =>
+      renderMessageBlocks(splitIntoBlocks(sanitizeTerminalText(content)), marker, conversationInner);
+    /** Activity that belongs between two messages rather than inside a turn.
+     * Emitted once, keyed by what it says, because an entry that arrives after
+     * its anchor has already been passed can only be appended where it lands. */
+    const standaloneActivity = (anchor: number): string[] => {
+      const rows: string[] = [];
+      for (const entry of this.activityEntries) {
+        if (entry.anchor !== anchor || entry.responseOffset !== undefined) continue;
+        const key = `${anchor}\u0000${entry.lines.join('\u0001')}`;
+        if (this.emittedActivity.has(key)) continue;
+        this.emittedActivity.add(key);
+        rows.push(...activityRows(entry.lines));
+      }
+      return rows;
     };
-    appendActivity(messageStart);
-    for (const [messageIndex, message] of messages.entries()) {
-      const marker = message.role === 'assistant' ? chalk.white('·') : chalk.white('›');
-      const appendMarkdownContent = (
-        rawContent: string, messageMarker: string, events: readonly InlineResponseEvent[] = [], trackStableTail = false,
-      ): void => {
-        // Model and user text is sanitized before it is parsed or styled, so
-        // the live stream and the persisted copy of a message lay out alike.
-        const content = sanitizeTerminalText(rawContent);
-        // Settled content is context-free: a message always starts after a
-        // blank row (or at the top), so its rows depend only on these inputs.
-        const cacheKey = trackStableTail ? undefined : [
-          conversationInner, messageMarker,
-          events.map((event) => `${event.kind}@${event.responseOffset}#${event.sequence ?? ''}=${event.kind === 'activity' ? event.lines.join('\n') : event.text}`).join('\u0001'),
-          content,
-        ].join('\u0000');
-        const cachedRows = cacheKey === undefined ? undefined : this.messageRowCache.get(cacheKey);
-        if (cachedRows) {
-          for (const text of cachedRows) conversation.push({ text });
-          return;
-        }
-        const firstRow = conversation.length;
-        let firstLine = true;
-        /** Returns how many conversation rows are final even if this block is
-         * still growing at the end of a live stream. */
-        const appendBlock = (block: MessageBlock, live = false): number => {
-          const blockStart = conversation.length;
-          const quotePrefix = block.quoteDepth ? chalk.dim('│ '.repeat(block.quoteDepth)) : '';
-          const linePrefix = (): string => {
-            const prefix = firstLine ? `${messageMarker} ` : '  ';
-            firstLine = false;
-            return prefix;
-          };
-          if (block.kind === 'code') {
-            const structural = `${quotePrefix}${'  '.repeat(block.indent)}`;
-            let lastLineStart = blockStart;
-            for (const codeLine of [...(block.language ? [chalk.dim(`[${block.language}]`)] : []), ...block.lines]) {
-              lastLineStart = conversation.length;
-              const segments = wrapCodeLine(codeLine, Math.max(1, conversationInner - terminalCellWidth(structural) - 2));
-              for (const [segmentIndex, segment] of segments.entries()) {
-                const continuation = segmentIndex ? chalk.dim('↳ ') : '  ';
-                conversation.push({ text: `${linePrefix()}${structural}${continuation}${chalk.cyan(segment)}` });
-              }
-            }
-            // The last source line may still be receiving characters, and a
-            // fence with no body yet may still be receiving its info string.
-            return block.lines.length > 1 || block.lines[0] ? lastLineStart : blockStart;
-          }
-          if (block.kind === 'table') {
-            const available = Math.max(1, conversationInner - terminalCellWidth(quotePrefix));
-            for (const tableLine of renderTableBlock(block.header, block.rows, available, block.align)) {
-              conversation.push({ text: `${linePrefix()}${quotePrefix}${tableLine}` });
-            }
-            // A new row can re-layout every column, so no table row is final
-            // until the block closes. All of them are written at that point.
-            return blockStart;
-          }
-          if (block.kind === 'rule') {
-            const available = Math.max(1, conversationInner - terminalCellWidth(quotePrefix));
-            conversation.push({ text: `${linePrefix()}${quotePrefix}${chalk.dim('─'.repeat(available))}` });
-            return blockStart;
-          }
-          const listPrefix = block.kind === 'list-item'
-            ? `${'  '.repeat(block.depth)}${block.task ? chalk.cyan(block.checked ? '☑' : '☐') : block.ordered ? chalk.dim(`${block.number}.`) : chalk.dim('•')} `
-            : block.kind === 'paragraph' ? '  '.repeat(block.indent) : '';
-          const structural = `${quotePrefix}${listPrefix}`;
-          const hangIndent = ' '.repeat(terminalCellWidth(structural));
-          const text = block.kind === 'heading' || block.kind === 'paragraph' || block.kind === 'list-item' ? block.text : '';
-          // The block still receiving tokens has a new text on every frame;
-          // caching it only fills the cache with dead prefixes.
-          const styled = (live ? renderInlineMarkdownLive : renderInlineMarkdown)(text || ' ');
-          const budget = Math.max(1, conversationInner - terminalCellWidth(structural));
-          const wrapped = wrapWords(styled, budget);
-          for (const [lineIndex, line] of wrapped.entries()) {
-            const indentation = lineIndex === 0 ? structural : hangIndent;
-            const rendered = block.kind === 'heading'
-              ? block.level <= 2 ? chalk.cyanBright(chalk.bold(line)) : chalk.bold(line)
-              : line;
-            conversation.push({ text: `${linePrefix()}${indentation}${rendered}` });
-          }
-          return blockStart;
-        };
-        const timeline = responseTimeline(content, events, trackStableTail ? this.streamingBlocks(content) : undefined);
-        let finalMarkdownPart = -1;
-        for (const [partIndex, part] of timeline.entries()) if (part.kind === 'markdown') finalMarkdownPart = partIndex;
-        for (const [partIndex, part] of timeline.entries()) {
-          if (part.kind === 'markdown') {
-            const stableRows = appendBlock(part.block, trackStableTail && partIndex === finalMarkdownPart);
-            if (trackStableTail && partIndex === finalMarkdownPart) lineStableConversationBoundary = stableRows;
-          } else if (part.kind === 'activity') appendActivityGroup(part.lines);
-          else {
-            ensureBlankConversationRow();
-            appendMarkdownContent(part.text, chalk.white('›'));
-            conversation.push({ text: `  ${chalk.dim('↳ steered into active turn')}` });
-            ensureBlankConversationRow();
-          }
-          // Everything before the final live timeline part is structurally
-          // complete. It can enter native scrollback if the replaceable tail
-          // would otherwise exceed the viewport; the unfinished last block
-          // remains editable as more streamed Markdown arrives.
-          if (trackStableTail && streamingMarkdownBoundary(content, timeline, partIndex)) {
-            stableConversationBoundary = conversation.length;
-          }
-        }
-        if (cacheKey !== undefined) this.messageRowCache.set(cacheKey, conversation.slice(firstRow).map((row) => row.text));
-      };
-      const absoluteMessageIndex = messageStart + messageIndex;
-      // Tool rows describe an assistant turn. They are anchored at the index the
-      // live assistant occupied, and the NEXT question lands on that same index
-      // once the answer is persisted -- so without this the finished tools from
-      // the previous answer rendered inside the question just typed, directly
-      // above the composer, on every single turn.
-      const embeddedEvents: InlineResponseEvent[] = (message.role !== 'assistant' ? [] : this.activityEntries)
-        .filter((entry) => entry.anchor === absoluteMessageIndex && entry.responseOffset !== undefined)
-        // A tool that is still running is reported in the waiting band
-        // ("running <label>") and nowhere else. Its row is still mutable --
-        // completion rewrites it with the output preview -- so rendering it
-        // here forced it, and everything after it, to stay in the repainted
-        // region. Because the row is anchored at the offset where the tool
-        // STARTED, one long-running (or never-completed) tool parked its own
-        // row and every later paragraph directly above the composer for the
-        // rest of the turn. A finished row is immutable and flows into
-        // scrollback with the text around it.
-        .filter((entry) => entry.event?.kind !== 'tool-start')
+    /** The in-flight turn's tools and steering messages, as rows that settle.
+     * A running tool is reported in the waiting band ("running <label>") and
+     * nowhere else: its row is still mutable -- completion rewrites it with the
+     * output preview -- and a mutable row can never enter scrollback. At the
+     * end of the turn a tool that never reported completion settles anyway,
+     * rather than being lost or holding the region open forever. */
+    const turnTools = (ended: boolean): SettlingTool[] => {
+      const tools: SettlingTool[] = this.activityEntries
+        // An anchor is reused: the next turn's assistant occupies the same
+        // index when the previous one was never persisted. The turn that
+        // produced an entry is what decides whether it belongs to this one.
+        .filter((entry) => entry.anchor === this.activityAnchor && entry.responseOffset !== undefined
+          && (entry.sequence ?? 0) > this.turnSequenceFloor)
+        .filter((entry) => ended || entry.event?.kind !== 'tool-start')
         .map((entry) => ({
-          kind: 'activity' as const, responseOffset: entry.responseOffset!, sequence: entry.sequence, lines: entry.lines,
+          id: entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`,
+          done: true, responseOffset: entry.responseOffset, lines: activityRows(entry.lines),
         }));
-      if (absoluteMessageIndex === persistedMessages.length) {
-        const durableSteers = pending?.steers ?? [];
-        embeddedEvents.push(...durableSteers.map((item) => ({
-          kind: 'steer' as const, responseOffset: item.responseOffset ?? 0, text: item.text,
+      const steerRows = (text: string): string[] => [
+        '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '',
+      ];
+      const durable = pending?.steers ?? [];
+      tools.push(...durable.map((item, index) => ({
+        id: `steer#${item.responseOffset ?? 0}#${index}`, done: true,
+        responseOffset: item.responseOffset ?? 0, lines: steerRows(item.text),
+      })));
+      const durableTexts = new Set(durable.map((item) => item.text));
+      tools.push(...this.waitingSubmissions
+        .filter((item) => item.state === 'steered' && !durableTexts.has(item.text))
+        .map((item) => ({
+          id: `steer#${item.sequence}`, done: true, responseOffset: item.responseOffset, lines: steerRows(item.text),
         })));
-        const durableTexts = new Set(durableSteers.map((item) => item.text));
-        embeddedEvents.push(...this.waitingSubmissions.filter((item) => item.state === 'steered'
-          && !durableTexts.has(item.text))
-          .map((item) => ({ kind: 'steer' as const, responseOffset: item.responseOffset, sequence: item.sequence, text: item.text })));
-      }
-      const transientAssistant = hasTransientAssistant && absoluteMessageIndex === persistedMessages.length;
-      appendMarkdownContent(message.content, marker, embeddedEvents, transientAssistant);
-      if (message.queueState) {
-        const status = message.queueState === 'steered' ? 'steered into active turn'
-          : message.queueState === 'sending' ? 'submitting…'
-            : message.queueState === 'error' ? 'not sent · restored for editing' : 'queued for next turn';
-        conversation.push({ text: `  ${chalk.dim(`↳ ${status}`)}` });
-      }
-      ensureBlankConversationRow();
-      appendActivity(messageStart + messageIndex + 1);
-      // Only QUEUED rows are provisional. The live assistant is re-rendered
-      // identically once persisted, so its settled prefix may still spill into
-      // scrollback -- which is what keeps an answer taller than the viewport
-      // from losing its head rows while it streams.
-      if (absoluteMessageIndex + 1 === persistedMessages.length + (hasTransientAssistant ? 1 : 0)) {
-        provisionalConversationStart = conversation.length;
-      }
+      return tools;
+    };
+    const renderBlocks = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
+      renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage);
+    const renderLive = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
+      renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage, true);
+
+    if (this.reseedTranscript === 'scroll-away') {
+      finished.push(...Array.from({ length: targetHeight }, () => ''));
+      this.lastFinishedRow = '';
     }
-    const conversationLines = liveConversationLines(
-      conversation.map((row) => row.text), hasTransientAssistant,
-    );
+    if (this.reseedTranscript) {
+      // The first frame of the process, or of a newly opened session, writes
+      // its windowed history once. Everything already in scrollback -- the
+      // shell's own output, the previous conversation -- stays where it is.
+      this.emittedMessages = conversationMessageWindow(persistedMessages, undefined, []).messageStart;
+      this.emittedActivity.clear();
+      this.liveAssistantIndex = undefined;
+      this.turnTranscript.reset();
+      this.reseedTranscript = false;
+    }
+    emit(standaloneActivity(this.emittedMessages));
+    for (let index = this.emittedMessages; index < persistedMessages.length; index += 1) {
+      const message = persistedMessages[index]!;
+      if (index === this.liveAssistantIndex && message.role === 'assistant') {
+        // The answer that just streamed. Its rows are already in scrollback and
+        // the transcript knows exactly which blocks it still owes, so a
+        // persisted copy that runs longer than what streamed -- a re-derived
+        // answer, an interrupted turn -- contributes only its tail, and one
+        // identical to what streamed contributes nothing at all.
+        emit(this.turnTranscript.advance({
+          content: sanitizeTerminalText(message.content), tools: turnTools(true), turnEnded: true, renderBlocks,
+        }).finished);
+      } else {
+        emit(messageRows(message.content, message.role === 'assistant' ? '·' : userMarker));
+      }
+      if (index === this.liveAssistantIndex) {
+        this.liveAssistantIndex = undefined;
+        this.turnTranscript.reset();
+      }
+      emit(['']);
+      emit(standaloneActivity(index + 1));
+    }
+    this.emittedMessages = persistedMessages.length;
+
+    const liveConversation: string[] = [];
+    if (hasTransientAssistant) {
+      this.liveAssistantIndex = persistedMessages.length;
+      const content = sanitizeTerminalText(this.liveResponse);
+      const step = this.turnTranscript.advance({
+        content,
+        // The live answer is lexed from its last blank-line boundary rather
+        // than re-parsed from the top on every delta.
+        blocks: this.streamingBlocks(content),
+        tools: turnTools(!this.waitingLabel),
+        turnEnded: !this.waitingLabel,
+        renderBlocks,
+        renderLive,
+      });
+      emit(step.finished);
+      liveConversation.push(...step.live);
+    }
+    for (const message of queuedMessages) {
+      // Provisional, and so never retired: a queued turn becomes a real user
+      // message the moment it is sent, and would then be written a second time.
+      const status = message.queueState === 'steered' ? 'steered into active turn'
+        : message.queueState === 'sending' ? 'submitting…'
+          : message.queueState === 'error' ? 'not sent · restored for editing' : 'queued for next turn';
+      liveConversation.push('', ...messageRows(message.content, userMarker), `  ${chalk.dim(`↳ ${status}`)}`);
+    }
+    const conversationLines = liveConversationLines(liveConversation, true);
     const meta = this.statusText();
     const footer: string[] = [];
     if (noticeRows && notice) footer.push(`  ${chalk.yellow(visibleSlice(notice, inner))}`);
@@ -1739,13 +1762,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (waitingRows) {
       footer.push(`  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
+    // When a window is exhausted, the harness-reported reset time sits
+    // directly above the usage rule it describes.
+    if (this.usageResetLabel) {
+      footer.push(`  ${chalk.dim(visibleSlice(this.usageResetLabel, Math.max(1, width - 2)))}`);
+    }
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. Keeping it out of the provider/model/directory row makes
     // the two quota windows easy to scan without adding another footer row.
     footer.push(chalk.dim(rightLabeledRule(width, this.usageLabel)));
     const composerStart = footer.length;
     for (const [index, row] of composerRows.rows.entries()) {
-      footer.push(`  ${index === 0 ? chalk.white(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
+      footer.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
     }
     // The rule below the composer carries the chat's title at its right
     // edge instead of a plain dashed line -- dashes fill from the left up to
@@ -1756,113 +1784,59 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     footer.push(chalk.dim(rightLabeledRule(width, this.titleText())));
     footer.push(`  ${chalk.dim(visibleSlice(meta, inner))}`);
 
-    // A width change mid-turn re-wraps rows that are already permanent, so the
-    // old prefix can never match again. Committing the half-streamed answer to
-    // force a match froze it, and every later frame was then rejected as a
-    // mismatch -- the answer vanished until the turn ended. Re-plan from an
-    // empty prefix instead: stable rows are promoted again as they overflow,
-    // and the viewport reset below repaints one screen either way.
-    const replanLiveTurn = this.resetInlineScreen === 'viewport' && hasTransientAssistant;
-    if (replanLiveTurn) this.inlinePermanentLines = [];
-    const commit = this.commitConversationOnNextPaint && !replanLiveTurn;
-    const maxDynamicConversation = Math.max(0, targetHeight - footer.length);
-    // With no queued row on screen there is nothing provisional, so the whole
-    // conversation is committable.
-    const provisionalStart = Number.isFinite(provisionalConversationStart)
-      ? provisionalConversationStart : conversationLines.length;
-    const plan = inlineConversationPlan(
-      this.inlinePermanentLines, conversationLines, commit, maxDynamicConversation,
-      commit ? conversationLines.length : Math.max(stableConversationBoundary, lineStableConversationBoundary),
-      Math.min(provisionalStart, conversationLines.length),
-    );
-    const reset: InlineReset = this.resetInlineScreen || (plan.reset ? 'viewport' : false);
-    const dynamicConversation = plan.dynamic;
-    const dynamic = [...dynamicConversation, ...footer];
+    // The live region is bounded by the viewport: it is erased and redrawn as
+    // one block every frame, so it can never be taller than the terminal. A
+    // construct that settles only when it closes -- a table still receiving
+    // rows -- shows its tail until then, and every row of it is written on the
+    // frame the block completes.
+    const maxLiveConversation = Math.max(0, targetHeight - footer.length);
+    const liveConversationRows = Math.min(conversationLines.length, maxLiveConversation);
+    const live = [...(maxLiveConversation ? conversationLines.slice(-maxLiveConversation) : []), ...footer];
     const cursorRow = palette?.hideCursor
-      ? Math.max(0, dynamic.length - 1)
-      : dynamicConversation.length + composerStart + composerRows.cursorRow;
+      ? Math.max(0, live.length - 1)
+      : liveConversationRows + composerStart + composerRows.cursorRow;
     const cursorColumn = palette?.hideCursor ? 1 : 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
-    this.inlinePermanentLines = plan.permanent;
-    this.commitConversationOnNextPaint = false;
-    this.resetInlineScreen = false;
-    this.writeInlineFrame(plan.permanent, dynamic, cursorRow, cursorColumn, reset, Boolean(palette?.hideCursor), targetHeight);
+    this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
   }
 
-  /** Native-scrollback renderer. Persisted chat is emitted once; only the
-   * live response and footer are erased and replaced. This lets the terminal,
-   * rather than a private viewport offset, own wheel and touch scroll. */
-  private writeInlineFrame(
-    permanent: readonly string[], dynamic: readonly string[], cursorRow: number,
-    cursorColumn: number, reset: InlineReset, hideCursor: boolean, targetHeight = Math.max(5, output.rows || 30),
+  /** One append-only frame. `finished` rows are handed to the terminal's own
+   * scrollback -- written once, never addressed again -- and only the live
+   * region below them is erased and redrawn. */
+  private renderFrame(
+    finished: readonly string[], live: readonly string[], cursorRow: number, cursorColumn: number, hideCursor: boolean,
   ): void {
     // Last line of defence: whatever produced a row, the only escape sequences
     // that reach the terminal are SGR colors, and no row contains a control
-    // character that would move the cursor out from under the diff.
-    const safeRow = (row: string): string => sanitizeTerminalText(row, { keepSgr: true, singleLine: true });
-    const state: InlineFrameState = {
-      permanent: permanent.map(safeRow), dynamic: dynamic.map(safeRow), cursorRow, cursorColumn, reset, hideCursor, targetHeight,
-    };
-    if (this.frameInFlight) {
-      // A resize/session reset must survive later spinner or token paints
-      // that coalesce into this pending slot before the current write drains.
-      this.pendingInlineFrame = {
-        ...state,
-        reset: state.reset === 'history' || this.pendingInlineFrame?.reset === 'history' ? 'history'
-          : state.reset || this.pendingInlineFrame?.reset || false,
-      };
-      return;
-    }
-    this.flushInlineFrame(state);
+    // character that would move the cursor out from under the live region.
+    const safeRow = (row: string): string => closeOpenHyperlink(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }));
+    // Frames that coalesce while a write drains accumulate their finished rows
+    // instead of replacing them. A live row dropped here is drawn again by the
+    // frame that replaces it; a retired row would simply be lost.
+    this.pendingFinished.push(...finished.map(safeRow));
+    this.pendingLive = { live: live.map(safeRow), cursorRow, cursorColumn, hideCursor };
+    if (!this.frameInFlight) this.flushFrame();
   }
 
-  private flushInlineFrame(state: InlineFrameState): void {
+  private flushFrame(): void {
     if (this.closed || this.suspended) return;
-    const prefixMatches = this.inlineWrittenPermanentLines.every((line, index) => state.permanent[index] === line);
-    // A change in the live region's height is NOT a reset. It used to be, and
-    // every palette open/close, composer wrap, or waiting-band toggle cleared
-    // and repainted the whole viewport. inlineFrameDiff erases only from the
-    // first row that actually differs and lets growth scroll naturally.
-    const reset: InlineReset = state.reset || (prefixMatches ? false : 'viewport');
+    const pending = this.pendingLive;
+    if (!pending) return;
+    this.pendingLive = undefined;
+    const finished = this.pendingFinished;
+    this.pendingFinished = [];
+    if (finished.length) this.lastFinishedRow = finished[finished.length - 1];
+    this.frameBuffer = '';
+    this.stream.render(finished, pending.live, pending.cursorRow, Math.max(0, pending.cursorColumn - 1));
+    const body = this.frameBuffer;
+    this.frameBuffer = '';
     // Synchronized output (DEC 2026): the terminal presents the whole frame at
     // once instead of tearing mid-repaint. Terminals without it ignore the pair.
-    let frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l\r`;
-    if (reset === 'viewport') {
-      // `2J` clears the viewport only, and only rows this UI is about to
-      // repaint. Scrollback is never cleared by this UI.
-      frame += '\u001b[2J\u001b[H';
-      // Exactly one viewport, bottom-anchored. Emitting the whole retained
-      // prefix would re-dump the transcript into scrollback on every resize.
-      const rows = bottomAnchoredLines([...state.permanent, ...state.dynamic], state.targetHeight).slice(-state.targetHeight);
-      frame += inlineFrameDiff([], 0, rows.slice(0, rows.length - state.dynamic.length), state.dynamic, state.cursorRow, state.cursorColumn);
-    } else if (reset === 'history') {
-      // The first frame of the process begins at the cursor, below whatever
-      // the shell already printed. A newly opened session first removes the
-      // old live region and scrolls the previous conversation up into
-      // scrollback -- preserved, not erased -- so the new one starts on a
-      // clean viewport. Either way the windowed history is written once.
-      if (this.inlineStarted) {
-        const up = this.inlinePaintedCursorRow;
-        frame += `${up > 0 ? `\u001b[${up}A` : ''}\r\u001b[J\u001b[${state.targetHeight};1H${'\n'.repeat(state.targetHeight)}\u001b[H`;
-      }
-      frame += inlineFrameDiff([], 0, state.permanent, state.dynamic, state.cursorRow, state.cursorColumn);
-    } else {
-      frame += inlineFrameDiff(
-        this.inlinePaintedRows, this.inlinePaintedCursorRow,
-        state.permanent.slice(this.inlineWrittenPermanentLines.length), state.dynamic, state.cursorRow, state.cursorColumn,
-      );
-    }
-    frame += `\u001b[?7h${state.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
+    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l${body}\u001b[?7h${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
     this.frameInFlight = true;
     terminalModes.painted = true;
     output.write(frame, () => {
-      this.inlineWrittenPermanentLines = state.permanent;
-      this.inlinePaintedRows = state.dynamic;
-      this.inlinePaintedCursorRow = Math.max(0, Math.min(state.cursorRow, Math.max(0, state.dynamic.length - 1)));
-      this.inlineStarted = true;
       this.frameInFlight = false;
-      const pending = this.pendingInlineFrame;
-      this.pendingInlineFrame = undefined;
-      if (pending && !this.closed && !this.suspended) this.flushInlineFrame(pending);
+      if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
     });
   }
 
@@ -1892,7 +1866,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.suspended = true;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
-    this.pendingInlineFrame = undefined;
+    this.pendingLive = undefined;
     if (input.isTTY) input.setRawMode(false);
     terminalModes.rawMode = false;
     output.write(`${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`);
@@ -1903,12 +1877,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private readonly onContinue = (): void => {
     if (this.closed) return;
     this.suspended = false;
-    const columns = output.columns || 0;
-    if (columns !== this.lastColumns) {
-      this.resetInlineScreen = this.resetInlineScreen || 'viewport';
-      this.commitConversationOnNextPaint = true;
-    }
-    this.lastColumns = columns;
+    this.lastColumns = output.columns || 0;
     this.resumeInput?.();
     if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
     else this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
@@ -1918,17 +1887,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * left at column one of the region's first row, which is where the next
    * writer -- a vendor CLI, the shell, or this UI's next frame -- continues. */
   private eraseLiveRegion(): string {
-    const up = this.inlinePaintedCursorRow;
-    this.inlinePaintedRows = [];
-    this.inlinePaintedCursorRow = 0;
-    return `${up > 0 ? `\u001b[${up}A` : ''}\r\u001b[J`;
+    this.frameBuffer = '';
+    this.pendingLive = undefined;
+    this.stream.close();
+    const data = this.frameBuffer;
+    this.frameBuffer = '';
+    return data;
   }
 
   /** Remove a completed palette/picker as one frame. Painting an empty
    * composer here left its borders/status rows alive while the selected slash
    * command ran, which looked like a composer floating above blank space. */
   private clearInteractiveFrame(): void {
-    this.writeInlineFrame(this.inlinePermanentLines, [], 0, 1, false, true);
+    this.renderFrame([], [], 0, 1, true);
   }
 
   async question(
@@ -2194,8 +2165,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           : selectedOption?.actions?.length ? ' · Tab options' : '';
         const destructive = selectedOption?.deleteAction ? ` · Del ${selectedOption.deleteAction.label.toLowerCase()}` : '';
         const hint = query
-          ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose${secondary}${destructive} \u00b7 \u2190 back \u00b7 Esc exit`
-          : `${currentOptions().length} total \u00b7 \u2191\u2193 move \u00b7 ${confirmation} choose${secondary}${destructive} \u00b7 \u2190 back \u00b7 Esc exit \u00b7 type to filter`;
+          ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · \u2190 back · Esc exit`
+          : `${currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · \u2190 back · Esc exit · type to filter`;
         this.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, hint });
       };
       let finished = false;
@@ -2300,7 +2271,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.pendingInlineFrame = undefined;
+    this.pendingLive = undefined;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     this.stopWaiting(false);
@@ -2324,7 +2295,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * place once that process exits. */
   async suspend(): Promise<void> {
     this.suspended = true;
-    this.pendingInlineFrame = undefined;
+    this.pendingLive = undefined;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     if (input.isTTY) input.setRawMode(false);
@@ -2352,12 +2323,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // returns; native scrollback remains available above the refreshed view.
     this.suspended = false;
     // Whatever the vendor printed stays in scrollback and the live region
-    // simply starts again below it. Only a width change invalidates the rows
-    // this UI wrote earlier, and only that needs the viewport repainted.
-    const columns = output.columns || 0;
-    if (columns !== this.lastColumns) this.resetInlineScreen = this.resetInlineScreen || 'viewport';
-    this.lastColumns = columns;
-    this.commitConversationOnNextPaint = true;
+    // simply starts again below it: eraseLiveRegion() left nothing of this
+    // UI's own on screen, so the next frame begins wherever the cursor is.
+    this.lastColumns = output.columns || 0;
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
