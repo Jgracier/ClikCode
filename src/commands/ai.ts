@@ -4146,7 +4146,10 @@ export async function aiSessionSend(
   if (activeTerminalHarness && Array.isArray(turn.toolCalls)) {
     for (const call of turn.toolCalls) {
       const name = call && typeof call.name === 'string' ? call.name : 'tool';
-      activeTerminalHarness.activity(`${chalk.green('done')} ${chalk.dim(name)}`);
+      // The tool's own name, with nothing in front of it -- the same rule the
+      // native-harness rows follow. This is the Gateway/direct-API path, and
+      // it was the one place still prepending a status word.
+      activeTerminalHarness.activity(chalk.dim(name));
     }
   }
   state.invocations.push(invocation);
