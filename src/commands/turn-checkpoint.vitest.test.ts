@@ -1,3 +1,7 @@
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
@@ -105,5 +109,39 @@ describe('durable turn checkpoints', () => {
     expect(target.queuedTurns).toEqual([queued]);
     expect(consumeSessionTurn(target, queued.id)).toBe(true);
     expect(target.queuedTurns).toBeUndefined();
+  });
+});
+
+describe('a live submission is queued or it is not', () => {
+  /** Reported: a queued message ran, and its text came back in the composer
+   * at the same time. queue() writes the entry and then persists it; when the
+   * write failed, the rejection handed the text back to the draft while the
+   * entry a later flush carried ran the turn anyway. The composer cannot
+   * represent both, so a failed write takes the entry out again. */
+  it('is not left in the queue when its write fails', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clikcode-queue-'));
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    try {
+      const { DurableTurnCheckpoint } = await import('./ai.js');
+      const session = {
+        id: randomUUID(), conversationId: randomUUID(), route: 'local', status: 'active',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messages: [],
+      } as unknown as Parameters<typeof beginPendingTurn>[0];
+      const state = { v: 1, sessions: [session], accounts: [] } as never;
+      const checkpoint = await DurableTurnCheckpoint.start(state, session, 'first prompt');
+
+      // Every write from here on fails, the way a full disk or a revoked
+      // directory does.
+      await chmod(home, 0o500);
+      const submission = { id: randomUUID(), text: 'follow up', submittedAt: new Date().toISOString() };
+      await expect(checkpoint.queue(submission)).rejects.toThrow();
+      expect(session.queuedTurns, 'a turn nobody was told about stayed in the queue').toBeUndefined();
+    } finally {
+      await chmod(home, 0o700).catch(() => undefined);
+      if (previous === undefined) delete process.env.CLIKCODE_HOME;
+      else process.env.CLIKCODE_HOME = previous;
+      await rm(home, { recursive: true, force: true }).catch(() => undefined);
+    }
   });
 });
