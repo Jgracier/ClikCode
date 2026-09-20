@@ -329,12 +329,25 @@ export function measureViewportRows(timeoutMs = 250): Promise<number | undefined
  * differs per terminal; this is how a report becomes a diagnosis. Sixty lines
  * per process, so a long session cannot grow it without bound. */
 let cursorLogLines = 0;
+let inputLogLines = 0;
+/** Frames are noisy and a session opens with a burst of them; what a client
+ * sends is rare and is the thing a report turns on. One budget each, so a
+ * startup cannot spend the budget that would have recorded the swipe. */
+const FRAME_LOG_LINES = 60;
+const INPUT_LOG_LINES = 2_000;
 export function logCursorEvent(line: string): void {
   // VITEST: the suite drives a stubbed terminal against the real home
-  // directory, and sixty lines per test process is noise that buries the one
+  // directory, and these lines per test process are noise that buries the one
   // session anybody wants to read.
-  if (process.env.VITEST || cursorLogLines >= 60) return;
-  cursorLogLines += 1;
+  if (process.env.VITEST) return;
+  const isInput = line.startsWith('input ');
+  if (isInput) {
+    if (inputLogLines >= INPUT_LOG_LINES) return;
+    inputLogLines += 1;
+  } else {
+    if (cursorLogLines >= FRAME_LOG_LINES) return;
+    cursorLogLines += 1;
+  }
   try {
     const dir = join(homedir(), '.clikcode');
     mkdirSync(dir, { recursive: true });
@@ -569,7 +582,9 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       // user's message. Ctrl+B arrives as \u0002, which the escape-only rule
       // here did not record, so a report of "the key does nothing" could not
       // be told apart from "the key never arrived".
-      if (key.startsWith('\u001b') || key.charCodeAt(0) < 0x20) logCursorEvent(`input ${JSON.stringify(key)}`);
+      if (key.startsWith('\u001b') || key.charCodeAt(0) < 0x20) {
+        logCursorEvent(`input ${JSON.stringify(key)} screen=${output.columns ?? '?'}x${output.rows ?? '?'}`);
+      }
       // A DSR reply is the terminal talking back, not the user typing.
       const report = cursorPositionReport(key);
       if (report) {
