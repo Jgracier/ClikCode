@@ -131,6 +131,22 @@ export function wheelScrollRows(key: string): number {
 export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key) || LEGACY_MOUSE_EVENT.test(key);
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
+const FOCUS_IN = '\u001b[I';
+/** Told when the client hands focus back.
+ *
+ * Focus reports are asked for by `?1004h` and dropped at the reader -- they
+ * are not keystrokes and must never reach a draft or an approval prompt. But
+ * they are the one reliable notice that the client has just rebuilt its
+ * terminal, which is what a phone does when its keyboard slides away, and
+ * rebuilding it drops the mouse modes this program asked for. It does not
+ * always resize the pty when it does (measured on this user's phone: 70x32 on
+ * both sides of a keyboard that came and went), so SIGWINCH cannot be the
+ * only hook. Dropping the key and announcing the event are both right. */
+const focusListeners = new Set<() => void>();
+export function onTerminalFocus(listener: () => void): () => void {
+  focusListeners.add(listener);
+  return () => { focusListeners.delete(listener); };
+}
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
@@ -388,7 +404,9 @@ export function logCursorEvent(line: string): void {
   // directory, and these lines per test process are noise that buries the one
   // session anybody wants to read.
   if (process.env.VITEST) return;
-  const isInput = line.startsWith('input ') || line.startsWith('scroll ');
+  // Resizes belong to the input budget: they are the event the scrolling
+  // reports turn on, and the frame budget is spent within a second of startup.
+  const isInput = line.startsWith('input ') || line.startsWith('scroll ') || line.startsWith('resize ') || line.startsWith('focus ');
   if (isInput) {
     if (inputLogLines >= INPUT_LOG_LINES) return;
     inputLogLines += 1;
@@ -641,7 +659,10 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       }
       // Focus in/out and OSC replies (theme notifications), likewise:
       // enabled for what they announce, not to be read.
-      if (FOCUS_EVENT.test(key) || key.startsWith('\u001b]')) continue;
+      if (FOCUS_EVENT.test(key) || key.startsWith('\u001b]')) {
+        if (key === FOCUS_IN) for (const listener of [...focusListeners]) listener();
+        continue;
+      }
       onKey(key);
     }
   };
@@ -1453,6 +1474,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // So it is asked for again after the client has settled, twice, a few
       // hundred milliseconds apart. A client that never dropped them sets
       // what is already set.
+      logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${this.alternateScreen}`);
       this.reassertMouseTracking();
       // No height probe here either: it jumps the cursor to the bottom-right
       // corner and asks, which is another thing done at exactly the moment a
@@ -1506,17 +1528,29 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * rather than once per SIGWINCH. */
   private modeReassertTimers: NodeJS.Timeout[] = [];
 
+  /** Unregisters the focus listener, so a closed prompter stops asking. */
+  private stopFocusListening?: () => void;
+
   /** Ask for the input modes again, now and after the client has settled.
    * Now is not enough on its own -- see onResize. */
   private reassertMouseTracking(): void {
     for (const timer of this.modeReassertTimers) clearTimeout(timer);
     this.modeReassertTimers = [];
+    // Raw mode is deliberately NOT a precondition. It used to be, and that is
+    // how the wheel got lost: `setTerminalRawMode(false)` runs at the end of
+    // every prompt, picker and palette, so whether raw mode happens to be on
+    // at the instant a keyboard slides away is incidental -- and a resize that
+    // arrived in one of those gaps re-asserted nothing at all, leaving mouse
+    // reporting off for the rest of the session. Setting a mode is not asking
+    // a question: DSR is what must never go into a cooked terminal, because
+    // the line discipline echoes the answer into the draft. `?1000h` has no
+    // answer to echo, so it is safe in either mode.
     const ask = (): void => {
-      if (this.closed || this.suspended || !terminalModes.rawMode) return;
+      if (this.closed || this.suspended) return;
       output.write(reassertInputModes(this.alternateScreen));
     };
     ask();
-    for (const delay of [250, 750]) {
+    for (const delay of [250, 750, 1500]) {
       const timer = setTimeout(ask, delay);
       timer.unref();
       this.modeReassertTimers.push(timer);
@@ -1609,6 +1643,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
+    // The keyboard coming back is the other half of the keyboard going away,
+    // and the half a resize does not always announce.
+    this.stopFocusListening = onTerminalFocus(() => {
+      logCursorEvent(`focus in screen=${output.columns}x${output.rows} alternate=${this.alternateScreen}`);
+      this.reassertMouseTracking();
+    });
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
     // signal handler elsewhere -- must not leave the shell in raw mode with a
     // hidden cursor and bracketed paste on.
@@ -3145,6 +3185,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaiting(false);
     this.clearTransientNotice();
     process.off('SIGWINCH', this.onResize);
+    this.stopFocusListening?.();
+    this.stopFocusListening = undefined;
     process.off('SIGCONT', this.onContinue);
     process.off('exit', restoreTerminal);
     setTerminalRawMode(false);
