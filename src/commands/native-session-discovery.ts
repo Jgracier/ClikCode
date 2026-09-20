@@ -266,6 +266,31 @@ async function claudeSessionTitle(path: string): Promise<string | undefined> {
   return title;
 }
 
+/** The title the harness itself gave this thread, or nothing.
+ *
+ * Claude Code names a chat a turn or two in and writes the name into its own
+ * transcript as an `ai-title` record. That is a real title -- what the
+ * conversation is about -- so ClikCode uses it rather than inventing one. The
+ * first-message fallback used for the /resume list deliberately does not apply
+ * here: a chat with no vendor title stays unnamed and gets asked for one.
+ */
+export async function nativeGeneratedTitle(
+  harness: AiLocalHarnessDefinition, nativeId: string | undefined, workspace: string | undefined,
+  environment: NativeSessionEnvironment = {},
+): Promise<string | undefined> {
+  if (harness.command !== 'claude' || !nativeId || !workspace) return undefined;
+  const file = await locateNativeSessionFile(harness, nativeId, workspace, environment);
+  if (!file) return undefined;
+  const prefix = await readFilePrefix(file.path, 8_000).catch(() => '');
+  for (const line of prefix.split('\n')) {
+    if (!line.trim()) continue;
+    let record: Record<string, unknown>;
+    try { record = JSON.parse(line); } catch { continue; }
+    if (record.type === 'ai-title' && typeof record.aiTitle === 'string' && record.aiTitle.trim()) return record.aiTitle.trim();
+  }
+  return undefined;
+}
+
 async function discoverClaudeFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
   const sessions: DiscoveredNativeSession[] = [];
   for (const dir of claudeProjectDirectories(workspace, environment)) {

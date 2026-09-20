@@ -24,8 +24,9 @@ import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessT
 import { spawnPortable as spawn } from './spawn-portable.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover.js';
 import { carryNativeSession } from './native-session-carry.js';
+import { extractSessionTitle, normalizeSessionTitle, sessionTitleSource, StreamingTitle, withTitleRequest } from './session-title.js';
 import {
-  ADOPTED_TRANSCRIPT_READERS, conversationTitle, discoverNativeSessions, FS_SESSION_DISCOVERY, mergeNativeTranscript, type DiscoveredNativeSession,
+  ADOPTED_TRANSCRIPT_READERS, discoverNativeSessions, FS_SESSION_DISCOVERY, mergeNativeTranscript, nativeGeneratedTitle, type DiscoveredNativeSession,
 } from './native-session-discovery.js';
 import type {
   AiHarnessAccount, AiHarnessOptionDefinition,
@@ -140,6 +141,24 @@ export async function closePersistentTransport(sessionId?: string): Promise<void
  * gh/docker configuration so a turn can still commit, push and install. */
 function turnEnvironment(harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined): Record<string, string> {
   return homeRedirectEnvironment(harness, nativeProfileEnvironment(account?.nativeProfile), { home: homedir(), exists: existsSync });
+}
+
+/** Name a chat, once, from a title the model produced.
+ *
+ * Never from the first message: that is the start of a sentence, not a name.
+ * A /rename is the user's and is left alone; everything else is provisional
+ * until a real title arrives, and a turn that produces none simply leaves the
+ * chat unnamed for the next turn to ask again. */
+async function nameSession(
+  session: HarnessSession,
+  sources: { title?: string; vendor?: () => Promise<string | undefined> },
+): Promise<void> {
+  if (session.nameSource === 'user' || session.name) return;
+  const raw = sources.title ?? await sources.vendor?.().catch(() => undefined);
+  const title = raw ? normalizeSessionTitle(raw) : undefined;
+  if (!title) return;
+  session.name = title;
+  session.nameSource = 'provider';
 }
 
 function conversationIdFor(session: HarnessSession): string {
@@ -345,7 +364,6 @@ async function preserveInterruptedTurn(id: string, prompt: string, partialRespon
     if (partialResponse) updatePendingResponse(session, partialResponse, 'replace', new Date().toISOString());
     finishPendingTurn(session, partialResponse || undefined, new Date().toISOString());
   } else session.messages = interruptedTurnMessages(session.messages ?? [], prompt, partialResponse, outputStarted);
-  session.name ??= conversationTitle(prompt);
   session.attachments = [];
   session.updatedAt = new Date().toISOString();
   await writeState(state);
@@ -375,7 +393,6 @@ export class DurableTurnCheckpoint {
     const checkpoint = new DurableTurnCheckpoint(state, session);
     if (queuedTurnId) consumeSessionTurn(session, queuedTurnId);
     beginPendingTurn(session, prompt, new Date().toISOString());
-    session.name ??= conversationTitle(prompt);
     await checkpoint.enqueue();
     return checkpoint;
   }
@@ -489,8 +506,6 @@ async function synchronizeNativeTranscript(state: HarnessState, session: Harness
       delete session.pendingTurn;
     }
   }
-  const firstUserMessage = merged.find((message) => message.role === 'user')?.content;
-  if (!session.name && firstUserMessage) session.name = conversationTitle(firstUserMessage);
   session.updatedAt = new Date().toISOString();
   return true;
 }
@@ -1834,6 +1849,7 @@ export const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandl
     const name = words.join(' ').trim();
     if (!name) throw new Error('Enter a name after /rename.');
     session.name = name.slice(0, 120);
+    session.nameSource = 'user';
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-renamed', text: `Conversation renamed to “${session.name}”.` });
@@ -3718,6 +3734,17 @@ export async function aiSessionSend(
     if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
     if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
     if (harness.provider !== account.provider) throw new Error(`session provider ${harness.displayName} does not match account "${account.label}"`);
+    // An unnamed chat gets a title from the harness that writes one, and asks
+    // the model for one where the harness does not. The request rides on this
+    // turn's text only -- never on what is stored as the user's message -- and
+    // the answer is stripped of it before anyone sees it.
+    const titleSource = sessionTitleSource(harness);
+    // The first prompt of a conversation, and no other: a chat with messages
+    // already in it has had its chance, and pinning the request to later turns
+    // would keep editing prompts the user can see the effect of.
+    const askingForTitle = !session.name && titleSource === 'ask' && !(session.messages ?? []).length;
+    const titleStream = askingForTitle ? new StreamingTitle() : undefined;
+    if (askingForTitle) turnText = withTitleRequest(turnText);
     const supportsImages = harnessSupportsImages(harness);
     const images = supportsImages ? prepared.images : [];
     if (prepared.images.length && !supportsImages) {
@@ -3941,8 +3968,10 @@ export async function aiSessionSend(
                   void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
                 },
                 onResponseDelta: (text, mode = 'append') => {
-                  checkpoint.response(text, mode);
-                  activeTerminalHarness?.response(text, mode);
+                  const visible = titleStream ? titleStream.push(text, mode) : text;
+                  if (visible === undefined) return;
+                  checkpoint.response(visible, mode);
+                  activeTerminalHarness?.response(visible, mode);
                 },
                 onPhase: (phase) => activeTerminalHarness?.phase(phase),
                 onApproval: (title, detail) => activeTerminalHarness?.approval(title, detail) ?? Promise.resolve(false),
@@ -4145,13 +4174,20 @@ export async function aiSessionSend(
       };
       state.invocations.push(invocation);
       session.attachments = [];
-      await checkpoint.complete(result.text);
+      const answer = titleStream ? extractSessionTitle(result.text) : { title: undefined, text: result.text };
+      await checkpoint.complete(answer.text);
+      await nameSession(session, {
+        title: titleStream?.title ?? answer.title,
+        ...(titleSource === 'vendor'
+          ? { vendor: () => nativeGeneratedTitle(harness, session.nativeSessionId, session.workspace, environment) }
+          : {}),
+      });
       // The vendor subprocess owns persistence. Re-read its transcript after
       // exit so any source-side turns/events that were not represented by the
       // final response are reflected in ClikCode before the turn is saved.
       await synchronizeNativeTranscript(state, session);
       await writeState(state);
-      if (!activeTerminalHarness) emitHarnessOutput({ session, text: result.text, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+      if (!activeTerminalHarness) emitHarnessOutput({ session, text: answer.text, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
       return;
     }
     } finally {
@@ -4162,6 +4198,10 @@ export async function aiSessionSend(
   if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
   const baseMessages = sessionTranscriptMessages(session);
+  // No harness on this path writes its own titles, so the first prompt of a
+  // conversation asks the model for one and the answer is stripped of it.
+  const titleStream = !session.name && !(session.messages ?? []).length ? new StreamingTitle() : undefined;
+  if (titleStream) turnText = withTitleRequest(turnText);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
@@ -4196,8 +4236,10 @@ export async function aiSessionSend(
       messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
       ...(signal ? { abortSignal: signal } : {}),
       onDelta: (delta: string) => {
-        checkpoint.response(delta, 'append');
-        activeTerminalHarness?.response(delta, 'append');
+        const visible = titleStream ? titleStream.push(delta, 'append') : delta;
+        if (visible === undefined) return;
+        checkpoint.response(visible, 'append');
+        activeTerminalHarness?.response(visible, 'append');
       },
     });
   };
@@ -4253,8 +4295,10 @@ export async function aiSessionSend(
   }
   state.invocations.push(invocation);
   session.attachments = [];
-  await checkpoint.complete(turn.text);
-  if (!activeTerminalHarness) emitHarnessOutput({ session, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+  const answer = titleStream ? extractSessionTitle(turn.text) : { title: undefined, text: turn.text };
+  await checkpoint.complete(answer.text);
+  await nameSession(session, { title: titleStream?.title ?? answer.title });
+  if (!activeTerminalHarness) emitHarnessOutput({ session, text: answer.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
   } finally {
     await checkpoint.flush();
   }
@@ -4286,7 +4330,11 @@ export async function aiGatewaySessionSend(
   if (!text) throw new Error('prompt is required');
   const prepared = await prepareAttachments(session.attachments ?? []);
   if (prepared.images.length) throw new Error('ClikDeploy Gateway does not accept image attachments. Switch to a local provider with /provider or clear them with /attachments clear.');
-  const turnText = `${text}${prepared.textContext}`;
+  // The first prompt of a conversation carries the title request here too:
+  // the gateway's coding agent and the platform assistant both answer as a
+  // model, and neither writes a title of its own anywhere ClikCode can read.
+  const titleStream = !session.name && !(session.messages ?? []).length ? new StreamingTitle() : undefined;
+  const turnText = titleStream ? withTitleRequest(`${text}${prepared.textContext}`) : `${text}${prepared.textContext}`;
   const baseUrl = getApiUrl(config).replace(/\/$/, '');
   const apiKey = getApiKeyForUrl(config, baseUrl);
   if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
@@ -4313,10 +4361,12 @@ export async function aiGatewaySessionSend(
     };
     state.invocations.push(harnessInvocation);
     session.attachments = [];
-    await checkpoint.complete(harnessTurn.text);
+    const named = titleStream ? extractSessionTitle(harnessTurn.text) : { title: undefined, text: harnessTurn.text };
+    await checkpoint.complete(named.text);
+    await nameSession(session, { title: titleStream?.title ?? named.title });
     if (!activeTerminalHarness) {
       emitHarnessOutput({
-        session, text: harnessTurn.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation: harnessInvocation,
+        session, text: named.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation: harnessInvocation,
       });
     }
     await checkpoint.flush();
@@ -4359,11 +4409,14 @@ export async function aiGatewaySessionSend(
         // the user with a reply that implied work the platform never did.
         if (event.type === 'result') gatewayNotice = gatewayResultNotice(event.data) ?? gatewayNotice;
         if (event.type === 'delta' && typeof event.text === 'string') {
-          checkpoint.response(event.text, 'append');
-          activeTerminalHarness?.phase('generating response');
-          activeTerminalHarness?.response(event.text, 'append');
           reply += event.text;
-          if (streamToTerminal) { output.write(event.text); wroteDelta = true; }
+          const visible = titleStream ? titleStream.push(event.text, 'append') : event.text;
+          if (visible !== undefined) {
+            checkpoint.response(visible, 'append');
+            activeTerminalHarness?.phase('generating response');
+            activeTerminalHarness?.response(visible, 'append');
+            if (streamToTerminal) { output.write(visible); wroteDelta = true; }
+          }
         }
         // `kind`/`tool` are real, additive fields on the wire protocol
         // (apps/web's chat-stream.ts / assistant/chat route) mapping the
@@ -4408,9 +4461,11 @@ export async function aiGatewaySessionSend(
   const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform', at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
   session.attachments = [];
-  await checkpoint.complete(reply);
+  const answered = titleStream ? extractSessionTitle(reply) : { title: undefined, text: reply };
+  await checkpoint.complete(answered.text);
+  await nameSession(session, { title: titleStream?.title ?? answered.title });
   if (wroteDelta) output.write('\n\n');
-  else if (!activeTerminalHarness) emitHarnessOutput({ session, text: reply, usage: { attributedBy: 'clikdeploy-gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
+  else if (!activeTerminalHarness) emitHarnessOutput({ session, text: answered.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
   } finally {
     await checkpoint.flush();
   }

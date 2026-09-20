@@ -268,6 +268,10 @@ export interface HarnessSession {
   effort: string;
   permissionMode?: AiHarnessPermissionMode;
   name?: string;
+  /** Who named it. `user` is a /rename and is never overwritten; `provider` is
+   * the harness's own title, or one the first turn asked the model for. A name
+   * with no source is a legacy one derived from the first message. */
+  nameSource?: 'user' | 'provider';
   accountFailover: 'never' | 'on-quota-exhausted';
   createdAt: string;
   updatedAt: string;
