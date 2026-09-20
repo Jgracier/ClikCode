@@ -407,11 +407,64 @@ const TOOL_INPUT_CATEGORIES: ReadonlyArray<readonly [ToolCategory, string]> = [
   ['run', 'command'], ['search', 'pattern'], ['search', 'query'], ['fetch', 'url'],
 ];
 
+/** How one harness's tool calls reach a category. Every harness in the
+ * catalog has an entry, including the ones that can never produce a tool row
+ * at all -- "fully mapped" means the answer is written down for each of them,
+ * not that each of them works.
+ *
+ * `names` lists only the vendor names the verb table and the input shape
+ * cannot settle between them. It is deliberately short: a name invented here
+ * would be a claim about a vendor's protocol that nobody has checked, which is
+ * the failure mode the old label regex was. Where a harness needs no entries,
+ * `note` says what classifies it instead.
+ */
+export interface HarnessToolMapping {
+  /** `text` harnesses emit no machine-readable tool events at all, so no
+   * category is reachable for them -- a ceiling in the vendor's CLI, not here. */
+  stream: 'structured' | 'text';
+  names?: Readonly<Record<string, ToolCategory>>;
+  note: string;
+}
+
+const CLAUDE_TOOL_NAMES: Readonly<Record<string, ToolCategory>> = {
+  // Read/Edit/Write/Bash/Glob/Grep/WebFetch/NotebookRead/NotebookEdit all
+  // match the verb table already. These two are the background-shell tools it
+  // cannot reach, and they carry no input that would classify them either.
+  BashOutput: 'run', KillShell: 'run',
+};
+
+export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>> = {
+  claude: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'tool_use blocks carry name and input; Edit/Write also carry a diff, which settles them outright.' },
+  qwen: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'Claude-shaped stream, parsed by the same branch and named the same way.' },
+  codex: { stream: 'structured', note: 'command_execution is a run by the shape of its own envelope; mcp_tool_call classifies by the MCP tool name.' },
+  opencode: { stream: 'structured', note: 'part.tool with part.state.input: the verb table reads the name, the input shape covers the rest.' },
+  kilo: { stream: 'structured', note: 'an OpenCode fork emitting the same envelope.' },
+  gemini: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
+  goose: { stream: 'structured', note: 'names are server-prefixed (developer__shell), which no verb table can match; the command in their input is what classifies them.' },
+  cline: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
+  droid: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
+  kiro: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
+  amp: { stream: 'structured', note: 'JSON-lines turn; tool events classify by name where the stream reports one.' },
+  pi: { stream: 'structured', note: 'JSON-lines turn; tool events classify by name where the stream reports one.' },
+  antigravity: { stream: 'structured', note: 'step_update carries step.tool_name and no input, so the verb table alone classifies it.' },
+  cursor: { stream: 'structured', note: 'tool events carry a name and a description, not an input record; the verb table alone classifies them.' },
+  command: { stream: 'structured', note: 'tool_running/tool_completed/tool_errored carry toolName; shell and edit both match the verb table.' },
+  auggie: { stream: 'structured', note: 'JSON turn; ACP tool events classify by name.' },
+  copilot: { stream: 'text', note: 'text-only turn output. ACP is declared for session identity, not for a tool stream, so no tool row is reachable.' },
+  aider: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
+  crush: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
+  hermes: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
+  kimi: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
+  vibe: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
+  openhands: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
+  cn: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
+};
+
 /** Spread form: contributes nothing at all when the evidence does not settle
  * it, so an unclassified tool's event is byte-identical to what it was before
  * categories existed. */
-function categoryOf(name: string, input?: Record<string, unknown>): { category?: ToolCategory } {
-  const category = toolCategory(name, input);
+function categoryOf(name: string, input?: Record<string, unknown>, harness?: string): { category?: ToolCategory } {
+  const category = toolCategory(name, input, false, harness);
   return category ? { category } : {};
 }
 
@@ -419,9 +472,11 @@ function categoryOf(name: string, input?: Record<string, unknown>): { category?:
  * a diff the harness actually reported, then the tool's own name, then the
  * shape of its input. Undefined when none of the three settles it. */
 export function toolCategory(
-  name: string, input?: Record<string, unknown>, hasDiff = false,
+  name: string, input?: Record<string, unknown>, hasDiff = false, harness?: string,
 ): ToolCategory | undefined {
   if (hasDiff) return 'edit';
+  const declared = harness ? HARNESS_TOOL_MAPPINGS[harness]?.names?.[name] : undefined;
+  if (declared) return declared;
   const normalized = name.toLowerCase().replace(/[^a-z]/g, '');
   for (const [category, pattern] of TOOL_NAME_CATEGORIES) if (pattern.test(normalized)) return category;
   for (const [category, key] of TOOL_INPUT_CATEGORIES) {
@@ -470,7 +525,7 @@ function blockText(content: unknown): string {
 }
 
 /** One Claude-shaped `tool_use` block. */
-function claudeToolStart(tool: JsonRecord): NativeActivityEvent {
+function claudeToolStart(tool: JsonRecord, command: string): NativeActivityEvent {
   const name = String(tool.name ?? 'tool');
   const input = asRecord(tool.input);
   const identity = typeof tool.id === 'string' ? { id: tool.id } : {};
@@ -492,7 +547,7 @@ function claudeToolStart(tool: JsonRecord): NativeActivityEvent {
       diff: { removed: [], added: [...added.lines, ...truncationNote(added.truncated)] },
     };
   }
-  return { kind: 'tool-start', label: toolLabel(name, input), ...categoryOf(name, input), ...identity };
+  return { kind: 'tool-start', label: toolLabel(name, input), ...categoryOf(name, input, command), ...identity };
 }
 
 /** Every activity one record describes. A single Claude message routinely
@@ -503,11 +558,11 @@ export function parseNativeActivityEventsFromValue(harness: AiLocalHarnessDefini
   const value = asRecord(parsed);
   if (!value) return [];
   if (CLAUDE_SHAPED.has(harness.command)) {
-    const claude = claudeShapedActivity(value);
+    const claude = claudeShapedActivity(value, harness.command);
     if (claude) return claude;
   }
   if (harness.command === 'goose') {
-    const goose = gooseActivity(value);
+    const goose = gooseActivity(value, harness.command);
     if (goose) return goose;
   }
   const single = singleActivityEvent(harness, value);
@@ -533,7 +588,7 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
 
 /** Claude Code stream-json (also Qwen Code). Returns undefined for records
  * this shape does not own, so the generic branches still get a look. */
-function claudeShapedActivity(value: JsonRecord): NativeActivityEvent[] | undefined {
+function claudeShapedActivity(value: JsonRecord, command: string): NativeActivityEvent[] | undefined {
   const type = String(value.type ?? '');
   const parent = typeof value.parent_tool_use_id === 'string' && value.parent_tool_use_id ? { parentId: value.parent_tool_use_id } : {};
   if (type === 'system' || type === 'result' || type === 'rate_limit_event') return [];
@@ -550,7 +605,7 @@ function claudeShapedActivity(value: JsonRecord): NativeActivityEvent[] | undefi
     if (!Array.isArray(content)) return [];
     return content.flatMap((part): NativeActivityEvent[] => {
       const block = asRecord(part);
-      if (block?.type === 'tool_use' || block?.type === 'server_tool_use') return [{ ...claudeToolStart(block), ...parent }];
+      if (block?.type === 'tool_use' || block?.type === 'server_tool_use') return [{ ...claudeToolStart(block, command), ...parent }];
       if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
         return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140), ...parent }];
       }
@@ -577,7 +632,7 @@ function claudeShapedActivity(value: JsonRecord): NativeActivityEvent[] | undefi
  * content parts are Goose's own Message serialization -- `toolRequest`
  * ({id, toolCall:{status, value:{name, arguments}}}) on assistant messages and
  * `toolResponse` ({id, toolResult:{status, value|error}}) on user messages. */
-function gooseActivity(value: JsonRecord): NativeActivityEvent[] | undefined {
+function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[] | undefined {
   if (value.type !== 'message') return undefined;
   const content = asRecord(value.message)?.content;
   if (!Array.isArray(content)) return [];
@@ -589,8 +644,8 @@ function gooseActivity(value: JsonRecord): NativeActivityEvent[] | undefined {
       const detail = asRecord(call?.value) ?? call;
       const name = String(detail?.name ?? 'tool');
       const args = asRecord(detail?.arguments);
-      if (call?.status === 'error') return [{ kind: 'tool-error', label: name, ...categoryOf(name, args), ...identity }];
-      return [{ kind: 'tool-start', label: toolLabel(name, args), ...categoryOf(name, args), ...identity }];
+      if (call?.status === 'error') return [{ kind: 'tool-error', label: name, ...categoryOf(name, args, command), ...identity }];
+      return [{ kind: 'tool-start', label: toolLabel(name, args), ...categoryOf(name, args, command), ...identity }];
     }
     if (block?.type === 'toolResponse') {
       const result = asRecord(block.toolResult);
@@ -615,7 +670,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       return {
         kind: /error|fail/i.test(state) ? 'tool-error' : state === 'DONE' ? 'tool-done' : 'tool-start',
         label: String(step.tool_name ?? 'tool'),
-        ...categoryOf(String(step.tool_name ?? 'tool')),
+        ...categoryOf(String(step.tool_name ?? 'tool'), undefined, harness.command),
       };
     }
   }
@@ -675,7 +730,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     return {
       kind: type.endsWith('completed')
         ? (item?.status === 'failed' || item?.status === 'error' ? 'tool-error' : 'tool-done')
-        : 'tool-start', label: name, ...categoryOf(name),
+        : 'tool-start', label: name, ...categoryOf(name, undefined, harness.command),
       ...(typeof item?.id === 'string' ? { id: item.id } : {}),
     };
   }
@@ -693,7 +748,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     const output = typeof state?.output === 'string' ? cappedActivityOutput(state.output) : undefined;
     return {
       kind: /error|fail/i.test(status) ? 'tool-error' : status === 'completed' ? 'tool-done' : 'tool-start',
-      label: toolLabel(name, asRecord(state?.input)), ...categoryOf(name, asRecord(state?.input)),
+      label: toolLabel(name, asRecord(state?.input)), ...categoryOf(name, asRecord(state?.input), harness.command),
       ...(typeof part?.callID === 'string' ? { id: part.callID } : typeof part?.id === 'string' ? { id: part.id } : {}),
       ...(output?.length ? { output } : {}),
     };
@@ -719,7 +774,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       const output = cappedActivityOutput(rawOutput);
       return {
         kind, label: kind === 'tool-start' && description ? `${name}(${visibleSlice(description, 72)})` : name,
-        ...categoryOf(name),
+        ...categoryOf(name, undefined, harness.command),
         ...(typeof inner.toolCallId === 'string' ? { id: inner.toolCallId } : {}),
         ...(output?.length ? { output } : {}),
       };
@@ -731,7 +786,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   // (same as Command Code above) this only ever reports 'tool-start'.
   if (harness.command === 'pi') {
     if (type === 'tool_execution_start') {
-      return { kind: 'tool-start', label: String(value.toolName ?? 'tool'), ...categoryOf(String(value.toolName ?? 'tool')) };
+      return { kind: 'tool-start', label: String(value.toolName ?? 'tool'), ...categoryOf(String(value.toolName ?? 'tool'), undefined, harness.command) };
     }
     if (type === 'tool_execution_end') return {
       kind: value.isError === true || value.error ? 'tool-error' : 'tool-done',
@@ -741,7 +796,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       const event = value.assistantMessageEvent && typeof value.assistantMessageEvent === 'object'
         ? value.assistantMessageEvent as Record<string, unknown> : undefined;
       if (event?.type === 'toolcall_start') {
-        return { kind: 'tool-start', label: String(event.toolName ?? 'tool'), ...categoryOf(String(event.toolName ?? 'tool')) };
+        return { kind: 'tool-start', label: String(event.toolName ?? 'tool'), ...categoryOf(String(event.toolName ?? 'tool'), undefined, harness.command) };
       }
     }
   }
