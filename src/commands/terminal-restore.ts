@@ -10,15 +10,16 @@ import { stdin as input, stdout as output } from 'node:process';
 export const terminalModes: {
   bracketedPaste: boolean;
   kittyKeyboard: boolean;
-  /** DECCKM: arrow keys arrive as SS3 while an application owns the terminal. */
-  applicationCursorKeys: boolean;
+  /** Focus reporting (`CSI ?1004h`): what an interactive application sets, and
+   * what a client reads to tell one from a shell. */
+  focusReporting: boolean;
   rawMode: boolean;
   /** A frame hid the cursor / disabled autowrap / opened a synchronized update. */
   painted: boolean;
   /** Supplied by the live prompter: erases its composer and footer so whatever
    * is printed next (a stack trace, the shell prompt) starts on a clean row. */
   leaveLiveRegion?: () => string;
-} = { bracketedPaste: false, kittyKeyboard: false, applicationCursorKeys: false, rawMode: false, painted: false };
+} = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, rawMode: false, painted: false };
 
 /** Leave the terminal the way a shell expects it: synchronized update closed,
  * kitty keyboard flags popped, bracketed paste off, autowrap on, cursor shown,
@@ -29,13 +30,13 @@ export function restoreTerminal(): void {
     if (terminalModes.painted) sequence += `\x1b[?2026l${terminalModes.leaveLiveRegion?.() ?? ''}`;
     if (terminalModes.kittyKeyboard) sequence += '\x1b[<u';
     if (terminalModes.bracketedPaste) sequence += '\x1b[?2004l';
-    if (terminalModes.applicationCursorKeys) sequence += '\x1b[?1l';
+    if (terminalModes.focusReporting) sequence += '\x1b[?1004l';
     if (terminalModes.painted) sequence += '\x1b[?7h\x1b[?25h';
     const wasRaw = terminalModes.rawMode;
     terminalModes.painted = false;
     terminalModes.kittyKeyboard = false;
     terminalModes.bracketedPaste = false;
-    terminalModes.applicationCursorKeys = false;
+    terminalModes.focusReporting = false;
     terminalModes.rawMode = false;
     terminalModes.leaveLiveRegion = undefined;
     if (sequence && output.isTTY) output.write(sequence);
