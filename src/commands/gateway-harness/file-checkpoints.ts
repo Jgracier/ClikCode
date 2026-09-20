@@ -75,8 +75,12 @@ export class FileCheckpointStore {
   private async readManifest(sessionId: string, turnId: string): Promise<CheckpointManifest | undefined> {
     try {
       const parsed = JSON.parse(await fs.readFile(path.join(this.turnDir(sessionId, turnId), 'manifest.json'), 'utf8')) as CheckpointManifest;
-      return Array.isArray(parsed.entries) ? parsed : undefined;
-    } catch { return undefined; }
+      if (!Array.isArray(parsed.entries)) throw new Error('checkpoint manifest has no entries array');
+      return parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
   }
 
   /** Record the pre-image of `absolutePath` for this turn. The FIRST snapshot
@@ -112,7 +116,10 @@ export class FileCheckpointStore {
 
   async listTurns(sessionId: string): Promise<CheckpointTurnSummary[]> {
     let names: string[];
-    try { names = await fs.readdir(path.join(this.root, safeSegment(sessionId))); } catch { return []; }
+    try { names = await fs.readdir(path.join(this.root, safeSegment(sessionId))); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
     const out: CheckpointTurnSummary[] = [];
     for (const turnId of names.sort()) {
       const manifest = await this.readManifest(sessionId, turnId);
@@ -171,19 +178,22 @@ export class FileCheckpointStore {
     if (typeof entry.path !== 'string' || !path.isAbsolute(entry.path) || path.normalize(entry.path) !== entry.path) {
       throw new Error('refusing to restore a non-normalized path');
     }
-    if (roots && !roots.some((root) => { const rel = path.relative(path.resolve(root), entry.path); return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel); })) {
+    const target = path.resolve(entry.path);
+    if (roots && !roots.some((root) => { const rel = path.relative(path.resolve(root), target); return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel); })) {
       throw new Error('refusing to restore outside the allowed roots');
     }
     if (!entry.existed) {
-      await fs.rm(entry.path, { force: true });
+      await fs.rm(target, { force: true });
       return;
     }
     if (!entry.hash || !/^[a-f0-9]{64}$/.test(entry.hash)) throw new Error('snapshot blob reference is invalid');
     const content = await fs.readFile(path.join(dir, 'blobs', entry.hash));
     if (createHash('sha256').update(content).digest('hex') !== entry.hash) throw new Error('snapshot blob is corrupt');
-    await fs.mkdir(path.dirname(entry.path), { recursive: true });
-    await fs.writeFile(entry.path, content);
-    if (typeof entry.mode === 'number') await fs.chmod(entry.path, entry.mode & 0o7777);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content);
+    // Restore ordinary read/execute bits but never set write access for group/other
+    // or carry privileged sticky/set-id bits out of an untrusted manifest.
+    if (typeof entry.mode === 'number') await fs.chmod(target, entry.mode & 0o755);
   }
 
   /** Drop the oldest turns beyond the retention cap (count and bytes). */
