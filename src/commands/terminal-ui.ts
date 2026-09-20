@@ -222,8 +222,14 @@ function enterInputModes(): string {
 
 /** The modes an open read depends on, without claiming them again: entering
  * pushes the kitty flag, and pushing it twice would need two pops. */
-export function reassertInputModes(): string {
-  return `${ENABLE_BRACKETED_PASTE}${ENABLE_MOUSE_TRACKING}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
+export function reassertInputModes(withMouse: boolean): string {
+  // Exactly what entering asked for, and no more. Asking for the wheel here
+  // when the conversation is on the main screen is how hiding a keyboard
+  // killed scrolling: the resize re-asserted a mode the prompt had
+  // deliberately not taken, and from that moment the client forwarded its
+  // wheel to a screen with no scrolling of its own.
+  return `${ENABLE_BRACKETED_PASTE}${withMouse ? ENABLE_MOUSE_TRACKING : ''}`
+    + `${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
 }
 
 function leaveInputModes(): string {
@@ -1479,7 +1485,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.modeReassertTimers = [];
     const ask = (): void => {
       if (this.closed || this.suspended || !terminalModes.rawMode) return;
-      output.write(reassertInputModes());
+      output.write(reassertInputModes(this.alternateScreen));
     };
     ask();
     for (const delay of [250, 750]) {
