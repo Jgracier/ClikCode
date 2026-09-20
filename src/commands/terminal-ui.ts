@@ -92,13 +92,22 @@ export const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
  * exactly what it did. A cosmetic parity is not worth a cursor. */
 export const ENABLE_THEME_NOTIFICATIONS = '\u001b[?2031h';
 export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
-/** Wheel reporting, in SGR encoding so a wide terminal can still express a
- * column. Only the wheel is wanted -- it is how a conversation is read back
- * on a screen with no page keys, which is every phone -- so button presses
- * and drags are decoded and dropped rather than acted on, leaving the
- * client's own selection and copy gestures alone. */
-export const ENABLE_WHEEL_REPORTING = '\u001b[?1000h\u001b[?1006h';
-export const DISABLE_WHEEL_REPORTING = '\u001b[?1006l\u001b[?1000l';
+/** Mouse tracking: normal (1000), button-event (1002), any-event (1003), SGR
+ * encoding (1006). Exactly the set Claude Code turns on, captured from it in
+ * this user's own terminal -- and the reason a swipe scrolls it.
+ *
+ * Only 1000 and 1006 were sent before, which is click tracking: a client has
+ * no reason to report a drag or a wheel notch under it, and Termius reported
+ * none, which is how "the client sends nothing at all for a swipe" was
+ * concluded and the alternate screen abandoned over it. A phone has no page
+ * keys; the wheel is the only way a conversation is read back, and these are
+ * the modes that make the client send one.
+ *
+ * Presses and drags are still decoded and dropped rather than acted on. What
+ * they cost is the client's own selection gesture, which is why Claude Code
+ * prints "Hold Shift while selecting to use your terminal's native copy". */
+export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
+export const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l';
 /** SGR: `CSI < button ; column ; row M|m`. Wheel up is 64, wheel down 65. */
 const MOUSE_EVENT = /^\u001b\[<(\d+);\d+;\d+[Mm]$/;
 /** X10: `CSI M` then button and two coordinates, each offset by 32. A client
@@ -126,34 +135,36 @@ export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
 
-/** The alternate screen.
+/** The alternate screen, and why it is the default again.
  *
- * ClikCode drew on the main screen so the conversation would accumulate in the
- * terminal's own scrollback -- a real virtue, and the reason every frame had
- * to place the cursor with relative motions and hope the terminal counted rows
- * the same way. It does not always: a row wrapped, a region reflowed, a mode
- * ignored, and the cursor sat below the composer with stale rows stranded
- * around it. On the alternate screen every row has an address, so each frame
- * writes to one and parks on one, and none of that can happen.
+ * It was entered once to fix the cursor, then abandoned for one reason: a
+ * swipe. A terminal's own scrollback is what a phone client scrolls, the
+ * alternate screen has none, and the input log showed the client sending
+ * nothing at all for a swipe -- so the conversation became unreadable above
+ * the fold, and the main screen came back with every relative-motion problem
+ * it has.
  *
- * It also tells the client what nothing else could. A phone SSH client was
- * drawing its own history completion over the composer -- it reads the line as
- * if a shell were reading it -- and the alternate screen is the one signal
- * every client honours for "an application owns this terminal".
+ * That conclusion rested on a premise and a bug. The premise -- "Claude Code
+ * and Codex both draw on the main screen, which is why a swipe reads their
+ * transcripts" -- is false: captured from Claude Code v2.1.276 in the user's
+ * own Termius session, it enters the alternate screen (`?1049h`, `2J`, `H`)
+ * and turns on full mouse tracking (`?1000h ?1002h ?1003h ?1006h`), then
+ * scrolls its own transcript from the wheel events that come back. The bug:
+ * ClikCode set a `wheelReporting` flag and never sent the sequence, and what
+ * it would have sent was click tracking anyway. A client reports no wheel
+ * under a finger that nothing asked to track, which is exactly what the input
+ * log recorded.
  *
- * It is NOT the default, and the reason is scrolling. A terminal's own
- * scrollback is what a client scrolls when someone swipes, and the alternate
- * screen has none -- so on a phone, where a swipe is the only gesture there
- * is, the conversation became unreadable above the fold. Claude Code and
- * Codex both draw on the main screen, which is why a swipe reads their
- * transcripts and could not read this one.
+ * So both halves come back together: this screen, and the modes that make a
+ * swipe arrive as wheel events for the transcript this renderer already keeps
+ * (see alternateTranscript). With them, the terminal is owned outright --
+ * every row has an address, the cursor is placed and not walked to, nothing
+ * of the shell shows above, and a client has no reason to read the composer
+ * as a shell prompt and offer its own command history over it.
  *
- * The cursor was the reason to move here, and it is no longer: a frame parks
- * absolutely from a position the terminal reports, which works the same on
- * either screen. So the main screen is the default again, and
- * `CLIKCODE_ALT_SCREEN=1` opts into this one for a terminal whose scrollback
- * is not worth keeping. */
-export function classicScreen(): boolean { return process.env.CLIKCODE_ALT_SCREEN !== '1'; }
+ * `CLIKCODE_MAIN_SCREEN=1` keeps the old behaviour for a terminal where the
+ * native scrollback is worth more than any of that. */
+export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Home, erase the screen, erase the saved lines. Written once at startup on
@@ -205,7 +216,7 @@ export function setTerminalRawMode(on: boolean): void {
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
   logCursorEvent('input modes: bracketed paste, wheel reporting, theme notifications, focus reporting');
-  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
+  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_MOUSE_TRACKING}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
   terminalModes.bracketedPaste = true;
   terminalModes.focusReporting = true;
   terminalModes.wheelReporting = true;
@@ -218,7 +229,7 @@ function enterInputModes(): string {
 }
 
 function leaveInputModes(): string {
-  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_WHEEL_REPORTING}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
+  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE_TRACKING}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
   terminalModes.kittyKeyboard = false;
   terminalModes.bracketedPaste = false;
   terminalModes.focusReporting = false;
