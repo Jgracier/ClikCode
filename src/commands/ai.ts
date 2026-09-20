@@ -17,7 +17,7 @@ import { CLIKCODE_USER_AGENT, CLIKCODE_VERSION } from '../version.js';
 import {
   gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn,
 } from './ai-gateway-harness.js';
-import { commonControlFor, vendorFacingOptions } from './harness-options.js';
+import { commonControlFor, optionIdsForControl, vendorFacingOptions } from './harness-options.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, createTurnIdleController, ensureNativeHarness, noteTurnActivityEvent, inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
@@ -1134,6 +1134,16 @@ function optionForHarness(harness: AiLocalHarnessDefinition, id: string): AiHarn
   return localHarnessCapabilityManifest(harness).options.find((option) => option.id === id);
 }
 
+/** The option a ClikCode command drives on THIS harness, whatever the vendor
+ * spells it. Looking it up by a literal id was why /add-dir could not reach
+ * Gemini's and Qwen's `--include-directories`, which is the same control. */
+function optionForControl(
+  harness: AiLocalHarnessDefinition, control: string,
+): AiHarnessOptionDefinition | undefined {
+  const ids = optionIdsForControl(control);
+  return localHarnessCapabilityManifest(harness).options.find((option) => ids.includes(option.id));
+}
+
 function parseHarnessOption(option: AiHarnessOptionDefinition, raw: string): unknown {
   const value = raw.trim();
   if (option.kind === 'boolean') {
@@ -1639,7 +1649,7 @@ async function addSessionDirectory(state: HarnessState, session: HarnessSession,
   if (!raw.trim()) throw new Error('usage: /add-dir <dir>');
   const harness = sessionHarness(session);
   if (!harness) throw new Error('Choose a provider before adding directories.');
-  const option = optionForHarness(harness, 'add-dir');
+  const option = optionForControl(harness, '/add-dir');
   if (!option) throw new Error(`${harness.displayName} does not declare an additional-directory option; start ClikCode from a common parent directory or use /cwd instead.`);
   const path = await resolveExistingDirectory(session, raw);
   const current = session.harnessOptions?.[option.id];
