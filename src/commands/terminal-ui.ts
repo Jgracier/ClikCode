@@ -156,6 +156,10 @@ const EXIT_CONFIRM_MS = 2000;
 export function classicScreen(): boolean { return process.env.CLIKCODE_ALT_SCREEN !== '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
+/** Home, erase the screen, erase the saved lines. Written once at startup on
+ * the main screen so the terminal's scrollback -- which is where the
+ * conversation lives and what a swipe reads -- starts empty. */
+const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[H\u001b[2J\u001b[3J';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
@@ -1361,9 +1365,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
     }
-    // On the main screen nothing is cleared: the user's scrollback and
-    // whatever the shell printed above are theirs, and the first frame simply
-    // begins at the cursor. (`3J` here used to wipe the entire scrollback.)
+    // On the main screen the terminal's own scrollback IS the conversation:
+    // it is what a swipe scrolls, and it is shared with whatever the shell
+    // printed before this process started. A reader scrolling back therefore
+    // runs out of conversation and into a prompt, the command that launched
+    // this, and the output of whatever ran before it. Clearing the screen and
+    // the saved lines once, here, leaves a scrollback holding nothing but what
+    // this UI writes into it -- and the whole conversation is written at open,
+    // so a swipe reads the conversation and only the conversation.
+    //
+    // Exactly once, at startup. Nothing after this clears anything: a frame
+    // that wiped the screen mid-conversation would take the transcript with
+    // it. `CLIKCODE_KEEP_SCROLLBACK=1` keeps the shell's history instead, for
+    // a terminal where that history is worth more than a clean scroll.
+    else if (process.env.CLIKCODE_KEEP_SCROLLBACK !== '1') output.write(CLEAR_SCREEN_AND_SCROLLBACK);
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
