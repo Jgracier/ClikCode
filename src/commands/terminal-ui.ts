@@ -865,6 +865,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * terminal now; this UI never addresses it again. */
   private emittedMessages = 0;
   private readonly emittedActivity = new Set<string>();
+  /** User text already retired, so a steer materialized into the transcript by
+   * an earlier frame is not drawn a second time as a live row. */
+  private readonly retiredThisSession = new Set<string>();
   /** Where the answer currently streaming will land once it is persisted, so
    * the persisted copy adds only what the stream had not already retired. */
   private liveAssistantIndex?: number;
@@ -1480,14 +1483,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const steerRows = (text: string): string[] => [
         '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '',
       ];
-      const durable = pending?.steers ?? [];
+      // A steer is drawn live, and sessionTranscriptMessages() also
+      // materializes it as a real user message; only one of the two may reach
+      // the transcript.
+      const durable = materializedPendingTurn ? [] : pending?.steers ?? [];
       tools.push(...durable.map((item, index) => ({
         id: `steer#${item.responseOffset ?? 0}#${index}`, done: true,
         responseOffset: item.responseOffset ?? 0, lines: steerRows(item.text),
       })));
       const durableTexts = new Set(durable.map((item) => item.text));
       tools.push(...this.waitingSubmissions
-        .filter((item) => item.state === 'steered' && !durableTexts.has(item.text))
+        .filter((item) => item.state === 'steered' && !durableTexts.has(item.text)
+          && !(materializedPendingTurn && this.retiredThisSession.has(item.text)))
         .map((item) => ({
           id: `steer#${item.sequence}`, done: true, responseOffset: item.responseOffset, lines: steerRows(item.text),
         })));
@@ -1508,10 +1515,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // shell's own output, the previous conversation -- stays where it is.
       this.emittedMessages = conversationMessageWindow(persistedMessages, undefined, []).messageStart;
       this.emittedActivity.clear();
+      this.retiredThisSession.clear();
       this.liveAssistantIndex = undefined;
       this.turnTranscript.reset();
       this.reseedTranscript = false;
     }
+    // More messages were retired than this turn's own list has, which is what
+    // a pending turn already materialized into the transcript looks like from
+    // here: its steers are in scrollback as real user messages, and scrollback
+    // cannot be unwritten, so the live copies of them are the ones to drop.
+    const materializedPendingTurn = this.emittedMessages > persistedMessages.length;
     emit(standaloneActivity(this.emittedMessages));
     for (let index = this.emittedMessages; index < persistedMessages.length; index += 1) {
       const message = persistedMessages[index]!;
@@ -1526,6 +1539,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         }).finished);
       } else {
         emit(messageRows(message.content, message.role === 'assistant' ? '·' : userMarker));
+        if (message.role === 'user') this.retiredThisSession.add(message.content);
       }
       if (index === this.liveAssistantIndex) {
         this.liveAssistantIndex = undefined;
@@ -1534,7 +1548,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       emit(['']);
       emit(standaloneActivity(index + 1));
     }
-    this.emittedMessages = persistedMessages.length;
+    // Monotonic: a row in scrollback cannot be un-emitted, so a list that
+    // comes back shorter -- sessionTranscriptMessages() materializes a pending
+    // turn, the live form of the same turn does not -- must not lower this.
+    this.emittedMessages = Math.max(this.emittedMessages, persistedMessages.length);
 
     const liveConversation: string[] = [];
     if (hasTransientAssistant) {
