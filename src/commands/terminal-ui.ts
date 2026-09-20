@@ -206,6 +206,17 @@ const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Home, erase the screen, erase the saved lines. Written once at startup, so
  * the scrollback a swipe reads holds the conversation and not the shell. */
 const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[H\u001b[2J\u001b[3J';
+/** OSC 0: the window title, which names the tab a phone client shows.
+ *
+ * The last thing Claude Code wrote that this did not. Its own capture sets the
+ * title at startup and again per chat -- and after that, the two programs'
+ * vocabularies are identical, every sequence one emits the other emits too.
+ *
+ * Worth having on its own account: a terminal tab reading the conversation's
+ * name rather than the shell's is how you find the right session among
+ * several, which on a phone is the difference between one tab and guessing. */
+const windowTitle = (title: string): string =>
+  `\u001b]0;${title.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 60)}\u0007`;
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
@@ -1689,11 +1700,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private alternateScreen = !classicScreen() && output.isTTY;
   /** True while a palette or picker owns the screen. */
   private overlayActive = false;
+  /** The title last given to the terminal, so a repaint does not resend it. */
+  private windowTitle = 'ClikCode';
 
   constructor() {
     // Asked before the screen is taken, in this order, because that is the
     // order it was captured in -- see TERMINAL_NEGOTIATION.
     output.write(TERMINAL_NEGOTIATION);
+    output.write(windowTitle('ClikCode'));
     terminalModes.bracketedPaste = true;
     terminalModes.focusReporting = true;
     terminalModes.themeNotifications = true;
@@ -1739,6 +1753,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.reseedTranscript = this.emittedMessages ? 'scroll-away' : 'first';
     }
     if (!this.waitingLabel) this.waitingSubmissions = [];
+    const named = session.name?.trim() ? `ClikCode - ${session.name.trim()}` : 'ClikCode';
+    if (named !== this.windowTitle) {
+      this.windowTitle = named;
+      if (!this.closed && !this.suspended) output.write(windowTitle(named));
+    }
     this.currentSession = session;
     this.currentAccount = account;
     this.currentNotice = notice;
@@ -3263,7 +3282,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the shell's own screen returns untouched. The conversation is on disk
     // either way -- `/resume` reopens it.
     output.write(
-      `${this.alternateScreen ? '' : this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`
+      `${this.alternateScreen ? '' : this.eraseLiveRegion()}${leaveInputModes()}${windowTitle('')}\u001b[?7h\u001b[?25h`
       + (terminalModes.alternateScreen ? LEAVE_ALTERNATE_SCREEN : ''),
     );
     terminalModes.alternateScreen = false;
