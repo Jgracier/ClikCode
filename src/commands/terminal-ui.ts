@@ -131,22 +131,6 @@ export function wheelScrollRows(key: string): number {
 export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key) || LEGACY_MOUSE_EVENT.test(key);
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
-const FOCUS_IN = '\u001b[I';
-/** Told when the client hands focus back.
- *
- * Focus reports are asked for by `?1004h` and dropped at the reader -- they
- * are not keystrokes and must never reach a draft or an approval prompt. But
- * they are the one reliable notice that the client has just rebuilt its
- * terminal, which is what a phone does when its keyboard slides away, and
- * rebuilding it drops the mouse modes this program asked for. It does not
- * always resize the pty when it does (measured on this user's phone: 70x32 on
- * both sides of a keyboard that came and went), so SIGWINCH cannot be the
- * only hook. Dropping the key and announcing the event are both right. */
-const focusListeners = new Set<() => void>();
-export function onTerminalFocus(listener: () => void): () => void {
-  focusListeners.add(listener);
-  return () => { focusListeners.delete(listener); };
-}
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
@@ -183,11 +167,6 @@ const EXIT_CONFIRM_MS = 2000;
 export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
-/** Save the cursor, release any scroll region, put the cursor back -- so it
- * moves nothing. The first thing Claude Code writes, and now the first thing
- * this writes: a region left set by whatever ran before would confine this UI
- * to its rows. */
-const RESET_SCROLL_REGION = '\u001b7\u001b[r\u001b8';
 /** Home, erase the screen, erase the saved lines. Written once at startup, so
  * the scrollback a swipe reads holds the conversation and not the shell. */
 const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[H\u001b[2J\u001b[3J';
@@ -406,7 +385,7 @@ export function logCursorEvent(line: string): void {
   if (process.env.VITEST) return;
   // Resizes belong to the input budget: they are the event the scrolling
   // reports turn on, and the frame budget is spent within a second of startup.
-  const isInput = line.startsWith('input ') || line.startsWith('scroll ') || line.startsWith('resize ') || line.startsWith('focus ');
+  const isInput = line.startsWith('input ') || line.startsWith('scroll ') || line.startsWith('resize ');
   if (isInput) {
     if (inputLogLines >= INPUT_LOG_LINES) return;
     inputLogLines += 1;
@@ -659,10 +638,7 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       }
       // Focus in/out and OSC replies (theme notifications), likewise:
       // enabled for what they announce, not to be read.
-      if (FOCUS_EVENT.test(key) || key.startsWith('\u001b]')) {
-        if (key === FOCUS_IN) for (const listener of [...focusListeners]) listener();
-        continue;
-      }
+      if (FOCUS_EVENT.test(key) || key.startsWith('\u001b]')) continue;
       onKey(key);
     }
   };
@@ -1528,9 +1504,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * rather than once per SIGWINCH. */
   private modeReassertTimers: NodeJS.Timeout[] = [];
 
-  /** Unregisters the focus listener, so a closed prompter stops asking. */
-  private stopFocusListening?: () => void;
-
   /** Ask for the input modes again, now and after the client has settled.
    * Now is not enough on its own -- see onResize. */
   private reassertMouseTracking(): void {
@@ -1606,49 +1579,29 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private overlayActive = false;
 
   constructor() {
-    // Opened in the order Claude Code opens, captured from it in this user's
-    // own terminal, because the order is the one thing left that differs and
-    // the client's behaviour demonstrably depends on the app:
-    //
-    //     ESC7 ESC[r ESC8        release any scroll region, moving nothing
-    //     ?25h ?25l              the cursor, settled
-    //     ?2004h ?2031h ?1004h   bracketed paste, theme, focus
-    //     ?1049h ESC[2J ESC[H    and only then, the screen
-    //     ?1000h ?1002h ?1003h ?1006h   with the wheel
-    //
-    // This UI took the screen first and asked for nothing until a prompt
-    // opened, so a client deciding how to route touches at the moment an
-    // application claims the screen saw one with no paste, no focus and no
-    // mouse -- and kept the swipe for itself. Measured: with the keyboard
-    // hidden, Claude Code receives a swipe as 200-1000 bytes a second and this
-    // received nothing at all.
-    output.write(`${RESET_SCROLL_REGION}\u001b[?25h\u001b[?25l`);
-    output.write(`${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`);
-    terminalModes.bracketedPaste = true;
-    terminalModes.focusReporting = true;
-    terminalModes.themeNotifications = true;
     if (this.alternateScreen) {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
-      output.write(ENABLE_MOUSE_TRACKING);
-      terminalModes.wheelReporting = true;
-    } else {
-      // On the main screen the client's own scrollback is the conversation, so
-      // the wheel stays with it; the screen and its saved lines are cleared
-      // once so that scrollback holds this conversation and not the shell, and
-      // the first frame starts on the last row, which is what puts the
-      // composer on the bottom edge and keeps it there.
+    }
+    // The screen and its saved lines are cleared once, and the first frame
+    // starts on the LAST row.
+    //
+    // The clear leaves the shell's own history -- a login banner, a prompt,
+    // the command that started this -- out of the scrollback a swipe reads,
+    // which is where this UI keeps the conversation. Starting on the bottom
+    // row is what puts the composer on the bottom edge and keeps it there: the
+    // transcript is appended directly above it and the screen scrolls up to
+    // make room, so a block that opened on the edge is still on it a thousand
+    // rows later.
+    //
+    // Exactly once, and only here: a frame that cleared mid-conversation would
+    // take the transcript with it.
+    else {
       output.write(CLEAR_SCREEN_AND_SCROLLBACK);
       output.write(`\u001b[${Math.max(1, output.rows || 24)};1H`);
     }
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
-    // The keyboard coming back is the other half of the keyboard going away,
-    // and the half a resize does not always announce.
-    this.stopFocusListening = onTerminalFocus(() => {
-      logCursorEvent(`focus in screen=${output.columns}x${output.rows} alternate=${this.alternateScreen}`);
-      this.reassertMouseTracking();
-    });
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
     // signal handler elsewhere -- must not leave the shell in raw mode with a
     // hidden cursor and bracketed paste on.
@@ -3185,8 +3138,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaiting(false);
     this.clearTransientNotice();
     process.off('SIGWINCH', this.onResize);
-    this.stopFocusListening?.();
-    this.stopFocusListening = undefined;
     process.off('SIGCONT', this.onContinue);
     process.off('exit', restoreTerminal);
     setTerminalRawMode(false);
