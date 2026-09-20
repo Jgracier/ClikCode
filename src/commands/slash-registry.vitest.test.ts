@@ -75,15 +75,23 @@ describe('slash registry', () => {
     }
   });
 
-  it('keeps the terminal harness out of the palette and in /help', () => {
+  it('keeps the vendor harness out of the palette and in /help', () => {
     const palette = slashPalette(session(), harness(), VENDOR_EXTRAS).map((row) => row.value);
-    // The vendor's own commands and the per-harness switches would otherwise
-    // render as if ClikCode owned them.
-    for (const vendor of ['/mcp', '/rewind', '/vendor', '/other']) expect(palette).not.toContain(vendor);
-    expect(palette.some((value) => value === '/ship')).toBe(true);
+    // A manager surface or an advertised command would otherwise render as if
+    // ClikCode owned it.
+    for (const vendor of ['/mcp', '/rewind']) expect(palette).not.toContain(vendor);
+    expect(palette).toContain('/ship');
     const help = slashHelpText(session(), harness(), VENDOR_EXTRAS);
     for (const vendor of ['/mcp', '/rewind']) expect(help).toContain(vendor);
     expect(help).toContain('/<harness>');
+  });
+
+  it("lists ClikCode's own harness switches last in the palette", () => {
+    const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
+    const firstSwitch = palette.findIndex((row) => row.group === 'Switch harness');
+    expect(firstSwitch).toBeGreaterThan(0);
+    expect(palette.slice(firstSwitch).every((row) => row.group === 'Switch harness')).toBe(true);
+    expect(palette.slice(firstSwitch).map((row) => row.value)).toEqual(['/vendor', '/other']);
   });
 
   it('keeps an unavailable command listed with its reason', () => {

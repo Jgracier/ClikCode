@@ -153,9 +153,9 @@ export interface SlashExtras {
 
 /** Every listable row. Unavailable commands stay listed with their reason so
  * the user learns why, instead of a command silently disappearing. `vendor`
- * adds the terminal harness's own surfaces (its manager commands, whatever an
- * ACP agent advertised) and the `/<harness>` switch rows, which always come
- * last. */
+ * adds the surfaces the terminal harness itself owns: its manager commands and
+ * whatever an ACP agent advertised. ClikCode's own `/<harness>` switch rows
+ * are not vendor commands and always come last. */
 function slashRows(
   session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined,
   extras: SlashExtras, vendor: boolean,
@@ -184,24 +184,21 @@ function slashRows(
   for (const item of extras.custom ?? []) {
     push({ label: `/${item.name}`, value: `/${item.name}`, detail: item.description ?? 'custom command', group: 'Custom', ...(item.argumentHint ? { argHint: item.argumentHint } : {}) });
   }
-  if (vendor) {
-    for (const item of extras.harnesses ?? []) {
-      push({ label: `/${item.command}`, value: `/${item.command}`, detail: `switch to ${item.displayName}`, argHint: '[request]', group: 'Switch harness' });
-    }
+  for (const item of extras.harnesses ?? []) {
+    push({ label: `/${item.command}`, value: `/${item.command}`, detail: `switch to ${item.displayName}`, argHint: '[request]', group: 'Switch harness' });
   }
   const rank = (row: SlashPaletteEntry): number => SLASH_GROUP_ORDER.indexOf(row.group);
   return rows.map((row, index) => ({ row, index })).sort((a, b) => rank(a.row) - rank(b.row) || a.index - b.index).map(({ row }) => row);
 }
 
-/** Palette rows: ClikCode's OWN commands, plus the user's custom templates
- * (theirs, whichever directory they keep them in). The terminal harness's
- * commands stay out of it -- its manager surfaces (/mcp, /plugins, …), the
- * commands an ACP agent advertises, and the one-per-installed-harness
- * `/<harness>` switch rows. A palette that mixes both reads as one flat
- * namespace, so a name the vendor owns looks like a ClikCode command and a
- * name ClikCode owns silently shadows the vendor's. All of them still run
- * when typed (routeSlashInput keeps routing them), `/provider` is the
- * discoverable way to switch harnesses, and `/help` lists every one. */
+/** Palette rows: ClikCode's OWN commands -- the registry, the user's custom
+ * templates, and the `/<harness>` switch rows (ClikCode's own handoff
+ * feature, merely named after each CLI). What the VENDOR owns stays out: its
+ * manager surfaces (/mcp, /plugins, …) and the commands an ACP agent
+ * advertises. A palette that mixes both reads as one flat namespace, so a
+ * vendor-owned name looks like a ClikCode command and a ClikCode name
+ * silently shadows the vendor's. Those still run when typed (routeSlashInput
+ * is unchanged) and `/help` lists them. */
 export function slashPalette(
   session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, extras: SlashExtras = {},
 ): SlashPaletteEntry[] {
