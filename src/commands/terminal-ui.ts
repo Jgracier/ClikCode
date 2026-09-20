@@ -99,18 +99,27 @@ export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
  * client's own selection and copy gestures alone. */
 export const ENABLE_WHEEL_REPORTING = '\u001b[?1000h\u001b[?1006h';
 export const DISABLE_WHEEL_REPORTING = '\u001b[?1006l\u001b[?1000l';
-/** `CSI < button ; column ; row M|m`. Wheel up is 64, wheel down 65. */
+/** SGR: `CSI < button ; column ; row M|m`. Wheel up is 64, wheel down 65. */
 const MOUSE_EVENT = /^\u001b\[<(\d+);\d+;\d+[Mm]$/;
+/** X10: `CSI M` then button and two coordinates, each offset by 32. A client
+ * that ignores the SGR request reports in this form, and it is the older and
+ * more widely implemented of the two -- so it is decoded, not assumed away. */
+export const LEGACY_MOUSE_PREFIX = '\u001b[M';
+const LEGACY_MOUSE_EVENT = new RegExp(`^${'\\u001b\\[M'}[\\s\\S]{3}$`);
+
+/** Rows to scroll for a mouse report, or zero for one that is not the wheel. */
 export function wheelScrollRows(key: string): number {
-  const match = MOUSE_EVENT.exec(key);
-  if (!match) return 0;
-  const button = Number(match[1]);
+  const sgr = MOUSE_EVENT.exec(key);
+  const button = sgr
+    ? Number(sgr[1])
+    : LEGACY_MOUSE_EVENT.test(key) ? (key.charCodeAt(LEGACY_MOUSE_PREFIX.length) - 32) : undefined;
+  if (button === undefined) return 0;
   // Three rows a notch, the rate a terminal scrolls its own scrollback at.
   if (button === 64) return 3;
   if (button === 65) return -3;
   return 0;
 }
-export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key);
+export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key) || LEGACY_MOUSE_EVENT.test(key);
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
@@ -428,6 +437,22 @@ export class TerminalInputDecoder {
       }
       const prefix = this.pending[1];
       if (prefix === '[') {
+        // X10 mouse reporting: `CSI M` and then exactly three bytes, which are
+        // coordinates and not a terminator. Scanning for a final byte stops at
+        // the M and leaves those three to be read as text -- a wheel notch
+        // typed three characters into the composer instead of scrolling, on
+        // every client that does not speak the SGR encoding we ask for.
+        if (this.pending.startsWith(LEGACY_MOUSE_PREFIX)) {
+          if (this.pending.length < LEGACY_MOUSE_PREFIX.length + 3) {
+            if (!flush) break;
+            keys.push('\u001b');
+            this.pending = this.pending.slice(1);
+            continue;
+          }
+          keys.push(this.pending.slice(0, LEGACY_MOUSE_PREFIX.length + 3));
+          this.pending = this.pending.slice(LEGACY_MOUSE_PREFIX.length + 3);
+          continue;
+        }
         let end = 2;
         while (end < this.pending.length && !/[\x40-\x7e]/.test(this.pending[end]!)) end++;
         if (end >= this.pending.length) {
@@ -1184,6 +1209,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private approvalQueue: ApprovalRequest[] = [];
   private approvalRestoreLabel?: string;
   private readonly onWaitingKey = (key: string): void => {
+    // Before approvals and before the draft: a turn running is when someone
+    // wants to read what went past, and Escape still means interrupt here.
+    if (!this.pendingApproval && this.handleScrollKey(key)) return;
     if (this.pendingApproval) {
       // The draft is never edited from here: every key is either an answer or
       // dropped, so the composer is exactly as the user left it afterwards.
@@ -2231,6 +2259,26 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** True while the reader is looking at something other than the live end. */
   get scrolledBack(): boolean { return this.alternateScrollback > 0; }
 
+  /** Keys that move the transcript rather than the draft, in the one place
+   * both the prompt and the waiting band read them from. Reading back is
+   * wanted most while a turn runs -- which is the half that had no scrolling
+   * at all, so a page key or a wheel notch reached the draft editor instead.
+   * Returns whether the key was spent here. */
+  private handleScrollKey(key: string): boolean {
+    if (!this.alternateScreen) return false;
+    if (isMouseEvent(key)) {
+      // Every mouse report is consumed, wheel or not: a click belongs to the
+      // client's own selection, never to the composer.
+      const rows = wheelScrollRows(key);
+      if (rows) this.scrollTranscript(rows);
+      return true;
+    }
+    const page = Math.max(1, this.viewportRows() - 3);
+    if (key === '\u001b[5~') { this.scrollTranscript(page); return true; }
+    if (key === '\u001b[6~') { this.scrollTranscript(-page); return true; }
+    return false;
+  }
+
   /** Forget where on screen the live block sits: whoever writes next (the
    * shell, a vendor CLI, a resize) decides that now. */
   private forgetScreenPosition(): void {
@@ -2509,10 +2557,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // the only way back through what was said. Shift+Up/Down does the
         // same a row at a time. Esc, which already clears a draft, also
         // returns to the live end.
-        const page = Math.max(1, this.viewportRows() - 3);
-        if (key === '\u001b[5~') { this.scrollTranscript(page); return; }
-        if (key === '\u001b[6~') { this.scrollTranscript(-page); return; }
-        if (isMouseEvent(key)) { this.scrollTranscript(wheelScrollRows(key)); return; }
+        if (this.handleScrollKey(key)) return;
+        // Escape returns to the live end here; in the waiting band it keeps
+        // meaning interrupt, and a new turn rejoins on its own.
         if (key === '\u001b' && this.scrolledBack) { this.scrollTranscript(-Number.MAX_SAFE_INTEGER); return; }
         // Everything else is text editing, shared with the waiting composer.
         const edited = editComposer(value, cursor, key);
