@@ -232,6 +232,26 @@ export function reassertInputModes(withMouse: boolean): string {
     + `${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
 }
 
+/** What a single read owns, and nothing else.
+ *
+ * The kitty flag is pushed per read, so one pop belongs at the end of each.
+ * The rest -- bracketed paste, mouse tracking, focus and theme reporting --
+ * belong to the SESSION, and dropping them between prompts is what cost the
+ * wheel: captured from Claude Code in this user's own terminal, it sets those
+ * modes once at startup and the only disables in 185KB of output are at exit,
+ * while this code turned them off at every submit, every picker and every
+ * palette. A client with no tracking on at the moment its keyboard slides
+ * away has no reason to forward the swipe that follows, and claims the
+ * gesture for itself instead.
+ *
+ * They come back off in leaveInputModes(), which is for handing the terminal
+ * to something else: a suspend, a vendor CLI, an exit. */
+function popReadModes(): string {
+  if (!terminalModes.kittyKeyboard) return '';
+  terminalModes.kittyKeyboard = false;
+  return POP_KITTY_KEYBOARD;
+}
+
 function leaveInputModes(): string {
   const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE_TRACKING}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
   terminalModes.kittyKeyboard = false;
@@ -2754,7 +2774,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         setTerminalRawMode(false);
-        output.write(`${leaveInputModes()}\u001b[?25h`);
+        output.write(`${popReadModes()}\u001b[?25h`);
         this.resumeInput = undefined;
         this.clearTransientNotice();
         if (answer) this.panelState = undefined;
@@ -2776,7 +2796,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         setTerminalRawMode(false);
-        output.write(`${leaveInputModes()}\u001b[?25h`);
+        output.write(`${popReadModes()}\u001b[?25h`);
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
       const handleKey = (key: string): void => {
