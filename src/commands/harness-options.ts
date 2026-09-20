@@ -70,6 +70,16 @@ export function commonControlFor(id: string): string | undefined {
   return entry?.kind === 'common' ? entry.control : undefined;
 }
 
+/** Every option id a given control owns, across all harnesses. `--add-dir`
+ * and `--include-directories` are one control with two spellings, so a command
+ * that looks its option up by a literal id finds nothing on the harnesses that
+ * use the other one. */
+export function optionIdsForControl(control: string): string[] {
+  return Object.entries(OPTION_NORMALIZATION)
+    .filter(([, entry]) => entry.kind === 'common' && entry.control === control)
+    .map(([id]) => id);
+}
+
 /** Options to show as vendor rows: everything a ClikCode command does not
  * already own. Listing the others here too is how one setting ended up with
  * two interfaces. */

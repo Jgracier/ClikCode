@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses, localHarnessCapabilityManifest } from '../../../../packages/clikrouter/src/ai-local-harness';
-import { commonControlFor, OPTION_NORMALIZATION, vendorFacingOptions } from './harness-options';
+import { commonControlFor, OPTION_NORMALIZATION, optionIdsForControl, vendorFacingOptions } from './harness-options';
 
 type Opt = { id: string; category?: string; description?: string };
 const harnesses = allLocalHarnesses() as unknown as Array<{ command: string; displayName: string }>;
@@ -74,6 +74,79 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     for (const id of ['provider', 'agent', 'mode']) {
       expect(OPTION_NORMALIZATION[id]!.kind, `${id} was promoted`).toBe('vendor');
       expect(commonControlFor(id)).toBeUndefined();
+    }
+  });
+});
+
+describe('every option is reachable, by exactly one route', () => {
+  it('leaves nothing that a user cannot set', () => {
+    // The two failure modes are opposite and both real: an option listed twice
+    // gives one setting two interfaces, and an option folded into a control
+    // that cannot actually drive it on this harness disappears entirely. The
+    // second is the worse one, and it is what folding `include-directories`
+    // into /add-dir caused until the lookup went by control rather than by id.
+    const unreachable: string[] = [];
+    const duplicated: string[] = [];
+    for (const harness of harnesses) {
+      const options = optionsOf(harness);
+      const vendorRows = new Set(vendorFacingOptions(options).map((o) => o.id));
+      for (const option of options) {
+        const control = commonControlFor(option.id);
+        const viaVendorRow = vendorRows.has(option.id);
+        if (control && viaVendorRow) duplicated.push(`${harness.command}/${option.id}`);
+        if (!control && !viaVendorRow) unreachable.push(`${harness.command}/${option.id}`);
+      }
+    }
+    expect(unreachable, 'options with no route at all').toEqual([]);
+    expect(duplicated, 'options reachable two ways').toEqual([]);
+  });
+
+  it('gives each control an option on every harness that has one to drive', () => {
+    // A control owns a concept, not a spelling. If a harness publishes any id
+    // the control owns, resolving by control must find it.
+    for (const control of ['/add-dir', '/model', '/permissions', '/effort', '/cwd']) {
+      const ids = optionIdsForControl(control);
+      expect(ids.length, `${control} owns no option id`).toBeGreaterThan(0);
+      for (const harness of harnesses) {
+        const published = optionsOf(harness).filter((o) => ids.includes(o.id));
+        // Either the harness publishes one of this control's spellings, or it
+        // publishes none -- never one the control cannot see.
+        expect(published.length, `${harness.command} publishes ${published.length} rows for ${control}`).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('reaches both spellings of extra directories from one control', () => {
+    const ids = optionIdsForControl('/add-dir');
+    const byAddDir = harnesses.filter((h) => optionsOf(h).some((o) => o.id === 'add-dir'));
+    const byInclude = harnesses.filter((h) => optionsOf(h).some((o) => o.id === 'include-directories'));
+    expect(byAddDir.length).toBeGreaterThan(0);
+    expect(byInclude.map((h) => h.command)).toEqual(['gemini', 'qwen']);
+    for (const harness of [...byAddDir, ...byInclude]) {
+      expect(optionsOf(harness).some((o) => ids.includes(o.id)), `${harness.command} is unreachable from /add-dir`).toBe(true);
+    }
+  });
+});
+
+describe('a harness only ever shows its own options', () => {
+  it('never leaks one vendor\'s options into another\'s list', () => {
+    // The lists are built from the selected session's harness manifest, so the
+    // guarantee is that no id appears for a harness that does not publish it.
+    for (const harness of harnesses) {
+      const shown = new Set(vendorFacingOptions(optionsOf(harness)).map((o) => o.id));
+      const published = new Set(optionsOf(harness).map((o) => o.id));
+      for (const id of shown) expect(published.has(id), `${harness.command} shows ${id} it does not publish`).toBe(true);
+    }
+  });
+
+  it('keeps vendor-specific ids out of every other harness that lacks them', () => {
+    // `--worktree` exists on seven harnesses and must not appear on the other
+    // seventeen just because it is a shared, normalized name.
+    const withWorktree = harnesses.filter((h) => optionsOf(h).some((o) => o.id === 'worktree')).map((h) => h.command);
+    const withoutWorktree = harnesses.filter((h) => !withWorktree.includes(h.command));
+    expect(withWorktree.length).toBe(7);
+    for (const harness of withoutWorktree) {
+      expect(vendorFacingOptions(optionsOf(harness)).some((o) => o.id === 'worktree')).toBe(false);
     }
   });
 });
