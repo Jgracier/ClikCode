@@ -198,6 +198,40 @@ export function measureViewportRows(timeoutMs = 250): Promise<number | undefined
     .then((answer) => (answer.status === 'ok' && answer.row > 0 ? answer.row : undefined));
 }
 
+/** Claim the one outstanding question, for a DSR the caller is about to send
+ * itself (inside a frame). False when another question is already waiting:
+ * two answers in flight cannot be told apart, and mixing them up moves the
+ * live region to a row it was never on. */
+export function beginCursorQuestion(): boolean {
+  if (!output.isTTY || !input.isTTY || !terminalModes.rawMode || cursorQueryInFlight) return false;
+  cursorQueryInFlight = true;
+  return true;
+}
+
+/** Wait for the next cursor report, for a DSR that has already gone out
+ * inside a frame. Releases the claim beginCursorQuestion took. */
+export function awaitCursorReport(timeoutMs = 400): Promise<CursorQuery> {
+  if (!output.isTTY || !input.isTTY) { cursorQueryInFlight = false; return Promise.resolve({ status: 'timeout' }); }
+  return new Promise<CursorQuery>((resolve) => {
+    const waiter = (report: { row: number; column: number }): void => finish({ status: 'ok', ...report });
+    const timer = setTimeout(() => finish({ status: 'timeout' }), timeoutMs);
+    timer.unref();
+    function finish(answer: CursorQuery): void {
+      clearTimeout(timer);
+      cursorReportWaiters.delete(waiter);
+      input.off('data', onData);
+      cursorQueryInFlight = false;
+      resolve(answer);
+    }
+    const onData = (chunk: Buffer | string): void => {
+      const report = cursorPositionReport(String(chunk));
+      if (report) finish({ status: 'ok', ...report });
+    };
+    cursorReportWaiters.add(waiter);
+    input.on('data', onData);
+  });
+}
+
 /** One question at a time: two DSR queries in flight cannot tell their
  * answers apart. A second caller is told `busy` rather than queued -- every
  * measurement here is opportunistic, and a queue behind a terminal that never
@@ -217,6 +251,11 @@ export type CursorQuery =
  * in the same write, so nothing can land in between. */
 export async function queryCursorPosition(prefix = '', timeoutMs = 250, suffix = ''): Promise<CursorQuery> {
   if (!output.isTTY || !input.isTTY) return { status: 'timeout' };
+  // Only ever ask while the terminal is in raw mode. With echo on, the line
+  // discipline prints the terminal's answer on screen as text -- `^[[4;44R`
+  // sitting in the status line -- and hands it to whatever reads stdin next.
+  // Not raw yet is not "unsupported": ask again once a prompt is open.
+  if (!terminalModes.rawMode) return { status: 'busy' };
   if (cursorQueryInFlight) return { status: 'busy' };
   cursorQueryInFlight = true;
   try {
@@ -1016,9 +1055,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private blockTopRow?: number;
   /** Set once a terminal declines to answer DSR; it is then never asked again. */
   private cursorParkUnsupported = false;
-  /** True between writing an unparked frame and parking it: only then is the
-   * cursor on the block's last row, which is what a measurement means. */
-  private cursorAtBlockEnd = false;
   private usageLabel?: string;
   private usageResetLabel?: string;
   private selecting = false;
@@ -1292,7 +1328,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
   ): void {
     this.stopWaiting(false);
-    this.remeasureViewport();
     this.liveResponse = '';
     // A running turn always renders as stable messages, its submitted user
     // prompt, then one live assistant slot. Keep that slot fixed for the
@@ -1888,126 +1923,89 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the frame is left ending on the block's LAST row -- the one position
     // whose absolute screen row can be asked for without trusting any earlier
     // motion -- and the cursor is parked with an absolute jump from there.
-    const absolutePark = this.absoluteParkAvailable() && !pending.hideCursor;
-    // Redraw in place when the last answer told us where this block starts and
-    // nothing can have moved it since: retiring rows into scrollback scrolls
-    // the screen, and so does a block that would now run past the bottom.
-    const anchorRow = absolutePark && !finished.length && this.blockTopRow
+    // Where the block sits on screen is either known (the last measurement,
+    // still valid) or asked for inside this very frame: the DSR goes out
+    // after the last row and before the park, so its answer describes the
+    // block's last row -- the one position no earlier motion can spoil. The
+    // park itself is still written immediately, so the cursor never waits on
+    // a round trip; the answer only corrects it, and teaches the next frame
+    // where to draw.
+    const measuring = this.absoluteParkAvailable() && !pending.hideCursor;
+    const anchorRow = measuring && !finished.length && this.blockTopRow
       && this.blockTopRow + pending.live.length - 1 <= this.viewportRows()
       ? this.blockTopRow
       : undefined;
+    const probe = measuring && !anchorRow && beginCursorQuestion() ? '\u001b[6n' : '';
     this.stream.render(
       finished, pending.live, pending.cursorRow, Math.max(0, pending.cursorColumn - 1),
-      { park: !absolutePark, ...(anchorRow ? { anchorRow } : {}) },
+      { ...(anchorRow ? { anchorRow } : {}), ...(probe ? { probe } : {}) },
     );
     const body = this.frameBuffer;
     this.frameBuffer = '';
     // Synchronized output (DEC 2026): the terminal presents the whole frame at
     // once instead of tearing mid-repaint. Terminals without it ignore the pair.
-    // The cursor stays hidden until it is parked, so the jump is never seen.
-    const showCursor = pending.hideCursor || absolutePark ? '' : '\u001b[?25h';
-    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l${body}\u001b[?7h${showCursor}${END_SYNCHRONIZED_UPDATE}`;
+    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l${body}\u001b[?7h${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
     this.frameInFlight = true;
     terminalModes.painted = true;
     const geometry = { rows: pending.live.length, cursorRow: pending.cursorRow, cursorColumn: pending.cursorColumn };
     this.frameGeometry = geometry;
-    if (!absolutePark) this.blockTopRow = undefined;
+    if (!measuring) this.blockTopRow = undefined;
+    // Listen before writing: a terminal can answer inside the same tick the
+    // frame goes out, and an answer nobody is waiting for is simply lost.
+    const report = probe ? awaitCursorReport() : undefined;
     output.write(frame, () => {
-      const settled = (): void => {
-        this.frameInFlight = false;
-        if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
-      };
-      // An anchored frame needs no round trip: the block was told where to
-      // start, so the composer's row is arithmetic. That is the common case
-      // -- the measurement below is paid once, then reused until something
-      // scrolls the screen out from under it.
-      if (absolutePark && anchorRow) {
+      this.frameInFlight = false;
+      // An anchored frame drew from a known row, so the composer's row is
+      // arithmetic: park there too, since the relative park the frame carries
+      // is exactly what cannot be trusted on a terminal that miscounts rows.
+      if (anchorRow) {
         this.blockTopRow = anchorRow;
         this.parkCursorAt(anchorRow + geometry.cursorRow, geometry.cursorColumn);
         this.stream.markParked(geometry.cursorRow);
-        settled();
-        return;
-      }
-      // Measuring costs a round trip, so the frame is never held for it; the
-      // answer is applied to whatever block is on screen when it arrives, and
-      // only while that block still has the shape this one measured.
-      if (absolutePark) {
-        this.cursorAtBlockEnd = true;
-        void this.parkCursorAbsolutely(geometry, 0);
-      }
-      settled();
+      } else if (report) void this.readBlockPosition(geometry, report);
+      if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
     });
+  }
+
+  /** Asking is only safe once the terminal is in raw mode (otherwise its
+   * answer is echoed on screen and fed to whatever reads stdin), is skipped
+   * while a turn streams -- the resting cursor is what matters -- and is
+   * never repeated on a terminal that has already declined to answer. */
+  private absoluteParkAvailable(): boolean {
+    return !this.cursorParkUnsupported && !this.waitingLabel
+      && terminalModes.rawMode && input.isTTY && output.isTTY;
+  }
+
+  /** Take the answer to the DSR this frame carried, and with it the block's
+   * position on screen. The relative park has already happened, so this only
+   * corrects it -- and only while the block it measured is still the one on
+   * screen. */
+  private async readBlockPosition(
+    geometry: { rows: number; cursorRow: number; cursorColumn: number }, report: Promise<CursorQuery>,
+  ): Promise<void> {
+    const answer = await report;
+    if (this.closed || this.suspended || answer.status !== 'ok') {
+      // A terminal that never answers is asked once and then left alone with
+      // the relative park it always had.
+      if (answer.status === 'timeout') this.cursorParkUnsupported = true;
+      return;
+    }
+    if (this.frameGeometry !== geometry) return; // a newer frame owns the screen
+    this.blockTopRow = Math.max(1, answer.row - (geometry.rows - 1));
+    this.parkCursorAt(this.blockTopRow + geometry.cursorRow, geometry.cursorColumn);
+    this.stream.markParked(geometry.cursorRow);
+  }
+
+  private parkCursorAt(row: number, column: number): void {
+    if (this.closed || this.suspended) return;
+    output.write(`\u001b[${Math.max(1, row)};${Math.max(1, column)}H\u001b[?25h`);
   }
 
   /** Forget where on screen the live block sits: whoever writes next (the
    * shell, a vendor CLI, a resize) decides that now. */
   private forgetScreenPosition(): void {
     this.blockTopRow = undefined;
-    this.cursorAtBlockEnd = false;
     resetCursorQueries();
-  }
-
-  private parkCursorAt(row: number, column: number): void {
-    if (this.closed || this.suspended) return;
-    this.cursorAtBlockEnd = false;
-    output.write(`\u001b[${Math.max(1, row)};${Math.max(1, column)}H\u001b[?25h`);
-  }
-
-  /** Asking costs a round trip, so it is spent where it is worth it: the
-   * resting cursor between turns, not every frame of a streaming answer. */
-  private absoluteParkAvailable(): boolean {
-    return !this.cursorParkUnsupported && !this.waitingLabel && input.isTTY && output.isTTY;
-  }
-
-  /** The frame ended on the block's last row. Ask the terminal which row that
-   * is and jump straight to the composer's. A terminal that does not answer
-   * gets the relative park instead, once, and is never asked again. */
-  private async parkCursorAbsolutely(
-    geometry: { rows: number; cursorRow: number; cursorColumn: number }, attempt: number,
-  ): Promise<void> {
-    // A measurement only means "the block's last row" while the cursor is
-    // still sitting there. Once something has parked it, asking again would
-    // read the composer's row and treat it as the block's end.
-    if (!this.cursorAtBlockEnd) {
-      if (this.blockTopRow) this.parkCursorAt(this.blockTopRow + geometry.cursorRow, geometry.cursorColumn);
-      return;
-    }
-    const answer = await queryCursorPosition();
-    if (this.closed || this.suspended) return;
-    // Something parked the cursor while the terminal was answering -- an
-    // anchored frame, which needs no measurement and is already correct. This
-    // answer describes a screen that has since been redrawn: applying it
-    // would move the cursor off the composer it just landed on.
-    if (!this.cursorAtBlockEnd) return;
-    // Frames keep coming while the terminal answers. A frame of the same
-    // height redrew this block in place, so the answer still describes it; a
-    // different height is a different block, and gets its own measurement.
-    const current = this.frameGeometry;
-    const usable = current && current.rows === geometry.rows;
-    if (answer.status === 'busy' || !usable) {
-      // Another question is mid-flight, or the block changed under this one.
-      // Retry once the microtask queue drains rather than parking blind --
-      // and give up rather than spin.
-      if (attempt < 3 && current) queueMicrotask(() => { void this.parkCursorAbsolutely(current, attempt + 1); });
-      return;
-    }
-    const column = Math.max(1, current.cursorColumn);
-    if (answer.status !== 'ok') {
-      // Declined (not merely busy): this terminal gets the relative park from
-      // here on, which is what it always had.
-      if (answer.status === 'timeout') this.cursorParkUnsupported = true;
-      this.blockTopRow = undefined;
-      output.write(`${parkCursor(current.rows, current.cursorRow, Math.max(0, column - 1))}\u001b[?25h`);
-      this.stream.markParked(current.cursorRow);
-      return;
-    }
-    const position = answer;
-    // The frame ended on the block's LAST row, so every row of the block is
-    // now known in screen coordinates -- including the one the composer is
-    // on, and the one the next frame should start at.
-    this.blockTopRow = Math.max(1, position.row - (current.rows - 1));
-    this.parkCursorAt(this.blockTopRow + current.cursorRow, column);
-    this.stream.markParked(current.cursorRow);
   }
 
   private showTransientNotice(text: string, durationMs: number, redraw: () => void): void {
@@ -2097,10 +2095,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
     }
-    // The phone keyboard (and its accessory bar) can appear between prompts
-    // without the client announcing a new size, so the height is re-checked
-    // here rather than once at startup.
-    this.remeasureViewport();
     return new Promise((resolveQuestion, rejectQuestion) => {
       let value = this.queuedDraft ?? '';
       this.queuedDraft = undefined;
@@ -2289,6 +2283,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       };
       this.resumeInput = () => { stopInput(); if (!finished) listen(); };
       listen();
+      // Raw mode is on now, so the terminal's answers come back as input
+      // instead of being echoed on screen. The phone keyboard (and its
+      // accessory bar) can appear between prompts without the client
+      // announcing a new size, so the height is re-checked per prompt.
+      this.remeasureViewport();
       draw();
     });
   }
