@@ -1398,7 +1398,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // that wiped the screen mid-conversation would take the transcript with
     // it. `CLIKCODE_KEEP_SCROLLBACK=1` keeps the shell's history instead, for
     // a terminal where that history is worth more than a clean scroll.
-    else if (process.env.CLIKCODE_KEEP_SCROLLBACK !== '1') output.write(CLEAR_SCREEN_AND_SCROLLBACK);
+    else if (process.env.CLIKCODE_KEEP_SCROLLBACK !== '1') {
+      output.write(CLEAR_SCREEN_AND_SCROLLBACK);
+      // And the cursor is home, on a screen nothing else has written to: the
+      // first frame therefore knows the row it draws from, and every frame
+      // after it follows by arithmetic. Keeping the shell's scrollback instead
+      // means inheriting its cursor, which is unknown until the terminal is
+      // asked -- the one case that still needs a probe to get started.
+      this.blockTopRow = 1;
+    }
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
@@ -2150,19 +2158,35 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (finished.length) this.lastFinishedRow = finished[finished.length - 1];
     if (this.alternateScreen) { this.flushAlternateFrame(finished, pending); return; }
     this.frameBuffer = '';
-    // A frame's motions are relative, which is what keeps the transcript
-    // append-only -- and they are right until the terminal disagrees about
-    // how many rows something took (a row it wrapped, a resize it reflowed, a
-    // mode it ignored). The walk back up to the composer then lands low, and
-    // stays low, because the next frame walks from the same wrong place. So
-    // the frame is left ending on the block's LAST row -- the one position
-    // whose absolute screen row can be asked for without trusting any earlier
-    // motion -- and the cursor is parked with an absolute jump from there.
+    // Where the live block sits on screen is KNOWN here -- not stepped to, and
+    // not asked for.
+    //
+    // Stepping was the original: every motion relative, which is only right
+    // while the terminal counts rows the way this code does. One row it
+    // wrapped, one resize it reflowed, one mode it ignored, and the walk back
+    // up to the composer lands low -- and stays low, because the next frame
+    // steps from the same wrong place. That is the cursor under the composer.
+    // Asking (DSR) corrected it afterwards: a round trip per frame, racing
+    // every other answer in flight, on exactly the links least able to answer
+    // promptly. The alternate screen removed both by giving every row an
+    // address -- and took the scrollback a swipe reads with it.
+    //
+    // None of that is necessary on the main screen. This UI clears the screen
+    // once at startup and writes every byte on it afterwards, and every row is
+    // clipped one column short of the width so none of them can wrap. So the
+    // arithmetic is exact and it is all that is needed: the block starts on a
+    // row we know, the frame writes a known number of rows, the terminal
+    // scrolls by whatever runs past its last row, and the block's new top row
+    // follows. Rows are addressed outright and the cursor is parked outright,
+    // which is what the alternate screen was for -- with the scrollback kept.
+    //
+    // The terminal is asked only where the position is genuinely unknown: a
+    // startup that inherited the shell's cursor (CLIKCODE_KEEP_SCROLLBACK), a
+    // resize that reflowed the screen, a vendor CLI or a shell job that wrote
+    // on it. One question, at a seam, instead of one per frame.
+    const height = this.viewportRows();
+    const anchorRow = this.blockTopRow && this.blockTopRow <= height ? this.blockTopRow : undefined;
     const measuring = this.absoluteParkAvailable() && !pending.hideCursor;
-    const anchorRow = measuring && !finished.length && this.blockTopRow
-      && this.blockTopRow + pending.live.length - 1 <= this.viewportRows()
-      ? this.blockTopRow
-      : undefined;
     const probe = measuring && !anchorRow && beginCursorQuestion() ? '\u001b[6n' : '';
     this.stream.render(
       finished, pending.live, pending.cursorRow, Math.max(0, pending.cursorColumn - 1),
@@ -2184,6 +2208,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // not agree with, so where it used to start is no longer a fact about the
     // screen. Keeping it is how a stale anchor draws the next frame rows above
     // where it belongs and leaves the cursor below the composer.
+    // Rows top..top+written-1, clamped: a terminal scrolls by exactly whatever
+    // runs past its last row, which moves the block up by exactly that much.
+    // With no live region the cursor comes to rest below the last finished
+    // row instead, and that is where the next frame begins.
+    const lastRow = Math.min(height, (anchorRow ?? 1) + finished.length + Math.max(0, pending.live.length - 1));
+    const nextTop = anchorRow === undefined
+      ? undefined
+      : Math.max(1, pending.live.length
+        ? lastRow - (pending.live.length - 1)
+        : Math.min(height, anchorRow + finished.length));
+    // A frame that could neither address its rows nor ask where they landed
+    // moved the block by a count the terminal may not agree with; the row it
+    // started on has stopped being a fact about the screen.
     if (!anchorRow && !probe) this.blockTopRow = undefined;
     // Listen before writing: a terminal can answer inside the same tick the
     // frame goes out, and an answer nobody is waiting for is simply lost.
@@ -2193,11 +2230,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // An anchored frame drew from a known row, so the composer's row is
       // arithmetic: park there too, since the relative park the frame carries
       // is exactly what cannot be trusted on a terminal that miscounts rows.
-      if (anchorRow) {
-        this.blockTopRow = anchorRow;
-        this.parkCursorAt(anchorRow + geometry.cursorRow, geometry.cursorColumn);
+      if (anchorRow && nextTop !== undefined) {
+        this.blockTopRow = nextTop;
+        if (!pending.hideCursor) this.parkCursorAt(nextTop + geometry.cursorRow, geometry.cursorColumn);
         this.stream.markParked(geometry.cursorRow);
-        logCursorEvent(`frame anchored: top=${anchorRow} rows=${geometry.rows} composer=${anchorRow + geometry.cursorRow} col=${geometry.cursorColumn}`);
+        logCursorEvent(`frame anchored: top=${anchorRow}->${nextTop} rows=${geometry.rows} finished=${finished.length} composer=${(nextTop ?? 1) + geometry.cursorRow} col=${geometry.cursorColumn}`);
       } else if (report) void this.readBlockPosition(geometry, report);
       else {
         logCursorEvent(`frame relative: rows=${geometry.rows} cursorRow=${geometry.cursorRow} measuring=${measuring} raw=${terminalModes.rawMode} declined=${this.cursorParkUnsupported} waiting=${Boolean(this.waitingLabel)}`);
