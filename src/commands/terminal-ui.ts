@@ -378,11 +378,36 @@ let inputLogLines = 0;
  * startup cannot spend the budget that would have recorded the swipe. */
 const FRAME_LOG_LINES = 60;
 const INPUT_LOG_LINES = 2_000;
+/** Every byte this process writes to the terminal, with a timestamp, when
+ * CLIKCODE_TRACE_OUT=1. Diagnostic only, and off by default.
+ *
+ * The one thing no recorder can capture: putting a pty between this and the
+ * client changes the behaviour being investigated -- recorded, a swipe with
+ * the keyboard hidden reaches this program; run directly, it does not. So the
+ * trace has to come from inside. Reads ~/.clikcode/output-trace.log. */
+let traceInstalled = false;
+function installOutputTrace(): void {
+  if (traceInstalled || process.env.CLIKCODE_TRACE_OUT !== '1' || process.env.VITEST) return;
+  traceInstalled = true;
+  const path = join(homedir(), '.clikcode', 'output-trace.log');
+  try { mkdirSync(join(homedir(), '.clikcode'), { recursive: true }); } catch { /* fail-open-ok */ }
+  const original = output.write.bind(output);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a faithful passthrough of stream.write's overloads
+  (output as any).write = (chunk: any, ...rest: any[]): boolean => {
+    try {
+      appendFileSync(path, `${Date.now() / 1000} ${JSON.stringify(String(chunk))}\n`, { encoding: 'utf8', mode: 0o600 });
+    } catch { /* fail-open-ok: diagnostics must never break the UI */ }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any
+    return (original as any)(chunk, ...rest);
+  };
+}
+
 export function logCursorEvent(line: string): void {
   // VITEST: the suite drives a stubbed terminal against the real home
   // directory, and these lines per test process are noise that buries the one
   // session anybody wants to read.
   if (process.env.VITEST) return;
+  installOutputTrace();
   // Resizes belong to the input budget: they are the event the scrolling
   // reports turn on, and the frame budget is spent within a second of startup.
   const isInput = line.startsWith('input ') || line.startsWith('scroll ') || line.startsWith('resize ');
