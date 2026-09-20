@@ -73,6 +73,14 @@ function waitingInputAction(key: string): WaitingInputAction | undefined {
  * fences the payload and the whole thing arrives as one key. */
 export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
+/** DECCKM. Arrow keys then arrive as SS3 (`ESC O A`), which the decoder
+ * already folds back, and that is the point: it is the oldest signal a
+ * terminal has that an application -- not a shell -- owns the screen.
+ * Clients that layer their own shell helpers on top (history popups, path
+ * completion over the composer) key off signals like this one and bracketed
+ * paste to stay out of the way. */
+export const ENABLE_APPLICATION_CURSOR_KEYS = '\u001b[?1h';
+export const DISABLE_APPLICATION_CURSOR_KEYS = '\u001b[?1l';
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
@@ -80,8 +88,9 @@ const EXIT_CONFIRM_MS = 2000;
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
-  let sequence = ENABLE_BRACKETED_PASTE;
+  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_APPLICATION_CURSOR_KEYS}`;
   terminalModes.bracketedPaste = true;
+  terminalModes.applicationCursorKeys = true;
   terminalModes.rawMode = true;
   if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
     sequence += PUSH_KITTY_KEYBOARD;
@@ -91,9 +100,10 @@ function enterInputModes(): string {
 }
 
 function leaveInputModes(): string {
-  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}`;
+  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_APPLICATION_CURSOR_KEYS}`;
   terminalModes.kittyKeyboard = false;
   terminalModes.bracketedPaste = false;
+  terminalModes.applicationCursorKeys = false;
   return sequence;
 }
 
