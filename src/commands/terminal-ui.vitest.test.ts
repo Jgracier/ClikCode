@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { activityLifecyclePhase, commandPaletteMatches, composerRightArrowValue, conversationMessageWindow, editWaitingComposer, liveConversationLines, pickerConfirmsSelection, pickerDeletesSelection, rebaseActivityOffsets, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { activityLifecyclePhase, commandPaletteMatches, composerRightArrowValue, editWaitingComposer, liveConversationLines, pickerConfirmsSelection, pickerDeletesSelection, rebaseActivityOffsets, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('terminal waiting input', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
@@ -77,17 +77,6 @@ describe('terminal waiting input', () => {
     expect(pickerConfirmsSelection('\u001b[D')).toBe(false);
   });
 
-  it('does not shift the persisted transcript window when live rows arrive', () => {
-    const persisted = Array.from({ length: 45 }, (_, index) => `message ${index}`);
-    const window = conversationMessageWindow(persisted, 'live response', ['queued']);
-    expect(window.messageStart).toBe(5);
-    expect(window.messages[0]).toBe('message 5');
-    expect(window.messages.at(-2)).toBe('live response');
-    expect(window.messages.at(-1)).toBe('queued');
-  });
-});
-
-describe('streamed response chronology', () => {
   it('updates repeated tool progress in place and ignores reasoning as chat activity', () => {
     const started = upsertActivityEvent([], 3, 12, { kind: 'tool-start', id: 'call-1', label: 'search\nrepository' });
     const repeated = upsertActivityEvent(started, 3, 12, { kind: 'tool-start', id: 'call-1', label: 'search repository' });

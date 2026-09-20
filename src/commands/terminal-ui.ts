@@ -808,16 +808,6 @@ export function liveConversationLines(lines: readonly string[], live: boolean): 
  * queued rows are appended. Applying the history cap to the combined array
  * drops its first persisted row, breaks the native-scrollback prefix, and
  * causes every live frame to be rejected until the final commit. */
-export function conversationMessageWindow<T>(
-  persisted: readonly T[], transient: T | undefined, queued: readonly T[], historyLimit = 40,
-): { messages: T[]; messageStart: number } {
-  const history = persisted.slice(-Math.max(0, historyLimit));
-  return {
-    messages: [...history, ...(transient === undefined ? [] : [transient]), ...queued],
-    messageStart: persisted.length - history.length,
-  };
-}
-
 /** One rendered activity row and where it belongs: the message index it was
  * reported under, and -- for a row produced inside a turn -- the response
  * offset it started at, which is where it is written back into the prose. */
@@ -1918,9 +1908,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     if (this.reseedTranscript) {
       // The first frame of the process, or of a newly opened session, writes
-      // its windowed history once. Everything already in scrollback -- the
-      // shell's own output, the previous conversation -- stays where it is.
-      this.emittedMessages = conversationMessageWindow(persistedMessages, undefined, []).messageStart;
+      // the conversation once -- ALL of it. Everything already in scrollback
+      // (the shell's own output, the previous conversation) stays where it is.
+      //
+      // This wrote only the last forty messages, which is why a chat opened
+      // from disk could not be scrolled back through: the rows were never
+      // written, so there was nothing above the fold to find. On the main
+      // screen the terminal's scrollback is where a conversation lives, and a
+      // window here truncated it at the one moment it is filled.
+      this.emittedMessages = 0;
       this.lastEmittedMessage = undefined;
       this.emittedActivity.clear();
       this.retiredThisSession.clear();
