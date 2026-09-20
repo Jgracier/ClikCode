@@ -475,10 +475,14 @@ export async function claudeUsageReading(_session: HarnessSession, environment: 
     // on its own stream. Saying "needs re-auth" sent people to log in to an
     // account that was working.
     if (response.status === 401 || response.status === 403) return { windows: [], label: 'usage refreshes on next turn' };
-    // The account is briefly over its own quota-endpoint budget. There is no
-    // figure to show, but a bare gap is indistinguishable from a provider that
-    // publishes no usage at all -- name the state so it reads as temporary.
-    if (response.status === 429) return { windows: [], label: 'usage rate limited' };
+    // The account is briefly over its own quota-endpoint budget. That is a
+    // fact about this probe, not about the account's usage, and publishing it
+    // as a reading put "usage rate limited" on the shared account record --
+    // where every open terminal read it, for the whole cache window, while
+    // the harness's own stream was reporting the real figure for free on
+    // every turn. A probe that could not read reports that it could not read:
+    // the caller carries the last good figure through it.
+    if (response.status === 429) return undefined;
     if (!response.ok) return undefined;
     const body = await response.json() as {
       five_hour?: { utilization?: number; resets_at?: unknown; resetsAt?: unknown };
@@ -663,7 +667,14 @@ export async function nativeUsageReading(session: HarnessSession, state: Harness
   // Whichever is newer: another terminal may have published since this
   // process last cached.
   const entry = cached && sharedEntry ? (sharedEntry.at > cached.at ? sharedEntry : cached) : cached ?? sharedEntry;
-  const ttl = entry?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;
+  // A harness that reports quota on its own turn stream refreshes this for
+  // free every time it answers, so re-asking the vendor's endpoint between
+  // turns buys nothing and spends a per-account budget that several open
+  // terminals share. Its reading stands until the window it describes resets.
+  const streams = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
+  const ttl = entry?.failed
+    ? NATIVE_USAGE_FAILURE_TTL_MS
+    : streams && entry?.windows?.length ? Number.POSITIVE_INFINITY : NATIVE_USAGE_CACHE_TTL_MS;
   if (entry && Number.isFinite(entry.at) && Date.now() - entry.at < ttl && usageReadingIsCurrent(entry)) {
     nativeUsageCache.set(cacheKey, entry);
     return { windows: entry.windows ?? [], ...(entry.label === undefined ? {} : { label: entry.label }) };
