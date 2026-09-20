@@ -82,6 +82,13 @@ export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
  * ClikCode did not. Captured from each of them in a pty, not guessed. */
 export const ENABLE_FOCUS_REPORTING = '\u001b[?1004h';
 export const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
+/** Theme-change notifications, and a scroll-region reset wrapped in a
+ * save/restore so it moves nothing. Neither is used here either: both are in
+ * Claude Code's opening bytes, captured in a pty, and the whole point is to
+ * look to a client exactly like the applications it already stays out of. */
+export const ENABLE_THEME_NOTIFICATIONS = '\u001b[?2031h';
+export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
+export const RESET_SCROLL_REGION = '\u001b7\u001b[r\u001b8';
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
@@ -91,9 +98,10 @@ const EXIT_CONFIRM_MS = 2000;
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
-  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_FOCUS_REPORTING}`;
+  let sequence = `${RESET_SCROLL_REGION}${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
   terminalModes.bracketedPaste = true;
   terminalModes.focusReporting = true;
+  terminalModes.themeNotifications = true;
   terminalModes.rawMode = true;
   if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
     sequence += PUSH_KITTY_KEYBOARD;
@@ -103,10 +111,11 @@ function enterInputModes(): string {
 }
 
 function leaveInputModes(): string {
-  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_FOCUS_REPORTING}`;
+  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
   terminalModes.kittyKeyboard = false;
   terminalModes.bracketedPaste = false;
   terminalModes.focusReporting = false;
+  terminalModes.themeNotifications = false;
   return sequence;
 }
 
@@ -419,8 +428,9 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
         for (const waiter of [...cursorReportWaiters]) waiter(report);
         continue;
       }
-      // Focus in/out, likewise: enabled for what it announces, not to be read.
-      if (FOCUS_EVENT.test(key)) continue;
+      // Focus in/out and OSC replies (theme notifications), likewise:
+      // enabled for what they announce, not to be read.
+      if (FOCUS_EVENT.test(key) || key.startsWith('\u001b]')) continue;
       onKey(key);
     }
   };
