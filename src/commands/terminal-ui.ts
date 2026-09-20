@@ -864,7 +864,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * rows already written. Everything before `emittedMessages` belongs to the
    * terminal now; this UI never addresses it again. */
   private emittedMessages = 0;
-  private readonly emittedActivity = new Set<string>();
+  /** Sequence numbers of the standalone activity rows already retired. One
+   * number per activity event, alongside activityEntries itself, which is
+   * deliberately never evicted -- some of it is immutable scrollback. */
+  private readonly emittedActivity = new Set<number>();
   /** User text already retired, so a steer materialized into the transcript by
    * an earlier frame is not drawn a second time as a live row. */
   private readonly retiredThisSession = new Set<string>();
@@ -989,6 +992,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // Ink and ratatui behave, and precisely why neither of them re-dumps the
       // transcript on every resize. The live region is redrawn at the new width
       // by the ordinary frame below.
+      //
+      // The one thing this cannot prove: the region is erased by walking up
+      // the number of rows it was written as, and a terminal that reflows on
+      // resize (xterm and iTerm do; tmux does not) may since have turned a row
+      // wider than the new width into two. Walking up too few rows leaves a
+      // stale row above the composer until the region next changes height;
+      // walking up more than were written would erase real scrollback. The
+      // cosmetic failure is the one to prefer, so the walk is capped at what
+      // was written and never guessed upward. Both reference implementations
+      // have this same limit, for this same reason.
       this.lastColumns = output.columns || 0;
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
@@ -1049,7 +1062,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.activityEntries = [...this.activityEntries, {
       anchor: this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0,
       ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
-      ...(this.waitingLabel ? { sequence: ++this.timelineSequence } : {}),
+      // Every entry gets one, waiting or not: it is this row's identity for
+      // "already retired", and two rows that happen to say the same thing are
+      // still two rows.
+      sequence: ++this.timelineSequence,
       lines: [normalized],
     }];
     this.schedulePaint();
@@ -1449,15 +1465,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const messageRows = (content: string, marker: string): string[] =>
       renderMessageBlocks(splitIntoBlocks(sanitizeTerminalText(content)), marker, conversationInner);
     /** Activity that belongs between two messages rather than inside a turn.
-     * Emitted once, keyed by what it says, because an entry that arrives after
-     * its anchor has already been passed can only be appended where it lands. */
+     * Retired once, by identity rather than by text -- two rows that say the
+     * same thing are still two rows -- and an entry that arrives after its
+     * anchor has been passed is appended where it lands, which is the only
+     * thing an append-only transcript can do with it. */
     const standaloneActivity = (anchor: number): string[] => {
       const rows: string[] = [];
       for (const entry of this.activityEntries) {
         if (entry.anchor !== anchor || entry.responseOffset !== undefined) continue;
-        const key = `${anchor}\u0000${entry.lines.join('\u0001')}`;
-        if (this.emittedActivity.has(key)) continue;
-        this.emittedActivity.add(key);
+        const id = entry.sequence;
+        if (id === undefined || this.emittedActivity.has(id)) continue;
+        this.emittedActivity.add(id);
         rows.push(...activityRows(entry.lines));
       }
       return rows;
