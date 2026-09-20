@@ -11,13 +11,6 @@ import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 
 type Json = Record<string, any>;
 
-const ACP_ARGV: Readonly<Record<string, readonly string[]>> = {
-  cline: ['--acp'],
-  copilot: ['--acp', '--stdio'],
-  droid: ['exec', '--output-format', 'acp'],
-  hermes: ['acp'],
-};
-
 /** Tool kinds that cannot change the workspace or run code. `auto` approves
  * only these; everything else still reaches the user. */
 const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'think', 'fetch']);
@@ -25,10 +18,6 @@ const DIFF_LINE_CAP = 200;
 const OUTPUT_LINE_CAP = 20;
 const DETAIL_LINE_CAP = 12;
 const CANCEL_SETTLE_MS = 2000;
-
-export function acpArgvForHarness(command: string): readonly string[] | undefined {
-  return ACP_ARGV[command];
-}
 
 export interface AcpPlanEntry { content: string; status: string; priority?: string }
 export interface AcpAvailableCommand { name: string; description?: string; hint?: string }
@@ -207,28 +196,22 @@ export function acpPermissionPlan(mode: AiHarnessPermissionMode, params: Json): 
   };
 }
 
-/** Full child argv for one ACP launch, or undefined without an adapter. */
-export function acpSpawnArgv(input: Pick<AcpTurnInput, 'command' | 'model' | 'effort' | 'permissionMode' | 'argv' | 'optionPlacement' | 'extraArgv'>): string[] | undefined {
-  const argv = input.argv ?? acpArgvForHarness(input.command);
+/** Full child argv for one ACP launch, or undefined without an adapter.
+ *
+ * The argv comes from the catalog (`harnessAcpLaunch`), which already derives
+ * the mode flag, the model flag, the effort flag and the permission flags from
+ * the harness's own entry. A second copy of those flags lived here as a
+ * fallback for callers that passed no argv -- four harnesses' worth of
+ * `command === 'cline' ? ['--thinking', effort]`, drifting from the catalog
+ * entry describing the same flag. There is one description of a harness now,
+ * and it is the catalog. */
+export function acpSpawnArgv(
+  input: Pick<AcpTurnInput, 'command' | 'argv' | 'optionPlacement' | 'extraArgv'>,
+): string[] | undefined {
+  const argv = input.argv;
   if (!argv) return undefined;
-  const { command, effort, permissionMode } = input;
-  // The local flag table is only a fallback. A caller that supplies `argv`
-  // (catalog-driven launch) owns the options too and passes them as extraArgv
-  // -- deriving them here as well would duplicate every flag.
-  const known = input.argv === undefined && ACP_ARGV[command] !== undefined;
-  const options = [
-    ...(known && input.model ? ['--model', input.model] : []),
-    ...(known && effort && command === 'cline' ? ['--thinking', effort] : []),
-    ...(known && effort && command === 'copilot' ? ['--effort', effort] : []),
-    ...(known && effort && command === 'droid' ? ['--reasoning-effort', effort] : []),
-    ...(known && effort && command === 'hermes' ? ['--reasoning', effort] : []),
-    ...(known && permissionMode === 'bypass' ? command === 'cline' ? ['--auto-approve', 'true'] : command === 'copilot' ? ['--allow-all'] : command === 'droid' ? ['--skip-permissions-unsafe'] : command === 'hermes' ? ['--yolo'] : [] : []),
-    ...(known && permissionMode === 'auto' && command === 'droid' ? ['--auto', 'low'] : []),
-    ...(input.extraArgv ?? []),
-  ];
-  // Droid's model/autonomy flags belong to the `exec` subcommand. Other ACP
-  // harnesses publish root-level configuration flags before their ACP mode.
-  const placement = input.optionPlacement ?? (command === 'droid' ? 'after' : 'before');
+  const options = [...(input.extraArgv ?? [])];
+  const placement = input.optionPlacement ?? 'before';
   return placement === 'after' ? [...argv, ...options] : [...options, ...argv];
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acpActivityEvent, acpApprovalDetail, acpArgvForHarness, acpResponseDelta, acpSpawnArgv } from './acp-client.js';
+import { acpActivityEvent, acpApprovalDetail, acpResponseDelta, acpSpawnArgv } from './acp-client.js';
 
 describe('shared ACP adapter contract', () => {
   it('normalizes agent prose and tool lifecycle events', () => {
@@ -47,21 +47,17 @@ describe('shared ACP adapter contract', () => {
     expect(acpApprovalDetail({ title: 'Mystery' })).toBeUndefined();
   });
 
-  it('keeps the local launch table as the fallback when no argv is supplied', () => {
-    expect(acpSpawnArgv({ command: 'droid', permissionMode: 'auto', model: 'm', effort: 'high' }))
-      .toEqual(['exec', '--output-format', 'acp', '--model', 'm', '--reasoning-effort', 'high', '--auto', 'low']);
-    // auto must not switch the agent's own blanket approval on.
-    expect(acpSpawnArgv({ command: 'cline', permissionMode: 'auto' })).toEqual(['--acp']);
-    expect(acpSpawnArgv({ command: 'kimi', permissionMode: 'ask' })).toBeUndefined();
-    expect(acpSpawnArgv({ command: 'kimi', permissionMode: 'ask', model: 'k2', argv: ['--acp'], extraArgv: ['--model', 'k2'] })).toEqual(['--model', 'k2', '--acp']);
-  });
-
-  it('only opts providers with a verified ACP launch into the shared transport', () => {
-    // Cursor Agent currently publishes structured stream-json but no ACP
-    // subcommand; do not pay for a guaranteed failed spawn before fallback.
-    expect(acpArgvForHarness('cursor')).toBeUndefined();
-    expect(acpArgvForHarness('copilot')).toEqual(['--acp', '--stdio']);
-    expect(acpArgvForHarness('droid')).toEqual(['exec', '--output-format', 'acp']);
-    expect(acpArgvForHarness('aider')).toBeUndefined();
+  /** The catalog describes an ACP launch -- the mode flag, and the model,
+   * effort and permission flags derived from the harness's own entry -- and
+   * passes it as `argv`/`extraArgv`. A second copy of those flags used to live
+   * in this module as a fallback for callers that passed none, which was only
+   * ever this test: production builds the launch from the catalog
+   * (harnessAcpLaunch) on every turn. One description of a harness, and it is
+   * the catalog. */
+  it('assembles the launch the catalog handed it, and refuses without one', () => {
+    expect(acpSpawnArgv({ command: 'droid', argv: ['exec', '--output-format', 'acp'], optionPlacement: 'after', extraArgv: ['--model', 'm'] }))
+      .toEqual(['exec', '--output-format', 'acp', '--model', 'm']);
+    expect(acpSpawnArgv({ command: 'kimi', argv: ['--acp'], extraArgv: ['--model', 'k2'] })).toEqual(['--model', 'k2', '--acp']);
+    expect(acpSpawnArgv({ command: 'cursor' }), 'a harness with no catalog ACP launch cannot be spawned').toBeUndefined();
   });
 });
