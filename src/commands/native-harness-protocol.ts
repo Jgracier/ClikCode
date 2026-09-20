@@ -709,11 +709,17 @@ export function isCodeChangeLabel(label: string): boolean {
 
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
   if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
-  const isCodeChange = Boolean(event.diff) || isCodeChangeLabel(event.label);
-  const glyph = event.kind === 'tool-error' ? chalk.red('failed')
-    : isCodeChange ? chalk.magenta('edit')
-      : event.kind === 'tool-done' ? chalk.green('done') : chalk.yellow('tool');
-  const summary = `  ${glyph} ${chalk.dim(event.label)}`;
+  // The tool's own label, with nothing prepended to it. A status word in front
+  // of every row ("done", "edit", "tool") restated what the row already said by
+  // existing -- a finished tool is reported when it finishes -- and pushed the
+  // call itself two words to the right on every line. Failure is the one state
+  // a label cannot carry on its own, so that, and only that, reads differently.
+  // Failure is the exception, and it is a suffix rather than a prefix: colour
+  // alone would carry it only on a terminal that has colour, and a piped or
+  // NO_COLOR transcript would read a failed call as a successful one.
+  const summary = `  ${event.kind === 'tool-error'
+    ? `${chalk.red(event.label)} ${chalk.red('failed')}`
+    : chalk.dim(event.label)}`;
   if (!event.diff) {
     const output = event.output ?? [];
     const visible = output.slice(0, ACTIVITY_PREVIEW_LINES);

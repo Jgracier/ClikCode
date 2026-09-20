@@ -86,12 +86,14 @@ describe('slash registry', () => {
     expect(help).toContain('/<harness>');
   });
 
-  it("lists ClikCode's own harness switches last in the palette", () => {
+  it('keeps the harness switches out of the palette, and in /help', () => {
+    // They are ClikCode's own feature, but two dozen rows each named after a
+    // terminal CLI read as the terminal's command list pasted into the
+    // palette. Typing one still works; /help is where they are listed.
     const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
-    const firstSwitch = palette.findIndex((row) => row.group === 'Switch harness');
-    expect(firstSwitch).toBeGreaterThan(0);
-    expect(palette.slice(firstSwitch).every((row) => row.group === 'Switch harness')).toBe(true);
-    expect(palette.slice(firstSwitch).map((row) => row.value)).toEqual(['/vendor', '/other']);
+    expect(palette.some((row) => row.group === 'Switch harness')).toBe(false);
+    for (const command of ['/vendor', '/other']) expect(palette.map((row) => row.value)).not.toContain(command);
+    expect(slashHelpText(session(), harness(), VENDOR_EXTRAS)).toContain('/<harness>');
   });
 
   it('keeps an unavailable command listed with its reason', () => {

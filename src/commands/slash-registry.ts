@@ -202,7 +202,12 @@ function slashRows(
 export function slashPalette(
   session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, extras: SlashExtras = {},
 ): SlashPaletteEntry[] {
-  return slashRows(session, harness, extras, false);
+  // ClikCode's own commands only. The `/<harness>` switch rows are ClikCode's
+  // feature, but there are two dozen of them and every one is named after a
+  // terminal CLI, so the palette read as the terminal's own command list
+  // pasted underneath ClikCode's. They still run when typed, and /help still
+  // documents them as `/<harness> [request]`.
+  return slashRows(session, harness, extras, false).filter((row) => row.group !== 'Switch harness');
 }
 
 /** `[usage, description]` rows per group, for the human /help panel. */
