@@ -166,6 +166,25 @@ const ALTERNATE_TRANSCRIPT_ROWS = 2000;
  * moves the transcript. The rate a terminal scrolls its own scrollback at. */
 const SWIPE_ROWS = 3;
 
+/** Raw mode, and the record of it, in one place.
+ *
+ * They were two: `input.setRawMode(false)` at the end of a prompt, a picker, a
+ * waiting band or a vendor handover, and `terminalModes.rawMode` left saying
+ * `true` because only two of the seven exits cleared it. Everything that asks
+ * the terminal a question checks that flag first, for a good reason -- with
+ * echo on, the line discipline prints the terminal's answer as text and hands
+ * it to whatever reads stdin next. So a resize between two prompts (a phone's
+ * keyboard, which resizes the screen every time it opens) sent a DSR into a
+ * cooked terminal, and its answer -- `^[[31;54R` -- was echoed and typed
+ * straight into the composer.
+ *
+ * Every entry and exit goes through here now, so the flag cannot disagree with
+ * the terminal about what mode it is in. */
+export function setTerminalRawMode(on: boolean): void {
+  if (input.isTTY) input.setRawMode(on);
+  terminalModes.rawMode = on;
+}
+
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
@@ -175,7 +194,6 @@ function enterInputModes(): string {
   terminalModes.focusReporting = true;
   terminalModes.wheelReporting = true;
   terminalModes.themeNotifications = true;
-  terminalModes.rawMode = true;
   if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
     sequence += PUSH_KITTY_KEYBOARD;
     terminalModes.kittyKeyboard = true;
@@ -1612,7 +1630,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.streamingBlocks = createStreamingBlockParser();
     if (input.isTTY) {
       const listen = (): void => {
-        input.setRawMode(true);
+        setTerminalRawMode(true);
         input.resume();
         output.write(enterInputModes());
         this.stopWaitingInput = listenForTerminalKeys(this.onWaitingKey);
@@ -1648,7 +1666,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaitingInput?.();
     this.stopWaitingInput = undefined;
     if (this.waitingLabel) this.resumeInput = undefined;
-    if (input.isTTY) input.setRawMode(false);
+    setTerminalRawMode(false);
     this.cancelWaiting = undefined;
     this.waitingSubmit = undefined;
     this.waitingCancelled = false;
@@ -2513,8 +2531,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     this.pendingLive = undefined;
-    if (input.isTTY) input.setRawMode(false);
-    terminalModes.rawMode = false;
+    setTerminalRawMode(false);
     output.write(
       `${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`
       // Whoever takes the terminal takes the main screen with it: a vendor
@@ -2623,7 +2640,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         finished = true;
         this.paletteActive = false;
         stopInput();
-        input.setRawMode(false);
+        setTerminalRawMode(false);
         output.write(`${leaveInputModes()}\u001b[?25h`);
         this.resumeInput = undefined;
         this.clearTransientNotice();
@@ -2645,7 +2662,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         finished = true;
         this.paletteActive = false;
         stopInput();
-        input.setRawMode(false);
+        setTerminalRawMode(false);
         output.write(`${leaveInputModes()}\u001b[?25h`);
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
@@ -2781,7 +2798,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       };
       let exitArmedAt = 0;
       const listen = (): void => {
-        input.setRawMode(true);
+        setTerminalRawMode(true);
         input.resume();
         output.write(enterInputModes());
         stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
@@ -2856,7 +2873,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         finished = true;
         this.selecting = false;
         stopInput();
-        input.setRawMode(false);
+        setTerminalRawMode(false);
         this.clearInteractiveFrame();
         resolveSelection(value);
       };
@@ -2886,7 +2903,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           return;
         }
         if (finished) return;
-        input.setRawMode(true);
+        setTerminalRawMode(true);
         input.resume();
         stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
         draw();
@@ -2897,7 +2914,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const value = await this.select(option.label, option.alternates);
         if (value !== undefined) return finish(value);
         if (finished) return;
-        input.setRawMode(true);
+        setTerminalRawMode(true);
         input.resume();
         stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
         draw();
@@ -2916,7 +2933,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           return;
         }
         if (finished) return;
-        input.setRawMode(true);
+        setTerminalRawMode(true);
         input.resume();
         stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
         draw();
@@ -2941,7 +2958,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         else return;
         draw();
       };
-      input.setRawMode(true);
+      setTerminalRawMode(true);
       input.resume();
       stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
       draw();
@@ -2963,8 +2980,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     process.off('SIGWINCH', this.onResize);
     process.off('SIGCONT', this.onContinue);
     process.off('exit', restoreTerminal);
-    terminalModes.rawMode = false;
-    if (input.isTTY) input.setRawMode(false);
+    setTerminalRawMode(false);
     input.pause();
     // On the main screen the conversation stays in the terminal's scrollback
     // where it can still be read and copied, and only this UI's own live
@@ -2989,7 +3005,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.forgetScreenPosition();
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
-    if (input.isTTY) input.setRawMode(false);
+    setTerminalRawMode(false);
     input.pause();
     // Remove the composer and footer before handing over, so the vendor's
     // output continues directly under the conversation instead of being typed
