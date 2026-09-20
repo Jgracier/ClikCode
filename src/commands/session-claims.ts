@@ -69,6 +69,7 @@ function parseClaim(raw: string | undefined): SessionClaim | undefined {
       ? { startedAt: parsed.heartbeatAt, nonce: '', ...parsed } as SessionClaim
       : undefined;
   } catch {
+    // fail-open-ok: malformed claim data cannot prove ownership and is treated as an invalid, absent claim
     return undefined;
   }
 }
