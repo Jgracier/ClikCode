@@ -349,28 +349,6 @@ export function cursorPositionReport(key: string): { row: number; column: number
 
 const cursorReportWaiters = new Set<(report: { row: number; column: number }) => void>();
 
-/** How many rows the terminal REALLY has, asked of the terminal itself.
- *
- * The size SSH reports is the size the client chose to announce. A mobile
- * client that drops a keyboard bar over the bottom rows commonly announces
- * nothing at all, and a live region laid out for rows that are not there
- * makes every relative motion in the frame clamp at the screen's top edge:
- * the walk back up lands below the composer, and rows the next frame means to
- * erase survive underneath it. `CSI 999;999H` clamps to the real last row,
- * and DECSC/DECRC put the cursor back, so nothing on screen moves.
- *
- * Resolves undefined on a terminal that does not answer, which simply leaves
- * the announced size in charge. */
-export function measureViewportRows(timeoutMs = 250): Promise<number | undefined> {
-  // Save the cursor, jump past the last row so the terminal clamps, ask, and
-  // put the cursor back: nothing on screen moves.
-  // One write: save, jump past the last row so the terminal clamps, ask,
-  // restore. A frame landing between the save and the restore would restore
-  // the cursor to a row that no longer means anything.
-  return queryCursorPosition('\u001b7\u001b[999;999H', timeoutMs, '\u001b8')
-    .then((answer) => (answer.status === 'ok' && answer.row > 0 ? answer.row : undefined));
-}
-
 /** A short, bounded record of what the terminal actually did with the cursor,
  * written to ~/.clikcode/cursor.log. Placing the cursor depends on how a
  * client answers (or ignores) DSR, which cannot be seen from a screenshot and
@@ -1374,9 +1352,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * first frame of a newly opened session. */
   private reseedTranscript: false | 'first' | 'scroll-away' = 'first';
   private lastColumns = output.columns || 0;
-  /** The terminal's real height when it answers DSR; see measureViewportRows. */
-  private measuredRows?: number;
-  private measuring = false;
   /** The live block the last frame drew, for the absolute park below it. */
   private frameGeometry?: { rows: number; cursorRow: number; cursorColumn: number };
   /** Where that block starts on screen, learned from the terminal's own
@@ -1508,7 +1483,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // was written and never guessed upward. Both reference implementations
       // have this same limit, for this same reason.
       this.lastColumns = output.columns || 0;
-      this.measuredRows = undefined;
       this.forgetScreenPosition();
       // The modes are asked for again, because a resize is where they get
       // lost: a phone hiding its keyboard resizes the pty, and the client
@@ -1568,7 +1542,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * than it announced is not offering rows we may use. */
   private viewportRows(): number {
     const announced = output.rows || 30;
-    return Math.max(5, this.measuredRows ? Math.min(announced, this.measuredRows) : announced);
+    return Math.max(5, output.rows || 30);
   }
 
   /** The repaint a resize needs, once the resize is over.
@@ -1628,18 +1602,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
 
-  /** One probe in flight at a time; the answer repaints at the real height. */
-  private remeasureViewport(): void {
-    if (this.measuring || this.closed || this.suspended) return;
-    this.measuring = true;
-    void measureViewportRows().then((rows) => {
-      this.measuring = false;
-      logCursorEvent(`height probe: answered=${rows ?? 'no'} announced=${output.columns}x${output.rows} TERM=${process.env.TERM ?? '?'}`);
-      if (this.closed || rows === this.measuredRows) return;
-      this.measuredRows = rows;
-      if (rows !== undefined) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
-    }).catch(() => { this.measuring = false; });
-  }
+
 
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */
@@ -3061,11 +3024,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       };
       this.resumeInput = () => { stopInput(); if (!finished) listen(); };
       listen();
-      // Raw mode is on now, so the terminal's answers come back as input
-      // instead of being echoed on screen. The phone keyboard (and its
-      // accessory bar) can appear between prompts without the client
-      // announcing a new size, so the height is re-checked per prompt.
-      this.remeasureViewport();
       draw();
     });
   }
