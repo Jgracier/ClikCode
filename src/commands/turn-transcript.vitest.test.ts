@@ -206,3 +206,38 @@ describe('a whole turn', () => {
     expect(next.finished).toEqual(['Second answer.']);
   });
 });
+
+describe('a tool call closes the prose before it', () => {
+  it('settles a paragraph that no blank line ever closed', () => {
+    const content = 'Right, I will check the tests and report back.';
+    const streaming = settledAnswerBlocks(content, 0, false);
+    expect(streaming.settled, 'a growing paragraph is still live').toHaveLength(0);
+    expect(streaming.live).toHaveLength(1);
+
+    const closed = settledAnswerBlocks(content, 0, false, undefined, true);
+    expect(closed.settled, 'a paragraph a tool call followed is final').toHaveLength(1);
+    expect(closed.live).toHaveLength(0);
+  });
+
+  it('leaves prose written after the tool call live', () => {
+    const transcript = new TurnTranscript();
+    const first = transcript.advance({
+      content: 'Checking the tests.',
+      tools: [{ id: 't1', done: true, lines: ['  Bash(npx vitest run)'], responseOffset: 'Checking the tests.'.length }],
+      turnEnded: false,
+      renderBlocks: text,
+    });
+    expect(first.finished.join('\n')).toContain('Checking the tests.');
+    expect(first.finished.join('\n')).toContain('Bash(npx vitest run)');
+    expect(first.live.join('\n')).not.toContain('Checking the tests.');
+
+    const second = transcript.advance({
+      content: 'Checking the tests.\n\nThey pass, still writing',
+      tools: [{ id: 't1', done: true, lines: ['  Bash(npx vitest run)'], responseOffset: 'Checking the tests.'.length }],
+      turnEnded: false,
+      renderBlocks: text,
+    });
+    expect(second.live.join('\n'), 'the sentence still being written is live').toContain('They pass, still writing');
+    expect(second.finished.join('\n')).not.toContain('They pass, still writing');
+  });
+});
