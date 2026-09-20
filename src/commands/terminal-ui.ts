@@ -209,6 +209,12 @@ function enterInputModes(): string {
   return sequence;
 }
 
+/** The modes an open read depends on, without claiming them again: entering
+ * pushes the kitty flag, and pushing it twice would need two pops. */
+export function reassertInputModes(): string {
+  return `${ENABLE_BRACKETED_PASTE}${ENABLE_MOUSE_TRACKING}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
+}
+
 function leaveInputModes(): string {
   const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE_TRACKING}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
   terminalModes.kittyKeyboard = false;
@@ -1393,6 +1399,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.lastColumns = output.columns || 0;
       this.measuredRows = undefined;
       this.forgetScreenPosition();
+      // The modes are asked for again, because a resize is where they get
+      // lost. A phone hiding its keyboard resizes the pty, and a client that
+      // resets its emulator's modes across that stops reporting the wheel --
+      // which is exactly a swipe that scrolls with the keyboard up and does
+      // nothing with it down. Asking twice costs a few bytes; a client that
+      // never dropped them sets what is already set.
+      if (terminalModes.rawMode) output.write(reassertInputModes());
       this.remeasureViewport();
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
