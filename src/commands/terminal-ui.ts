@@ -1449,7 +1449,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // hundred milliseconds apart. A client that never dropped them sets
       // what is already set.
       this.reassertMouseTracking();
-      this.remeasureViewport();
+      // No height probe here either: it jumps the cursor to the bottom-right
+      // corner and asks, which is another thing done at exactly the moment a
+      // swipe is being recognised, and another thing Claude Code never does.
+      // The size the terminal announces is what the layout uses.
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
   };
@@ -2377,7 +2380,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.frameBuffer = '';
     // Synchronized output (DEC 2026): the terminal presents the whole frame at
     // once instead of tearing mid-repaint. Terminals without it ignore the pair.
-    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l${body}\u001b[?7h${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
+    // No autowrap toggle and no synchronized-update pair around a frame.
+    //
+    // Both were belt-and-braces: DECAWM-off in case a row reached the last
+    // column (every row is already clipped a column short, which is what
+    // actually prevents it), and DEC 2026 so a frame is presented whole. They
+    // also fire dozens of times a second, and they are the only thing this UI
+    // does per frame that Claude Code -- which scrolls on this client with the
+    // keyboard hidden, where this did not -- never does at all. A client
+    // recognising a swipe across several frames has its state reset by every
+    // one of them.
+    const frame = `\u001b[?25l${body}${pending.hideCursor ? '' : '\u001b[?25h'}`;
     this.frameInFlight = true;
     terminalModes.painted = true;
     const geometry = { rows: pending.live.length, cursorRow: pending.cursorRow, cursorColumn: pending.cursorColumn };
@@ -2487,7 +2500,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // below depends on whether the frame shows it.
     const park = `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
     if (!updates.length && !park) return;
-    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l${updates.join('')}\u001b[?7h${park}${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
+    const frame = `\u001b[?25l${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
     this.frameInFlight = true;
     terminalModes.painted = true;
     logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
