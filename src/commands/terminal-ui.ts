@@ -156,10 +156,6 @@ const EXIT_CONFIRM_MS = 2000;
 export function classicScreen(): boolean { return process.env.CLIKCODE_ALT_SCREEN !== '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
-/** Home, erase the screen, erase the saved lines. Written once at startup on
- * the main screen so the terminal's scrollback -- which is where the
- * conversation lives and what a swipe reads -- starts empty. */
-const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[H\u001b[2J\u001b[3J';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
@@ -1088,6 +1084,17 @@ export function renderMessageBlocks(
   };
   for (const [index, block] of blocks.entries()) {
     const streaming = live && index === blocks.length - 1;
+    // Blocks are separated by an empty row -- a paragraph, a list, a fence and
+    // the paragraph after it are separate things and read as one wall of text
+    // without it. Consecutive items of the same list are not separated: a list
+    // is one thing. The separator belongs to the block that FOLLOWS, never to
+    // the one before it: a row handed to scrollback can never grow a row, and
+    // a streaming answer's blocks are handed over as each one closes.
+    // A run that continues a message (firstOfMessage false) is separated from
+    // whatever the earlier run wrote for the same reason.
+    const previous = index ? blocks[index - 1] : undefined;
+    const tight = previous?.kind === 'list-item' && block.kind === 'list-item';
+    if ((previous || !firstOfMessage) && !tight) rows.push('');
     const quotePrefix = block.quoteDepth ? chalk.dim('│ '.repeat(block.quoteDepth)) : '';
     if (block.kind === 'code') {
       const structural = `${quotePrefix}${'  '.repeat(block.indent)}`;
@@ -1177,6 +1184,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The last row retired, so a blank separator is never doubled across the
    * boundary between one frame and the next. */
   private lastFinishedRow?: string;
+  /** The row before it, so the guard that separates messages can tell one
+   * empty row from two across a frame boundary. */
+  private secondLastFinishedRow?: string;
   /** Persisted messages already in scrollback, and the standalone activity
    * rows already written. Everything before `emittedMessages` belongs to the
    * terminal now; this UI never addresses it again. */
@@ -1385,28 +1395,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
     }
-    // On the main screen the terminal's own scrollback IS the conversation:
-    // it is what a swipe scrolls, and it is shared with whatever the shell
-    // printed before this process started. A reader scrolling back therefore
-    // runs out of conversation and into a prompt, the command that launched
-    // this, and the output of whatever ran before it. Clearing the screen and
-    // the saved lines once, here, leaves a scrollback holding nothing but what
-    // this UI writes into it -- and the whole conversation is written at open,
-    // so a swipe reads the conversation and only the conversation.
-    //
-    // Exactly once, at startup. Nothing after this clears anything: a frame
-    // that wiped the screen mid-conversation would take the transcript with
-    // it. `CLIKCODE_KEEP_SCROLLBACK=1` keeps the shell's history instead, for
-    // a terminal where that history is worth more than a clean scroll.
-    else if (process.env.CLIKCODE_KEEP_SCROLLBACK !== '1') {
-      output.write(CLEAR_SCREEN_AND_SCROLLBACK);
-      // And the cursor is home, on a screen nothing else has written to: the
-      // first frame therefore knows the row it draws from, and every frame
-      // after it follows by arithmetic. Keeping the shell's scrollback instead
-      // means inheriting its cursor, which is unknown until the terminal is
-      // asked -- the one case that still needs a probe to get started.
-      this.blockTopRow = 1;
-    }
+    // On the main screen nothing is cleared: the user's scrollback and
+    // whatever the shell printed above are theirs, and the first frame simply
+    // begins at the cursor.
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
@@ -1866,8 +1857,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const emit = (rows: readonly string[]): void => {
       for (const row of rows) {
         const last = finished.length ? finished[finished.length - 1] : this.lastFinishedRow;
-        // One blank row between things, never two, and never a leading one.
-        if (row === '' && (last === '' || last === undefined)) continue;
+        const before = finished.length > 1 ? finished[finished.length - 2]
+          : finished.length ? this.lastFinishedRow : this.secondLastFinishedRow;
+        // An empty row on each side of a message, so two of them separate a
+        // message from the answer under it and from the message after it.
+        // Never a third, and never a leading one at the top of a transcript.
+        if (row === '' && (last === undefined || (last === '' && (before === '' || before === undefined)))) continue;
         finished.push(row);
       }
     };
@@ -2015,7 +2010,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.turnTranscript.reset();
       }
       this.lastEmittedMessage = messageKey(message);
-      emit(['']);
+      emit(['', '']);
       emit(standaloneActivity(index + 1));
     }
     // Monotonic: a row in scrollback cannot be un-emitted, so a list that
@@ -2157,35 +2152,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.pendingLive = undefined;
     const finished = this.pendingFinished;
     this.pendingFinished = [];
-    if (finished.length) this.lastFinishedRow = finished[finished.length - 1];
+    if (finished.length) {
+      this.secondLastFinishedRow = finished.length > 1 ? finished[finished.length - 2] : this.lastFinishedRow;
+      this.lastFinishedRow = finished[finished.length - 1];
+    }
     if (this.alternateScreen) { this.flushAlternateFrame(finished, pending); return; }
     this.frameBuffer = '';
-    // Where the live block sits on screen is KNOWN here -- not stepped to, and
-    // not asked for.
-    //
-    // Stepping was the original: every motion relative, which is only right
-    // while the terminal counts rows the way this code does. One row it
-    // wrapped, one resize it reflowed, one mode it ignored, and the walk back
-    // up to the composer lands low -- and stays low, because the next frame
-    // steps from the same wrong place. That is the cursor under the composer.
-    // Asking (DSR) corrected it afterwards: a round trip per frame, racing
-    // every other answer in flight, on exactly the links least able to answer
-    // promptly. The alternate screen removed both by giving every row an
-    // address -- and took the scrollback a swipe reads with it.
-    //
-    // None of that is necessary on the main screen. This UI clears the screen
-    // once at startup and writes every byte on it afterwards, and every row is
-    // clipped one column short of the width so none of them can wrap. So the
-    // arithmetic is exact and it is all that is needed: the block starts on a
-    // row we know, the frame writes a known number of rows, the terminal
-    // scrolls by whatever runs past its last row, and the block's new top row
-    // follows. Rows are addressed outright and the cursor is parked outright,
-    // which is what the alternate screen was for -- with the scrollback kept.
-    //
-    // The terminal is asked only where the position is genuinely unknown: a
-    // startup that inherited the shell's cursor (CLIKCODE_KEEP_SCROLLBACK), a
-    // resize that reflowed the screen, a vendor CLI or a shell job that wrote
-    // on it. One question, at a seam, instead of one per frame.
+    // A frame's motions are relative, which is what keeps the transcript
+    // append-only. They are right until the terminal disagrees about how many
+    // rows something took (a row it wrapped, a resize it reflowed, a mode it
+    // ignored): the walk back up to the composer then lands low, and stays
+    // low, because the next frame walks from the same wrong place. So a frame
+    // ends on the block's LAST row -- the one position whose absolute screen
+    // row can be asked for without trusting any earlier motion -- and the
+    // cursor is parked with an absolute jump, from a row the terminal either
+    // told us (the DSR this frame carries) or that nothing can have moved.
     const height = this.viewportRows();
     // Anchored only where nothing is retired: no rows written above the block
     // means the terminal cannot have scrolled, so the row it starts on is the
