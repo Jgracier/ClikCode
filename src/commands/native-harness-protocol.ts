@@ -148,6 +148,68 @@ export interface NativeTurnUsage {
 const finiteNumber = (...candidates: unknown[]): number | undefined =>
   candidates.find((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate));
 
+/** What a harness says about itself on its own stream.
+ *
+ * Every vendor opens a turn by announcing what it is about to do it with --
+ * the model it resolved, the permission mode it applied, the commands it
+ * offers -- and ClikCode was displaying what it had ASKED for instead. A
+ * session set to `automatic` showed "automatic"; a vendor that substituted a
+ * model said so and was not heard.
+ *
+ * Read by shape, not by vendor: an opening record (`system`/init,
+ * `session_configured`, `session.started`, …) carrying any of these fields.
+ * Per-message records are ignored -- `assistant` events carry a `model` too,
+ * and echoing that every frame would fight the session's own settings. */
+export interface NativeSelfReport {
+  model?: string;
+  permissionMode?: string;
+  commands?: Array<{ name: string; description?: string; hint?: string }>;
+}
+
+const OPENING_RECORD = /(?:^|[._-])(?:init|initialized|configured|started|ready|system|session)(?:$|[._-])/i;
+
+export function nativeSelfReportFromValue(value: unknown): NativeSelfReport | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const type = String(record.type ?? record.method ?? '');
+  const subtype = String(record.subtype ?? '');
+  if (!OPENING_RECORD.test(type) && !OPENING_RECORD.test(subtype)) return undefined;
+  const source = asRecord(record.session) ?? asRecord(record.params) ?? record;
+  const report: NativeSelfReport = {};
+  const model = source.model ?? source.model_id ?? source.modelId;
+  if (typeof model === 'string' && model.trim()) report.model = model.trim();
+  const mode = source.permissionMode ?? source.permission_mode ?? source.approvalMode ?? source.approval_mode;
+  if (typeof mode === 'string' && mode.trim()) report.permissionMode = mode.trim();
+  const commands = source.slash_commands ?? source.slashCommands ?? source.availableCommands ?? source.available_commands ?? source.commands;
+  if (Array.isArray(commands)) {
+    const named = commands.flatMap((entry) => {
+      if (typeof entry === 'string') return entry.trim() ? [{ name: entry.trim().replace(/^\//, '') }] : [];
+      const item = asRecord(entry);
+      const name = typeof item?.name === 'string' ? item.name.trim().replace(/^\//, '') : undefined;
+      if (!name) return [];
+      const description = typeof item?.description === 'string' ? item.description : undefined;
+      const hint = typeof item?.input?.valueOf === 'function' && typeof (asRecord(item.input)?.hint) === 'string'
+        ? String(asRecord(item.input)?.hint) : undefined;
+      return [{ name, ...(description ? { description } : {}), ...(hint ? { hint } : {}) }];
+    });
+    if (named.length) report.commands = named;
+  }
+  return Object.keys(report).length ? report : undefined;
+}
+
+/** Read one stream line for what the harness says about itself. Self-gated, so
+ * ordinary output lines are not re-parsed as JSON. */
+export function nativeSelfReportFromLine(lineText: string): NativeSelfReport | undefined {
+  if (!/"(?:model|model_id|modelId|permissionMode|permission_mode|approvalMode|slash_commands|slashCommands|availableCommands|available_commands|commands)"/.test(lineText)) return undefined;
+  try {
+    return nativeSelfReportFromValue(JSON.parse(lineText));
+  } catch {
+    // fail-open-ok: one unparseable line on a decoration path; the turn's own
+    // output is read elsewhere and is unaffected.
+    return undefined;
+  }
+}
+
 /** Usage reported by one record, if it is a usage-bearing terminal record. */
 export function nativeUsageFromValue(value: unknown): NativeTurnUsage | undefined {
   const record = asRecord(value);

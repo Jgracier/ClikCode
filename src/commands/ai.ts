@@ -35,7 +35,7 @@ import type {
 import {
   harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
-  nativeTurnResult, nativeTurnUsage, type NativeTurnResult,
+  nativeSelfReportFromLine, nativeTurnResult, nativeTurnUsage, type NativeTurnResult,
   compactPath, nativeProfileEnvironment, renderActivityLine, sessionProviderLabel, streamLocalAiTurn,
 } from './native-harness-protocol.js';
 import {
@@ -3860,6 +3860,23 @@ export async function aiSessionSend(
             // chats used to exhaust between them -- down to a cold-start probe.
             // (Self-gated on a substring, so it does not re-parse ordinary lines.)
             void recordNativeStreamUsage(session, lineText).catch(() => undefined);
+            // And what it says about itself: the model it actually resolved,
+            // the permission mode it applied, the commands it offers. All of
+            // it arrives on this same stream, for free, and was previously
+            // taken from what ClikCode had ASKED for instead.
+            const selfReport = nativeSelfReportFromLine(lineText);
+            if (selfReport) {
+              if (selfReport.model || selfReport.permissionMode) {
+                session.reported = {
+                  at: new Date().toISOString(),
+                  ...(selfReport.model ? { model: selfReport.model } : {}),
+                  ...(selfReport.permissionMode ? { permissionMode: selfReport.permissionMode } : {}),
+                };
+                checkpoint.persistNow().catch(() => undefined);
+                activeTerminalHarness?.render(session);
+              }
+              if (selfReport.commands?.length) nativeAvailableCommands.set(session.id, selfReport.commands);
+            }
             for (const event of parsed.activities ?? []) {
               cliOutputStarted = true;
               noteTurnActivityEvent(idle, event);

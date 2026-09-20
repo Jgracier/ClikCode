@@ -294,6 +294,11 @@ export interface HarnessSession {
   workspace?: string;
   /** Latest token/context reading reported by the transport for this chat. */
   lastUsage?: { at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; contextWindow?: number };
+  /** What the harness said about itself on its own stream, rather than what it
+   * was asked for. `model` is the model it actually ran -- a session set to
+   * `automatic`, or one whose vendor silently substituted, showed the request
+   * and not the answer. `permissionMode` is the mode it applied. */
+  reported?: { at: string; model?: string; permissionMode?: string };
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   /** Crash-safe turn journal. It remains separate until completion so a
    * provider retry cannot accidentally submit the same user prompt twice. */
