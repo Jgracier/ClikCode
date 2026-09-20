@@ -2550,6 +2550,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\u001b[A' || key === '\u001b[B') {
           const direction = key === '\u001b[A' ? -1 : 1;
           if (options.length) { selected = (selected + direction + options.length) % options.length; return draw(); }
+          // An empty composer means the conversation is what is being looked
+          // at, so the arrows read it. Recorded from a real phone client: a
+          // swipe arrives as arrow keys and nothing else -- no mouse report in
+          // any encoding, and no page keys on the keyboard -- so on that
+          // client this is the only way back through the conversation at all.
+          // History keeps Ctrl+P and Ctrl+N, which is where it always was as
+          // well, and the arrows still move through a draft once there is one.
+          if (!value && this.alternateScreen && this.scrollTranscript(direction === -1 ? SWIPE_ROWS : -SWIPE_ROWS)) return;
           const moved = composerVerticalMove(value, cursor, direction);
           if (moved !== undefined) cursor = moved;
           else historyStep(direction);
