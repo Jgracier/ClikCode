@@ -65,7 +65,15 @@ async function main() {
   const expected = top ? top.row + 1 : undefined;
   results.push(`park 2 rows up in a 4-row block: expected ${expected},5  actual ${at(parked)}  ${parked && parked.row === expected ? 'OK' : `*** OFF BY ${parked && expected ? parked.row - expected : '?'} ***`}`);
 
-  // 4. Unknown private modes must be swallowed, not printed as text.
+  // 4. How tall is the screen REALLY? Moving to row 999 clamps at the last
+  //    row the terminal actually has, which is the number the frame layout
+  //    needs -- SSH's reported size is what the client chose to announce, and
+  //    a mobile client whose keyboard bar eats rows may not announce it again.
+  const clamped = await ask(`${CSI}999;999H`);
+  results.push(`true viewport (cursor clamp):  ${at(clamped)}  reported ${output.rows}x${output.columns}  ${clamped && clamped.row === output.rows ? 'matches' : '*** DISAGREES WITH THE REPORTED SIZE ***'}`);
+  output.write(`${CSI}${Math.max(1, (clamped?.row ?? output.rows ?? 24) - 1)};1H`);
+
+  // 5. Unknown private modes must be swallowed, not printed as text.
   const syncBefore = await ask(`\r${CSI}2K`);
   const syncAfter = await ask(`${CSI}?2026h${CSI}?2026l`);
   results.push(`synchronized-update pair:     ${at(syncBefore)} -> ${at(syncAfter)}  ${syncBefore && syncAfter && syncBefore.column === syncAfter.column ? 'swallowed' : '*** PRINTED AS TEXT ***'}`);
