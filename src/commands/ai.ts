@@ -361,7 +361,7 @@ async function discardInterruptedTurn(id: string, prompt: string): Promise<void>
 /** Serializes bounded checkpoint writes for one in-flight turn. Deltas update
  * memory immediately and coalesce into a disk write, while start, provider
  * identity changes, completion, and error unwinding force a durable flush. */
-class DurableTurnCheckpoint {
+export class DurableTurnCheckpoint {
   private timer: NodeJS.Timeout | undefined;
   private writes: Promise<void> = Promise.resolve();
   private dirty = false;
@@ -391,7 +391,17 @@ class DurableTurnCheckpoint {
 
   async queue(submission: LiveTurnSubmission): Promise<void> {
     enqueueSessionTurn(this.session, submission, new Date().toISOString());
-    await this.persistNow();
+    try {
+      await this.persistNow();
+    } catch (error) {
+      // Queued in memory and then failed to write is the one outcome the
+      // composer cannot represent: this call rejecting hands the text back to
+      // the draft, while the entry a later flush persists runs the turn
+      // anyway -- the message both came back and was sent. Take it out again
+      // so the rejection is the truth.
+      consumeSessionTurn(this.session, submission.id);
+      throw error;
+    }
   }
 
   /** A steer that timed out was queued, then turned out to have landed after
@@ -3323,6 +3333,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     while (true) {
       let line: string;
       let queuedTurnId: string | undefined;
+      /** Shown while THIS turn runs, unlike `notice`, which the next frame shows. */
+      let turnNotice: string | undefined;
       let activeWorkspace = process.cwd();
       // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
       // handoff, resume) closes the child it had.
@@ -3348,7 +3360,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         if (queued) {
           line = queued.text;
           queuedTurnId = queued.id;
-          notice = 'Running queued message';
+          // Carried into the turn's own render rather than left for the next
+          // pass of this loop: a notice set here is not painted until the
+          // frame after the turn, which is to say it announced a queued
+          // message as running only once it had finished running.
+          turnNotice = 'Running queued message';
         } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true })).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
@@ -3375,7 +3391,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               ? { queuedTurns: active.queuedTurns?.filter((item) => item.id !== turn.queuedTurnId) }
               : {}),
           };
-          rl.render(pending, activeAccount);
+          rl.render(pending, activeAccount, turnNotice);
+          turnNotice = undefined;
           const turnController = new AbortController();
           const liveInput = new LiveTurnInputBroker();
           interruptedSubmission = { text: promptText, restoreOnEscape: false };
