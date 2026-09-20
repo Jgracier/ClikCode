@@ -41,22 +41,29 @@ export const CLI_VERSION: string = (() => {
   }
 })();
 
-export const BANNER = `
-${chalk.cyan('╔═══════════════════════════════════════╗')}
-${chalk.cyan('║')}  ${chalk.bold.white('⚡ ClikDeploy CLI')}               ${chalk.cyan('║')}
-${chalk.cyan('║')}  ${chalk.gray('Deploy First, Configure Later')}      ${chalk.cyan('║')}
-${chalk.cyan('╚═══════════════════════════════════════╝')}
+/** Rows are padded by measured cell width, not typed by hand: the lightning
+ * bolt is two cells wide, and the hand-spaced version left the right border
+ * two to five columns short of the corners. Default foreground + bold and dim
+ * are used instead of white/gray, which vanish on light and Solarized themes. */
+function bannerBox(title: string, tagline: string): string {
+  const inner = 39;
+  const cells = (text: string): number => [...text].reduce((total, character) => total + (/\p{Emoji_Presentation}/u.test(character) ? 2 : 1), 0);
+  const row = (text: string, style: (value: string) => string): string =>
+    `${chalk.cyan('║')}  ${style(text)}${' '.repeat(Math.max(0, inner - 2 - cells(text)))}${chalk.cyan('║')}`;
+  return `
+${chalk.cyan(`╔${'═'.repeat(inner)}╗`)}
+${row(title, chalk.bold)}
+${row(tagline, chalk.dim)}
+${chalk.cyan(`╚${'═'.repeat(inner)}╝`)}
 `;
+}
+
+export const BANNER = bannerBox('⚡ ClikDeploy CLI', 'Deploy First, Configure Later');
 
 /** ClikCode is a free-standing product bundled in the same package for
  * distribution only; its first-run banner must say so, not show ClikDeploy's
  * deployment-platform branding. */
-export const CLIKCODE_BANNER = `
-${chalk.cyan('╔═══════════════════════════════════════╗')}
-${chalk.cyan('║')}  ${chalk.bold.white('⚡ ClikCode')}                      ${chalk.cyan('║')}
-${chalk.cyan('║')}  ${chalk.gray('Local-first AI coding runtime')}      ${chalk.cyan('║')}
-${chalk.cyan('╚═══════════════════════════════════════╝')}
-`;
+export const CLIKCODE_BANNER = bannerBox('⚡ ClikCode', 'Local-first AI coding runtime');
 
 /**
  * Render a command failure. JSON mode gets a machine-readable object; human mode

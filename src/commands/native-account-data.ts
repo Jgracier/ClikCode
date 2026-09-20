@@ -223,6 +223,25 @@ export function usageReadingLabel(windows: readonly UsageWindow[]): string | und
   return parts.length ? parts.join(' · ') : undefined;
 }
 
+/** "resets at 8:00PM", derived from the same vendor-reported `resetsAt` the
+ * usage windows already carry -- not computed independently. Only speaks for
+ * a window that is actually exhausted right now (matches accountIsExhausted's
+ * `usedPct >= 100` threshold) and whose reset is still ahead of us; picks the
+ * soonest one when more than one window is spent. */
+export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now: number = Date.now()): string | undefined {
+  const exhausted = (windows ?? [])
+    .filter((window): window is UsageWindow & { resetsAt: string } => window.usedPct >= 100 && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
+    .sort((a, b) => Date.parse(a.resetsAt) - Date.parse(b.resetsAt));
+  const next = exhausted[0];
+  if (!next) return undefined;
+  const date = new Date(next.resetsAt);
+  const hours24 = date.getHours();
+  const period = hours24 >= 12 ? 'PM' : 'AM';
+  const hours12 = hours24 % 12 || 12;
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  return `resets at ${hours12}:${minutes}${period}`;
+}
+
 function usageReading(windows: Array<UsageWindow | undefined>): UsageReading | undefined {
   const known = windows.filter((window): window is UsageWindow => Boolean(window));
   return known.length ? { windows: known, label: usageReadingLabel(known) } : undefined;
