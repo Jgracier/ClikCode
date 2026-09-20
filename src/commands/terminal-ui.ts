@@ -2164,6 +2164,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   ): void {
     if (finished.length) {
       this.alternateTranscript.push(...finished);
+      // Someone reading stays where they are. The offset counts rows from the
+      // end of the transcript, so rows arriving at that end move the window
+      // forward by one per row -- the text walks out from under the reader
+      // while a turn streams, which is what "scrolling slips through previous
+      // messages" is. Growing the offset by the same count holds it still.
+      if (this.alternateScrollback > 0) this.alternateScrollback += finished.length;
+      // Trimming the front does not move the end, so it leaves the offset be.
       const excess = this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS;
       if (excess > 0) this.alternateTranscript.splice(0, excess);
     }
