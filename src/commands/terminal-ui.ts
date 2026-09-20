@@ -142,26 +142,26 @@ const EXIT_CONFIRM_MS = 2000;
  * reader would notice missing. */
 const RESIZE_SETTLE_MS = 120;
 
-/** The main screen, where the conversation is the terminal's own scrollback.
+/** The alternate screen, which is what delivers both halves of reading back.
  *
- * This is the default, and the alternate screen is now the opt-in
- * (`CLIKCODE_ALT_SCREEN=1`). The reason is the whole reason a swipe would not
- * scroll this UI with a phone keyboard hidden, and it is architectural rather
- * than anything in a byte stream.
+ * Measured on the device, one session, keyboard hidden: 33 wheel reports at
+ * 70x63 and 82 scrolls, with the composer staying put -- because this renderer
+ * draws the whole screen, so the composer is drawn, not scrolled. That is the
+ * behaviour Claude Code has, and it is on the alternate screen too: its own
+ * capture from this phone contains `?1049h`, and its settings call that
+ * renderer "fullscreen".
  *
- * Read out of Claude Code's own settings schema: `tui` is "default" or
- * "fullscreen", where "fullscreen" is the alt-screen renderer with virtualised
- * scrollback and "default" is the classic main-screen renderer -- and
- * fullscreen is still being upsold (fullscreenUpsellSeenCount), so default is
- * what it ships with. On the main screen the conversation lives in the
- * client's real scrollback, and a one-finger swipe pans that buffer: no bytes
- * are sent, no mouse mode is involved, and it works in any keyboard position
- * because the application is not part of the gesture at all.
+ * The main screen (`CLIKCODE_MAIN_SCREEN=1`) is the fallback, and it is a real
+ * one: there the conversation IS the client's scrollback, so a swipe pans it
+ * with no bytes sent and scrolling cannot fail -- but the composer scrolls
+ * away with the history, because the pan is the client's own view and nothing
+ * here is told it happened. Pinning it there would need a scroll region, and
+ * lines scrolled out of a partial region are discarded by this client, which
+ * is the scrollback the pan depends on.
  *
- * Behind an alternate screen there is no scrollback to pan, so the client has
- * nothing to do with the swipe and sends nothing. Every byte-level comparison
- * against Claude Code was comparing two different rendering architectures. */
-export function classicScreen(): boolean { return process.env.CLIKCODE_ALT_SCREEN !== '1'; }
+ * So: alternate screen for both behaviours, main screen when scrolling matters
+ * more than the composer staying put. */
+export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 /** The opening handshake, transcribed sequence for sequence from Claude Code
  * running in this user's own terminal.
@@ -1655,8 +1655,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * conversation fifty rows away. On the alternate screen it costs nothing:
    * the main screen, transcript and all, is exactly as it was when it closes.
    *
-   * `CLIKCODE_ALT_SCREEN=1` keeps everything on the alternate screen, for a
-   * terminal whose own scrollback is not worth having. */
+   * `CLIKCODE_MAIN_SCREEN=1` puts the conversation back on the main screen,
+   * where the client's own scrollback is the transcript -- see classicScreen(). */
   private alternateScreen = !classicScreen() && output.isTTY;
   /** True while a palette or picker owns the screen. */
   private overlayActive = false;
