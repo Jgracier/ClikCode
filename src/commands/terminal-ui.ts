@@ -507,7 +507,11 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       // way, and "scrolling does nothing" has three possible causes that look
       // identical from here: no report sent, a report in an encoding we do not
       // decode, or a report decoded and then dropped.
-      if (key.startsWith('\u001b')) logCursorEvent(`input ${JSON.stringify(key)}`);
+      // Escape sequences and control keys -- never typed text, which is the
+      // user's message. Ctrl+B arrives as \u0002, which the escape-only rule
+      // here did not record, so a report of "the key does nothing" could not
+      // be told apart from "the key never arrived".
+      if (key.startsWith('\u001b') || key.charCodeAt(0) < 0x20) logCursorEvent(`input ${JSON.stringify(key)}`);
       // A DSR reply is the terminal talking back, not the user typing.
       const report = cursorPositionReport(key);
       if (report) {
