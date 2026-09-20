@@ -98,6 +98,31 @@ export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
 
+/** The alternate screen.
+ *
+ * ClikCode drew on the main screen so the conversation would accumulate in the
+ * terminal's own scrollback -- a real virtue, and the reason every frame had
+ * to place the cursor with relative motions and hope the terminal counted rows
+ * the same way. It does not always: a row wrapped, a region reflowed, a mode
+ * ignored, and the cursor sat below the composer with stale rows stranded
+ * around it. On the alternate screen every row has an address, so each frame
+ * writes to one and parks on one, and none of that can happen.
+ *
+ * It also tells the client what nothing else could. A phone SSH client was
+ * drawing its own history completion over the composer -- it reads the line as
+ * if a shell were reading it -- and the alternate screen is the one signal
+ * every client honours for "an application owns this terminal".
+ *
+ * `CLIKCODE_CLASSIC_SCREEN=1` restores the main-screen renderer for anyone who
+ * would rather keep the transcript in scrollback. Conversations are on disk
+ * either way, and `/resume` reopens them. */
+export function classicScreen(): boolean { return process.env.CLIKCODE_CLASSIC_SCREEN === '1'; }
+const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
+const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
+/** Rows kept above the viewport so scrolling back inside a conversation still
+ * has somewhere to scroll to. */
+const ALTERNATE_TRANSCRIPT_ROWS = 2000;
+
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
@@ -1256,10 +1281,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }).catch(() => { this.measuring = false; });
   }
 
+  /** Rows retired out of the viewport, kept so the conversation above the
+   * live region is still there to scroll back to on the alternate screen. */
+  private readonly alternateTranscript: string[] = [];
+  private readonly alternateScreen = !classicScreen() && output.isTTY;
+
   constructor() {
-    // Nothing is cleared. The user's scrollback and whatever the shell printed
-    // above are theirs; the first frame simply begins at the cursor. (`3J`
-    // here used to wipe the terminal's entire scrollback on launch.)
+    if (this.alternateScreen) {
+      output.write(ENTER_ALTERNATE_SCREEN);
+      terminalModes.alternateScreen = true;
+    }
+    // On the main screen nothing is cleared: the user's scrollback and
+    // whatever the shell printed above are theirs, and the first frame simply
+    // begins at the cursor. (`3J` here used to wipe the entire scrollback.)
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
@@ -1965,6 +1999,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const finished = this.pendingFinished;
     this.pendingFinished = [];
     if (finished.length) this.lastFinishedRow = finished[finished.length - 1];
+    if (this.alternateScreen) { this.flushAlternateFrame(finished, pending); return; }
     this.frameBuffer = '';
     // A frame's motions are relative, which is what keeps the transcript
     // append-only -- and they are right until the terminal disagrees about
@@ -1974,13 +2009,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the frame is left ending on the block's LAST row -- the one position
     // whose absolute screen row can be asked for without trusting any earlier
     // motion -- and the cursor is parked with an absolute jump from there.
-    // Where the block sits on screen is either known (the last measurement,
-    // still valid) or asked for inside this very frame: the DSR goes out
-    // after the last row and before the park, so its answer describes the
-    // block's last row -- the one position no earlier motion can spoil. The
-    // park itself is still written immediately, so the cursor never waits on
-    // a round trip; the answer only corrects it, and teaches the next frame
-    // where to draw.
     const measuring = this.absoluteParkAvailable() && !pending.hideCursor;
     const anchorRow = measuring && !finished.length && this.blockTopRow
       && this.blockTopRow + pending.live.length - 1 <= this.viewportRows()
@@ -2018,6 +2046,43 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       else {
         logCursorEvent(`frame relative: rows=${geometry.rows} cursorRow=${geometry.cursorRow} measuring=${measuring} raw=${terminalModes.rawMode} declined=${this.cursorParkUnsupported} waiting=${Boolean(this.waitingLabel)}`);
       }
+      if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
+    });
+  }
+
+  /** One screen, every row at an address.
+   *
+   * Retired rows go into `alternateTranscript` instead of the terminal's
+   * scrollback, the viewport shows its tail above the live region, and the
+   * cursor is parked with an absolute jump. Nothing here counts rows the
+   * terminal might count differently, so nothing here can drift. */
+  private flushAlternateFrame(
+    finished: readonly string[],
+    pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean },
+  ): void {
+    if (finished.length) {
+      this.alternateTranscript.push(...finished);
+      const excess = this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS;
+      if (excess > 0) this.alternateTranscript.splice(0, excess);
+    }
+    const height = this.viewportRows();
+    const live = pending.live.slice(-height);
+    const above = Math.max(0, height - live.length);
+    const rows = [...this.alternateTranscript.slice(-above), ...live];
+    while (rows.length < height) rows.unshift('');
+    // `EL` after each row: the row is replaced, not overprinted, so a shorter
+    // one cannot leave the tail of a longer one behind it.
+    const screen = rows.map((row) => `${row}\u001b[K`).join('\r\n');
+    const composerRow = rows.length - live.length + pending.cursorRow + 1;
+    const park = pending.hideCursor
+      ? ''
+      : `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
+    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l\u001b[H${screen}\u001b[?7h${park}${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
+    this.frameInFlight = true;
+    terminalModes.painted = true;
+    logCursorEvent(`alternate frame: height=${height} live=${live.length} composer=${composerRow} col=${pending.cursorColumn}`);
+    output.write(frame, () => {
+      this.frameInFlight = false;
       if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
     });
   }
@@ -2094,7 +2159,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.pendingLive = undefined;
     if (input.isTTY) input.setRawMode(false);
     terminalModes.rawMode = false;
-    output.write(`${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`);
+    output.write(
+      `${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`
+      // Whoever takes the terminal takes the main screen with it: a vendor
+      // login prompt drawn on our alternate screen would vanish with it.
+      + (this.alternateScreen ? LEAVE_ALTERNATE_SCREEN : ''),
+    );
+    if (this.alternateScreen) terminalModes.alternateScreen = false;
     process.once('SIGCONT', this.onContinue);
     process.kill(process.pid, 'SIGTSTP');
   }
@@ -2102,6 +2173,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private readonly onContinue = (): void => {
     if (this.closed) return;
     this.suspended = false;
+    if (this.alternateScreen && !terminalModes.alternateScreen) {
+      output.write(ENTER_ALTERNATE_SCREEN);
+      terminalModes.alternateScreen = true;
+    }
     this.lastColumns = output.columns || 0;
     // The shell printed its own rows while it had the terminal, so the row
     // this block used to start on means nothing now.
@@ -2518,10 +2593,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     terminalModes.rawMode = false;
     if (input.isTTY) input.setRawMode(false);
     input.pause();
-    // The conversation stays in the terminal's scrollback where the user can
-    // still read and copy it. Only this UI's own live region (composer, status
-    // rows) is removed, and the shell prompt resumes directly beneath the chat.
-    output.write(`${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`);
+    // On the main screen the conversation stays in the terminal's scrollback
+    // where it can still be read and copied, and only this UI's own live
+    // region goes; on the alternate screen the whole thing is handed back and
+    // the shell's own screen returns untouched. The conversation is on disk
+    // either way -- `/resume` reopens it.
+    output.write(
+      `${this.alternateScreen ? '' : this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`
+      + (terminalModes.alternateScreen ? LEAVE_ALTERNATE_SCREEN : ''),
+    );
+    terminalModes.alternateScreen = false;
     terminalModes.painted = false;
     terminalModes.leaveLiveRegion = undefined;
   }
@@ -2559,6 +2640,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Re-seed the authoritative transcript at the new width when control
     // returns; native scrollback remains available above the refreshed view.
     this.suspended = false;
+    if (this.alternateScreen && !terminalModes.alternateScreen) {
+      output.write(ENTER_ALTERNATE_SCREEN);
+      terminalModes.alternateScreen = true;
+    }
     this.forgetScreenPosition();
     // Whatever the vendor printed stays in scrollback and the live region
     // simply starts again below it: eraseLiveRegion() left nothing of this

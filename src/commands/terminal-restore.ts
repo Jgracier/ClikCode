@@ -15,13 +15,15 @@ export const terminalModes: {
   focusReporting: boolean;
   /** Theme-change notifications (`CSI ?2031h`), set for the same reason. */
   themeNotifications: boolean;
+  /** The UI is drawing on the alternate screen and owes the shell its own back. */
+  alternateScreen: boolean;
   rawMode: boolean;
   /** A frame hid the cursor / disabled autowrap / opened a synchronized update. */
   painted: boolean;
   /** Supplied by the live prompter: erases its composer and footer so whatever
    * is printed next (a stack trace, the shell prompt) starts on a clean row. */
   leaveLiveRegion?: () => string;
-} = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, themeNotifications: false, rawMode: false, painted: false };
+} = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, themeNotifications: false, alternateScreen: false, rawMode: false, painted: false };
 
 /** Leave the terminal the way a shell expects it: synchronized update closed,
  * kitty keyboard flags popped, bracketed paste off, autowrap on, cursor shown,
@@ -35,12 +37,15 @@ export function restoreTerminal(): void {
     if (terminalModes.themeNotifications) sequence += '\x1b[?2031l';
     if (terminalModes.focusReporting) sequence += '\x1b[?1004l';
     if (terminalModes.painted) sequence += '\x1b[?7h\x1b[?25h';
+    // Last, so everything above lands on the screen it was meant for.
+    if (terminalModes.alternateScreen) sequence += '\x1b[?1049l';
     const wasRaw = terminalModes.rawMode;
     terminalModes.painted = false;
     terminalModes.kittyKeyboard = false;
     terminalModes.bracketedPaste = false;
     terminalModes.focusReporting = false;
     terminalModes.themeNotifications = false;
+    terminalModes.alternateScreen = false;
     terminalModes.rawMode = false;
     terminalModes.leaveLiveRegion = undefined;
     if (sequence && output.isTTY) output.write(sequence);
