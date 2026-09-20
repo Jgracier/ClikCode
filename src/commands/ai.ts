@@ -22,7 +22,8 @@ import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, createTurnIdleController, ensureNativeHarness, noteTurnActivityEvent, inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
 import { spawnPortable as spawn } from './spawn-portable.js';
-import { classifyAccountFailure, failoverPrompt, interruptedTurnFailoverPrompt, replayIsSafe, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover.js';
+import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './ai-failover.js';
+import { carryNativeSession } from './native-session-carry.js';
 import {
   ADOPTED_TRANSCRIPT_READERS, conversationTitle, discoverNativeSessions, FS_SESSION_DISCOVERY, mergeNativeTranscript, type DiscoveredNativeSession,
 } from './native-session-discovery.js';
@@ -3799,14 +3800,6 @@ export async function aiSessionSend(
       delete session.nativeSessionPreallocated;
       await checkpoint.persistNow();
     };
-    /** Before replaying an interrupted turn somewhere else: a turn that already
-     * changed the workspace is never re-run blind. */
-    const confirmReplay = async (target: string): Promise<boolean> => {
-      if (replayIsSafe(session.pendingTurn)) return true;
-      const touched = (session.pendingTurn as { touchedFiles?: string[] } | undefined)?.touchedFiles ?? [];
-      const detail = `The interrupted turn had already started changing the workspace${touched.length ? `:\n${touched.map((file) => `  ${file}`).join('\n')}` : '.'}\nReplaying asks ${target} to inspect the workspace and finish the remaining work.`;
-      return (await activeTerminalHarness?.approval(`Replay the interrupted turn on ${target}?`, detail)) ?? false;
-    };
     for (;;) {
       const environment = turnEnvironment(harness, account);
       const hasImages = images.length > 0;
@@ -4072,7 +4065,6 @@ export async function aiSessionSend(
           // regardless of provider or account": session.messages is the
           // durable, vendor-agnostic source of truth, and nativeSessionId is
           // a disposable optimization, never a requirement.
-          if (!await confirmReplay('a fresh native session')) throw failure;
           session.nativeSessionId = undefined;
           session.nativeStartedAt = undefined;
           delete session.nativeSessionPreallocated;
@@ -4097,11 +4089,18 @@ export async function aiSessionSend(
           await checkpoint.persistNow();
           throw new Error('all usage exhausted');
         }
-        // A turn that already edited files is not re-run blind on another
-        // account: ask, and without anyone to ask, stop and say why.
-        if (!await confirmReplay(fallback.label)) {
-          throw new Error(`${account.label} ran out of quota after this turn had started changing the workspace, so it was not replayed automatically on ${fallback.label}. Review the workspace, then send a follow-up to continue.`);
-        }
+        // The vendor's own thread is carried into the account taking over, so
+        // it resumes with everything it actually said and did rather than a
+        // retelling of it. Only where that cannot be done -- a harness whose
+        // transcript layout is not known, a file that is not on disk -- does
+        // the turn fall back to a fresh thread seeded from ClikCode's copy.
+        const carriedThread = await carryNativeSession({
+          harness,
+          nativeId: session.nativeSessionId,
+          workspace: session.workspace,
+          from: turnEnvironment(harness, account),
+          to: turnEnvironment(harness, fallback),
+        });
         switchedFrom = account.label;
         // Announced before the retry, not after it returns: switching accounts
         // happens inside one continuous await chain, so without this the whole
@@ -4112,13 +4111,21 @@ export async function aiSessionSend(
         await closePersistentTransport(session.id);
         account = fallback;
         session.accountId = fallback.id;
-        session.nativeSessionId = undefined;
-        session.nativeStartedAt = undefined;
-        delete session.nativeSessionPreallocated;
-        // Built while the interrupted attempt's touched-file hints are still on
-        // the checkpoint; only then is the partial response cleared, because
-        // the retry is a new response attempt (the direct-API path does the same).
-        turnText = interruptedTurnFailoverPrompt(session);
+        if (carriedThread) {
+          // The same thread, under a new account: it holds the conversation,
+          // the interrupted request and every tool call it had already made.
+          // All it is owed is the word to carry on.
+          turnText = INTERRUPTED_TURN_REQUEST;
+        } else {
+          session.nativeSessionId = undefined;
+          session.nativeStartedAt = undefined;
+          delete session.nativeSessionPreallocated;
+          // Built while the interrupted attempt's touched-file hints are still
+          // on the checkpoint; only then is the partial response cleared,
+          // because the retry is a new response attempt (the direct-API path
+          // does the same).
+          turnText = interruptedTurnFailoverPrompt(session);
+        }
         checkpoint.response('', 'replace');
         activeTerminalHarness?.response('', 'replace');
         continue;
