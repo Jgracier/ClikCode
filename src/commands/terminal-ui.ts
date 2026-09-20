@@ -246,38 +246,32 @@ export function setTerminalRawMode(on: boolean): void {
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
 function enterInputModes(): string {
-  logCursorEvent('input modes: bracketed paste, wheel reporting, theme notifications, focus reporting');
-  // Mouse tracking is NOT among these. Asking for it tells the client to hand
-  // its wheel to this program instead of scrolling its own buffer -- and on
-  // the main screen that buffer is the conversation, scrolled by a swipe with
-  // no bytes sent, in any keyboard state. Taking the wheel there trades a
-  // scroll that always works for one that depends on the client forwarding a
-  // gesture it often does not. The alternate screen has no such buffer, so
-  // the overlay that takes that screen asks for the wheel with it.
-  let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
-  if (!classicScreen()) sequence += ENABLE_MOUSE_TRACKING;
-  terminalModes.bracketedPaste = true;
-  terminalModes.focusReporting = true;
-  terminalModes.wheelReporting = true;
-  terminalModes.themeNotifications = true;
+  // A mode already set emits nothing.
+  //
+  // Modelled on Claude Code's own mode stack, read out of its binary: `set()`
+  // returns the empty string when the mode is already in its entry list, so a
+  // mode is asked for once and never again for as long as it is held. This
+  // asked for all four groups at every prompt, every picker and every palette,
+  // whether or not they were already on -- dozens of redundant mode changes in
+  // a session, each one an event the client on the other end has to interpret.
+  //
+  // The flags were already tracked here. They were simply never read.
+  let sequence = '';
+  if (!terminalModes.bracketedPaste) { sequence += ENABLE_BRACKETED_PASTE; terminalModes.bracketedPaste = true; }
+  if (!terminalModes.themeNotifications) { sequence += ENABLE_THEME_NOTIFICATIONS; terminalModes.themeNotifications = true; }
+  if (!terminalModes.focusReporting) { sequence += ENABLE_FOCUS_REPORTING; terminalModes.focusReporting = true; }
+  if (!classicScreen() && !terminalModes.wheelReporting) {
+    sequence += ENABLE_MOUSE_TRACKING;
+    terminalModes.wheelReporting = true;
+  }
   if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
     sequence += PUSH_KITTY_KEYBOARD;
     terminalModes.kittyKeyboard = true;
   }
+  if (sequence) logCursorEvent(`input modes asked: ${JSON.stringify(sequence)}`);
   return sequence;
 }
 
-/** The modes an open read depends on, without claiming them again: entering
- * pushes the kitty flag, and pushing it twice would need two pops. */
-export function reassertInputModes(withMouse: boolean): string {
-  // Exactly what entering asked for, and no more. Asking for the wheel here
-  // when the conversation is on the main screen is how hiding a keyboard
-  // killed scrolling: the resize re-asserted a mode the prompt had
-  // deliberately not taken, and from that moment the client forwarded its
-  // wheel to a screen with no scrolling of its own.
-  return `${ENABLE_BRACKETED_PASTE}${withMouse ? ENABLE_MOUSE_TRACKING : ''}`
-    + `${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
-}
 
 /** What a single read owns, and nothing else.
  *
@@ -1559,7 +1553,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // hundred milliseconds apart. A client that never dropped them sets
       // what is already set.
       logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${this.alternateScreen}`);
-      this.reassertMouseTracking();
       // No height probe here either: it jumps the cursor to the bottom-right
       // corner and asks, which is another thing done at exactly the moment a
       // swipe is being recognised, and another thing Claude Code never does.
@@ -1638,30 +1631,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
 
-  /** Ask for the input modes again. Once.
-   *
-   * This used to ask four times -- at the resize and again at 250ms, 750ms and
-   * 1500ms -- on the theory that the client resets its emulator across a
-   * resize and a single ask lands underneath that reset. The theory was never
-   * confirmed, and a controlled capture argues against it: driven through the
-   * same 32-to-63-row resize under a local pty, Claude Code re-asserts nothing
-   * at all and scrolls on this client anyway, and a bare script that asks
-   * exactly once receives the gesture too. Asking four times is the one thing
-   * this UI did that neither of them does -- 224 bytes of mode flipping spread
-   * across a second and a half, while the client is deciding what a finger on
-   * the glass means.
-   *
-   * Raw mode is deliberately not a precondition, and that part stands on its
-   * own: `setTerminalRawMode(false)` runs at the end of every prompt, picker
-   * and palette, so whether raw mode is on when a keyboard slides away is
-   * incidental, and a resize landing in one of those gaps used to re-assert
-   * nothing at all. Setting a mode is not asking a question -- DSR is what
-   * must never go into a cooked terminal, because the line discipline echoes
-   * the answer into the draft, and `?1000h` has no answer to echo. */
-  private reassertMouseTracking(): void {
-    if (this.closed || this.suspended) return;
-    output.write(reassertInputModes(this.alternateScreen));
-  }
+
 
 
 
