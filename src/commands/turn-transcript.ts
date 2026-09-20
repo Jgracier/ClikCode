@@ -21,6 +21,8 @@ import type { MessageBlock } from './types.js';
  * block began, which no amount of further text can undo. */
 export function settledAnswerBlocks(
   content: string, alreadyEmitted: number, turnEnded: boolean, parsedBlocks?: readonly MessageBlock[],
+  /** A tool call began after every character of `content`. */
+  closedByTool = false,
 ): { settled: MessageBlock[]; live: MessageBlock[]; emitted: number } {
   // `parsedBlocks` lets a streaming caller supply its incrementally parsed
   // blocks; they are identical to splitIntoBlocks(content) by contract.
@@ -30,8 +32,14 @@ export function settledAnswerBlocks(
   // be stranded in the live region forever. Mid-stream, the last block is
   // still settled if a blank line already closed it: more text starts a NEW
   // block and can no longer alter this one.
+  //
+  // A tool call closes it just as surely. The model wrote a sentence and then
+  // went to work: nothing it does afterwards can edit that sentence, and
+  // waiting for a blank line that never comes left the paragraph pinned above
+  // the waiting row for the length of the turn -- stationary, while the tool
+  // rows it caused scrolled past above it.
   const closedByBlankLine = blocks.length > 0 && /\n[ \t]*\n$/.test(content);
-  const settledCount = turnEnded || closedByBlankLine
+  const settledCount = turnEnded || closedByBlankLine || closedByTool
     ? blocks.length
     : Math.max(0, blocks.length - 1);
   const emitted = Math.min(alreadyEmitted, settledCount);
@@ -141,7 +149,12 @@ export class TurnTranscript {
     /** Optional separate renderer for the block still receiving tokens. */
     renderLive?: BlockRenderer;
   }): { finished: string[]; live: string[] } {
-    const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded, input.blocks);
+    // A tool that began at or after the end of the prose proves the prose is
+    // final: the model stopped writing to call it.
+    const closedByTool = input.tools.some((tool) => (tool.done || input.turnEnded)
+      && tool.responseOffset !== undefined && tool.responseOffset >= input.content.length
+      && input.content.length > 0);
+    const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded, input.blocks, closedByTool);
     // Same rule as settledToolRows, kept grouped so a tool's rows can be
     // placed at the offset it started at rather than after all of the prose.
     const isSettled = (tool: SettlingTool): boolean => tool.done || input.turnEnded;
