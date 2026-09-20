@@ -1447,7 +1447,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // terminal where that history is worth more than either of those.
     else if (process.env.CLIKCODE_KEEP_SCROLLBACK !== '1') {
       output.write(CLEAR_SCREEN_AND_SCROLLBACK);
-      this.blockTopRow = 1;
+      // And the first frame starts on the LAST row, not the first. A block is
+      // written from wherever the cursor is, so starting at the bottom edge
+      // puts the composer there -- and keeps it there, because the transcript
+      // is appended directly above it and the screen scrolls up to make room.
+      // Starting at the top left a composer at the top of an empty screen with
+      // everything below it blank until the conversation had grown tall enough
+      // to push it down.
+      const lastRow = Math.max(1, output.rows || 24);
+      output.write(`\u001b[${lastRow};1H`);
+      this.blockTopRow = lastRow;
     }
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
