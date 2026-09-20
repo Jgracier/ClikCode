@@ -202,13 +202,14 @@ export function measureViewportRows(timeoutMs = 250): Promise<number | undefined
 }
 
 /** A short, bounded record of what the terminal actually did with the cursor,
- * written to ~/.clikcode/cursor.log. Placing the cursor depends on how a
- * client answers (or ignores) DSR, which cannot be seen from a screenshot and
- * differs per terminal; this is how a report becomes a diagnosis. Capped, so
- * a long session cannot grow it without bound. */
+ * written to ~/.clikcode/cursor.log when CLIKCODE_CURSOR_LOG is set. Placing
+ * the cursor depends on how a client answers (or ignores) DSR, which cannot be
+ * seen from a screenshot and differs per terminal; this is how a report
+ * becomes a diagnosis. Off by default, and capped, so neither a normal
+ * session nor a long one writes anything unasked. */
 let cursorLogLines = 0;
 export function logCursorEvent(line: string): void {
-  if (cursorLogLines >= 60) return;
+  if (!process.env.CLIKCODE_CURSOR_LOG || cursorLogLines >= 60) return;
   cursorLogLines += 1;
   try {
     const dir = join(homedir(), '.clikcode');
