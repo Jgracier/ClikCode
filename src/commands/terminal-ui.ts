@@ -141,10 +141,19 @@ const EXIT_CONFIRM_MS = 2000;
  * if a shell were reading it -- and the alternate screen is the one signal
  * every client honours for "an application owns this terminal".
  *
- * `CLIKCODE_CLASSIC_SCREEN=1` restores the main-screen renderer for anyone who
- * would rather keep the transcript in scrollback. Conversations are on disk
- * either way, and `/resume` reopens them. */
-export function classicScreen(): boolean { return process.env.CLIKCODE_CLASSIC_SCREEN === '1'; }
+ * It is NOT the default, and the reason is scrolling. A terminal's own
+ * scrollback is what a client scrolls when someone swipes, and the alternate
+ * screen has none -- so on a phone, where a swipe is the only gesture there
+ * is, the conversation became unreadable above the fold. Claude Code and
+ * Codex both draw on the main screen, which is why a swipe reads their
+ * transcripts and could not read this one.
+ *
+ * The cursor was the reason to move here, and it is no longer: a frame parks
+ * absolutely from a position the terminal reports, which works the same on
+ * either screen. So the main screen is the default again, and
+ * `CLIKCODE_ALT_SCREEN=1` opts into this one for a terminal whose scrollback
+ * is not worth keeping. */
+export function classicScreen(): boolean { return process.env.CLIKCODE_ALT_SCREEN !== '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Rows kept above the viewport so scrolling back inside a conversation still
