@@ -393,6 +393,7 @@ const INPUT_LOG_LINES = 2_000;
 let traceInstalled = false;
 const traceBuffer: string[] = [];
 const TRACE_MAX_ENTRIES = 40_000;
+const TRACE_FLUSH_MS = 3_000;
 /** Both directions of the terminal conversation, buffered in memory and
  * written out once at exit. CLIKCODE_TRACE=1.
  *
@@ -434,7 +435,18 @@ function installOutputTrace(): void {
   // Earliest possible point on the read side: before any decoding, filtering
   // or dispatch, so "nothing arrived" cannot be confused with "we dropped it".
   input.on('data', (chunk: Buffer | string) => traceEvent('in', String(chunk)));
+  // Flushed on a timer as well as at exit, because the session being traced is
+  // usually the one the user is reading this in: it does not exit, so an
+  // exit-only flush writes nothing at all. One write every few seconds is far
+  // from one per terminal write, which is what perturbed the measurement
+  // before -- and it means a kill or a dropped connection still leaves the
+  // trace on disk.
+  const timer = setInterval(flushTerminalTrace, TRACE_FLUSH_MS);
+  timer.unref();
   process.on('exit', flushTerminalTrace);
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.on(signal, () => { flushTerminalTrace(); });
+  }
 }
 
 export function logCursorEvent(line: string): void {
