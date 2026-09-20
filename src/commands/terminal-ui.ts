@@ -13,7 +13,7 @@ import {
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { restoreTerminal, terminalModes } from './terminal-restore.js';
+import { installTerminalRestoreSignals, restoreTerminal, terminalModes } from './terminal-restore.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import { parkCursor, TranscriptStream } from './transcript-stream.js';
@@ -1700,6 +1700,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // signal handler elsewhere -- must not leave the shell in raw mode with a
     // hidden cursor and bracketed paste on.
     process.on('exit', restoreTerminal);
+    installTerminalRestoreSignals();
     terminalModes.leaveLiveRegion = () => this.eraseLiveRegion();
   }
 
