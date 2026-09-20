@@ -577,7 +577,60 @@ export function codexRateLimitsLabel(rateLimits: unknown): string | undefined {
   return reading?.label;
 }
 
-/** Harnesses that report their own quota on their turn stream. */
+/** Quota a harness reports on its own stream, recognised by the SHAPE of the
+ * record rather than by which harness sent it.
+ *
+ * A harness that is being driven is the authority on its own quota: it knows
+ * what it just spent, and it says so for free on the stream already being
+ * parsed. Keying that by harness name meant every new vendor started out
+ * unable to report something it was already reporting, and pushed the ones
+ * without an entry onto an HTTP endpoint instead -- a per-account budget that
+ * several open terminals exhaust between them.
+ *
+ * Two shapes cover every vendor seen so far, and an unknown record simply
+ * matches neither:
+ *   - `rate_limit_event.rate_limit_info.unifiedWindows` (Claude Code), whose
+ *     utilization is a 0..1 fraction;
+ *   - a `rate_limits` object with `primary`/`secondary` windows (Codex, and
+ *     anything else carrying the app-server's shape), in 0..100 percent. */
+export function streamQuotaReading(value: unknown): UsageReading | undefined {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+  if (!record) return undefined;
+  const info = record.rate_limit_info ?? record.rateLimitInfo;
+  const unified = info && typeof info === 'object'
+    ? (info as { unifiedWindows?: unknown; unified_windows?: unknown }).unifiedWindows
+      ?? (info as { unified_windows?: unknown }).unified_windows
+    : undefined;
+  if (unified && typeof unified === 'object') {
+    const windows = unified as Record<string, { utilization?: unknown; resetsAt?: unknown; resets_at?: unknown } | undefined>;
+    const window = (name: string, key: string): UsageWindow | undefined => {
+      const entry = windows[key];
+      return usageWindow(
+        name, typeof entry?.utilization === 'number' ? entry.utilization * 100 : undefined,
+        entry?.resetsAt ?? entry?.resets_at,
+      );
+    };
+    return usageReading([window('5h', 'five_hour'), window('weekly', 'seven_day')]);
+  }
+  return codexRateLimitsReading(record.rate_limits ?? record.rateLimits);
+}
+
+/** Read a stream line for quota, whatever harness produced it. */
+export function streamQuotaReadingFromLine(lineText: string): UsageReading | undefined {
+  // Self-gated: ordinary output lines are not re-parsed as JSON.
+  if (!lineText.includes('rate_limit') && !lineText.includes('rateLimit')) return undefined;
+  try {
+    return streamQuotaReading(JSON.parse(lineText));
+  } catch {
+    // fail-open-ok: one unparseable line on a decoration path. The turn's own
+    // output is read elsewhere and is unaffected.
+    return undefined;
+  }
+}
+
+/** Harnesses whose quota arrives on their turn stream. Every harness is read
+ * by shape, so this says "this one reports for itself", nothing more: it is
+ * what tells the caller not to ask an endpoint for what the harness gives. */
 export const NATIVE_STREAM_USAGE: Readonly<Partial<Record<string, (lineText: string) => string | undefined>>> = {
   claude: claudeStreamUsage,
 };
@@ -617,7 +670,10 @@ async function publishUsageReading(cacheKey: string, accountId: string | null | 
  * run a turn yet has no stream to read. */
 export async function recordNativeStreamUsage(session: HarnessSession, lineText: string): Promise<string | undefined> {
   if (!session.nativeHarness) return undefined;
-  const structured = NATIVE_STREAM_USAGE_READINGS[session.nativeHarness]?.(lineText);
+  // By shape first, so a harness reporting quota in a known form is read
+  // whether or not anyone has registered it by name.
+  const structured = streamQuotaReadingFromLine(lineText)
+    ?? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness]?.(lineText);
   return recordDerivedUsage(session, structured ?? NATIVE_STREAM_USAGE[session.nativeHarness]?.(lineText));
 }
 
@@ -649,7 +705,9 @@ export const NATIVE_USAGE_READING_PROBES: Readonly<Partial<Record<string, { labe
 };
 
 /** The structured reading behind nativeUsageLabel: same caching, same sharing. */
-export async function nativeUsageReading(session: HarnessSession, state: HarnessState): Promise<UsageReading | undefined> {
+export async function nativeUsageReading(
+  session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
+): Promise<UsageReading | undefined> {
   const probe = session.nativeHarness ? NATIVE_USAGE_PROBES[session.nativeHarness] : undefined;
   if (!probe) return undefined;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
@@ -667,10 +725,14 @@ export async function nativeUsageReading(session: HarnessSession, state: Harness
   // Whichever is newer: another terminal may have published since this
   // process last cached.
   const entry = cached && sharedEntry ? (sharedEntry.at > cached.at ? sharedEntry : cached) : cached ?? sharedEntry;
-  // A harness that reports quota on its own turn stream refreshes this for
-  // free every time it answers, so re-asking the vendor's endpoint between
-  // turns buys nothing and spends a per-account budget that several open
-  // terminals share. Its reading stands until the window it describes resets.
+  // A harness that reports quota on its own turn stream is the authority on
+  // its own quota: it answers for free every time it works, so nothing here
+  // asks the vendor's endpoint for it. Its reading stands until the window it
+  // describes resets, and a terminal that has never run a turn shows nothing
+  // rather than spending a per-account endpoint budget that every open
+  // terminal shares -- which is what rate-limited the account out of reading
+  // its own usage. `network` is for an explicit request (`/usage`), where
+  // waiting for a number is the point.
   const streams = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
   const ttl = entry?.failed
     ? NATIVE_USAGE_FAILURE_TTL_MS
@@ -678,6 +740,11 @@ export async function nativeUsageReading(session: HarnessSession, state: Harness
   if (entry && Number.isFinite(entry.at) && Date.now() - entry.at < ttl && usageReadingIsCurrent(entry)) {
     nativeUsageCache.set(cacheKey, entry);
     return { windows: entry.windows ?? [], ...(entry.label === undefined ? {} : { label: entry.label }) };
+  }
+  if (streams && !options.network) {
+    // Carry the last figure the harness gave, however old: it is still the
+    // only true thing anyone knows, and the next turn replaces it.
+    return entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const structured = session.nativeHarness ? NATIVE_USAGE_READING_PROBES[session.nativeHarness] : undefined;
@@ -700,8 +767,10 @@ export async function nativeUsageReading(session: HarnessSession, state: Harness
   return { windows: next.windows ?? [], ...(next.label === undefined ? {} : { label: next.label }) };
 }
 
-export async function nativeUsageLabel(session: HarnessSession, state: HarnessState): Promise<string | undefined> {
-  return (await nativeUsageReading(session, state))?.label;
+export async function nativeUsageLabel(
+  session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
+): Promise<string | undefined> {
+  return (await nativeUsageReading(session, state, options))?.label;
 }
 
 function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, harnessCommand: string): HarnessSession {
@@ -718,15 +787,19 @@ function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, ha
  * any, or a bare stand-in otherwise — codexUsageProbe ignores the session
  * argument entirely, and a stand-in with no nativeSessionId simply yields no
  * OpenCode label rather than a wrong one. */
-export async function accountUsageLabel(account: AiHarnessAccount, state: HarnessState): Promise<string | undefined> {
-  return (await accountUsageReading(account, state))?.label;
+export async function accountUsageLabel(
+  account: AiHarnessAccount, state: HarnessState, options: { network?: boolean } = {},
+): Promise<string | undefined> {
+  return (await accountUsageReading(account, state, options))?.label;
 }
 
-export async function accountUsageReading(account: AiHarnessAccount, state: HarnessState): Promise<UsageReading | undefined> {
+export async function accountUsageReading(
+  account: AiHarnessAccount, state: HarnessState, options: { network?: boolean } = {},
+): Promise<UsageReading | undefined> {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
   if (!harness || !NATIVE_USAGE_PROBES[harness.command]) return undefined;
-  return nativeUsageReading(accountPseudoSession(account, state, harness.command), state);
+  return nativeUsageReading(accountPseudoSession(account, state, harness.command), state, options);
 }
 
 /** Return only already-known usage. Account pickers render from this and warm
