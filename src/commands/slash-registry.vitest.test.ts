@@ -47,11 +47,24 @@ describe('slash registry', () => {
     });
   });
 
-  it('refuses repository tasks on the gateway route', () => {
-    for (const name of ['init', 'review']) {
+  it('allows repository tasks on the gateway route, which now reads local files', () => {
+    // The gateway route runs ClikCode's own agent loop on this machine and
+    // asks the gateway only for the model step, so its tools touch the same
+    // files a local harness's do. These used to refuse with "cannot see local
+    // files", which was true of the platform assistant it no longer uses.
+    for (const name of ['init', 'review', 'add-dir']) {
       const state = resolveSlashCommand(name)!.availability(session({ route: 'gateway', nativeHarness: undefined }), undefined);
-      expect(state.available).toBe(false);
-      expect(state.reason).toMatch(/cannot see local files/);
+      expect(state.available, `/${name} still refuses on the gateway route`).toBe(true);
+    }
+  });
+
+  it('keeps deciding on this machine what the agent may do to it', () => {
+    // The gateway picks the model and the effort. It does not get to pick how
+    // much of the user's filesystem an agent may touch without asking.
+    const permissions = resolveSlashCommand('permissions')!.availability(session({ route: 'gateway', nativeHarness: undefined }), undefined);
+    expect(permissions.available).toBe(true);
+    for (const name of ['model', 'effort']) {
+      expect(resolveSlashCommand(name)!.availability(session({ route: 'gateway', nativeHarness: undefined }), undefined).available).toBe(false);
     }
   });
 
