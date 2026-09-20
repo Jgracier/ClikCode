@@ -1351,6 +1351,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // have this same limit, for this same reason.
       this.lastColumns = output.columns || 0;
       const previousRows = this.measuredRows;
+      const previousTop = this.blockTopRow;
+      const previousBlockRows = this.stream.liveRows;
       this.measuredRows = undefined;
       this.forgetScreenPosition();
       // A phone's keyboard going down hands back a third of the screen. The
@@ -1361,7 +1363,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // re-pinned every time it changed height would walk the conversation off
       // the top, one palette at a time, and nothing can scroll it back.
       const rows = output.rows || 0;
-      if (previousRows && rows > previousRows) this.blockTopRow = Math.max(1, rows - this.stream.liveRows + 1);
+      if (previousRows && rows > previousRows && previousTop && previousBlockRows) {
+        // Erased from where it was, not from where it is going: the frame
+        // below draws at the new bottom edge and erases from there down, which
+        // would leave the old block sitting above it.
+        output.write(`\u001b[${previousTop};1H\u001b[J`);
+        this.stream.forgetLiveRegion();
+        this.blockTopRow = Math.max(1, rows - previousBlockRows + 1);
+      }
       this.remeasureViewport();
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
