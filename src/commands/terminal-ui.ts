@@ -134,6 +134,11 @@ const FOCUS_EVENT = /^\u001b\[[IO]$/;
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
+/** How long a resize burst is given to finish before the screen is redrawn.
+ * A phone dismissing its keyboard emits several SIGWINCHes a few tens of
+ * milliseconds apart; this is longer than that gap and shorter than a frame a
+ * reader would notice missing. */
+const RESIZE_SETTLE_MS = 120;
 
 /** The alternate screen, and why it is the default again.
  *
@@ -1481,7 +1486,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // corner and asks, which is another thing done at exactly the moment a
       // swipe is being recognised, and another thing Claude Code never does.
       // The size the terminal announces is what the layout uses.
-      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+      this.repaintAfterResize();
     }
   };
 
@@ -1522,6 +1527,36 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private viewportRows(): number {
     const announced = output.rows || 30;
     return Math.max(5, this.measuredRows ? Math.min(announced, this.measuredRows) : announced);
+  }
+
+  /** The repaint a resize needs, once the resize is over.
+   *
+   * A keyboard sliding away is not one SIGWINCH, it is a burst of them -- the
+   * session log has 70x55, 70x63, 70x40, 70x32 inside four hundred
+   * milliseconds -- and painting per signal sent a full-screen repaint for
+   * each. At 63 rows of styled transcript that is 4KB a piece, several of them
+   * inside the moment the client is dismissing its keyboard and rebuilding the
+   * view it decides gestures against.
+   *
+   * That collision is measured, not guessed. In one session, seven swipes with
+   * the keyboard hidden delivered nothing at all; the eighth, with a
+   * diagnostic that made every write slower, delivered wheel reports normally.
+   * The same swipe works through a recording pty (which delays writes) and in
+   * a bare script whose repaint is a tenth the size. Everything that slows or
+   * shrinks this write makes the gesture arrive.
+   *
+   * So the burst is coalesced into the one repaint it always meant, drawn once
+   * the size has stopped changing. Short enough not to be seen, long enough to
+   * land after the client has finished. */
+  private resizePaintTimer?: NodeJS.Timeout;
+  private repaintAfterResize(): void {
+    if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
+    this.resizePaintTimer = setTimeout(() => {
+      this.resizePaintTimer = undefined;
+      if (this.closed || this.suspended) return;
+      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    }, RESIZE_SETTLE_MS);
+    this.resizePaintTimer.unref();
   }
 
   /** Timers holding the re-asserts that follow a resize, so a burst of them
@@ -3162,6 +3197,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.modeReassertTimers = [];
     this.stopWaiting(false);
     this.clearTransientNotice();
+    if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
+    this.resizePaintTimer = undefined;
     process.off('SIGWINCH', this.onResize);
     process.off('SIGCONT', this.onContinue);
     process.off('exit', restoreTerminal);
