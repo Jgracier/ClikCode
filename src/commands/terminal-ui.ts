@@ -1974,6 +1974,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     const answer = await queryCursorPosition();
     if (this.closed || this.suspended) return;
+    // Something parked the cursor while the terminal was answering -- an
+    // anchored frame, which needs no measurement and is already correct. This
+    // answer describes a screen that has since been redrawn: applying it
+    // would move the cursor off the composer it just landed on.
+    if (!this.cursorAtBlockEnd) return;
     // Frames keep coming while the terminal answers. A frame of the same
     // height redrew this block in place, so the answer still describes it; a
     // different height is a different block, and gets its own measurement.
