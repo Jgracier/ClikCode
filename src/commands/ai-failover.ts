@@ -196,19 +196,3 @@ export function interruptedTurnFailoverPrompt(session: HarnessSession, options: 
   return failoverPrompt(sessionTranscriptMessages(session), INTERRUPTED_TURN_REQUEST, { ...options, ...(touchedFiles ? { touchedFiles } : {}) });
 }
 
-/** Whether an interrupted turn can be replayed on another account/provider
- * without asking. False as soon as the turn recorded any activity that could
- * have changed the workspace (anything not recognisably read/search-like): a
- * blind replay would re-run half-applied edits, migrations or commits. */
-export function replayIsSafe(pendingTurn: HarnessSession['pendingTurn'] | PendingTurnWithHints | undefined | null): boolean {
-  if (!pendingTurn) return true;
-  const hints = pendingTurn as PendingTurnWithHints;
-  if (hints.mutatingActivity || hints.touchedFiles?.length) return false;
-  return (pendingTurn.activities ?? []).every((entry) => {
-    const match = /^(started|completed|failed)\s+([\s\S]*)$/.exec(entry.trim());
-    const label = match ? match[2]! : entry;
-    // A completion under the generic label says nothing its start did not.
-    if (match && match[1] !== 'started' && label.trim() === 'tool') return true;
-    return activityLabelIsReadOnly(label);
-  });
-}
