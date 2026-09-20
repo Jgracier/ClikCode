@@ -20,9 +20,11 @@ import type { MessageBlock } from './types.js';
  * until the turn ends. Everything before it is structurally complete: a new
  * block began, which no amount of further text can undo. */
 export function settledAnswerBlocks(
-  content: string, alreadyEmitted: number, turnEnded: boolean,
+  content: string, alreadyEmitted: number, turnEnded: boolean, parsedBlocks?: readonly MessageBlock[],
 ): { settled: MessageBlock[]; live: MessageBlock[]; emitted: number } {
-  const blocks = splitIntoBlocks(content);
+  // `parsedBlocks` lets a streaming caller supply its incrementally parsed
+  // blocks; they are identical to splitIntoBlocks(content) by contract.
+  const blocks = parsedBlocks ?? splitIntoBlocks(content);
   // A turn that ended settles everything, including a final block with no
   // blank line after it -- otherwise the last paragraph of every answer would
   // be stranded in the live region forever. Mid-stream, the last block is
@@ -131,13 +133,15 @@ export class TurnTranscript {
    * of any dependency on how a row is painted. */
   advance(input: {
     content: string;
+    /** Incrementally parsed blocks for `content`, when the caller has them. */
+    blocks?: readonly MessageBlock[];
     tools: readonly SettlingTool[];
     turnEnded: boolean;
     renderBlocks: BlockRenderer;
     /** Optional separate renderer for the block still receiving tokens. */
     renderLive?: BlockRenderer;
   }): { finished: string[]; live: string[] } {
-    const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded);
+    const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded, input.blocks);
     // Same rule as settledToolRows, kept grouped so a tool's rows can be
     // placed at the offset it started at rather than after all of the prose.
     const isSettled = (tool: SettlingTool): boolean => tool.done || input.turnEnded;
