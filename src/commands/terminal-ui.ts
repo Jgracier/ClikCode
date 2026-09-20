@@ -1216,6 +1216,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * first frame of a newly opened session. */
   private reseedTranscript: false | 'first' | 'scroll-away' = 'first';
   private lastColumns = output.columns || 0;
+  /** The screen height the last frame was laid out against, so a resize can be
+   * told from a repaint. */
+  private lastRows = output.rows || 0;
   /** The terminal's real height when it answers DSR; see measureViewportRows. */
   private measuredRows?: number;
   private measuring = false;
@@ -1350,24 +1353,30 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // was written and never guessed upward. Both reference implementations
       // have this same limit, for this same reason.
       this.lastColumns = output.columns || 0;
-      const previousRows = this.measuredRows;
+      const previousRows = this.lastRows;
       const previousTop = this.blockTopRow;
       const previousBlockRows = this.stream.liveRows;
+      this.lastRows = output.rows || 0;
       this.measuredRows = undefined;
       this.forgetScreenPosition();
-      // A phone's keyboard going down hands back a third of the screen. The
-      // block stayed where the small screen left it, with the new rows empty
-      // underneath -- so it moves to the new bottom edge, which is where a
-      // composer belongs and where the terminal has just refilled the rows
-      // above it from its own scrollback. Only on a resize: a block that
-      // re-pinned every time it changed height would walk the conversation off
-      // the top, one palette at a time, and nothing can scroll it back.
+      // A phone's keyboard hands back a third of the screen when it goes down
+      // and takes it again when it comes up. Either way the block belongs on
+      // the new bottom edge: that is where a composer goes, and after a
+      // resize it is the one row on the screen this code can still name --
+      // the terminal has just reflowed everything else.
+      //
+      // On a resize only. A block that re-pinned every time its own height
+      // changed would walk the conversation off the top, one palette at a
+      // time, because growing means scrolling the rows above away and nothing
+      // can ever scroll them back.
       const rows = output.rows || 0;
-      if (previousRows && rows > previousRows && previousTop && previousBlockRows) {
+      if (previousRows && rows !== previousRows && previousTop && previousBlockRows) {
         // Erased from where it was, not from where it is going: the frame
         // below draws at the new bottom edge and erases from there down, which
-        // would leave the old block sitting above it.
-        output.write(`\u001b[${previousTop};1H\u001b[J`);
+        // would leave the old block sitting above it. A screen that shrank may
+        // have taken that row with it, so the erase starts no lower than the
+        // last row there now is.
+        output.write(`\u001b[${Math.max(1, Math.min(previousTop, rows))};1H\u001b[J`);
         this.stream.forgetLiveRegion();
         this.blockTopRow = Math.max(1, rows - previousBlockRows + 1);
       }
