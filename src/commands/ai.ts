@@ -13,7 +13,10 @@ import chalk from 'chalk';
 import { getApiKeyForUrl, getApiUrl } from './gateway-credentials.js';
 import { gatewayLogin } from './gateway-login.js';
 import { isAllowedLoopbackHost } from './control-api-host.js';
-import { CLIKCODE_USER_AGENT } from '../version.js';
+import { CLIKCODE_USER_AGENT, CLIKCODE_VERSION } from '../version.js';
+import {
+  gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn,
+} from './ai-gateway-harness.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, createTurnIdleController, ensureNativeHarness, noteTurnActivityEvent, inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
@@ -4194,6 +4197,40 @@ export async function aiGatewaySessionSend(
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
+  // The coding agent runs here, on this machine; the gateway supplies the
+  // model step and nothing else. Only a gateway that cannot serve that -- an
+  // administrator kill switch, or a deployment older than the endpoint --
+  // falls back to the platform assistant below, and says so when it does.
+  try {
+    const harnessTurn = await runGatewayHarnessSessionTurn({
+      session, prompt: turnText, baseUrl, apiKey, version: CLIKCODE_VERSION,
+      ...(activeTerminalHarness ? { prompter: activeTerminalHarness } : {}),
+      ...(signal ? { signal } : {}),
+      ...(prepared.images.length ? { images: prepared.images } : {}),
+      onActivity: (event) => checkpoint.activity(event),
+    });
+    if (harnessTurn.isError) throw new Error(harnessTurn.text || 'gateway harness turn failed');
+    const harnessInvocation = {
+      id: randomUUID(), sessionId: session.id, accountId: 'gateway',
+      provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform',
+      at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
+    };
+    state.invocations.push(harnessInvocation);
+    session.attachments = [];
+    await checkpoint.complete(harnessTurn.text);
+    if (!activeTerminalHarness) {
+      emitHarnessOutput({
+        session, text: harnessTurn.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation: harnessInvocation,
+      });
+    }
+    await checkpoint.flush();
+    return;
+  } catch (error) {
+    if (!gatewayHarnessUnavailable(error)) { await checkpoint.flush(); throw error; }
+    const notice = gatewayHarnessFallbackNotice(error);
+    if (activeTerminalHarness) activeTerminalHarness.activity(chalk.dim(notice));
+    else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('Gateway:')} ${notice}\n`);
+  }
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
   try {
@@ -4292,9 +4329,6 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (index < 0) throw new Error(`AI session "${id}" was not found`);
   const current = state.sessions[index];
   const effectiveRoute = options.route ?? current.route;
-  if (options.permissions && effectiveRoute === 'gateway') {
-    throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy; Ask, Bypass, and Auto apply only to local harnesses.');
-  }
   if (effectiveRoute === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
     throw new Error('Gateway account, provider, model, effort, failover, and native sessions are selected by ClikDeploy platform routing and cannot be overridden per session.');
   }

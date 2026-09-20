@@ -433,6 +433,12 @@ const CLAUDE_TOOL_NAMES: Readonly<Record<string, ToolCategory>> = {
   BashOutput: 'run', KillShell: 'run',
 };
 
+/** ClikCode's own agent loop, the one the gateway route runs on this machine.
+ * It is not a vendor CLI and so not in the catalog, but it is a harness that
+ * emits tool events, and leaving it out of the map would be the same silent
+ * absence the map exists to prevent. */
+export const GATEWAY_HARNESS_COMMAND = 'clikdeploy-gateway';
+
 export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>> = {
   claude: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'tool_use blocks carry name and input; Edit/Write also carry a diff, which settles them outright.' },
   qwen: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'Claude-shaped stream, parsed by the same branch and named the same way.' },
@@ -458,6 +464,15 @@ export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>>
   vibe: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
   openhands: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
   cn: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
+  [GATEWAY_HARNESS_COMMAND]: {
+    stream: 'structured',
+    // read_file/list_dir/glob/grep/write_file/edit_file/multi_edit/bash/
+    // web_fetch all match the verb table. These two are the background-shell
+    // pair it cannot reach; todo_write and exit_plan_mode stay unclassified
+    // because neither is work on the user's code.
+    names: { bash_output: 'run', kill_bash: 'run' },
+    note: "ClikCode's own loop: the tool name is ours, so the verb table settles all but the background-shell pair.",
+  },
 };
 
 /** Spread form: contributes nothing at all when the evidence does not settle

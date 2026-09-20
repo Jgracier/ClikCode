@@ -48,13 +48,19 @@ const needsHarness = (what: string) => (session: HarnessSession | undefined, har
   if (!local.available) return local;
   return harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.` };
 };
-/** The platform assistant cannot see this machine's repository. Until the
- * local gateway harness lands, a repo task on the Gateway route would produce
- * a confident answer about files it never read. */
-const needsRepoAccess = (name: string) => (session: HarnessSession | undefined): SlashAvailability =>
-  session?.route === 'gateway'
-    ? { available: false, reason: `/${name} needs to read this repository, and the ClikDeploy Gateway assistant cannot see local files yet. Switch to a local provider with /provider first.` }
-    : { available: true };
+/** Reads this machine's repository, which both routes can now do: the gateway
+ * route runs ClikCode's own agent loop locally and asks the gateway only for
+ * the model step, so its tools touch the same files a local harness does. */
+const needsRepoAccess = (_name: string) => (): SlashAvailability => ({ available: true });
+
+/** Governs what the agent may do to THIS machine, so it applies on both
+ * routes. The gateway picks the model; it does not get to pick how much of
+ * the user's filesystem an agent may touch without asking. */
+const bothRoutes = (what: string) => (
+  session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined,
+): SlashAvailability => (session?.route === 'gateway'
+  ? { available: true }
+  : harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.` });
 
 function entry(
   name: string, group: SlashGroup, description: string,
@@ -82,7 +88,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('memory', 'Workspace', "show the harness's memory file; `edit` opens $EDITOR", { argHint: '[edit]' }),
   entry('diff', 'Workspace', 'changes against HEAD, staged included, plus untracked files'),
   entry('cwd', 'Workspace', 'show or change the working directory', { argHint: '[dir]' }),
-  entry('add-dir', 'Workspace', 'give the harness another writable directory', { argHint: '<dir>', availability: needsHarness('adding directories') }),
+  entry('add-dir', 'Workspace', 'give the harness another writable directory', { argHint: '<dir>', availability: bothRoutes('adding directories') }),
   entry('mention', 'Workspace', 'attach a file to the next request', { argHint: '[path]' }),
   entry('attachments', 'Workspace', 'queued files; `clear` empties them', { argHint: '[clear]' }),
 
@@ -103,7 +109,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   }),
   entry('models', 'Settings', 'list models configured on local accounts'),
   entry('effort', 'Settings', 'reasoning level', { argHint: '[level]', availability: needsHarness('setting effort') }),
-  entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: needsHarness('setting permissions') }),
+  entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions') }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),
   entry('settings', 'Settings', 'configure this workspace', { argHint: '[route|account|model|effort|permissions|option|global|provider …]' }),
