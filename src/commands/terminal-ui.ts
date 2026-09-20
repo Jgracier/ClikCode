@@ -2301,9 +2301,32 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // in it, the arrows still move the cursor through it.
     if (this.waitingLabel && !this.waitingDraft) {
       if (key === '\u001b[A') { this.scrollTranscript(SWIPE_ROWS); return true; }
-      if (key === '\u001b[B') { this.scrollTranscript(-SWIPE_ROWS); return true; }
+      if (key === '\u001b[B') {
+        if (!this.scrollTranscript(-SWIPE_ROWS)) this.noteReadingDirection();
+        return true;
+      }
     }
     return false;
+  }
+
+  /** Down at the live end moves nothing, and says so.
+   *
+   * There is nothing newer than the newest, so the key is a correct no-op --
+   * and an invisible one, which is worse than useless when the only way to
+   * read back on a client is its arrow keys: the request looks like a broken
+   * feature rather than a wrong direction. Inverting it instead was tried and
+   * is worse, because then nothing settles at the live end: every press
+   * bounces back into the history. So it stays a no-op, and it tells the
+   * reader which way to go. */
+  private noteReadingDirection(): boolean {
+    if (this.scrolledBack || this.alternateTranscript.length === 0) return false;
+    this.showTransientNotice(
+      '↑ to read earlier messages',
+      2000,
+      () => this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette),
+    );
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    return true;
   }
 
   /** Forget where on screen the live block sits: whoever writes next (the
@@ -2557,7 +2580,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           // client this is the only way back through the conversation at all.
           // History keeps Ctrl+P and Ctrl+N, which is where it always was as
           // well, and the arrows still move through a draft once there is one.
-          if (!value && this.alternateScreen && this.scrollTranscript(direction === -1 ? SWIPE_ROWS : -SWIPE_ROWS)) return;
+          if (!value && this.alternateScreen) {
+            if (this.scrollTranscript(direction === -1 ? SWIPE_ROWS : -SWIPE_ROWS)) return;
+            if (direction === 1 && this.noteReadingDirection()) return;
+          }
           const moved = composerVerticalMove(value, cursor, direction);
           if (moved !== undefined) cursor = moved;
           else historyStep(direction);
