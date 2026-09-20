@@ -2116,10 +2116,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // costs context; not dropping costs a working cursor.
     const overflow = Math.max(0, unbounded.length - targetHeight);
     const live = overflow ? unbounded.slice(overflow) : unbounded;
-    const cursorRow = palette?.hideCursor
-      ? Math.max(0, live.length - 1)
-      : Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
-    const cursorColumn = palette?.hideCursor ? 1 : 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
+    // The composer's own row and column, whether or not the frame shows the
+    // cursor: see parkCursorAt. The block's last row is the status line, and a
+    // caret parked there is the one every report of "the cursor is under the
+    // composer" is actually describing.
+    const cursorRow = Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
+    const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
     this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
   }
 
@@ -2185,7 +2187,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // resize that reflowed the screen, a vendor CLI or a shell job that wrote
     // on it. One question, at a seam, instead of one per frame.
     const height = this.viewportRows();
-    const anchorRow = this.blockTopRow && this.blockTopRow <= height ? this.blockTopRow : undefined;
+    // Anchored only where nothing is retired: no rows written above the block
+    // means the terminal cannot have scrolled, so the row it starts on is the
+    // row it started on. A frame that DOES retire rows scrolls the screen by
+    // an amount that can only be computed from the height the terminal reports
+    // -- and a client that reports one height while showing fewer rows (a
+    // phone with its keyboard up) makes that computation drift downward a row
+    // at a time, which draws the next frame over the last one. Such a frame
+    // steps instead, and asks where it landed.
+    const anchorRow = !finished.length && this.blockTopRow && this.blockTopRow + pending.live.length - 1 <= height
+      ? this.blockTopRow
+      : undefined;
     const measuring = this.absoluteParkAvailable() && !pending.hideCursor;
     const probe = measuring && !anchorRow && beginCursorQuestion() ? '\u001b[6n' : '';
     this.stream.render(
@@ -2208,16 +2220,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // not agree with, so where it used to start is no longer a fact about the
     // screen. Keeping it is how a stale anchor draws the next frame rows above
     // where it belongs and leaves the cursor below the composer.
-    // Rows top..top+written-1, clamped: a terminal scrolls by exactly whatever
-    // runs past its last row, which moves the block up by exactly that much.
-    // With no live region the cursor comes to rest below the last finished
-    // row instead, and that is where the next frame begins.
-    const lastRow = Math.min(height, (anchorRow ?? 1) + finished.length + Math.max(0, pending.live.length - 1));
-    const nextTop = anchorRow === undefined
-      ? undefined
-      : Math.max(1, pending.live.length
-        ? lastRow - (pending.live.length - 1)
-        : Math.min(height, anchorRow + finished.length));
+    // Nothing was retired above it, so the block is where it was.
+    const nextTop = anchorRow;
     // A frame that could neither address its rows nor ask where they landed
     // moved the block by a count the terminal may not agree with; the row it
     // started on has stopped being a fact about the screen.
@@ -2232,7 +2236,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // is exactly what cannot be trusted on a terminal that miscounts rows.
       if (anchorRow && nextTop !== undefined) {
         this.blockTopRow = nextTop;
-        if (!pending.hideCursor) this.parkCursorAt(nextTop + geometry.cursorRow, geometry.cursorColumn);
+        this.parkCursorAt(nextTop + geometry.cursorRow, geometry.cursorColumn, pending.hideCursor);
         this.stream.markParked(geometry.cursorRow);
         logCursorEvent(`frame anchored: top=${anchorRow}->${nextTop} rows=${geometry.rows} finished=${finished.length} composer=${(nextTop ?? 1) + geometry.cursorRow} col=${geometry.cursorColumn}`);
       } else if (report) void this.readBlockPosition(geometry, report);
@@ -2342,9 +2346,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stream.markParked(geometry.cursorRow);
   }
 
-  private parkCursorAt(row: number, column: number): void {
+  /** `hidden` keeps the cursor invisible -- it does not mean the cursor may be
+   * left anywhere. A terminal always has one, and a client that draws its own
+   * caret regardless of DECTCEM (phone SSH clients do) puts it wherever this
+   * code last left it. Parking a "hidden" cursor on the block's last row is
+   * therefore a caret sitting on the status line, under the composer, for as
+   * long as a turn runs. It is parked on the composer either way; only whether
+   * it is shown depends on the frame. */
+  private parkCursorAt(row: number, column: number, hidden = false): void {
     if (this.closed || this.suspended) return;
-    output.write(`\u001b[${Math.max(1, row)};${Math.max(1, column)}H\u001b[?25h`);
+    output.write(`\u001b[${Math.max(1, row)};${Math.max(1, column)}H${hidden ? '' : '\u001b[?25h'}`);
   }
 
   /** Move the viewport through the transcript. Positive scrolls back, and the
