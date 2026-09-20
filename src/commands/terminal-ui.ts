@@ -10,6 +10,9 @@ import {
   renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock,
   sanitizeTerminalText, splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
 } from './markdown-render.js';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { restoreTerminal, terminalModes } from './terminal-restore.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
@@ -196,6 +199,22 @@ export function measureViewportRows(timeoutMs = 250): Promise<number | undefined
   // the cursor to a row that no longer means anything.
   return queryCursorPosition('\u001b7\u001b[999;999H', timeoutMs, '\u001b8')
     .then((answer) => (answer.status === 'ok' && answer.row > 0 ? answer.row : undefined));
+}
+
+/** A short, bounded record of what the terminal actually did with the cursor,
+ * written to ~/.clikcode/cursor.log. Placing the cursor depends on how a
+ * client answers (or ignores) DSR, which cannot be seen from a screenshot and
+ * differs per terminal; this is how a report becomes a diagnosis. Capped, so
+ * a long session cannot grow it without bound. */
+let cursorLogLines = 0;
+export function logCursorEvent(line: string): void {
+  if (cursorLogLines >= 60) return;
+  cursorLogLines += 1;
+  try {
+    const dir = join(homedir(), '.clikcode');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, 'cursor.log'), `[${new Date().toISOString()}] pid ${process.pid} ${line}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch { /* fail-open-ok: diagnostics must never break the UI */ }
 }
 
 /** Claim the one outstanding question, for a DSR the caller is about to send
@@ -1199,6 +1218,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.measuring = true;
     void measureViewportRows().then((rows) => {
       this.measuring = false;
+      logCursorEvent(`height probe: answered=${rows ?? 'no'} announced=${output.columns}x${output.rows} TERM=${process.env.TERM ?? '?'}`);
       if (this.closed || rows === this.measuredRows) return;
       this.measuredRows = rows;
       if (rows !== undefined) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
@@ -1962,7 +1982,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.blockTopRow = anchorRow;
         this.parkCursorAt(anchorRow + geometry.cursorRow, geometry.cursorColumn);
         this.stream.markParked(geometry.cursorRow);
+        logCursorEvent(`frame anchored: top=${anchorRow} rows=${geometry.rows} composer=${anchorRow + geometry.cursorRow} col=${geometry.cursorColumn}`);
       } else if (report) void this.readBlockPosition(geometry, report);
+      else {
+        logCursorEvent(`frame relative: rows=${geometry.rows} cursorRow=${geometry.cursorRow} measuring=${measuring} raw=${terminalModes.rawMode} declined=${this.cursorParkUnsupported} waiting=${Boolean(this.waitingLabel)}`);
+      }
       if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
     });
   }
@@ -1984,6 +2008,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     geometry: { rows: number; cursorRow: number; cursorColumn: number }, report: Promise<CursorQuery>,
   ): Promise<void> {
     const answer = await report;
+    logCursorEvent(`frame probe: ${answer.status}${answer.status === 'ok' ? ` row=${answer.row} col=${answer.column}` : ''} rows=${geometry.rows} cursorRow=${geometry.cursorRow}`);
     if (this.closed || this.suspended || answer.status !== 'ok') {
       // A terminal that never answers is asked once and then left alone with
       // the relative park it always had.
@@ -1992,6 +2017,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     if (this.frameGeometry !== geometry) return; // a newer frame owns the screen
     this.blockTopRow = Math.max(1, answer.row - (geometry.rows - 1));
+    logCursorEvent(`frame measured: top=${this.blockTopRow} composer=${this.blockTopRow + geometry.cursorRow} col=${geometry.cursorColumn}`);
     this.parkCursorAt(this.blockTopRow + geometry.cursorRow, geometry.cursorColumn);
     this.stream.markParked(geometry.cursorRow);
   }
