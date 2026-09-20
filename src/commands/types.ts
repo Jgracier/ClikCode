@@ -215,9 +215,17 @@ export interface AiRouterRuntime {
   promptExceedsArgvLimit(harness: AiLocalHarnessDefinition, prompt: string): boolean;
 }
 
+/** What a tool call DOES, as against what state it is in. Deliberately small:
+ * five categories every harness's tools fall into, or nothing at all. */
+export type ToolCategory = 'read' | 'edit' | 'run' | 'search' | 'fetch';
+
 export interface HarnessActivityEvent {
   kind: 'thinking' | 'tool-start' | 'tool-done' | 'tool-error';
   label: string;
+  /** Absent whenever the evidence does not settle it. A tool nobody has
+   * catalogued renders exactly as it did before this existed, rather than
+   * being assigned a plausible-looking category. */
+  category?: ToolCategory;
   /** Vendor tool-call identity, when emitted, lets the TUI update an in-flight
    * row instead of appending a detached completion at the bottom. */
   id?: string;
@@ -375,4 +383,8 @@ export interface PickerOption<T> {
   actions?: readonly { label: string; value: string }[];
   /** Destructive row action. The terminal picker always confirms it first. */
   deleteAction?: { label: string; value: string };
+  /** Slash-palette rows: argument hint shown after the label, and the section
+   * the row belongs to. Optional; a prompter that ignores them still works. */
+  argHint?: string;
+  group?: string;
 }
