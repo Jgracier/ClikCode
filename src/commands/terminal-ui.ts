@@ -164,7 +164,7 @@ const EXIT_CONFIRM_MS = 2000;
  *
  * `CLIKCODE_MAIN_SCREEN=1` keeps the old behaviour for a terminal where the
  * native scrollback is worth more than any of that. */
-export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
+export function classicScreen(): boolean { return process.env.CLIKCODE_ALT_SCREEN !== '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Rows kept above the viewport so scrolling back inside a conversation still
@@ -1400,16 +1400,50 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.measuredRows = undefined;
       this.forgetScreenPosition();
       // The modes are asked for again, because a resize is where they get
-      // lost. A phone hiding its keyboard resizes the pty, and a client that
-      // resets its emulator's modes across that stops reporting the wheel --
-      // which is exactly a swipe that scrolls with the keyboard up and does
-      // nothing with it down. Asking twice costs a few bytes; a client that
-      // never dropped them sets what is already set.
-      if (terminalModes.rawMode) output.write(reassertInputModes());
+      // lost: a phone hiding its keyboard resizes the pty, and the client
+      // reapplies its own terminal defaults across that, which turns mouse
+      // reporting off. Asking once, here, loses to it -- SIGWINCH arrives
+      // before the client has finished, so the reset lands last and the
+      // reporting stays off. Measured: with an extra pty hop delaying this
+      // write, the same build receives 42 wheel events on the taller screen
+      // where it otherwise receives none.
+      //
+      // So it is asked for again after the client has settled, twice, a few
+      // hundred milliseconds apart. A client that never dropped them sets
+      // what is already set.
+      this.reassertMouseTracking();
       this.remeasureViewport();
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
   };
+
+  /** Take the alternate screen while an overlay is up, and give it back after.
+   * The main screen keeps its transcript untouched underneath, so closing one
+   * restores the conversation exactly, with nothing to redraw and nothing
+   * lost. */
+  private syncOverlayScreen(wanted: boolean): void {
+    if (classicScreen() === false) return; // pinned to the alternate screen
+    if (wanted === this.overlayActive) return;
+    this.overlayActive = wanted;
+    if (wanted) {
+      // The region goes with it: a program that takes the screen takes it
+      // whole, and a region left set would confine what draws next.
+      output.write(`${this.releaseScrollRegion()}${ENTER_ALTERNATE_SCREEN}`);
+      terminalModes.alternateScreen = true;
+      this.alternateScreen = true;
+      this.alternatePrevious = [];
+      this.alternateScrollback = 0;
+    } else {
+      output.write(LEAVE_ALTERNATE_SCREEN);
+      terminalModes.alternateScreen = false;
+      this.alternateScreen = false;
+      this.alternatePrevious = [];
+      // The main screen came back as it was, so the next frame starts from a
+      // region and a block it has to lay out again.
+      this.scrollRegionBottom = undefined;
+      this.regionPrevious = [];
+    }
+  }
 
   /** Never taller than the screen actually is: a live region that overflows
    * makes the walk back up to the composer clamp at the top edge, which is
@@ -1419,6 +1453,28 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private viewportRows(): number {
     const announced = output.rows || 30;
     return Math.max(5, this.measuredRows ? Math.min(announced, this.measuredRows) : announced);
+  }
+
+  /** Timers holding the re-asserts that follow a resize, so a burst of them
+   * (a keyboard sliding away resizes more than once) asks once per settle
+   * rather than once per SIGWINCH. */
+  private modeReassertTimers: NodeJS.Timeout[] = [];
+
+  /** Ask for the input modes again, now and after the client has settled.
+   * Now is not enough on its own -- see onResize. */
+  private reassertMouseTracking(): void {
+    for (const timer of this.modeReassertTimers) clearTimeout(timer);
+    this.modeReassertTimers = [];
+    const ask = (): void => {
+      if (this.closed || this.suspended || !terminalModes.rawMode) return;
+      output.write(reassertInputModes());
+    };
+    ask();
+    for (const delay of [250, 750]) {
+      const timer = setTimeout(ask, delay);
+      timer.unref();
+      this.modeReassertTimers.push(timer);
+    }
   }
 
   /** One probe in flight at a time; the answer repaints at the real height. */
@@ -1445,10 +1501,35 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * asks to look at what went past. Drawing on the alternate screen took the
    * terminal's own scrollback away; this is what replaces it. */
   private alternateScrollback = 0;
+  /** The last row of the terminal's scroll region, so it is set when it
+   * changes and not on every frame. */
+  private scrollRegionBottom?: number;
+  /** Exactly the rows the last region frame left below it, so the next one
+   * rewrites only what differs. */
+  private regionPrevious: string[] = [];
   /** Rows the last frame gave the transcript above the live region. The
    * scroll offset is bounded by it, and it changes with the screen. */
   private alternateAbove = 0;
-  private readonly alternateScreen = !classicScreen() && output.isTTY;
+  /** Which screen this frame belongs on.
+   *
+   * The conversation lives on the main screen, in a scroll region, because
+   * that is the only place the TERMINAL owns the transcript -- and a swipe
+   * scrolls what the terminal owns, with no bytes sent, whatever the client
+   * is doing with its keyboard.
+   *
+   * A palette or a picker goes to the alternate screen instead. Two reasons,
+   * and they point the same way. It is modal, full-screen, transient UI, which
+   * is what that screen is for. And a bottom region cannot grow to fit one
+   * without pushing rows off the top of the scrolling half, which the terminal
+   * cannot give back -- opening and closing a palette ten times walked the
+   * conversation fifty rows away. On the alternate screen it costs nothing:
+   * the main screen, transcript and all, is exactly as it was when it closes.
+   *
+   * `CLIKCODE_ALT_SCREEN=1` keeps everything on the alternate screen, for a
+   * terminal whose own scrollback is not worth having. */
+  private alternateScreen = !classicScreen() && output.isTTY;
+  /** True while a palette or picker owns the screen. */
+  private overlayActive = false;
 
   constructor() {
     if (this.alternateScreen) {
@@ -1867,6 +1948,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     optionalRows -= noticeRows;
     const availablePaletteRows = Math.min(requestedPaletteCapacity, optionalRows);
     const paletteCapacity = availablePaletteRows >= 3 ? availablePaletteRows : 0;
+    this.syncOverlayScreen(Boolean(paletteCapacity) || this.selecting);
     const paletteRows = paletteCapacity;
     const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
     // The software keyboard can make a mobile SSH viewport dramatically
@@ -2217,73 +2299,89 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.lastFinishedRow = finished[finished.length - 1];
     }
     if (this.alternateScreen) { this.flushAlternateFrame(finished, pending); return; }
-    this.frameBuffer = '';
-    // A frame's motions are relative, which is what keeps the transcript
-    // append-only. They are right until the terminal disagrees about how many
-    // rows something took (a row it wrapped, a resize it reflowed, a mode it
-    // ignored): the walk back up to the composer then lands low, and stays
-    // low, because the next frame walks from the same wrong place. So a frame
-    // ends on the block's LAST row -- the one position whose absolute screen
-    // row can be asked for without trusting any earlier motion -- and the
-    // cursor is parked with an absolute jump, from a row the terminal either
-    // told us (the DSR this frame carries) or that nothing can have moved.
+    this.flushRegionFrame(finished, pending);
+  }
+
+  /** The transcript scrolls in the terminal's own scroll region; the live
+   * block sits in the rows below it and never moves.
+   *
+   * This is what a fixed region is for, and it is the only arrangement that
+   * satisfies both halves of the problem at once. The terminal has to own the
+   * transcript, because a swipe scrolls what the TERMINAL holds -- no bytes
+   * are sent, so it works with the keyboard up, down, or absent, on a client
+   * that forwards no gesture at all. And this code has to own the composer,
+   * because a block placed by relative motion drifts on any terminal that
+   * counts a row differently, which is the cursor that kept landing on the
+   * status line.
+   *
+   * `CSI 1;N r` gives both: rows 1..N scroll and their lines leave for the
+   * scrollback (verified against a real terminal: a top margin of row 1 is
+   * what makes them go there rather than be discarded), while rows below N
+   * are outside the region and stay exactly where they are put. Every row of
+   * the block is addressed outright, so there is nothing to walk and nothing
+   * to ask the terminal about.
+   */
+  private flushRegionFrame(
+    finished: readonly string[],
+    pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean },
+  ): void {
     const height = this.viewportRows();
-    // Anchored only where nothing is retired: no rows written above the block
-    // means the terminal cannot have scrolled, so the row it starts on is the
-    // row it started on. A frame that DOES retire rows scrolls the screen by
-    // an amount that can only be computed from the height the terminal reports
-    // -- and a client that reports one height while showing fewer rows (a
-    // phone with its keyboard up) makes that computation drift downward a row
-    // at a time, which draws the next frame over the last one. Such a frame
-    // steps instead, and asks where it landed.
-    const anchorRow = !finished.length && this.blockTopRow && this.blockTopRow + pending.live.length - 1 <= height
-      ? this.blockTopRow
-      : undefined;
-    const measuring = this.absoluteParkAvailable() && !pending.hideCursor;
-    const probe = measuring && !anchorRow && beginCursorQuestion() ? '\u001b[6n' : '';
-    this.stream.render(
-      finished, pending.live, pending.cursorRow, Math.max(0, pending.cursorColumn - 1),
-      { ...(anchorRow ? { anchorRow } : {}), ...(probe ? { probe } : {}) },
-    );
-    const body = this.frameBuffer;
-    this.frameBuffer = '';
-    // Synchronized output (DEC 2026): the terminal presents the whole frame at
-    // once instead of tearing mid-repaint. Terminals without it ignore the pair.
-    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l${body}\u001b[?7h${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
+    // The transcript keeps at least one row: a block taller than the screen
+    // has nowhere to scroll into, and its head rows are dropped by the layout
+    // above rather than here.
+    const live = pending.live.slice(-Math.max(1, height - 1));
+    const regionBottom = Math.max(1, height - live.length);
+    let out = '';
+    if (this.scrollRegionBottom !== regionBottom) {
+      const previousBottom = this.scrollRegionBottom ?? regionBottom;
+      // The block's old rows are erased where they actually are, before the
+      // region moves under them: a row left inside the scrolling half would
+      // scroll up through the transcript as if it had been said.
+      for (let index = 0; index < this.regionPrevious.length; index += 1) {
+        out += `\u001b[${Math.min(height, previousBottom + 1 + index)};1H\u001b[K`;
+      }
+      // A block that GREW takes rows the transcript is in. They are scrolled
+      // away rather than covered -- scrolled out of a region that starts at
+      // row one, which is what puts them in the terminal's scrollback where
+      // they can still be read. Covering them loses them for good.
+      if (regionBottom < previousBottom) out += `\u001b[${previousBottom - regionBottom}S`;
+      out += `\u001b[1;${regionBottom}r`;
+      // A block that SHRANK gives rows back, and the transcript slides down to
+      // meet the composer rather than leaving a band above it. What scrolled
+      // away does not come back -- the blank lands at the top of the screen,
+      // where it is out of the way and fills with the next thing said.
+      if (regionBottom > previousBottom) out += `\u001b[${regionBottom - previousBottom}T`;
+      this.scrollRegionBottom = regionBottom;
+      this.regionPrevious = [];
+    }
+    if (finished.length) {
+      // Each row arrives on a newly scrolled line at the region's last row,
+      // which is what hands the line leaving the top to the scrollback.
+      out += `\u001b[${regionBottom};1H`;
+      for (const row of finished) out += `\n\r\u001b[K${row}`;
+    }
+    // Only the rows that changed, each addressed outright. A keystroke changes
+    // the composer's row and nothing else.
+    const full = this.regionPrevious.length !== live.length || finished.length > 0;
+    for (const [index, row] of live.entries()) {
+      if (!full && this.regionPrevious[index] === row) continue;
+      out += `\u001b[${regionBottom + 1 + index};1H\u001b[K${row}`;
+    }
+    for (let index = live.length; index < this.regionPrevious.length; index += 1) {
+      out += `\u001b[${Math.min(height, regionBottom + 1 + index)};1H\u001b[K`;
+    }
+    this.regionPrevious = [...live];
+    const composerRow = Math.min(height, regionBottom + 1 + Math.min(pending.cursorRow, Math.max(0, live.length - 1)));
+    // Parked whether or not the cursor is shown: a client that draws its own
+    // caret regardless of DECTCEM puts it wherever this code last left it.
+    out += `\u001b[${composerRow};${Math.max(1, pending.cursorColumn)}H`;
+    if (!out) return;
+    const frame = `${BEGIN_SYNCHRONIZED_UPDATE}\u001b[?25l\u001b[?7l${out}\u001b[?7h${pending.hideCursor ? '' : '\u001b[?25h'}${END_SYNCHRONIZED_UPDATE}`;
     this.frameInFlight = true;
     terminalModes.painted = true;
-    const geometry = { rows: pending.live.length, cursorRow: pending.cursorRow, cursorColumn: pending.cursorColumn };
-    this.frameGeometry = geometry;
-    // The block's absolute position survives a frame only when that frame
-    // either knew it (anchorRow) or is about to be told it (probe). A frame
-    // drawn relatively -- the DSR slot was busy, the cursor was hidden, the
-    // terminal declined -- moved the block by a row count the terminal may
-    // not agree with, so where it used to start is no longer a fact about the
-    // screen. Keeping it is how a stale anchor draws the next frame rows above
-    // where it belongs and leaves the cursor below the composer.
-    // Nothing was retired above it, so the block is where it was.
-    const nextTop = anchorRow;
-    // A frame that could neither address its rows nor ask where they landed
-    // moved the block by a count the terminal may not agree with; the row it
-    // started on has stopped being a fact about the screen.
-    if (!anchorRow && !probe) this.blockTopRow = undefined;
-    // Listen before writing: a terminal can answer inside the same tick the
-    // frame goes out, and an answer nobody is waiting for is simply lost.
-    const report = probe ? awaitCursorReport() : undefined;
+    logCursorEvent(`region frame: height=${height} bottom=${regionBottom} rows=${live.length} finished=${finished.length} composer=${composerRow} col=${pending.cursorColumn}`);
     output.write(frame, () => {
       this.frameInFlight = false;
-      // An anchored frame drew from a known row, so the composer's row is
-      // arithmetic: park there too, since the relative park the frame carries
-      // is exactly what cannot be trusted on a terminal that miscounts rows.
-      if (anchorRow && nextTop !== undefined) {
-        this.blockTopRow = nextTop;
-        this.parkCursorAt(nextTop + geometry.cursorRow, geometry.cursorColumn, pending.hideCursor);
-        this.stream.markParked(geometry.cursorRow);
-        logCursorEvent(`frame anchored: top=${anchorRow}->${nextTop} rows=${geometry.rows} finished=${finished.length} composer=${(nextTop ?? 1) + geometry.cursorRow} col=${geometry.cursorColumn}`);
-      } else if (report) void this.readBlockPosition(geometry, report);
-      else {
-        logCursorEvent(`frame relative: rows=${geometry.rows} cursorRow=${geometry.cursorRow} measuring=${measuring} raw=${terminalModes.rawMode} declined=${this.cursorParkUnsupported} waiting=${Boolean(this.waitingLabel)}`);
-      }
       if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
     });
   }
@@ -2570,10 +2668,27 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private eraseLiveRegion(): string {
     this.frameBuffer = '';
     this.pendingLive = undefined;
+    if (!this.alternateScreen) return this.releaseScrollRegion();
     this.stream.close();
     const data = this.frameBuffer;
     this.frameBuffer = '';
     return data;
+  }
+
+  /** Give the screen back whole: the block's rows are erased, the region is
+   * released, and the cursor is left where whatever runs next -- a vendor CLI,
+   * the shell -- will continue. A region left set would confine that program
+   * to the rows this UI happened to be using. */
+  private releaseScrollRegion(): string {
+    const height = this.viewportRows();
+    const bottom = this.scrollRegionBottom ?? height;
+    let out = '';
+    for (let index = 0; index < this.regionPrevious.length; index += 1) {
+      out += `\u001b[${Math.min(height, bottom + 1 + index)};1H\u001b[K`;
+    }
+    this.regionPrevious = [];
+    this.scrollRegionBottom = undefined;
+    return `${out}\u001b[r\u001b[${bottom};1H\r`;
   }
 
   /** Remove a completed palette/picker as one frame. Painting an empty
@@ -2980,6 +3095,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.frameGeometry = undefined;
     this.blockTopRow = undefined;
     resetCursorQueries();
+    for (const timer of this.modeReassertTimers) clearTimeout(timer);
+    this.modeReassertTimers = [];
     this.stopWaiting(false);
     this.clearTransientNotice();
     process.off('SIGWINCH', this.onResize);
@@ -2993,7 +3110,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the shell's own screen returns untouched. The conversation is on disk
     // either way -- `/resume` reopens it.
     output.write(
-      `${this.alternateScreen ? '' : this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`
+      `${this.alternateScreen ? '' : this.releaseScrollRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`
       + (terminalModes.alternateScreen ? LEAVE_ALTERNATE_SCREEN : ''),
     );
     terminalModes.alternateScreen = false;
