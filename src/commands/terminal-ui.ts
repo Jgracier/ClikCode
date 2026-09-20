@@ -164,7 +164,7 @@ const EXIT_CONFIRM_MS = 2000;
  *
  * `CLIKCODE_MAIN_SCREEN=1` keeps the old behaviour for a terminal where the
  * native scrollback is worth more than any of that. */
-export function classicScreen(): boolean { return process.env.CLIKCODE_ALT_SCREEN !== '1'; }
+export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Home, erase the screen, erase the saved lines. Written once at startup, so
