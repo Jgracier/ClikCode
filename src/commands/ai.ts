@@ -17,6 +17,7 @@ import { CLIKCODE_USER_AGENT, CLIKCODE_VERSION } from '../version.js';
 import {
   gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn,
 } from './ai-gateway-harness.js';
+import { commonControlFor, vendorFacingOptions } from './harness-options.js';
 import { emitJson } from '../utils/structured-output.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { captureNativeHarness, captureNativeHarnessOutput, captureNativeHarnessTurn, createTurnIdleController, ensureNativeHarness, noteTurnActivityEvent, inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
@@ -1501,7 +1502,10 @@ function capabilitiesText(session: HarnessSession): string {
   const manifest = localHarnessCapabilityManifest(harness);
   return [
     `${harness.displayName} capabilities`,
-    ...manifest.options.map((option) => `${option.label}: ${option.description}`),
+    ...manifest.options.map((option) => {
+      const control = commonControlFor(option.id);
+      return `${option.label}: ${option.description}${control ? ` (${control})` : ''}`;
+    }),
     ...Object.entries(manifest.managers ?? {}).map(([name, manager]) => `${manager?.label ?? name}: available`),
     ...(manifest.features ?? []).map((feature) => `${feature}: native`),
   ].join('\n');
@@ -3026,7 +3030,10 @@ async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: string): 
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   if (!harness) throw new Error('Choose a provider first.');
   const manifest = localHarnessCapabilityManifest(harness);
-  const option = await chooseOption(rl, `${harness.displayName} options`, manifest.options.map((item) => ({
+  // Only what no ClikCode command already owns. /model, /permissions, /effort,
+  // /cwd and /add-dir were each listed here as a raw vendor row as well, so the
+  // same setting had two interfaces that could disagree.
+  const option = await chooseOption(rl, `${harness.displayName} options`, vendorFacingOptions(manifest.options).map((item) => ({
     label: item.label,
     detail: `· ${item.description}${item.dangerous ? ` · ${chalk.yellow('dangerous')}` : ''}`,
     value: item,
@@ -3092,7 +3099,7 @@ async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: 
     ...(harness?.modelArgvPrefix ? [{ label: 'Model', detail: 'provider default or model ID', value: 'model' }] : []),
     ...(harness && harnessSupportsEffort(harness) ? [{ label: 'Reasoning effort', detail: 'provider-supported levels', value: 'effort' }] : []),
     ...(harness?.permissionModes?.length ? [{ label: 'Permissions', detail: 'provider-supported approval behavior', value: 'permissions' }] : []),
-    ...(harness && localHarnessCapabilityManifest(harness).options.some((option) => !['model', 'effort', 'workspace', 'permissions'].includes(option.id))
+    ...(harness && vendorFacingOptions(localHarnessCapabilityManifest(harness).options).length
       ? [{ label: `${harness.displayName} options`, detail: 'modes, tools, safety, and context', value: 'options' }] : []),
     { label: 'Quota failover', detail: 'switch accounts automatically, or not', value: 'failover' },
     { label: 'Show current setup', value: 'status' },
