@@ -1026,8 +1026,11 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   let accountJustCreated = false;
   if (!selected || selected.provider !== harness.provider || selected.status !== 'ready') {
     const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli' && account.status === 'ready');
-    if (accounts.length === 1) session.accountId = accounts[0].id;
-    else if (accounts.length === 0) {
+    if (accounts.length) {
+      session.accountId = preferredAccountId(
+        state, harness.provider, session.accountId, (account) => account.authKind === 'vendor-cli',
+      );
+    } else {
       accountJustCreated = true;
       // Same derivation addAccountForHarness uses after an explicit login,
       // applied here too so a session's very first auto-created account
@@ -1052,7 +1055,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       };
       state.accounts.push(account);
       session.accountId = account.id;
-    } else session.accountId = null;
+    }
   }
   let account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   if (activeTerminalHarness && harness.loginArgv) {
@@ -2236,6 +2239,30 @@ async function chooseOption<T>(
  * about does not. Crucially it takes a fresh conversationId and no parent, so
  * it lists as its own row in /resume instead of merging into the conversation
  * it was started from, and it carries no inherited name. */
+/** Which account a conversation on this provider should use.
+ *
+ * The rule, in one place because it was previously decided in two: keep the
+ * one it already has if that still fits, otherwise the account most recently
+ * used on this provider, otherwise the first ready one. Null only when the
+ * provider has no ready account at all.
+ *
+ * Both callers used to give up and store null as soon as a provider had more
+ * than one account -- on the reasoning that the user should choose -- but
+ * nothing asked them to, so the next turn failed with "no account selected"
+ * on exactly the setups where an account was most obviously available. */
+export function preferredAccountId(
+  state: HarnessState, provider: string, current?: string | null,
+  where: (account: AiHarnessAccount) => boolean = () => true,
+): string | null {
+  const ready = state.accounts.filter((account) => account.provider === provider && account.status === 'ready' && where(account));
+  if (!ready.length) return null;
+  if (current && ready.some((account) => account.id === current)) return current;
+  const lastUsed = [...state.sessions]
+    .filter((session) => session.accountId && ready.some((account) => account.id === session.accountId))
+    .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.accountId;
+  return lastUsed ?? ready[0]!.id;
+}
+
 export function newConversationSession(
   state: HarnessState, source: HarnessSession, now = new Date().toISOString(),
 ): HarnessSession {
@@ -2284,14 +2311,13 @@ async function newProviderConversation(currentId: string, harnessCommandName: st
   // Refresh the source before freezing its portable ClikCode history into a
   // child branch. The source native session remains untouched after this.
   if (await synchronizeNativeTranscript(state, current)) await writeState(state);
-  const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
   const defaults = resolveDefaultSettings(state, harness.provider);
   const now = new Date().toISOString();
   const sourceDisplayName = current.nativeHarness
     ? localHarnessForCommand(current.nativeHarness)?.displayName
     : sessionProviderLabel(current);
   const session = createHandoffBranch({
-    source: current, target: harness, accountId: accounts.length === 1 ? accounts[0]!.id : null,
+    source: current, target: harness, accountId: preferredAccountId(state, harness.provider),
     model: state.providerSettings[harness.provider]?.model ?? null, defaults, now, sourceDisplayName,
   });
   state.sessions.push(session);
