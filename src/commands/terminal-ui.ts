@@ -1625,9 +1625,25 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   constructor() {
     terminalModes.uiStarted = true;
     if (this.alternateScreen) {
+      // Every mode in one breath, with the screen, in this order -- copied
+      // from the bare script that receives the gesture on this user's phone
+      // when this program does not. Measured minutes apart in the same
+      // failing state: that script took 64,214 wheel reports with the
+      // keyboard hidden and ClikCode took none, and the opening was the only
+      // thing left that differed. It asked for all seven the moment it took
+      // the screen; this asked for the four mouse modes and left paste, theme
+      // and focus until the first prompt opened, several frames later.
+      //
+      // The `?1006l` before `?1006h` is the script's, kept deliberately: it
+      // makes SGR reporting a transition rather than a no-op, and a client
+      // deciding how to route touches has something to notice.
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
-      output.write(ENABLE_MOUSE_TRACKING);
+      output.write(`${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`
+        + '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h');
+      terminalModes.bracketedPaste = true;
+      terminalModes.themeNotifications = true;
+      terminalModes.focusReporting = true;
       terminalModes.wheelReporting = true;
     }
     // The screen and its saved lines are cleared once, and the first frame
