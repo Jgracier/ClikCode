@@ -323,6 +323,7 @@ export function logCursorEvent(line: string): void {
  * live region to a row it was never on. */
 export function beginCursorQuestion(): boolean {
   if (!output.isTTY || !input.isTTY || !terminalModes.rawMode || cursorQueryInFlight) return false;
+  if (awaitingLateAnswer()) return false;
   cursorQueryInFlight = true;
   return true;
 }
@@ -333,7 +334,7 @@ export function awaitCursorReport(timeoutMs = 400): Promise<CursorQuery> {
   if (!output.isTTY || !input.isTTY) { cursorQueryInFlight = false; return Promise.resolve({ status: 'timeout' }); }
   return new Promise<CursorQuery>((resolve) => {
     const waiter = (report: { row: number; column: number }): void => finish({ status: 'ok', ...report });
-    const timer = setTimeout(() => finish({ status: 'timeout' }), timeoutMs);
+    const timer = setTimeout(() => { quarantineLateAnswer(); finish({ status: 'timeout' }); }, timeoutMs);
     timer.unref();
     function finish(answer: CursorQuery): void {
       clearTimeout(timer);
@@ -357,8 +358,26 @@ export function awaitCursorReport(timeoutMs = 400): Promise<CursorQuery> {
  * answers would make them all arrive too late to mean anything. */
 let cursorQueryInFlight = false;
 
+/** A question that timed out is not over. The terminal may still answer, and
+ * a late answer is indistinguishable from the next question's -- so the next
+ * question reads it, and is told the cursor is somewhere it has not been for
+ * several frames. The session log has exactly that: a height probe gives up,
+ * a frame probe goes out four milliseconds later, and the answer that comes
+ * back belongs to the first. An anchor ten rows off then draws the live block
+ * where it does not belong and parks the cursor below the composer.
+ *
+ * So a timeout quarantines the terminal instead of releasing it: nothing is
+ * asked during the grace period, and a stray answer arriving inside it finds
+ * no waiter at all (a report nobody is waiting for is dropped where keys are
+ * read). Long enough to cover a slow link's answer, short enough that a
+ * terminal which simply never answers is not asked again for a whole second. */
+const STALE_ANSWER_GRACE_MS = 750;
+let quarantinedUntil = 0;
+function quarantineLateAnswer(): void { quarantinedUntil = Date.now() + STALE_ANSWER_GRACE_MS; }
+function awaitingLateAnswer(): boolean { return Date.now() < quarantinedUntil; }
+
 /** A prompter that is going away takes any unanswered question with it. */
-export function resetCursorQueries(): void { cursorQueryInFlight = false; }
+export function resetCursorQueries(): void { cursorQueryInFlight = false; quarantinedUntil = 0; }
 
 export type CursorQuery =
   | { status: 'ok'; row: number; column: number }
@@ -375,10 +394,11 @@ export async function queryCursorPosition(prefix = '', timeoutMs = 250, suffix =
   // sitting in the status line -- and hands it to whatever reads stdin next.
   // Not raw yet is not "unsupported": ask again once a prompt is open.
   if (!terminalModes.rawMode) return { status: 'busy' };
-  if (cursorQueryInFlight) return { status: 'busy' };
+  if (cursorQueryInFlight || awaitingLateAnswer()) return { status: 'busy' };
   cursorQueryInFlight = true;
   try {
     const position = await askCursorPosition(prefix, timeoutMs, suffix);
+    if (!position) quarantineLateAnswer();
     return position ? { status: 'ok', ...position } : { status: 'timeout' };
   } finally {
     cursorQueryInFlight = false;
@@ -2157,7 +2177,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     terminalModes.painted = true;
     const geometry = { rows: pending.live.length, cursorRow: pending.cursorRow, cursorColumn: pending.cursorColumn };
     this.frameGeometry = geometry;
-    if (!measuring) this.blockTopRow = undefined;
+    // The block's absolute position survives a frame only when that frame
+    // either knew it (anchorRow) or is about to be told it (probe). A frame
+    // drawn relatively -- the DSR slot was busy, the cursor was hidden, the
+    // terminal declined -- moved the block by a row count the terminal may
+    // not agree with, so where it used to start is no longer a fact about the
+    // screen. Keeping it is how a stale anchor draws the next frame rows above
+    // where it belongs and leaves the cursor below the composer.
+    if (!anchorRow && !probe) this.blockTopRow = undefined;
     // Listen before writing: a terminal can answer inside the same tick the
     // frame goes out, and an answer nobody is waiting for is simply lost.
     const report = probe ? awaitCursorReport() : undefined;
