@@ -92,6 +92,25 @@ export const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
  * exactly what it did. A cosmetic parity is not worth a cursor. */
 export const ENABLE_THEME_NOTIFICATIONS = '\u001b[?2031h';
 export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
+/** Wheel reporting, in SGR encoding so a wide terminal can still express a
+ * column. Only the wheel is wanted -- it is how a conversation is read back
+ * on a screen with no page keys, which is every phone -- so button presses
+ * and drags are decoded and dropped rather than acted on, leaving the
+ * client's own selection and copy gestures alone. */
+export const ENABLE_WHEEL_REPORTING = '\u001b[?1000h\u001b[?1006h';
+export const DISABLE_WHEEL_REPORTING = '\u001b[?1006l\u001b[?1000l';
+/** `CSI < button ; column ; row M|m`. Wheel up is 64, wheel down 65. */
+const MOUSE_EVENT = /^\u001b\[<(\d+);\d+;\d+[Mm]$/;
+export function wheelScrollRows(key: string): number {
+  const match = MOUSE_EVENT.exec(key);
+  if (!match) return 0;
+  const button = Number(match[1]);
+  // Three rows a notch, the rate a terminal scrolls its own scrollback at.
+  if (button === 64) return 3;
+  if (button === 65) return -3;
+  return 0;
+}
+export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key);
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
@@ -129,6 +148,7 @@ function enterInputModes(): string {
   let sequence = `${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`;
   terminalModes.bracketedPaste = true;
   terminalModes.focusReporting = true;
+  terminalModes.wheelReporting = true;
   terminalModes.themeNotifications = true;
   terminalModes.rawMode = true;
   if (!terminalModes.kittyKeyboard && kittyKeyboardSafe()) {
@@ -139,10 +159,11 @@ function enterInputModes(): string {
 }
 
 function leaveInputModes(): string {
-  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
+  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_WHEEL_REPORTING}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
   terminalModes.kittyKeyboard = false;
   terminalModes.bracketedPaste = false;
   terminalModes.focusReporting = false;
+  terminalModes.wheelReporting = false;
   terminalModes.themeNotifications = false;
   return sequence;
 }
@@ -1098,6 +1119,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * rows already written. Everything before `emittedMessages` belongs to the
    * terminal now; this UI never addresses it again. */
   private emittedMessages = 0;
+  /** `role:content` of the last message written to the transcript -- the seam
+   * the next frame carries on from, which a count cannot identify once the
+   * caller hands a window of the conversation rather than all of it. */
+  private lastEmittedMessage?: string;
   /** Sequence numbers of the standalone activity rows already retired. One
    * number per activity event, alongside activityEntries itself, which is
    * deliberately never evicted -- some of it is immutable scrollback. */
@@ -1283,6 +1308,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Exactly the rows the last alternate-screen frame left on screen, so the
    * next one writes only what differs. */
   private alternatePrevious: string[] = [];
+  /** How many rows above the live region the viewport is held back by. Zero
+   * follows the conversation, which is what a transcript does until someone
+   * asks to look at what went past. Drawing on the alternate screen took the
+   * terminal's own scrollback away; this is what replaces it. */
+  private alternateScrollback = 0;
   private readonly alternateScreen = !classicScreen() && output.isTTY;
 
   constructor() {
@@ -1412,6 +1442,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
   ): void {
     this.stopWaiting(false);
+    // A new turn is the reader rejoining the conversation.
+    this.alternateScrollback = 0;
     this.liveResponse = '';
     // A running turn always renders as stable messages, its submitted user
     // prompt, then one live assistant slot. Keep that slot fixed for the
@@ -1835,19 +1867,42 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // its windowed history once. Everything already in scrollback -- the
       // shell's own output, the previous conversation -- stays where it is.
       this.emittedMessages = conversationMessageWindow(persistedMessages, undefined, []).messageStart;
+      this.lastEmittedMessage = undefined;
       this.emittedActivity.clear();
       this.retiredThisSession.clear();
       this.liveAssistantIndex = undefined;
       this.turnTranscript.reset();
       this.reseedTranscript = false;
     }
-    // More messages were retired than this turn's own list has, which is what
-    // a pending turn already materialized into the transcript looks like from
-    // here: its steers are in scrollback as real user messages, and scrollback
-    // cannot be unwritten, so the live copies of them are the ones to drop.
-    const materializedPendingTurn = this.emittedMessages > persistedMessages.length;
-    emit(standaloneActivity(this.emittedMessages));
-    for (let index = this.emittedMessages; index < persistedMessages.length; index += 1) {
+    // Where this list carries on from what has already been written.
+    //
+    // A count alone cannot answer that: the interactive loop hands the turn's
+    // own view of the conversation as `messages.slice(-40)`, so the array that
+    // arrives mid-turn is a WINDOW, not the whole transcript. Counting
+    // absolutely, a long conversation had already emitted more messages than
+    // the window contains, so the loop below started past its end and wrote
+    // nothing -- the message the user had just submitted included. It vanished
+    // as the answer to it streamed in underneath.
+    //
+    // The last message actually written identifies the seam wherever it sits,
+    // window or not. Searching from the end keeps a repeated sentence from
+    // rewinding the transcript to its first occurrence.
+    const messageKey = (message: { role: string; content: string }): string => `${message.role}:${message.content}`;
+    let firstUnwritten = Math.min(this.emittedMessages, persistedMessages.length);
+    if (this.lastEmittedMessage !== undefined) {
+      for (let index = persistedMessages.length - 1; index >= 0; index -= 1) {
+        if (messageKey(persistedMessages[index]!) === this.lastEmittedMessage) { firstUnwritten = index + 1; break; }
+      }
+    }
+    // More messages were retired than this turn's own list has, and none of
+    // them is the seam, which is what a pending turn already materialized into
+    // the transcript looks like from here: its steers are in scrollback as
+    // real user messages, and scrollback cannot be unwritten, so the live
+    // copies of them are the ones to drop.
+    const materializedPendingTurn = firstUnwritten >= persistedMessages.length
+      && this.emittedMessages > persistedMessages.length;
+    emit(standaloneActivity(firstUnwritten));
+    for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
       const message = persistedMessages[index]!;
       if (index === this.liveAssistantIndex && message.role === 'assistant') {
         // The answer that just streamed. Its rows are already in scrollback and
@@ -1866,6 +1921,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.liveAssistantIndex = undefined;
         this.turnTranscript.reset();
       }
+      this.lastEmittedMessage = messageKey(message);
       emit(['']);
       emit(standaloneActivity(index + 1));
     }
@@ -2076,7 +2132,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const height = this.viewportRows();
     const live = pending.live.slice(-height);
     const above = Math.max(0, height - live.length);
-    const rows = [...this.alternateTranscript.slice(-above), ...live];
+    // Scrolled back, the live region gives up its rows to the transcript:
+    // looking at what went past is the whole point, and the composer is not
+    // what is being read. A frame at offset zero is the conversation as it
+    // happens.
+    const scrolled = Math.min(this.alternateScrollback, Math.max(0, this.alternateTranscript.length - above));
+    const rows = scrolled > 0
+      ? [
+        ...this.alternateTranscript.slice(
+          Math.max(0, this.alternateTranscript.length - above - scrolled),
+          this.alternateTranscript.length - scrolled,
+        ),
+        ...live.slice(0, Math.max(0, height - above)),
+      ]
+      : [...this.alternateTranscript.slice(-above), ...live];
     while (rows.length < height) rows.unshift('');
     // Only what changed. A keystroke changes the composer's row and nothing
     // else, and rewriting the whole screen for it costs kilobytes per key on
@@ -2141,6 +2210,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.closed || this.suspended) return;
     output.write(`\u001b[${Math.max(1, row)};${Math.max(1, column)}H\u001b[?25h`);
   }
+
+  /** Move the viewport through the transcript. Positive scrolls back, and the
+   * conversation is followed again at zero, which every new frame returns to
+   * by itself once the reader lets go. Returns whether anything moved, so a
+   * key that cannot scroll any further still means something to the caller. */
+  scrollTranscript(rows: number): boolean {
+    if (!this.alternateScreen) return false;
+    const furthest = Math.max(0, this.alternateTranscript.length - 1);
+    const next = Math.max(0, Math.min(furthest, this.alternateScrollback + rows));
+    if (next === this.alternateScrollback) return false;
+    this.alternateScrollback = next;
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    return true;
+  }
+
+  /** True while the reader is looking at something other than the live end. */
+  get scrolledBack(): boolean { return this.alternateScrollback > 0; }
 
   /** Forget where on screen the live block sits: whoever writes next (the
    * shell, a vendor CLI, a resize) decides that now. */
@@ -2415,9 +2501,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           cursor = nextCharacterIndex(value, cursor);
           return draw();
         }
-        // Already handled above when the transcript owns navigation. While a
-        // command palette is open, consume these rather than editing text.
-        if (key === '\u001b[5~' || key === '\u001b[6~') return;
+        // Page keys read the conversation rather than edit the draft: the
+        // alternate screen has no terminal scrollback behind it, so this is
+        // the only way back through what was said. Shift+Up/Down does the
+        // same a row at a time. Esc, which already clears a draft, also
+        // returns to the live end.
+        const page = Math.max(1, this.viewportRows() - 3);
+        if (key === '\u001b[5~') { this.scrollTranscript(page); return; }
+        if (key === '\u001b[6~') { this.scrollTranscript(-page); return; }
+        if (isMouseEvent(key)) { this.scrollTranscript(wheelScrollRows(key)); return; }
+        if (key === '\u001b' && this.scrolledBack) { this.scrollTranscript(-Number.MAX_SAFE_INTEGER); return; }
         // Everything else is text editing, shared with the waiting composer.
         const edited = editComposer(value, cursor, key);
         if (!edited.changed) return;

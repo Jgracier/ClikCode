@@ -13,6 +13,8 @@ export const terminalModes: {
   /** Focus reporting (`CSI ?1004h`): what an interactive application sets, and
    * what a client reads to tell one from a shell. */
   focusReporting: boolean;
+  /** Wheel reporting (`CSI ?1000h` + SGR), for reading the transcript back. */
+  wheelReporting: boolean;
   /** Theme-change notifications (`CSI ?2031h`), set for the same reason. */
   themeNotifications: boolean;
   /** The UI is drawing on the alternate screen and owes the shell its own back. */
@@ -23,7 +25,7 @@ export const terminalModes: {
   /** Supplied by the live prompter: erases its composer and footer so whatever
    * is printed next (a stack trace, the shell prompt) starts on a clean row. */
   leaveLiveRegion?: () => string;
-} = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, themeNotifications: false, alternateScreen: false, rawMode: false, painted: false };
+} = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, wheelReporting: false, themeNotifications: false, alternateScreen: false, rawMode: false, painted: false };
 
 /** Leave the terminal the way a shell expects it: synchronized update closed,
  * kitty keyboard flags popped, bracketed paste off, autowrap on, cursor shown,
@@ -35,6 +37,7 @@ export function restoreTerminal(): void {
     if (terminalModes.kittyKeyboard) sequence += '\x1b[<u';
     if (terminalModes.bracketedPaste) sequence += '\x1b[?2004l';
     if (terminalModes.themeNotifications) sequence += '\x1b[?2031l';
+    if (terminalModes.wheelReporting) sequence += '\x1b[?1006l\x1b[?1000l';
     if (terminalModes.focusReporting) sequence += '\x1b[?1004l';
     if (terminalModes.painted) sequence += '\x1b[?7h\x1b[?25h';
     // Last, so everything above lands on the screen it was meant for.
@@ -44,6 +47,7 @@ export function restoreTerminal(): void {
     terminalModes.kittyKeyboard = false;
     terminalModes.bracketedPaste = false;
     terminalModes.focusReporting = false;
+    terminalModes.wheelReporting = false;
     terminalModes.themeNotifications = false;
     terminalModes.alternateScreen = false;
     terminalModes.rawMode = false;
