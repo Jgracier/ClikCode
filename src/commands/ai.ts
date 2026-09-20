@@ -1130,13 +1130,22 @@ export async function aiGatewayStatus(config: Conf): Promise<void> {
 const VALID_EFFORTS = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['ask', 'bypass', 'auto'];
 
+/** An option by id, falling back to the other spellings of whatever control
+ * owns that id. `--add-dir` and `--include-directories` are one concept, so
+ * asking any harness for `add-dir` must find the one it actually publishes --
+ * looking up the literal id is what made /add-dir refuse on Gemini and Qwen. */
 function optionForHarness(harness: AiLocalHarnessDefinition, id: string): AiHarnessOptionDefinition | undefined {
-  return localHarnessCapabilityManifest(harness).options.find((option) => option.id === id);
+  const options = localHarnessCapabilityManifest(harness).options;
+  const exact = options.find((option) => option.id === id);
+  if (exact) return exact;
+  const control = commonControlFor(id);
+  if (!control) return undefined;
+  const ids = optionIdsForControl(control);
+  return options.find((option) => ids.includes(option.id));
 }
 
 /** The option a ClikCode command drives on THIS harness, whatever the vendor
- * spells it. Looking it up by a literal id was why /add-dir could not reach
- * Gemini's and Qwen's `--include-directories`, which is the same control. */
+ * spells it. */
 function optionForControl(
   harness: AiLocalHarnessDefinition, control: string,
 ): AiHarnessOptionDefinition | undefined {
@@ -1170,11 +1179,14 @@ function setSessionHarnessOption(session: HarnessSession, harness: AiLocalHarnes
   const option = optionForHarness(harness, id);
   if (!option) throw new Error(`${harness.displayName} does not support option "${id}"`);
   const parsed = parseHarnessOption(option, raw);
-  if (id === 'model') session.model = String(parsed);
-  else if (id === 'effort') session.effort = String(parsed);
-  else if (id === 'workspace') session.workspace = String(parsed);
-  else if (id === 'permissions') session.permissionMode = String(parsed) as AiHarnessPermissionMode;
-  else session.harnessOptions = { ...(session.harnessOptions ?? {}), [id]: parsed };
+  // Keyed by the option the harness actually publishes, never by the id the
+  // caller asked for: a value stored under `add-dir` on a harness that spells
+  // it `include-directories` is a value no turn ever reads.
+  if (option.id === 'model') session.model = String(parsed);
+  else if (option.id === 'effort') session.effort = String(parsed);
+  else if (option.id === 'workspace') session.workspace = String(parsed);
+  else if (option.id === 'permissions') session.permissionMode = String(parsed) as AiHarnessPermissionMode;
+  else session.harnessOptions = { ...(session.harnessOptions ?? {}), [option.id]: parsed };
   if (option.requiresNewSession) {
     session.nativeSessionId = undefined;
     session.nativeStartedAt = undefined;

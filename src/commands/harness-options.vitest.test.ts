@@ -150,3 +150,44 @@ describe('a harness only ever shows its own options', () => {
     }
   });
 });
+
+describe('asking for a control by any of its spellings finds the right option', () => {
+  /** Mirrors ai.ts's optionForHarness: exact id, then the control's others. */
+  const resolve = (harness: typeof harnesses[number], id: string): Opt | undefined => {
+    const options = optionsOf(harness);
+    const exact = options.find((o) => o.id === id);
+    if (exact) return exact;
+    const control = commonControlFor(id);
+    if (!control) return undefined;
+    const ids = optionIdsForControl(control);
+    return options.find((o) => ids.includes(o.id));
+  };
+
+  it('resolves every spelling of a control on every harness that has one', () => {
+    for (const control of ['/model', '/permissions', '/effort', '/cwd', '/add-dir']) {
+      const ids = optionIdsForControl(control);
+      for (const harness of harnesses) {
+        const published = optionsOf(harness).find((o) => ids.includes(o.id));
+        if (!published) continue;
+        // Asking by ANY id this control owns must land on the published one.
+        for (const id of ids) {
+          expect(resolve(harness, id)?.id, `${harness.command}: ${id} did not resolve to ${published.id}`).toBe(published.id);
+        }
+      }
+    }
+  });
+
+  it('reaches Gemini and Qwen through the id the other five use', () => {
+    for (const command of ['gemini', 'qwen']) {
+      const harness = harnesses.find((h) => h.command === command)!;
+      expect(resolve(harness, 'add-dir')?.id).toBe('include-directories');
+    }
+  });
+
+  it('still refuses an option the harness genuinely does not have', () => {
+    // The fallback must not invent a control where the harness publishes none.
+    const amp = harnesses.find((h) => h.command === 'amp')!;
+    expect(optionsOf(amp).some((o) => optionIdsForControl('/add-dir').includes(o.id))).toBe(false);
+    expect(resolve(amp, 'add-dir')).toBeUndefined();
+  });
+});
