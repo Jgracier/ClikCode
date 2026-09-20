@@ -383,28 +383,58 @@ let inputLogLines = 0;
  * startup cannot spend the budget that would have recorded the swipe. */
 const FRAME_LOG_LINES = 60;
 const INPUT_LOG_LINES = 2_000;
-/** Every byte this process writes to the terminal, with a timestamp, when
- * CLIKCODE_TRACE_OUT=1. Diagnostic only, and off by default.
+/** Every byte in and out of the terminal, timestamped, when CLIKCODE_TRACE=1.
+ * Off by default; written to ~/.clikcode/terminal-trace.log at exit.
  *
- * The one thing no recorder can capture: putting a pty between this and the
- * client changes the behaviour being investigated -- recorded, a swipe with
- * the keyboard hidden reaches this program; run directly, it does not. So the
- * trace has to come from inside. Reads ~/.clikcode/output-trace.log. */
+ * It lives inside the program because no recorder can capture this one: a pty
+ * between here and the client changes the behaviour under investigation --
+ * recorded through one, a keyboard-hidden swipe reaches this program; run
+ * directly, it does not. */
 let traceInstalled = false;
+const traceBuffer: string[] = [];
+const TRACE_MAX_ENTRIES = 40_000;
+/** Both directions of the terminal conversation, buffered in memory and
+ * written out once at exit. CLIKCODE_TRACE=1.
+ *
+ * Buffered, not appended per event, and that is the whole point. The first
+ * version of this wrote each chunk to disk as it happened -- and the bug under
+ * investigation stopped reproducing while it was on, because a synchronous
+ * file write before every terminal write is itself a change to the timing
+ * being measured. A trace that alters the thing it measures is not evidence.
+ *
+ * It records reads as well as writes, to settle the one question the cursor
+ * log cannot: whether the client sends nothing during a keyboard-hidden swipe,
+ * or sends and this program never reads it. The cursor log only shows keys
+ * that reached the dispatcher, so silence there means either. */
+function traceEvent(direction: 'out' | 'in', chunk: string): void {
+  if (!traceInstalled || traceBuffer.length >= TRACE_MAX_ENTRIES) return;
+  traceBuffer.push(`${Date.now() / 1000} ${direction} ${JSON.stringify(chunk)}`);
+}
+
+export function flushTerminalTrace(): void {
+  if (!traceInstalled || !traceBuffer.length) return;
+  try {
+    const path = join(homedir(), '.clikcode', 'terminal-trace.log');
+    mkdirSync(join(homedir(), '.clikcode'), { recursive: true });
+    appendFileSync(path, `${traceBuffer.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch { /* fail-open-ok: diagnostics must never break the UI */ }
+  traceBuffer.length = 0;
+}
+
 function installOutputTrace(): void {
-  if (traceInstalled || process.env.CLIKCODE_TRACE_OUT !== '1' || process.env.VITEST) return;
+  if (traceInstalled || process.env.CLIKCODE_TRACE !== '1' || process.env.VITEST) return;
   traceInstalled = true;
-  const path = join(homedir(), '.clikcode', 'output-trace.log');
-  try { mkdirSync(join(homedir(), '.clikcode'), { recursive: true }); } catch { /* fail-open-ok */ }
   const original = output.write.bind(output);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a faithful passthrough of stream.write's overloads
   (output as any).write = (chunk: any, ...rest: any[]): boolean => {
-    try {
-      appendFileSync(path, `${Date.now() / 1000} ${JSON.stringify(String(chunk))}\n`, { encoding: 'utf8', mode: 0o600 });
-    } catch { /* fail-open-ok: diagnostics must never break the UI */ }
+    traceEvent('out', String(chunk));
     // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any
     return (original as any)(chunk, ...rest);
   };
+  // Earliest possible point on the read side: before any decoding, filtering
+  // or dispatch, so "nothing arrived" cannot be confused with "we dropped it".
+  input.on('data', (chunk: Buffer | string) => traceEvent('in', String(chunk)));
+  process.on('exit', flushTerminalTrace);
 }
 
 export function logCursorEvent(line: string): void {
