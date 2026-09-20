@@ -17,7 +17,7 @@ import { TranscriptStream } from './transcript-stream.js';
 import { TurnTranscript, type SettlingTool } from './turn-transcript.js';
 import { nativeModelLabel } from './native-account-data.js';
 import type { LiveTurnInputResult } from './live-turn-input.js';
-import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBlock, PickerOption } from './types.js';
+import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBlock, PickerOption, ToolCategory } from './types.js';
 
 export { restoreTerminal };
 
@@ -168,6 +168,51 @@ function normalizeTerminalKey(key: string): string {
   return key;
 }
 
+/** `ESC [ row ; column R` is the terminal answering DSR, never a keystroke. */
+export function cursorPositionReport(key: string): { row: number; column: number } | undefined {
+  const match = /^\u001b\[(\d+);(\d+)R$/.exec(key);
+  return match ? { row: Number(match[1]), column: Number(match[2]) } : undefined;
+}
+
+const cursorReportWaiters = new Set<(report: { row: number; column: number }) => void>();
+
+/** How many rows the terminal REALLY has, asked of the terminal itself.
+ *
+ * The size SSH reports is the size the client chose to announce. A mobile
+ * client that drops a keyboard bar over the bottom rows commonly announces
+ * nothing at all, and a live region laid out for rows that are not there
+ * makes every relative motion in the frame clamp at the screen's top edge:
+ * the walk back up lands below the composer, and rows the next frame means to
+ * erase survive underneath it. `CSI 999;999H` clamps to the real last row,
+ * and DECSC/DECRC put the cursor back, so nothing on screen moves.
+ *
+ * Resolves undefined on a terminal that does not answer, which simply leaves
+ * the announced size in charge. */
+export function measureViewportRows(timeoutMs = 250): Promise<number | undefined> {
+  if (!output.isTTY || !input.isTTY) return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    const waiter = (report: { row: number; column: number }): void => finish(report.row);
+    const timer = setTimeout(() => finish(undefined), timeoutMs);
+    timer.unref();
+    function finish(rows: number | undefined): void {
+      clearTimeout(timer);
+      cursorReportWaiters.delete(waiter);
+      input.off('data', onData);
+      resolve(rows && rows > 0 ? rows : undefined);
+    }
+    // The key loop is only listening while a prompt is open, so the reply is
+    // read directly as well; whichever arrives first wins and the other is a
+    // no-op.
+    const onData = (chunk: Buffer | string): void => {
+      const report = cursorPositionReport(String(chunk));
+      if (report) finish(report.row);
+    };
+    cursorReportWaiters.add(waiter);
+    input.on('data', onData);
+    output.write('\u001b7\u001b[999;999H\u001b[6n\u001b8');
+  });
+}
+
 /** Stateful decoder for mobile/remote terminals, where one key's escape
  * sequence and even one UTF-8 character may be split across data chunks. */
 export class TerminalInputDecoder {
@@ -257,7 +302,17 @@ export class TerminalInputDecoder {
 function listenForTerminalKeys(onKey: (key: string) => void): () => void {
   const decoder = new TerminalInputDecoder();
   let flushTimer: NodeJS.Timeout | undefined;
-  const deliver = (keys: readonly string[]): void => { for (const key of keys) onKey(key); };
+  const deliver = (keys: readonly string[]): void => {
+    for (const key of keys) {
+      // A DSR reply is the terminal talking back, not the user typing.
+      const report = cursorPositionReport(key);
+      if (report) {
+        for (const waiter of [...cursorReportWaiters]) waiter(report);
+        continue;
+      }
+      onKey(key);
+    }
+  };
   const onData = (chunk: Buffer | string): void => {
     if (flushTimer) clearTimeout(flushTimer);
     deliver(decoder.push(chunk));
@@ -583,6 +638,9 @@ export function upsertActivityEvent(
     const effective = {
       ...normalized,
       ...(normalized.label === 'tool' ? { label: prior.event!.label } : {}),
+      // A completion frame routinely carries neither the name nor the input
+      // the category was derived from. The row keeps what its start knew.
+      ...(normalized.category ? {} : prior.event?.category ? { category: prior.event.category } : {}),
       ...(normalized.diff ? {} : prior.event?.diff ? { diff: prior.event.diff } : {}),
     };
     next[matchIndex] = { ...prior, event: effective, lines: renderActivityLine(effective).map((line) => line.trim()) };
@@ -618,20 +676,46 @@ export function rebaseActivityOffsets(
 /** Derive the spinner from the whole in-flight tool set rather than the most
  * recent provider event. A reasoning summary or one parallel completion must
  * not claim the agent is merely thinking while another tool is still live. */
+/** One place decides how a category looks and reads, for the retired row, the
+ * running row and the spinner alike. The glyph stays the same for every
+ * category on purpose: the shape is the transcript's, the colour is the
+ * tool's. Nothing is spelled out in front of a label -- the label already
+ * says `Read(...)` or `Bash(...)`, so colour is an aid here, not the only
+ * carrier, and a NO_COLOR terminal loses nothing it needs. */
+export const TOOL_CATEGORY_STYLE: Record<ToolCategory, { paint: (text: string) => string; verb: string }> = {
+  read: { paint: (text) => chalk.blue(text), verb: 'reading' },
+  edit: { paint: (text) => chalk.magenta(text), verb: 'editing' },
+  run: { paint: (text) => chalk.yellow(text), verb: 'running' },
+  search: { paint: (text) => chalk.cyan(text), verb: 'searching' },
+  fetch: { paint: (text) => chalk.green(text), verb: 'fetching' },
+};
+
+/** An unclassified tool keeps exactly the dim bullet it has always had. */
+export const paintToolGlyph = (category: ToolCategory | undefined, glyph: string): string =>
+  (category ? TOOL_CATEGORY_STYLE[category].paint(glyph) : chalk.dim(glyph));
+
 export function activityLifecyclePhase(
-  activeTools: ReadonlyMap<string, string>, event: HarnessActivityEvent,
-): { activeTools: Map<string, string>; phase: string } {
+  activeTools: ReadonlyMap<string, { label: string; category?: ToolCategory }>, event: HarnessActivityEvent,
+): { activeTools: Map<string, { label: string; category?: ToolCategory }>; phase: string; category?: ToolCategory } {
   const next = new Map(activeTools);
   const key = event.id ?? event.label;
-  if (event.kind === 'tool-start') next.set(key, event.label);
+  if (event.kind === 'tool-start') next.set(key, { label: event.label, ...(event.category ? { category: event.category } : {}) });
   else if (event.kind === 'tool-done' || event.kind === 'tool-error') {
     if (!next.delete(key) && !event.id) {
-      const matchingKey = [...next].reverse().find(([, label]) => label === event.label)?.[0];
+      const matchingKey = [...next].reverse().find(([, tool]) => tool.label === event.label)?.[0];
       if (matchingKey) next.delete(matchingKey);
     }
   }
   const running = [...next.values()];
-  return { activeTools: next, phase: running.length ? `running ${running[running.length - 1]}` : 'thinking' };
+  const current = running[running.length - 1];
+  if (!current) return { activeTools: next, phase: 'thinking' };
+  // The verb is what the tool is doing, not a generic "running" for
+  // everything. An unclassified tool keeps the word it always had.
+  const verb = current.category ? TOOL_CATEGORY_STYLE[current.category].verb : 'running';
+  return {
+    activeTools: next, phase: `${verb} ${current.label}`,
+    ...(current.category ? { category: current.category } : {}),
+  };
 }
 
 export function transientAssistantRequired(
@@ -836,7 +920,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingLabel = '';
   private waitingStartedAt = 0;
   private activityEntries: ActivityEntry[] = [];
-  private activeTools = new Map<string, string>();
+  private activeTools = new Map<string, { label: string; category?: ToolCategory }>();
+  /** Category of the tool the waiting band is currently reporting, so the
+   * spinner is tinted by what is actually happening. */
+  private waitingCategory?: ToolCategory;
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
@@ -882,6 +969,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * first frame of a newly opened session. */
   private reseedTranscript: false | 'first' | 'scroll-away' = 'first';
   private lastColumns = output.columns || 0;
+  /** The terminal's real height when it answers DSR; see measureViewportRows. */
+  private measuredRows?: number;
+  private measuring = false;
   private usageLabel?: string;
   private usageResetLabel?: string;
   private selecting = false;
@@ -1003,9 +1093,33 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // was written and never guessed upward. Both reference implementations
       // have this same limit, for this same reason.
       this.lastColumns = output.columns || 0;
+      this.measuredRows = undefined;
+      this.remeasureViewport();
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
     }
   };
+
+  /** Never taller than the screen actually is: a live region that overflows
+   * makes the walk back up to the composer clamp at the top edge, which is
+   * what parks the cursor on the status line and strands rows below it. The
+   * announced size is the ceiling -- a terminal that answers with more rows
+   * than it announced is not offering rows we may use. */
+  private viewportRows(): number {
+    const announced = output.rows || 30;
+    return Math.max(5, this.measuredRows ? Math.min(announced, this.measuredRows) : announced);
+  }
+
+  /** One probe in flight at a time; the answer repaints at the real height. */
+  private remeasureViewport(): void {
+    if (this.measuring || this.closed || this.suspended) return;
+    this.measuring = true;
+    void measureViewportRows().then((rows) => {
+      this.measuring = false;
+      if (this.closed || rows === this.measuredRows) return;
+      this.measuredRows = rows;
+      if (rows !== undefined) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    }).catch(() => { this.measuring = false; });
+  }
 
   constructor() {
     // Nothing is cleared. The user's scrollback and whatever the shell printed
@@ -1090,6 +1204,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
     const lifecycle = activityLifecyclePhase(this.activeTools, event);
     this.activeTools = lifecycle.activeTools;
+    this.waitingCategory = lifecycle.category;
     this.phase(lifecycle.phase);
     this.schedulePaint();
   }
@@ -1129,6 +1244,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
   ): void {
     this.stopWaiting(false);
+    this.remeasureViewport();
     this.liveResponse = '';
     // A running turn always renders as stable messages, its submitted user
     // prompt, then one live assistant slot. Keep that slot fixed for the
@@ -1147,6 +1263,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingCursor = 0;
     this.waitingSubmissions = [];
     this.activeTools.clear();
+    this.waitingCategory = undefined;
     this.waitingCancelled = false;
     this.waitingFrame = 0;
     this.waitingStartedAt = Date.now();
@@ -1316,7 +1433,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // What the agent is doing is essential and stays at full contrast; only the
     // counters and key hints after it are dimmed.
     const split = label.indexOf(' (');
-    return `${chalk.cyanBright(waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame))}  ${label.slice(0, split)}${chalk.dim(label.slice(split))}`;
+    // One spinner, one motion, for every harness and every tool -- the shape
+    // is the standard, the colour is what kind of work is running.
+    const spinner = waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
+    const tinted = this.waitingCategory ? TOOL_CATEGORY_STYLE[this.waitingCategory].paint(spinner) : chalk.cyanBright(spinner);
+    return `${tinted}  ${label.slice(0, split)}${chalk.dim(label.slice(split))}`;
   }
 
   private updateWaiting(): void {
@@ -1396,7 +1517,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.
-    const targetHeight = Math.max(5, output.rows || 30);
+    const targetHeight = this.viewportRows();
     const requestedPaletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
     // Keep generation at the response's live edge, directly above the
     // composer. It is a fixed status band, not transcript content, so a long
@@ -1465,8 +1586,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
     };
     const userMarker = chalk.bold('›');
-    const activityRows = (lines: readonly string[]): string[] => (lines.length
-      ? ['', ...lines.map((line) => `${chalk.dim('·')} ${visibleSlice(line, Math.max(1, conversationInner - 2))}`), '']
+    const activityRows = (lines: readonly string[], category?: ToolCategory): string[] => (lines.length
+      ? ['', ...lines.map((line) => `${paintToolGlyph(category, '·')} ${visibleSlice(line, Math.max(1, conversationInner - 2))}`), '']
       : []);
     const messageRows = (content: string, marker: string): string[] =>
       renderMessageBlocks(splitIntoBlocks(sanitizeTerminalText(content)), marker, conversationInner);
@@ -1482,7 +1603,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const id = entry.sequence;
         if (id === undefined || this.emittedActivity.has(id)) continue;
         this.emittedActivity.add(id);
-        rows.push(...activityRows(entry.lines));
+        rows.push(...activityRows(entry.lines, entry.event?.category));
       }
       return rows;
     };
@@ -1502,7 +1623,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         .filter((entry) => ended || entry.event?.kind !== 'tool-start')
         .map((entry) => ({
           id: entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`,
-          done: true, responseOffset: entry.responseOffset, lines: activityRows(entry.lines),
+          done: true, responseOffset: entry.responseOffset, lines: activityRows(entry.lines, entry.event?.category),
         }));
       const steerRows = (text: string): string[] => [
         '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '',
@@ -1660,10 +1781,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // frame the block completes.
     const maxLiveConversation = Math.max(0, targetHeight - footer.length);
     const liveConversationRows = Math.min(conversationLines.length, maxLiveConversation);
-    const live = [...(maxLiveConversation ? conversationLines.slice(-maxLiveConversation) : []), ...footer];
+    const unbounded = [...(maxLiveConversation ? conversationLines.slice(-maxLiveConversation) : []), ...footer];
+    // The hard invariant every relative motion in a frame depends on: the
+    // live region fits on screen. maxLiveConversation only bounds the
+    // conversation half, so a footer taller than the viewport (a palette and
+    // an approval block on a short phone screen) would still overflow, and an
+    // overflowing block cannot be walked back up -- the terminal stops at its
+    // top row and the cursor stays that many rows low. Dropping from the top
+    // costs context; not dropping costs a working cursor.
+    const overflow = Math.max(0, unbounded.length - targetHeight);
+    const live = overflow ? unbounded.slice(overflow) : unbounded;
     const cursorRow = palette?.hideCursor
       ? Math.max(0, live.length - 1)
-      : liveConversationRows + composerStart + composerRows.cursorRow;
+      : Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
     const cursorColumn = palette?.hideCursor ? 1 : 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
     this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
   }
@@ -1800,6 +1930,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
     }
+    // The phone keyboard (and its accessory bar) can appear between prompts
+    // without the client announcing a new size, so the height is re-checked
+    // here rather than once at startup.
+    this.remeasureViewport();
     return new Promise((resolveQuestion, rejectQuestion) => {
       let value = this.queuedDraft ?? '';
       this.queuedDraft = undefined;
