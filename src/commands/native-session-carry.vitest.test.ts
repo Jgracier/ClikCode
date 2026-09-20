@@ -1,7 +1,7 @@
 /** A vendor session belongs to the account whose profile it was written in.
  * Carrying the one file across is what lets a quota failover resume the
  * thread instead of seeding a fresh one with a retelling of it. */
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -56,6 +56,38 @@ describe('carrying a vendor session between account profiles', () => {
 
     expect(carried).toBe(join(to, day, name));
     await expect(readFile(carried!, 'utf8')).resolves.toBe('{"type":"response_item"}\n');
+  });
+
+  it('updates the copy waiting in a profile the conversation returns to', async () => {
+    // A -> B -> A: A still holds the copy it had when the conversation left,
+    // one switch out of date. Everything said while B owned the thread is only
+    // in B's file, and the resume has to read that.
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
+    const a = join(root, 'account-a');
+    const b = join(root, 'account-b');
+    const project = WORKSPACE.replace(/[^a-zA-Z0-9]/g, '-');
+    const file = (home: string): string => join(home, 'projects', project, 'session-one.jsonl');
+    await mkdir(join(a, 'projects', project), { recursive: true });
+    await writeFile(file(a), '{"turn":1}\n', 'utf8');
+
+    const carry = (from: string, to: string): ReturnType<typeof carryNativeSession> => carryNativeSession({
+      harness: harnessFor('claude'),
+      nativeId: 'session-one',
+      workspace: WORKSPACE,
+      from: { CLAUDE_CONFIG_DIR: from },
+      to: { CLAUDE_CONFIG_DIR: to },
+    });
+
+    await expect(carry(a, b)).resolves.toBe(file(b));
+    // The thread keeps working under B, which appends to B's copy.
+    await writeFile(file(b), '{"turn":1}\n{"turn":2}\n{"turn":3}\n', 'utf8');
+
+    await expect(carry(b, a)).resolves.toBe(file(a));
+    await expect(readFile(file(a), 'utf8')).resolves.toBe('{"turn":1}\n{"turn":2}\n{"turn":3}\n');
+    // And carrying the same file again is a no-op, not a rewrite.
+    const before = (await stat(file(a))).mtimeMs;
+    await expect(carry(b, a)).resolves.toBe(file(a));
+    expect((await stat(file(a))).mtimeMs).toBe(before);
   });
 
   it('reports nothing to carry rather than failing', async () => {
