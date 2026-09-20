@@ -23,22 +23,26 @@ export const terminalModes: {
   rawMode: boolean;
   /** A frame hid the cursor / disabled autowrap / opened a synchronized update. */
   painted: boolean;
+  /** A terminal UI took this terminal, so it owes the shell a full restore --
+   * every mouse mode and the state a client latches, not only what a flag here
+   * happened to record. A process that never drew writes nothing. */
+  uiStarted: boolean;
   /** Supplied by the live prompter: erases its composer and footer so whatever
    * is printed next (a stack trace, the shell prompt) starts on a clean row. */
   leaveLiveRegion?: () => string;
-} = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, wheelReporting: false, themeNotifications: false, alternateScreen: false, rawMode: false, painted: false };
+} = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, wheelReporting: false, themeNotifications: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false };
 
 /** Leave the terminal the way a shell expects it: synchronized update closed,
  * kitty keyboard flags popped, bracketed paste off, autowrap on, cursor shown,
  * cooked mode. Idempotent, and never throws -- it runs inside crash handlers. */
-export function restoreTerminal(): void {
+export function restoreTerminal(options: { sync?: boolean } = {}): void {
   try {
     // Nothing was ever switched on, so there is nothing to put back -- and a
     // process that never drew must not write escape sequences into a shell it
     // was only ever piped through. This is also what keeps repeat calls silent.
-    const touched = terminalModes.painted || terminalModes.kittyKeyboard || terminalModes.bracketedPaste
-      || terminalModes.themeNotifications || terminalModes.wheelReporting || terminalModes.focusReporting
-      || terminalModes.alternateScreen || terminalModes.rawMode;
+    const touched = terminalModes.uiStarted || terminalModes.painted || terminalModes.kittyKeyboard
+      || terminalModes.bracketedPaste || terminalModes.themeNotifications || terminalModes.wheelReporting
+      || terminalModes.focusReporting || terminalModes.alternateScreen || terminalModes.rawMode;
     if (!touched) {
       if (input.isRaw && input.isTTY && typeof input.setRawMode === 'function') input.setRawMode(false);
       return;
@@ -68,6 +72,7 @@ export function restoreTerminal(): void {
     // Last, so everything above lands on the screen it was meant for.
     if (terminalModes.alternateScreen) sequence += '\x1b[?1049l';
     const wasRaw = terminalModes.rawMode;
+    terminalModes.uiStarted = false;
     terminalModes.painted = false;
     terminalModes.kittyKeyboard = false;
     terminalModes.bracketedPaste = false;
@@ -78,11 +83,14 @@ export function restoreTerminal(): void {
     terminalModes.rawMode = false;
     terminalModes.leaveLiveRegion = undefined;
     if (sequence && output.isTTY) {
-      // writeSync, not output.write: this runs from signal handlers that
-      // re-raise immediately, and a queued stream write is simply lost when
-      // the process dies. Measured -- a SIGTERM produced no teardown at all,
-      // not one sequence, with the handler installed and running.
-      try { writeSync(output.fd, sequence); } catch { output.write(sequence); }
+      // From a signal handler the process dies immediately after this, and a
+      // queued stream write is simply lost -- measured, a SIGTERM produced no
+      // teardown at all. writeSync goes straight to the descriptor. Everywhere
+      // else the stream is used, because that is what the rest of the UI (and
+      // the test terminal) writes through.
+      if (options.sync) {
+        try { writeSync(output.fd, sequence); } catch { output.write(sequence); }
+      } else output.write(sequence);
     }
     // `isRaw` covers reads (pickers) that entered raw mode without recording it.
     if ((wasRaw || input.isRaw) && input.isTTY && typeof input.setRawMode === 'function') input.setRawMode(false);
@@ -110,7 +118,7 @@ export function installTerminalRestoreSignals(): void {
   restoreSignalsInstalled = true;
   for (const signal of RESTORE_SIGNALS) {
     process.on(signal, () => {
-      restoreTerminal();
+      restoreTerminal({ sync: true });
       process.removeAllListeners(signal);
       process.kill(process.pid, signal);
     });
