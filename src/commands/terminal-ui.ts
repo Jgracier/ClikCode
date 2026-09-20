@@ -115,8 +115,8 @@ export function wheelScrollRows(key: string): number {
     : LEGACY_MOUSE_EVENT.test(key) ? (key.charCodeAt(LEGACY_MOUSE_PREFIX.length) - 32) : undefined;
   if (button === undefined) return 0;
   // Three rows a notch, the rate a terminal scrolls its own scrollback at.
-  if (button === 64) return 3;
-  if (button === 65) return -3;
+  if (button === 64) return SWIPE_ROWS;
+  if (button === 65) return -SWIPE_ROWS;
   return 0;
 }
 export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key) || LEGACY_MOUSE_EVENT.test(key);
@@ -150,6 +150,9 @@ const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
+/** Rows one notch of a wheel, or one arrow press standing in for a swipe,
+ * moves the transcript. The rate a terminal scrolls its own scrollback at. */
+const SWIPE_ROWS = 3;
 
 /** Sequences for entering an interactive read. The kitty flag is pushed at most
  * once however many reads start, so one pop always restores the user's own. */
@@ -2290,6 +2293,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const page = Math.max(1, this.viewportRows() - 3);
     if (key === '\u001b[5~') { this.scrollTranscript(page); return true; }
     if (key === '\u001b[6~') { this.scrollTranscript(-page); return true; }
+    // Arrows, while a turn runs and the draft is empty. Recorded from a real
+    // client: it sends no mouse report for a swipe in any encoding, however
+    // the mode is requested -- it sends an arrow key. A phone keyboard has no
+    // page keys either, so without this there is no way to read back at all
+    // on that client. An empty draft is what makes it unambiguous: with text
+    // in it, the arrows still move the cursor through it.
+    if (this.waitingLabel && !this.waitingDraft) {
+      if (key === '\u001b[A') { this.scrollTranscript(SWIPE_ROWS); return true; }
+      if (key === '\u001b[B') { this.scrollTranscript(-SWIPE_ROWS); return true; }
+    }
     return false;
   }
 
