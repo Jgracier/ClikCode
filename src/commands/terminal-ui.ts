@@ -1354,10 +1354,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.draftPrompt = prompt;
     this.draftCursor = cursor;
     this.draftPalette = palette ? { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } : undefined;
-    // No -1 margin: DEC autowrap is off for this whole frame (see the
-    // `\u001b[?7l` at the top of it), so the real last column is safe to
-    // use, not just columns-1.
+    // The last column is never printed in. DEC autowrap is off for this whole
+    // frame (the `\u001b[?7l` at the top of it), which makes filling it safe
+    // on a terminal that honours that -- but several mobile SSH clients, and
+    // anything that filters the mode out in between, wrap eagerly instead and
+    // turn a full-width row into two. Every motion in a frame is relative, so
+    // each such row put the walk back up to the composer one row out, which is
+    // what parked the cursor on the status line below the composer instead of
+    // in it. Costing one column is a far better trade than that.
     const width = Math.max(12, output.columns || 100);
+    const rowWidth = width - 1;
     const inner = width - 4;
     // The conversation transcript gets its own, tighter margin: a bare
     // marker-and-space (2 columns) instead of inner's extra 2-space wrapper
@@ -1367,8 +1373,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // noticeably narrower and "bleaker" for no real reason; this doesn't
     // touch inner itself, so the notice/composer/meta lines below (which
     // share it) are unaffected.
-    const conversationInner = width - 2;
-    const rule = chalk.dim('─'.repeat(width));
+    const conversationInner = rowWidth - 2;
+    const rule = chalk.dim('─'.repeat(rowWidth));
     const stableMessages = session.messages ?? [];
     const pending = this.waitingLabel ? session.pendingTurn : undefined;
     const persistedMessages = pending
@@ -1633,7 +1639,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. Keeping it out of the provider/model/directory row makes
     // the two quota windows easy to scan without adding another footer row.
-    footer.push(chalk.dim(rightLabeledRule(width, this.usageLabel)));
+    footer.push(chalk.dim(rightLabeledRule(rowWidth, this.usageLabel)));
     const composerStart = footer.length;
     for (const [index, row] of composerRows.rows.entries()) {
       footer.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
@@ -1644,7 +1650,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // rule rather than needing a line of its own. Provider/model/directory
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
-    footer.push(chalk.dim(rightLabeledRule(width, this.titleText())));
+    footer.push(chalk.dim(rightLabeledRule(rowWidth, this.titleText())));
     footer.push(`  ${chalk.dim(visibleSlice(meta, inner))}`);
 
     // The live region is bounded by the viewport: it is erased and redrawn as
@@ -1669,9 +1675,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     finished: readonly string[], live: readonly string[], cursorRow: number, cursorColumn: number, hideCursor: boolean,
   ): void {
     // Last line of defence: whatever produced a row, the only escape sequences
-    // that reach the terminal are SGR colors, and no row contains a control
-    // character that would move the cursor out from under the live region.
-    const safeRow = (row: string): string => closeOpenHyperlink(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }));
+    // that reach the terminal are SGR colors, no row contains a control
+    // character that would move the cursor out from under the live region, and
+    // no row reaches the terminal's last column -- a row that fills it wraps
+    // into a second one wherever DECAWM-off is not honoured, and every
+    // relative motion in the frame after it is then one row out. The layout
+    // above already budgets for this; clipping here means a new row builder
+    // cannot reintroduce it.
+    const limit = Math.max(1, (output.columns || 100) - 1);
+    const safeRow = (row: string): string =>
+      closeOpenHyperlink(visibleSlice(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }), limit));
     // Frames that coalesce while a write drains accumulate their finished rows
     // instead of replacing them. A live row dropped here is drawn again by the
     // frame that replaces it; a retired row would simply be lost.
