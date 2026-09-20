@@ -6,7 +6,7 @@ import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import {
-  closeOpenHyperlink, composerLayout, createStreamingBlockParser, LruCache, nextCharacterIndex, previousCharacterIndex,
+  closeOpenHyperlink, composerLayout, createStreamingBlockParser, nextCharacterIndex, previousCharacterIndex,
   renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock,
   sanitizeTerminalText, splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine, wrapWords,
 } from './markdown-render.js';
@@ -521,64 +521,6 @@ export function rightLabeledRule(width: number, label?: string): string {
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
 }
 
-/** `commitThrough` is where provisional content begins: the live assistant and
- * any queued turns. Those rows are drawn from state that is about to change --
- * a queued turn becomes a real user message the moment it is sent -- so
- * promoting them into native scrollback paints them a second time when they
- * become real, stranding the first copy above the running turn's own output.
- * Native scrollback may only ever receive rows that are already persisted. */
-export function inlineConversationPlan(
-  permanent: readonly string[], current: readonly string[], commit: boolean, maxDynamic: number,
-  promoteThrough = permanent.length, commitThrough = current.length,
-): { reset: boolean; dynamic: string[]; permanent: string[] } {
-  const prefixMatches = permanent.every((line, index) => current[index] === line);
-  // A transient state can briefly omit the pending assistant between
-  // stopWaiting() and the authoritative persisted render. Never erase real
-  // scrollback for that intermediate frame; the next commit reconciles it.
-  if (!prefixMatches && !commit) {
-    return { reset: false, dynamic: [], permanent: [...permanent] };
-  }
-  const previous = prefixMatches ? [...permanent] : [];
-  const overflowBoundary = Math.max(previous.length, current.length - Math.max(0, maxDynamic));
-  const promotedBoundary = Math.min(promoteThrough, overflowBoundary);
-  const committed = Math.max(previous.length, Math.min(commitThrough, current.length));
-  const nextPermanent = commit
-    ? current.slice(0, committed)
-    : current.slice(0, Math.max(previous.length, Math.min(promotedBoundary, commitThrough)));
-  const uncommitted = commit ? current.slice(committed) : current.slice(previous.length);
-  return {
-    reset: !prefixMatches,
-    dynamic: uncommitted.slice(-Math.max(0, maxDynamic)),
-    permanent: nextPermanent,
-  };
-}
-
-/** A reset starts at the terminal home position. Fill only the unused rows
- * above the frame so its footer/composer remains attached to the viewport's
- * bottom edge without turning those blank rows into persisted transcript. */
-export function bottomAnchoredLines(lines: readonly string[], height: number): string[] {
-  return [...Array.from({ length: Math.max(0, height - lines.length) }, () => ''), ...lines];
-}
-
-/** Retained for callers and tests that reason about a bottom-anchored viewport;
- * the prompter itself now repaints cursor-relative (see inlineFrameDiff).
- *
- * Absolute viewport geometry for an incremental repaint. Completed prefix
- * rows stay above the new live region; growth scrolls only enough rows to
- * make that possible. The live region itself always starts at the row that
- * makes its final row equal the terminal's bottom row. */
-export function bottomAnchoredFrameGeometry(
-  height: number, previousDynamicRows: number, permanentRows: number, dynamicRows: number,
-): { scrollRows: number; clearStartRow: number; dynamicStartRow: number } {
-  const viewportHeight = Math.max(1, height);
-  const dynamicStartRow = dynamicRows ? Math.max(1, viewportHeight - dynamicRows + 1) : viewportHeight;
-  if (!previousDynamicRows) return { scrollRows: 0, clearStartRow: dynamicStartRow, dynamicStartRow };
-  const previousStartRow = Math.max(1, viewportHeight - previousDynamicRows + 1);
-  const scrollRows = Math.max(0, previousStartRow + permanentRows - dynamicStartRow);
-  const clearStartRow = Math.min(dynamicStartRow, previousStartRow - scrollRows + permanentRows);
-  return { scrollRows, clearStartRow: Math.max(1, clearStartRow), dynamicStartRow };
-}
-
 /** A live response must end on content, not its decorative separator. On a
  * short mobile viewport the last replaceable row may be the only row visible. */
 export function liveConversationLines(lines: readonly string[], live: boolean): string[] {
@@ -601,75 +543,11 @@ export function conversationMessageWindow<T>(
   };
 }
 
-export type InlineResponseEvent =
-  | { kind: 'activity'; responseOffset: number; sequence?: number; lines: string[] }
-  | { kind: 'steer'; responseOffset: number; sequence?: number; text: string };
-export type ResponseTimelinePart = { kind: 'markdown'; block: MessageBlock } | InlineResponseEvent;
-export type ActivityEntry = { anchor: number; responseOffset?: number; sequence?: number; event?: HarnessActivityEvent; lines: string[] };
-/** `viewport` repaints one screen (a width change re-wraps every row, so what
- * is on screen is wrong, but re-dumping the transcript on every resize would
- * flood scrollback). `history` writes the whole windowed transcript once: the
- * first frame of a process and the first frame of a newly opened session. */
-export type InlineReset = false | 'viewport' | 'history';
-type InlineFrameState = {
-  permanent: string[]; dynamic: string[]; cursorRow: number; cursorColumn: number; reset: InlineReset; hideCursor: boolean;
-  targetHeight: number;
-};
-
-/** Cursor-relative repaint of the live region. `previous` is what the last
- * frame left on screen with the cursor parked on `previousCursorRow` of it;
- * `appended` are rows entering permanent scrollback directly above the new
- * live rows. Nothing here addresses an absolute screen row, so the region can
- * start wherever the shell left the cursor and the terminal scrolls naturally
- * when the content reaches its bottom edge.
- *
- * Rows are compared, not blindly rewritten: a spinner tick touches one row. A
- * height change erases only from the first differing row down -- never the
- * viewport -- and rows promoted into scrollback that are already on screen as
- * the head of the old live region are simply left where they are. */
-export function inlineFrameDiff(
-  previous: readonly string[], previousCursorRow: number, appended: readonly string[], dynamic: readonly string[],
-  cursorRow: number, cursorColumn: number,
-): string {
-  const next = [...appended, ...dynamic];
-  let out = '';
-  let row = Math.max(0, previousCursorRow);
-  const moveTo = (target: number): void => {
-    if (target < row) out += `\u001b[${row - target}A`;
-    else if (target > row) out += `\u001b[${target - row}B`;
-    row = target;
-  };
-  if (next.length === previous.length) {
-    for (const [index, line] of next.entries()) {
-      if (line === previous[index]) continue;
-      moveTo(index);
-      out += `\r\u001b[2K${line}`;
-    }
-  } else {
-    let common = 0;
-    while (common < previous.length && common < next.length && previous[common] === next[common]) common += 1;
-    if (common < previous.length) {
-      moveTo(common);
-      out += '\r\u001b[J';
-      for (let index = common; index < next.length; index++) {
-        if (index > common) { out += '\n'; row += 1; }
-        out += `\r\u001b[2K${next[index]}`;
-      }
-    } else {
-      // Pure growth below unchanged rows: newlines from the old last row are
-      // what let the terminal scroll on its own when the bottom is reached.
-      moveTo(Math.max(0, previous.length - 1));
-      for (let index = common; index < next.length; index++) {
-        if (index > 0) { out += '\n'; row += 1; }
-        out += `\r\u001b[2K${next[index]}`;
-      }
-    }
-  }
-  moveTo(appended.length + Math.max(0, Math.min(cursorRow, Math.max(0, dynamic.length - 1))));
-  return `${out}\u001b[${Math.max(1, cursorColumn)}G`;
-}
-
-
+/** One rendered activity row and where it belongs: the message index it was
+ * reported under, and -- for a row produced inside a turn -- the response
+ * offset it started at, which is where it is written back into the prose. */
+export type ActivityEntry =
+  { anchor: number; responseOffset?: number; sequence?: number; event?: HarnessActivityEvent; lines: string[] };
 /** One provider may publish pending/running/progress frames for the same tool.
  * They describe one lifecycle, not separate calls. Upsert by native id, or by
  * the latest still-open matching label when a protocol omits ids. */
@@ -716,8 +594,8 @@ export function upsertActivityEvent(
   }
   // Do not evict old entries here. Some may already be immutable native
   // scrollback; removing one would invalidate the rendered prefix and force a
-  // full-screen reset. responseTimeline applies a bounded visual summary
-  // without destroying the chronological source data.
+  // full-screen reset. No entry is ever collapsed into a count either: a row
+  // whose text can still change could never enter scrollback at all.
   return next;
 }
 
@@ -761,56 +639,6 @@ export function transientAssistantRequired(
 ): boolean {
   return Boolean(liveResponse || (waiting && entries.some((entry) =>
     entry.anchor === transcriptLength && entry.responseOffset !== undefined)));
-}
-
-/** Parse the response exactly once, then attach tools and steering messages to
- * the first complete Markdown block boundary at or after their raw response
- * offset. This preserves chronology without cutting a fence, emphasis span,
- * link, list, quote, or table into independently parsed fragments. */
-export function responseTimeline(
-  content: string, events: readonly InlineResponseEvent[], parsedBlocks?: readonly MessageBlock[],
-): ResponseTimelinePart[] {
-  // `parsedBlocks` lets the live message supply its incrementally parsed
-  // blocks; they are identical to splitIntoBlocks(content) by contract.
-  const blocks = parsedBlocks ?? splitIntoBlocks(content);
-  const sorted = [...events].sort((left, right) => left.responseOffset - right.responseOffset
-    || (left.sequence ?? 0) - (right.sequence ?? 0));
-  // No tool row is ever collapsed into a "… N earlier tool calls" count, at
-  // either the response or the burst level. Such a row's text changes every
-  // time another tool runs, and a row that can still change cannot enter
-  // native scrollback -- so it pinned itself, and every paragraph after it, in
-  // the repainted region directly above the composer for the rest of the turn.
-  // Each finished tool is instead one immutable row at the offset where it
-  // started, so tools and prose stay interleaved in the order they happened
-  // and scroll away together. Overall height is bounded where it actually
-  // matters, by renderActivityLine capping one tool's own output preview and
-  // by inlineConversationPlan promoting overflow out of the live region.
-  const slots: InlineResponseEvent[][] = Array.from({ length: blocks.length + 1 }, () => []);
-  for (const event of sorted) {
-    const blockIndex = event.responseOffset <= 0 ? -1
-      : blocks.findIndex((block) => event.responseOffset <= block.sourceEnd);
-    slots[blockIndex < 0 ? (event.responseOffset <= 0 ? 0 : blocks.length) : blockIndex + 1]!.push(event);
-  }
-  const parts: ResponseTimelinePart[] = [];
-  parts.push(...slots[0]!);
-  for (const [index, block] of blocks.entries()) {
-    parts.push({ kind: 'markdown', block });
-    parts.push(...slots[index + 1]!);
-  }
-  return parts;
-}
-
-/** The final parsed block at a live EOF can still grow on the next token. It
- * is safe to freeze only when later Markdown proves the parser closed it, or
- * when an explicit blank line closes the source construct. An out-of-band
- * tool event alone is not proof that a list/paragraph/fence is complete. */
-export function streamingMarkdownBoundary(
-  content: string, timeline: readonly ResponseTimelinePart[], index: number,
-): boolean {
-  const part = timeline[index];
-  if (part?.kind !== 'markdown' || !part.block.blockBoundary) return false;
-  if (timeline.slice(index + 1).some((candidate) => candidate.kind === 'markdown')) return true;
-  return /\n[ \t]*\n$/.test(content.slice(0, part.block.sourceEnd));
 }
 
 /** How long an approval ignores every key after it appears. A person typing

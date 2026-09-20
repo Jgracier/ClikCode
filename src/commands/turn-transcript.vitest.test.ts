@@ -73,6 +73,101 @@ describe('a tool settles when it finishes', () => {
   });
 });
 
+describe('a tool lands where it happened', () => {
+  // These rules moved here from responseTimeline, which placed tools in a
+  // rebuilt conversation. Nothing rebuilds one any more, so the placement is
+  // decided once, as a row settles, and never revisited.
+  const renderBlocks = (blocks: readonly MessageBlock[]): string[] => text(blocks);
+  const run = (content: string, tools: Parameters<TurnTranscript['advance']>[0]['tools']): string[] =>
+    new TurnTranscript().advance({ content, tools, turnEnded: true, renderBlocks }).finished;
+
+  it('keeps tool activity at the response offset where it occurred', () => {
+    expect(run('I will inspect it.\n\nThe issue is fixed.', [
+      { id: 'a', done: true, responseOffset: 19, lines: ['tool read file'] },
+      { id: 'b', done: true, responseOffset: 19, lines: ['done read file'] },
+    ])).toEqual(['I will inspect it.', 'tool read file', 'done read file', 'The issue is fixed.']);
+  });
+
+  it('waits for a complete compound block before inserting a tool', () => {
+    // An offset inside a nested list belongs after the whole list: cutting a
+    // compound construct in half would re-parse its halves independently.
+    expect(run('- parent\n  - child\n- sibling\n\nAfter.', [
+      { id: 'a', done: true, responseOffset: 12, lines: ['tool inspect'] },
+    ])).toEqual(['parent', 'child', 'sibling', 'tool inspect', 'After.']);
+  });
+
+  it('keeps a whole tool-only burst rather than collapsing it to a count', () => {
+    // The count row changed every time another tool ran, and a row that can
+    // still change cannot enter native scrollback -- so it pinned itself, and
+    // everything after it, above the composer for the rest of the turn.
+    const tools = Array.from({ length: 12 }, (_, index) => ({
+      id: `t${index}`, done: true, responseOffset: 0, lines: [`done Read(file${index}.ts)`],
+    }));
+    const rows = run('Done.', tools);
+    expect(rows).toEqual([...tools.flatMap((tool) => tool.lines), 'Done.']);
+    expect(rows.join('\n')).not.toContain('earlier tool');
+  });
+
+  it('applies no response-wide budget when tools sit in separate blocks', () => {
+    const paragraphs = Array.from({ length: 12 }, (_, index) => `Paragraph ${index}.`);
+    let offset = 0;
+    const tools = paragraphs.map((paragraph, index) => {
+      offset += paragraph.length;
+      const tool = { id: `t${index}`, done: true, responseOffset: offset, lines: [`done tool ${index}`] };
+      offset += 2;
+      return tool;
+    });
+    const rows = run(paragraphs.join('\n\n'), tools);
+    expect(rows.filter((row) => row.startsWith('done tool '))).toHaveLength(12);
+    expect(rows.join('\n')).not.toContain('earlier tool');
+    expect(rows.at(-1)).toBe('done tool 11');
+  });
+
+  it('appends a tool that completes after the prose around it settled', () => {
+    // Append-only: a row is written where it became final. A tool that reports
+    // completion three paragraphs later cannot be inserted back up the page.
+    const transcript = new TurnTranscript();
+    const tool = { id: 'slow', responseOffset: 0, lines: ['done slow tool'] };
+    const first = transcript.advance({
+      content: 'One.\n\nTwo.\n\n', tools: [{ ...tool, done: false }], turnEnded: false, renderBlocks,
+    });
+    expect(first.finished).toEqual(['One.', 'Two.']);
+    const second = transcript.advance({
+      content: 'One.\n\nTwo.\n\nThree.', tools: [{ ...tool, done: true }], turnEnded: true, renderBlocks,
+    });
+    expect(second.finished).toEqual(['done slow tool', 'Three.']);
+  });
+});
+
+describe('an open code fence retires a line at a time', () => {
+  const renderBlocks = (blocks: readonly MessageBlock[]): string[] =>
+    blocks.flatMap((block) => (block.kind === 'code'
+      ? [...(block.language ? [`[${block.language}]`] : []), ...block.lines] : text([block])));
+
+  it('writes every completed line once, and the header once', () => {
+    // A fence taller than the viewport could never retire its head rows while
+    // the block itself was unfinished, and the live region cannot be taller
+    // than the terminal.
+    const transcript = new TurnTranscript();
+    const lines = Array.from({ length: 6 }, (_, index) => `line ${index}`);
+    const finished: string[] = [];
+    let live: string[] = [];
+    for (let count = 1; count <= lines.length; count += 1) {
+      const step = transcript.advance({
+        content: `\`\`\`ts\n${lines.slice(0, count).join('\n')}\n`, tools: [], turnEnded: false, renderBlocks,
+      });
+      finished.push(...step.finished);
+      live = step.live;
+    }
+    const closed = transcript.advance({
+      content: `\`\`\`ts\n${lines.join('\n')}\n\`\`\`\n\nDone.`, tools: [], turnEnded: true, renderBlocks,
+    });
+    finished.push(...closed.finished);
+    expect(live).toEqual(['line 5']);
+    expect(finished).toEqual(['[ts]', ...lines, 'Done.']);
+  });
+});
+
 describe('a whole turn', () => {
   const renderBlocks = (blocks: readonly MessageBlock[]): string[] => text(blocks);
 

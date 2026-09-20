@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { activityLifecyclePhase, bottomAnchoredFrameGeometry, bottomAnchoredLines, commandPaletteMatches, composerRightArrowValue, conversationMessageWindow, editWaitingComposer, inlineConversationPlan, liveConversationLines, pickerConfirmsSelection, pickerDeletesSelection, rebaseActivityOffsets, responseTimeline, rightLabeledRule, streamingMarkdownBoundary, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { activityLifecyclePhase, commandPaletteMatches, composerRightArrowValue, conversationMessageWindow, editWaitingComposer, liveConversationLines, pickerConfirmsSelection, pickerDeletesSelection, rebaseActivityOffsets, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
 
 describe('terminal waiting input', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
@@ -37,51 +37,6 @@ describe('terminal waiting input', () => {
     expect(decoder.push(Buffer.from('\u001by'))).toEqual(['\u001by']);
   });
 
-  it('commits transcript lines once and keeps only the live tail replaceable', () => {
-    expect(inlineConversationPlan([], ['old one', 'old two'], true, 20)).toEqual({
-      reset: false, dynamic: [], permanent: ['old one', 'old two'],
-    });
-    expect(inlineConversationPlan(['old one', 'old two'], ['old one', 'old two', 'live a', 'live b'], false, 1)).toEqual({
-      reset: false, dynamic: ['live b'], permanent: ['old one', 'old two'],
-    });
-    expect(inlineConversationPlan(['old one', 'old two'], ['replacement'], true, 20)).toEqual({
-      reset: true, dynamic: [], permanent: ['replacement'],
-    });
-    expect(inlineConversationPlan(['old one', 'old two'], ['temporary mismatch'], false, 20)).toEqual({
-      reset: false, dynamic: [], permanent: ['old one', 'old two'],
-    });
-    expect(inlineConversationPlan(
-      ['old'], ['old', 'complete block', 'unfinished one', 'unfinished two'], false, 2, 2,
-    )).toEqual({
-      reset: false, dynamic: ['unfinished one', 'unfinished two'], permanent: ['old', 'complete block'],
-    });
-  });
-
-  it('pads reset frames above their content so the composer stays at the bottom', () => {
-    expect(bottomAnchoredLines(['response', 'spinner', 'composer'], 6)).toEqual([
-      '', '', '', 'response', 'spinner', 'composer',
-    ]);
-    expect(bottomAnchoredLines(['one', 'two', 'three'], 2)).toEqual(['one', 'two', 'three']);
-  });
-
-  it('pins every incremental frame to the viewport bottom', () => {
-    expect(bottomAnchoredFrameGeometry(20, 7, 0, 5)).toEqual({
-      scrollRows: 0, clearStartRow: 14, dynamicStartRow: 16,
-    });
-    expect(bottomAnchoredFrameGeometry(20, 5, 0, 7)).toEqual({
-      scrollRows: 2, clearStartRow: 14, dynamicStartRow: 14,
-    });
-    expect(bottomAnchoredFrameGeometry(20, 7, 1, 7)).toEqual({
-      scrollRows: 1, clearStartRow: 14, dynamicStartRow: 14,
-    });
-    expect(bottomAnchoredFrameGeometry(20, 0, 0, 5)).toEqual({
-      scrollRows: 0, clearStartRow: 16, dynamicStartRow: 16,
-    });
-    expect(bottomAnchoredFrameGeometry(20, 5, 0, 0)).toEqual({
-      scrollRows: 0, clearStartRow: 16, dynamicStartRow: 20,
-    });
-  });
-
   it('keeps real live content in the final row on compact mobile viewports', () => {
     expect(liveConversationLines(['user', '', 'streamed response', ''], true)).toEqual([
       'user', '', 'streamed response',
@@ -90,9 +45,6 @@ describe('terminal waiting input', () => {
       'user', '', '· running tool',
     ]);
     expect(liveConversationLines(['user', ''], false)).toEqual(['user', '']);
-    expect(inlineConversationPlan(['user', ''], ['user', '', 'streamed response'], false, 1)).toMatchObject({
-      dynamic: ['streamed response'],
-    });
   });
 
   it('keeps escape and control-c as cancellation without treating other keys as actions', () => {
@@ -136,30 +88,6 @@ describe('terminal waiting input', () => {
 });
 
 describe('streamed response chronology', () => {
-  it('keeps tool activity at the response offset where it occurred', () => {
-    expect(responseTimeline('I will inspect it.\n\nThe issue is fixed.', [
-      { kind: 'activity', responseOffset: 19, lines: ['tool read file'] },
-      { kind: 'activity', responseOffset: 19, lines: ['done read file'] },
-    ])).toEqual([
-      { kind: 'markdown', block: { kind: 'paragraph', text: 'I will inspect it.', quoteDepth: 0, indent: 0, sourceEnd: 20, blockBoundary: true } },
-      { kind: 'activity', responseOffset: 19, lines: ['tool read file'] },
-      { kind: 'activity', responseOffset: 19, lines: ['done read file'] },
-      { kind: 'markdown', block: { kind: 'paragraph', text: 'The issue is fixed.', quoteDepth: 0, indent: 0, sourceEnd: 39, blockBoundary: true } },
-    ]);
-  });
-
-  it('waits for a complete compound Markdown block before inserting live events', () => {
-    const markdown = '- parent\n  - child\n- sibling\n\nAfter.';
-    const parts = responseTimeline(markdown, [
-      { kind: 'steer', responseOffset: 12, sequence: 1, text: 'Check the nested item' },
-      { kind: 'activity', responseOffset: 12, sequence: 2, lines: ['tool inspect'] },
-    ]);
-    expect(parts.map((part) => part.kind)).toEqual([
-      'markdown', 'markdown', 'markdown', 'steer', 'activity', 'markdown',
-    ]);
-    expect(parts[3]).toMatchObject({ kind: 'steer', text: 'Check the nested item' });
-  });
-
   it('updates repeated tool progress in place and ignores reasoning as chat activity', () => {
     const started = upsertActivityEvent([], 3, 12, { kind: 'tool-start', id: 'call-1', label: 'search\nrepository' });
     const repeated = upsertActivityEvent(started, 3, 12, { kind: 'tool-start', id: 'call-1', label: 'search repository' });
@@ -192,61 +120,6 @@ describe('streamed response chronology', () => {
     expect(state.phase).toBe('thinking');
   });
 
-  it('keeps a whole tool-only burst rather than collapsing it to a count', () => {
-    // The count row changed every time another tool ran, and a row that can
-    // still change cannot enter native scrollback -- so it pinned itself above
-    // the composer for the rest of the turn. Height is bounded where it
-    // actually matters: renderActivityLine caps one tool's own output preview,
-    // and inlineConversationPlan promotes overflow out of the live region.
-    const parts = responseTimeline('Done.', Array.from({ length: 7 }, (_, index) => ({
-      kind: 'activity' as const, responseOffset: 0, lines: [`done tool ${index + 1}`],
-    })));
-    expect(parts).toEqual([
-      ...Array.from({ length: 7 }, (_, index) => ({
-        kind: 'activity', responseOffset: 0, lines: [`done tool ${index + 1}`],
-      })),
-      { kind: 'markdown', block: { kind: 'paragraph', text: 'Done.', quoteDepth: 0, indent: 0, sourceEnd: 5, blockBoundary: true } },
-    ]);
-  });
-
-  it('keeps staggered tools at their effective Markdown position, all of them', () => {
-    const parts = responseTimeline('One long paragraph.', [
-      { kind: 'activity', responseOffset: 2, lines: ['tool 1', 'detail 1'] },
-      { kind: 'activity', responseOffset: 4, lines: ['tool 2', 'detail 2'] },
-      { kind: 'activity', responseOffset: 6, lines: ['tool 3', 'detail 3'] },
-      { kind: 'activity', responseOffset: 8, lines: ['tool 4', 'detail 4'] },
-    ]);
-    expect(parts.slice(1)).toEqual([
-      { kind: 'activity', responseOffset: 2, lines: ['tool 1', 'detail 1'] },
-      { kind: 'activity', responseOffset: 4, lines: ['tool 2', 'detail 2'] },
-      { kind: 'activity', responseOffset: 6, lines: ['tool 3', 'detail 3'] },
-      { kind: 'activity', responseOffset: 8, lines: ['tool 4', 'detail 4'] },
-    ]);
-  });
-
-  it('applies no response-wide budget when tools sit in separate prose blocks', () => {
-    // Collapsing the older ones into a "… N earlier tool calls in this
-    // response" row put that row at the offset of the OLDEST hidden tool --
-    // near the top of the answer -- and its count changed every time another
-    // tool ran. A row whose text keeps changing can never enter native
-    // scrollback, so it pinned itself and every paragraph after it in the
-    // repainted region directly above the composer for the whole turn.
-    // Finished rows are immutable and scroll away on their own instead.
-    const paragraphs = Array.from({ length: 12 }, (_, index) => `Paragraph ${index}.`);
-    const content = paragraphs.join('\n\n');
-    let offset = 0;
-    const events = paragraphs.map((paragraph, index) => {
-      offset += paragraph.length;
-      const event = { kind: 'activity' as const, responseOffset: offset, lines: [`done tool ${index}`] };
-      offset += 2;
-      return event;
-    });
-    const activities = responseTimeline(content, events).filter((part) => part.kind === 'activity');
-    expect(activities).toHaveLength(12);
-    expect(activities.flatMap((part) => part.lines).join('\n')).not.toContain('earlier tool');
-    expect(activities.at(-1)).toMatchObject({ lines: ['done tool 11'] });
-  });
-
   it('retains source activity beyond the visual summary limit', () => {
     let entries = [] as ReturnType<typeof upsertActivityEvent>;
     for (let index = 0; index < 60; index += 1) {
@@ -260,13 +133,6 @@ describe('streamed response chronology', () => {
     const entries = upsertActivityEvent([], 3, 12, { kind: 'tool-done', id: 'one', label: 'inspect' });
     expect(rebaseActivityOffsets(entries, 3, 'Original response', 'Changed response')[0]?.responseOffset).toBe(0);
     expect(rebaseActivityOffsets(entries, 3, 'Original', 'Original extended')[0]?.responseOffset).toBe(8);
-  });
-
-  it('does not freeze a live EOF block merely because a tool follows it', () => {
-    const open = responseTimeline('- first', [{ kind: 'activity', responseOffset: 7, lines: ['tool inspect'] }]);
-    expect(streamingMarkdownBoundary('- first', open, 0)).toBe(false);
-    const closed = responseTimeline('First.\n\nSecond.', [{ kind: 'activity', responseOffset: 7, lines: ['tool inspect'] }]);
-    expect(streamingMarkdownBoundary('First.\n\nSecond.', closed, 0)).toBe(true);
   });
 
   it('creates the live assistant anchor before prose so tools appear as they happen', () => {
