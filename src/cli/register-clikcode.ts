@@ -47,7 +47,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   sessions.command('send <id> <prompt...>').alias('chat').description('Send a turn through a saved session')
     .action((id, prompt: string[]) => aiGatewaySessionSend(config, id, prompt.join(' ')));
   sessions.command('command <id> <slash...>').alias('slash').description('Run /claude, /accounts, or another session slash command')
-    .action((id, slash: string[]) => aiSessionCommand(id, slash.join(' ')));
+    .action(async (id, slash: string[]) => { await aiSessionCommand(id, slash.join(' ')); });
   sessions.command('open <id>').alias('interactive').description('Open a persistent session; use /accounts, /claude, or /exit')
     .action((id) => aiSessionInteractive(config, id));
   sessions.command('resume <id>').description('Resume a ClikCode session and its exact native chat when available')

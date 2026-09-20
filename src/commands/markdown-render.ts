@@ -62,8 +62,36 @@ const ESCAPE_SEQUENCE = new RegExp([
   '\\u001b[ -/]*[0-~]?',
 ].join('|'), 'g');
 const SGR_SEQUENCE = /^\u001b\[[0-9;]*m$/;
+/** The two zero-width sequences this UI writes inside a row: SGR styling and
+ * OSC 8 hyperlink open/close. Everything that measures, slices or sanitizes a
+ * styled row treats exactly these as atomic and invisible. */
+const OSC8_SEQUENCE = /^\u001b\]8;[^\u0007\u001b\n]*\u001b\\$/;
+const ZERO_WIDTH_SEQUENCES = /\u001b\[[0-9;]*m|\u001b\]8;[^\u0007\u001b\n]*\u001b\\/g;
+const HYPERLINK_CLOSE = '\u001b]8;;\u001b\\';
+const hyperlinkOpen = (href: string): string => `\u001b]8;;${href}\u001b\\`;
+
+/** OSC 8 is only emitted where it is known to render as a link. Elsewhere it
+ * is at best ignored and at worst printed, so the fallback is `text (href)`.
+ * tmux forwards OSC 8 only with passthrough configured, which cannot be
+ * detected from inside it; CLIKCODE_HYPERLINKS=1 opts in there. */
+export function hyperlinksSupported(environment: NodeJS.ProcessEnv = process.env, isTty = Boolean(process.stdout.isTTY)): boolean {
+  const flag = (value: string | undefined): boolean => value !== undefined && value !== '' && value !== '0' && value.toLowerCase() !== 'false';
+  if (flag(environment.CLIKCODE_NO_HYPERLINKS)) return false;
+  if (!isTty || (environment.TERM ?? '').toLowerCase() === 'dumb') return false;
+  if (flag(environment.CLIKCODE_HYPERLINKS) || flag(environment.FORCE_HYPERLINK)) return true;
+  if (environment.TMUX || environment.STY || /^(?:screen|tmux)/.test(environment.TERM ?? '')) return false;
+  const program = (environment.TERM_PROGRAM ?? '').toLowerCase();
+  if (['iterm.app', 'wezterm', 'vscode', 'ghostty', 'hyper', 'kitty', 'rio', 'warpterminal'].includes(program)) return true;
+  if (environment.KITTY_WINDOW_ID || environment.WT_SESSION || environment.KONSOLE_VERSION || environment.DOMTERM) return true;
+  if (Number(environment.VTE_VERSION ?? 0) >= 5000) return true;
+  return /^(?:xterm-kitty|xterm-ghostty|foot|alacritty|wezterm|contour)/.test(environment.TERM ?? '');
+}
+let hyperlinksEnabled: boolean | undefined;
+/** Tests and callers that know better than the environment can decide. */
+export function setHyperlinksEnabled(enabled: boolean | undefined): void { hyperlinksEnabled = enabled; }
+const SAFE_LINK = /^(?:https?:\/\/|mailto:)[^\s\u0000-\u001f\u007f-\u009f]+$/i;
 const NEEDS_SANITIZING = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\t]/;
-const UNSAFE_IN_STYLED_TEXT = /[\u0000-\u0009\u000b-\u001a\u001c-\u001f\u007f-\u009f]|\u001b(?!\[[0-9;]*m)/;
+const UNSAFE_IN_STYLED_TEXT = /[\u0000-\u0009\u000b-\u001a\u001c-\u001f\u007f-\u009f]|\u001b(?!\[[0-9;]*m|\]8;[^\u0007\u001b\n]*\u001b\\)/;
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 export const TAB_WIDTH = 4;
 
@@ -104,9 +132,9 @@ export function sanitizeTerminalText(
   const clean = options.keepSgr ? !UNSAFE_IN_STYLED_TEXT.test(value) : !NEEDS_SANITIZING.test(value);
   if (clean && !(options.singleLine && value.includes('\n'))) return value;
   let text = value.replace(/\r\n?/g, '\n');
-  text = text.replace(ESCAPE_SEQUENCE, (sequence) => (options.keepSgr && SGR_SEQUENCE.test(sequence) ? sequence : ''));
+  text = text.replace(ESCAPE_SEQUENCE, (sequence) => (
+    options.keepSgr && (SGR_SEQUENCE.test(sequence) || OSC8_SEQUENCE.test(sequence)) ? sequence : ''));
   text = text.replace(CONTROL_CHARACTERS, (character) => (character === '\u001b' && options.keepSgr ? character : ''));
-  if (options.keepSgr) text = text.replace(/\u001b(?!\[[0-9;]*m)/g, '');
   text = expandTabs(text, options.tabWidth ?? TAB_WIDTH);
   return options.singleLine ? text.replace(/\n/g, ' ') : text;
 }
@@ -129,7 +157,7 @@ export function styleWords(text: string, style: (word: string) => string): strin
 /** Render CommonMark/GFM inline tokens directly to self-contained ANSI spans.
  * Tokenizing before styling prevents escape sequences from being reparsed as
  * markdown and keeps styling valid when the terminal wraps a line. */
-const renderInlineMarkdownUncached = (text: string): string => {
+const renderInlineMarkdownWith = (text: string, hyperlinks: boolean): string => {
   type Style = (value: string) => string;
   const render = (tokens: Token[], styles: Style[] = []): string => tokens.map((token) => {
     const apply = (value: string, extra: Style[] = styles): string => styleWords(value, (word) => extra.reduce((result, style) => style(result), word));
@@ -137,7 +165,17 @@ const renderInlineMarkdownUncached = (text: string): string => {
     if (token.type === 'em') return render(token.tokens ?? [], [...styles, chalk.italic]);
     if (token.type === 'del') return render(token.tokens ?? [], [...styles, chalk.strikethrough]);
     if (token.type === 'codespan') return apply(token.text, [...styles, chalk.cyan]);
-    if (token.type === 'link') return `${render(token.tokens ?? [], [...styles, chalk.underline])} ${chalk.dim(`(${token.href})`)}`;
+    if (token.type === 'link') {
+      const href = String(token.href ?? '');
+      const label = render(token.tokens ?? [], [...styles, chalk.underline]);
+      if (hyperlinks && SAFE_LINK.test(href)) {
+        // One open/close pair per word, like the styling: a link that wraps
+        // must not leave the hyperlink open across the row break.
+        return styleWords(label, (word) => `${hyperlinkOpen(href)}${word}${HYPERLINK_CLOSE}`);
+      }
+      // An autolink's text is its target; printing it twice helps nobody.
+      return token.text === href || `mailto:${token.text}` === href ? label : `${label} ${chalk.dim(`(${href})`)}`;
+    }
     if (token.type === 'image') return `${chalk.magenta(`[image: ${token.text || 'attachment'}]`)} ${chalk.dim(`(${token.href})`)}`;
     if (token.type === 'br') return ' ';
     if ('tokens' in token && Array.isArray(token.tokens)) return render(token.tokens, styles);
@@ -146,9 +184,12 @@ const renderInlineMarkdownUncached = (text: string): string => {
   }).join('');
   return render(Lexer.lexInline(text, { gfm: true, breaks: false }));
 };
-export const renderInlineMarkdown = memoizeByText(renderInlineMarkdownUncached);
+const linksOn = (): boolean => hyperlinksEnabled ?? (hyperlinksEnabled = hyperlinksSupported());
+const renderInlineLinked = memoizeByText((text: string) => renderInlineMarkdownWith(text, true));
+const renderInlinePlain = memoizeByText((text: string) => renderInlineMarkdownWith(text, false));
+export const renderInlineMarkdown = (text: string): string => (linksOn() ? renderInlineLinked : renderInlinePlain)(text);
 /** For the block that is still receiving tokens: same output, no cache entry. */
-export const renderInlineMarkdownLive = renderInlineMarkdownUncached;
+export const renderInlineMarkdownLive = (text: string): string => renderInlineMarkdownWith(text, linksOn());
 
 
 /** Convert the original CommonMark/GFM block tree into the small semantic
@@ -283,8 +324,18 @@ export function createStreamingBlockParser(): (text: string) => MessageBlock[] {
   };
 }
 
-/** Width-bounded GFM table rendering. Equal columns are predictable while
- * per-cell truncation guarantees the table never destabilizes the frame. */
+/** A hard-wrapped link can leave its hyperlink open at the end of a row. Rows
+ * are repainted independently, so the attribute must never outlive its row. */
+export function closeOpenHyperlink(row: string): string {
+  const last = row.lastIndexOf('\u001b]8;');
+  return last === -1 || row.startsWith(HYPERLINK_CLOSE, last) ? row : `${row}${HYPERLINK_CLOSE}`;
+}
+
+/** Width-bounded GFM table rendering. Columns take their natural width when
+ * the table fits and are shrunk proportionally when it does not; a cell that
+ * is still too wide WRAPS inside its column. Truncating with an ellipsis threw
+ * away exactly the long cells (paths, commands, descriptions) a table is
+ * usually there to show. */
 export function renderTableBlock(
   header: readonly string[], rows: readonly (readonly string[])[], width: number,
   align: readonly ('left' | 'center' | 'right' | null)[] = [],
@@ -292,17 +343,40 @@ export function renderTableBlock(
   const columns = Math.max(1, header.length, ...rows.map((row) => row.length));
   const borders = columns + 1;
   const padding = columns * 2;
-  const cellWidth = Math.max(3, Math.floor((Math.max(width, borders + padding + columns * 3) - borders - padding) / columns));
-  const row = (cells: readonly string[], heading = false): string => `│${Array.from({ length: columns }, (_, index) => {
-    const rendered = renderInlineMarkdown(cells[index] ?? '');
-    const clipped = visibleSlice(rendered, cellWidth);
-    const remaining = Math.max(0, cellWidth - terminalCellWidth(clipped));
-    const left = align[index] === 'right' ? remaining : align[index] === 'center' ? Math.floor(remaining / 2) : 0;
-    const padded = `${' '.repeat(left)}${clipped}${' '.repeat(remaining - left)}`;
-    return ` ${heading ? chalk.bold(padded) : padded} `;
-  }).join('│')}│`;
-  const separator = `├${Array.from({ length: columns }, () => '─'.repeat(cellWidth + 2)).join('┼')}┤`;
-  return [row(header, true), separator, ...rows.map((cells) => row(cells))].map((line) => visibleSlice(line, width));
+  const available = Math.max(columns * 3, width - borders - padding);
+  const rendered = [header, ...rows].map((cells) => Array.from({ length: columns }, (_, index) => renderInlineMarkdown(cells[index] ?? '')));
+  const natural = Array.from({ length: columns }, (_, index) => Math.max(3, ...rendered.map((cells) => terminalCellWidth(cells[index]!))));
+  const longestWord = Array.from({ length: columns }, (_, index) => Math.max(3, ...rendered.map((cells) =>
+    Math.max(0, ...cells[index]!.split(/\s+/).map((word) => terminalCellWidth(word))))));
+  const widths = [...natural];
+  // Take width from the widest column first, never below a column's longest
+  // word while any other column still has slack to give.
+  let excess = widths.reduce((sum, value) => sum + value, 0) - available;
+  for (const floor of [longestWord, natural.map(() => 3)]) {
+    while (excess > 0) {
+      let widest = -1;
+      for (let index = 0; index < columns; index++) {
+        if (widths[index]! > floor[index]! && (widest === -1 || widths[index]! > widths[widest]!)) widest = index;
+      }
+      if (widest === -1) break;
+      widths[widest]! -= 1;
+      excess -= 1;
+    }
+  }
+  const line = (cells: readonly string[], heading = false): string[] => {
+    const wrapped = cells.map((cell, index) => wrapWords(cell, widths[index]!));
+    const height = Math.max(1, ...wrapped.map((lines) => lines.length));
+    return Array.from({ length: height }, (_, lineIndex) => `│${wrapped.map((lines, index) => {
+      const text = lines[lineIndex] ?? '';
+      const remaining = Math.max(0, widths[index]! - terminalCellWidth(text));
+      const left = align[index] === 'right' ? remaining : align[index] === 'center' ? Math.floor(remaining / 2) : 0;
+      const padded = `${' '.repeat(left)}${text}${' '.repeat(remaining - left)}`;
+      return ` ${heading ? chalk.bold(padded) : padded} `;
+    }).join('│')}│`);
+  };
+  const separator = `├${widths.map((columnWidth) => '─'.repeat(columnWidth + 2)).join('┼')}┤`;
+  return [...line(rendered[0]!, true), separator, ...rendered.slice(1).flatMap((cells) => line(cells))]
+    .map((row) => closeOpenHyperlink(visibleSlice(row, width)));
 }
 
 export function visibleSlice(value: string, width: number): string {
@@ -315,10 +389,12 @@ export function visibleSlice(value: string, width: number): string {
   // bytes can leave a partial escape in the terminal, causing color bleed,
   // question marks, and adjacent rows that appear to run together.
   const tokens = displayTokens(value);
+  let linkOpen = false;
   for (const token of tokens) {
-    if (/^\u001b\[[0-9;]*m$/.test(token)) {
+    if (token[0] === '\u001b') {
       rendered += token;
-      sawAnsi = true;
+      if (OSC8_SEQUENCE.test(token)) linkOpen = token !== HYPERLINK_CLOSE;
+      else sawAnsi = true;
       continue;
     }
     const tokenWidth = terminalCellWidth(token);
@@ -326,7 +402,7 @@ export function visibleSlice(value: string, width: number): string {
     rendered += token;
     renderedWidth += tokenWidth;
   }
-  return `${rendered}${sawAnsi ? '\u001b[0m' : ''}…`;
+  return `${rendered}${linkOpen ? HYPERLINK_CLOSE : ''}${sawAnsi ? '\u001b[0m' : ''}…`;
 }
 
 /** Split a code line into display-only continuation rows without modifying
@@ -383,7 +459,7 @@ function displayTokens(value: string): string[] {
     for (const { segment } of graphemes.segment(text)) tokens.push(segment);
   };
   let consumed = 0;
-  for (const match of value.matchAll(/\u001b\[[0-9;]*m/g)) {
+  for (const match of value.matchAll(ZERO_WIDTH_SEQUENCES)) {
     const start = match.index;
     if (start > consumed) pushText(value.slice(consumed, start));
     tokens.push(match[0]);
@@ -419,7 +495,7 @@ function sliceToWidth(value: string, width: number): string {
 }
 
 export function terminalCellWidth(value: string): number {
-  const plain = value.replace(/\u001b\[[0-9;]*m/g, '');
+  const plain = value.includes('\u001b') ? value.replace(ZERO_WIDTH_SEQUENCES, '') : value;
   let width = 0;
   for (const { segment } of graphemes.segment(plain)) {
     if (segment === '\t') { width += TAB_WIDTH - (width % TAB_WIDTH); continue; }
@@ -429,7 +505,17 @@ export function terminalCellWidth(value: string): number {
     // to it (marks, variation selectors, joiners) draws inside those cells.
     const base = String.fromCodePoint(segment.codePointAt(0) ?? 0);
     if (/\p{Mark}/u.test(base)) continue;
-    width += isWideCodePoint(base.codePointAt(0) ?? 0) ? 2 : 1;
+    // Presentation is part of the width. U+FE0F asks for the emoji glyph, which
+    // terminals draw two cells wide even for a symbol that is one cell as text
+    // (U+2611 BALLOT BOX, U+2764 HEART); U+FE0E asks for the narrow text glyph.
+    // Symbols that default to emoji presentation (U+26A1, U+2705) are wide on
+    // their own.
+    const wide = segment.includes('\ufe0e') ? isWideCodePoint(base.codePointAt(0) ?? 0) && (base.codePointAt(0) ?? 0) >= 0x1f000
+      : isWideCodePoint(base.codePointAt(0) ?? 0)
+        || /\p{Emoji_Presentation}/u.test(base)
+        || (segment.includes('\ufe0f') && /\p{Emoji}/u.test(base) && !/^[0-9#*]$/.test(base))
+        || (segment.includes('\u20e3'));
+    width += wide ? 2 : 1;
   }
   return width;
 }
