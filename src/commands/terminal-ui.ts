@@ -159,6 +159,22 @@ const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Home, erase the screen, erase the saved lines. Written once at startup on
  * the main screen. */
 const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[H\u001b[2J\u001b[3J';
+/** `OSC 133;C` -- "what follows is a command's output", the FinalTerm/iTerm2
+ * shell-integration mark every modern client understands and several act on.
+ *
+ * A client with shell integration tracks where the prompt ended and the
+ * command began, so it knows whether what you are typing is a shell command.
+ * ClikCode is the command: the shell emitted this mark before launching it.
+ * But this UI then clears the screen and redraws it thousands of times, and a
+ * client whose parser loses that state falls back to reading the composer as a
+ * prompt -- which is why Termius offers shell-history completions over the
+ * palette, and offers them for text that is no longer even on the line.
+ * Re-asserting the mark says, in the one vocabulary they share, that nothing
+ * here is a prompt.
+ *
+ * Terminals that do not speak it ignore an OSC they do not recognise, which is
+ * why it costs nothing to send. */
+const COMMAND_OUTPUT_MARK = '\u001b]133;C\u001b\\';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
@@ -1476,7 +1492,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       output.write(`\u001b[${lastRow};1H`);
       this.blockTopRow = lastRow;
     }
-    output.write('\u001b[?25h');
+    output.write(`${COMMAND_OUTPUT_MARK}\u001b[?25h`);
     process.on('SIGWINCH', this.onResize);
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
     // signal handler elsewhere -- must not leave the shell in raw mode with a
@@ -2551,6 +2567,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       terminalModes.alternateScreen = true;
     }
     this.lastColumns = output.columns || 0;
+    // The shell had the terminal and marked its own prompt while it did, so
+    // the mark that says "this is a command's output, not a prompt" is
+    // asserted again with it.
+    output.write(COMMAND_OUTPUT_MARK);
     // The shell printed its own rows while it had the terminal, so the row
     // this block used to start on means nothing now.
     this.forgetScreenPosition();
@@ -3038,6 +3058,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // simply starts again below it: eraseLiveRegion() left nothing of this
     // UI's own on screen, so the next frame begins wherever the cursor is.
     this.lastColumns = output.columns || 0;
+    // A vendor CLI may have marked prompts of its own while it had the
+    // terminal; this UI is a command's output again.
+    output.write(COMMAND_OUTPUT_MARK);
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
