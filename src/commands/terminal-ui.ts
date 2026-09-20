@@ -131,6 +131,8 @@ export function wheelScrollRows(key: string): number {
 export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key) || LEGACY_MOUSE_EVENT.test(key);
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
+/** `CSI ? ... c`: the terminal answering Primary DA. Never a keystroke. */
+const DEVICE_ATTRIBUTES_REPLY = /^\u001b\[\?[0-9;]*c$/;
 export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
 export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
@@ -171,6 +173,35 @@ const RESIZE_SETTLE_MS = 120;
  * native scrollback is worth more than any of that. */
 export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
+/** The opening handshake, transcribed sequence for sequence from Claude Code
+ * running in this user's own terminal.
+ *
+ * The difference it captures is that Claude Code ASKS the terminal what it is
+ * before taking the screen -- XTVERSION (`CSI > 0 q`) and Primary DA (`CSI c`)
+ * -- and cycles paste/theme/focus off and on around each question. This UI
+ * asked nothing and simply took the screen.
+ *
+ * Why it is worth transcribing rather than reasoning about: on this user's
+ * phone, with the keyboard hidden, a swipe reaches Claude Code and does not
+ * reach ClikCode, and the same bare script scores tens of thousands of wheel
+ * reports in one run and zero in the next. The effect drifts, so single
+ * before-and-after comparisons are worthless -- several were, at length. An
+ * alternating test in which the only variable was replaying these bytes went
+ * from no events to events on the first round that replayed them, and stayed
+ * working afterwards, which is what a client latching a decision looks like.
+ *
+ * The questions have answers, and the answers come back as input: Primary DA
+ * as `CSI ? ... c`, XTVERSION as a DCS string. Both are filtered where keys
+ * are read, and the decoder holds a DCS until its terminator -- without that,
+ * a terminal which answers types its answer into the composer. */
+const TERMINAL_NEGOTIATION = '\u001b7\u001b[r\u001b8\u001b[?25h\u001b[?25l'
+  + '\u001b[?2004h\u001b[?2031h\u001b[?1004h'
+  + '\u001b[>0q\u001b[c\u001b(B\u000f\u001b[>4m'
+  + '\u001b[?1004l\u001b[?2031l\u001b[?2004l'
+  + '\u001b[?2004h\u001b[?2031h\u001b[?1004h'
+  + '\u001b[>0q\u001b[c\u001b[>4m'
+  + '\u001b[?1004l\u001b[?2031l\u001b[?2004l'
+  + '\u001b[?2004h\u001b[?2031h\u001b[?1004h';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Home, erase the screen, erase the saved lines. Written once at startup, so
  * the scrollback a swipe reads holds the conversation and not the shell. */
@@ -606,6 +637,22 @@ export class TerminalInputDecoder {
         continue;
       }
       const prefix = this.pending[1];
+      // DCS: `ESC P ... ST`, where ST is `ESC \\`. The XTVERSION reply arrives
+      // this way. Scanning it as a CSI would spray its text into the draft one
+      // character at a time, which is the same failure `^[[31;54R` in the
+      // composer was.
+      if (prefix === 'P') {
+        const close = this.pending.indexOf('\u001b\\', 2);
+        if (close === -1) {
+          if (!flush) break;
+          keys.push(this.pending);
+          this.pending = '';
+          continue;
+        }
+        keys.push(this.pending.slice(0, close + 2));
+        this.pending = this.pending.slice(close + 2);
+        continue;
+      }
       if (prefix === '[') {
         // X10 mouse reporting: `CSI M` and then exactly three bytes, which are
         // coordinates and not a terminator. Scanning for a final byte stops at
@@ -689,6 +736,10 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       // Focus in/out and OSC replies (theme notifications), likewise:
       // enabled for what they announce, not to be read.
       if (FOCUS_EVENT.test(key) || key.startsWith('\u001b]')) continue;
+      // Answers to the questions the opening handshake asks: Primary DA comes
+      // back as `CSI ? ... c`, XTVERSION as a DCS string. Neither is a key,
+      // and a terminal that answers must not be able to type into the draft.
+      if (DEVICE_ATTRIBUTES_REPLY.test(key) || key.startsWith('\u001bP')) continue;
       onKey(key);
     }
   };
@@ -1640,9 +1691,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private overlayActive = false;
 
   constructor() {
+    // Asked before the screen is taken, in this order, because that is the
+    // order it was captured in -- see TERMINAL_NEGOTIATION.
+    output.write(TERMINAL_NEGOTIATION);
+    terminalModes.bracketedPaste = true;
+    terminalModes.focusReporting = true;
+    terminalModes.themeNotifications = true;
     if (this.alternateScreen) {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
+      output.write(ENABLE_MOUSE_TRACKING);
+      terminalModes.wheelReporting = true;
     }
     // The screen and its saved lines are cleared once, and the first frame
     // starts on the LAST row.
