@@ -340,7 +340,7 @@ export function logCursorEvent(line: string): void {
   // directory, and these lines per test process are noise that buries the one
   // session anybody wants to read.
   if (process.env.VITEST) return;
-  const isInput = line.startsWith('input ');
+  const isInput = line.startsWith('input ') || line.startsWith('scroll ');
   if (isInput) {
     if (inputLogLines >= INPUT_LOG_LINES) return;
     inputLogLines += 1;
@@ -2412,6 +2412,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // never on it.
     const furthest = Math.max(0, this.alternateTranscript.length - this.alternateAbove);
     const next = Math.max(0, Math.min(furthest, this.alternateScrollback + rows));
+    // What a report of "it did not move" needs to be answerable: whether the
+    // key arrived (logged where keys are read), and whether there was anywhere
+    // to go -- a screen tall enough to show the whole transcript has nothing
+    // hidden above it, and refusing to move is then the right answer.
+    logCursorEvent(`scroll by=${rows} from=${this.alternateScrollback} to=${next} furthest=${furthest} rows=${this.alternateTranscript.length} above=${this.alternateAbove}`);
     if (next === this.alternateScrollback) return false;
     this.alternateScrollback = next;
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
