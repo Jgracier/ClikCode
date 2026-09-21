@@ -31,7 +31,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, listenForTerminalKeys, onKeyBatchEnd, w
 import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { formatTurnUsage } from './render/usage-line.js';
-import { liveConversationLines, rightLabeledRule, waitingSpinnerGlyph } from './render/waiting.js';
+import { liveConversationLines, paintUsageRule, rightLabeledRule, waitingSpinnerGlyph } from './render/waiting.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
@@ -1062,6 +1062,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           content: sanitizeTerminalText(message.content), tools: turnTools(true), turnEnded: true, renderBlocks,
         }).finished);
       } else {
+        // A prompt is framed, not butted against the answer above it. One
+        // blank row after every message was not enough separation to read as
+        // a break: the eye sees the question continuing the answer. The
+        // opening blank is skipped at the very top, where there is nothing to
+        // separate from.
+        if (message.role === 'user' && index > 0) emit(['']);
         emit(messageRows(message.content, message.role === 'assistant' ? '·' : userMarker));
         if (message.role === 'user') this.retiredThisSession.add(message.content);
       }
@@ -1109,6 +1115,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const conversationLines = liveConversationLines(liveConversation, true);
     const meta = this.statusText();
     const footer: string[] = [];
+    // The composer block starts with a clear row. Without it the rule above
+    // the composer sits directly on the last line of the answer, and the
+    // reply appears to run into the furniture -- the same missing breath the
+    // transcript needed before a prompt.
+    footer.push('');
     if (noticeRows && notice) footer.push(`  ${chalk.yellow(visibleSlice(notice, inner))}`);
     if (paletteCapacity) {
       footer.push(rule);
@@ -1143,10 +1154,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. Keeping it out of the provider/model/directory row makes
     // the two quota windows easy to scan without adding another footer row.
-    footer.push(chalk.dim(rightLabeledRule(rowWidth, this.usageLabel)));
+    // Usage is information, not furniture: it reads by state, so running low
+    // is visible without reading the number. The rule itself stays dim.
+    footer.push(paintUsageRule(rowWidth, this.usageLabel));
     const composerStart = footer.length;
     for (const [index, row] of composerRows.rows.entries()) {
-      footer.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
+      // The caret is the one thing on screen that says "type here", so it
+      // carries the accent rather than the same grey as the furniture.
+      footer.push(`  ${index === 0 ? chalk.cyanBright.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
     }
     // The rule below the composer carries the chat's title at its right
     // edge instead of a plain dashed line -- dashes fill from the left up to
@@ -1155,7 +1170,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
     footer.push(chalk.dim(rightLabeledRule(rowWidth, this.titleText())));
-    footer.push(`  ${chalk.dim(visibleSlice(meta, inner))}`);
+    // The provider is identity -- which harness is about to answer -- and is
+    // the one part of this line worth reading at a glance. The rest (model,
+    // effort, directory) stays dim, so the line still recedes as a whole.
+    const metaText = visibleSlice(meta, inner);
+    const separator = metaText.indexOf(' \u2022 ');
+    footer.push(separator > 0
+      ? `  ${chalk.cyan(metaText.slice(0, separator))}${chalk.dim(metaText.slice(separator))}`
+      : `  ${chalk.dim(metaText)}`);
 
     // The live region is bounded by the viewport: it is erased and redrawn as
     // one block every frame, so it can never be taller than the terminal. A

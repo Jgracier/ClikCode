@@ -1,6 +1,7 @@
 /** The waiting band: the spinner, and the rules and dimming that mark which
  * conversation lines are still live. */
 
+import chalk from 'chalk';
 import { terminalCellWidth, visibleSlice } from './width.js';
 
 /** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
@@ -40,4 +41,34 @@ export function liveConversationLines(lines: readonly string[], live: boolean): 
   const result = [...lines];
   if (live) while (result[result.length - 1] === '') result.pop();
   return result;
+}
+
+/** How much of an allowance is left, read out of the label the harness gave.
+ * Both forms appear: "42% left" and the legacy "58% used". */
+export function usageRemainingPercent(label?: string): number | undefined {
+  if (!label) return undefined;
+  const left = [...label.matchAll(/(\d+(?:\.\d+)?)%\s*left/gi)].map((m) => Number(m[1]));
+  if (left.length) return Math.min(...left);
+  const used = [...label.matchAll(/(\d+(?:\.\d+)?)%\s*used/gi)].map((m) => Number(m[1]));
+  return used.length ? 100 - Math.max(...used) : undefined;
+}
+
+/** The rule above the composer, with the usage label on its right edge.
+ *
+ * The rule is structure and stays dim. The label is information, so it reads
+ * by state: running low should be visible without reading the number, and
+ * exhausted should be unmissable. Everything around the composer being one
+ * flat grey meant the one figure that changes looked like the furniture. */
+export function paintUsageRule(width: number, label?: string): string {
+  const rule = rightLabeledRule(width, label);
+  if (!label) return chalk.dim(rule);
+  const at = rule.lastIndexOf(label);
+  if (at < 0) return chalk.dim(rule);
+  const remaining = usageRemainingPercent(label);
+  const exhausted = /exhausted/i.test(label);
+  const paint = exhausted || (remaining !== undefined && remaining <= 0) ? chalk.red
+    : remaining !== undefined && remaining <= 15 ? chalk.yellow
+      : remaining !== undefined ? chalk.green
+        : chalk.dim;
+  return `${chalk.dim(rule.slice(0, at))}${paint(label)}`;
 }
