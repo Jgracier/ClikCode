@@ -3,8 +3,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { emitJson } from '../../cli/structured-output.js';
-import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute } from '../../harness/definition.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
+import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
@@ -13,9 +14,24 @@ import { setEmitHarnessOutput } from '../account.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { markSessionLeftOpen } from '../../session/claim.js';
-import { optionForHarness, parseHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
+import { normalizeModelWord, optionForHarness, parseHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession } from './conversations.js';
+
+/** A model a user names on `sessions create`/`sessions set` must be one the
+ * harness actually publishes -- the same catalog its own picker draws from
+ * (nativeModelCatalog / harness.modelDiscoveryArgv) -- rather than any
+ * free-text string being stored and only failing once a real turn spawns the
+ * vendor CLI with it. Silent when the catalog itself is empty (discovery
+ * failed or the harness has none): a real vendor outage or a harness with no
+ * discovery command must not block setting a model that may well be valid. */
+export async function assertRealModel(harness: AiLocalHarnessDefinition | undefined, account: AiHarnessAccount | undefined, model: string): Promise<void> {
+  if (!harness) return;
+  const catalog = await nativeModelCatalog(harness, account);
+  if (catalog.models.length && !catalog.models.includes(model)) {
+    throw new Error(`"${model}" is not a model ${harness.displayName} publishes. Choose one of: ${catalog.models.join(', ')}`);
+  }
+}
 
 /** Gateway routing owns these fields as one policy unit. Keeping the mutation
  * centralized prevents route switches, slash settings, and headless setters
@@ -92,7 +108,9 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const provider = options.provider ?? account?.provider ?? null;
   const harness = provider ? localHarnessForProvider(provider) : undefined;
   if (provider && !harness && options.route === 'local') throw new Error(`unknown local provider "${provider}"`);
-  if (options.model && harness && !harness.modelArgvPrefix) throw new Error(`${harness.displayName} does not publish a model selector.`);
+  const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
+  if (model && harness && !harness.modelArgvPrefix) throw new Error(`${harness.displayName} does not publish a model selector.`);
+  if (model) await assertRealModel(harness, account, model);
   if (options.effort && harness) {
     const effortOption = optionForHarness(harness, 'effort');
     if (!effortOption) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
@@ -104,7 +122,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const session: HarnessSession = {
     id, conversationId: id, route: options.route, accountId: options.route === 'gateway' ? null : account?.id ?? null,
     provider: options.route === 'gateway' ? 'clikdeploy-gateway' : provider,
-    model: options.route === 'gateway' ? null : options.model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
+    model: options.route === 'gateway' ? null : model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
     effort: options.route === 'gateway' ? 'platform-managed' : options.effort ?? defaults.effort,
     ...(options.route === 'local' ? { permissionMode: defaults.permissionMode } : {}),
     accountFailover: options.route === 'gateway' ? 'never' : options.accountFailover ?? defaults.accountFailover,
@@ -175,30 +193,31 @@ export async function aiSessionShow(id: string): Promise<void> {
   emitJson({ session });
 }
 
+/** A session that never received a single turn AND was never linked to a real
+ * vendor conversation has nothing to resume — keeping it clutters every list
+ * with identical "Untitled chat" entries every time the app is opened and
+ * left without typing anything. A set nativeSessionId is kept even with zero
+ * ClikCode-tracked messages: it may be adopted from, or linked directly to, a
+ * vendor's own conversation that has real content ClikCode just never routed
+ * a turn through. gatewayConfirmed is the same signal for the one route
+ * (Gateway) that doesn't otherwise have a reliable "was this deliberate"
+ * field to check. nativeHarness is deliberately NOT part of this check: it
+ * used to be, on the theory that it is only ever set by an explicit provider
+ * selection (aiHarnessSelect, newProviderConversation) -- but
+ * newConversationSession carries it forward to every fresh default session
+ * too, same as `provider`/`accountId`/`route`, which made it indistinguishable
+ * from an accidental blank launch and defeated this check for the overwhelming
+ * majority of empty sessions. */
+function sessionIsEmpty(session: HarnessSession): boolean {
+  return !sessionTranscriptMessages(session).length && !session.nativeSessionId && !session.gatewayConfirmed;
+}
+
 /** Close is centralized even when the selected native agent has already exited. */
 export async function aiSessionClose(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  // A session that never received a single turn AND was never linked to a
-  // real vendor conversation has nothing to resume — keeping it as "closed"
-  // clutter buries real conversations under identical "Untitled chat" entries
-  // every time the app is opened and exited without typing anything. Drop it
-  // outright instead of accumulating it. A set nativeSessionId is kept even
-  // with zero ClikCode-tracked messages: it may be adopted from, or linked
-  // directly to, a vendor's own conversation that has real content ClikCode
-  // just never routed a turn through. A session with nativeHarness set is
-  // kept too, even message-less: explicitly choosing a native provider and
-  // configuring its account is real, deliberate setup work, not an
-  // accidental blank launch. nativeHarness is the reliable signal here
-  // specifically because it is ONLY ever set by an explicit selection
-  // (aiHarnessSelect, newProviderConversation) -- unlike `provider`,
-  // `accountId`, and `route`, which aiSessionOpenDefault's own "create a
-  // fresh default session" path silently carries forward from whatever
-  // session came before, even when the user has configured nothing yet.
-  // gatewayConfirmed is the same signal for the one route (Gateway) that
-  // doesn't otherwise have a reliable "was this deliberate" field to check.
-  if (!sessionTranscriptMessages(session).length && !session.nativeSessionId && !session.nativeHarness && !session.gatewayConfirmed) {
+  if (sessionIsEmpty(session)) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
@@ -213,12 +232,21 @@ export async function aiSessionClose(id: string): Promise<void> {
 }
 
 /** Save-and-leave lifecycle used by /exit. This deliberately does not call
- * aiSessionClose: closing a terminal must not make startup fall back to an
- * older provider branch of the same conversation. */
+ * aiSessionClose in the non-empty case: closing a terminal must not make
+ * startup fall back to an older provider branch of the same conversation. An
+ * empty session has no branch to preserve, so it is dropped exactly like
+ * aiSessionClose would rather than accumulating forever -- /exit is how
+ * nearly every session ends, and it is the overwhelmingly common way a blank
+ * "opened and did nothing" chat was never being cleaned up at all. */
 export async function aiSessionLeave(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (sessionIsEmpty(session)) {
+    state.sessions = state.sessions.filter((item) => item.id !== id);
+    await writeState(state);
+    return;
+  }
   markSessionLeftOpen(session, new Date().toISOString());
   await writeState(state);
 }
@@ -262,9 +290,11 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (effectiveRoute === 'local' && (options.account || options.provider) && !selectedHarness) {
     throw new Error(`unknown local provider "${options.provider ?? account?.provider}"`);
   }
-  if (options.model && selectedHarness && !selectedHarness.modelArgvPrefix) {
+  const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
+  if (model && selectedHarness && !selectedHarness.modelArgvPrefix) {
     throw new Error(`${selectedHarness.displayName} does not publish a model selector.`);
   }
+  if (model) await assertRealModel(selectedHarness, account ?? state.accounts.find((item) => item.id === current.accountId), model);
   if (options.effort && selectedHarness) {
     const effortOption = optionForHarness(selectedHarness, 'effort');
     if (!effortOption) throw new Error(`${selectedHarness.displayName} does not publish a configurable reasoning-effort flag.`);
@@ -281,7 +311,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.route ? { route: options.route } : {}),
     ...(account ? { accountId: account.id, provider: options.provider ?? account.provider } : {}),
     ...(options.provider ? { provider: options.provider } : {}),
-    ...(options.model ? { model: options.model } : {}),
+    ...(options.model !== undefined ? { model } : {}),
     ...(options.effort ? { effort: options.effort } : {}),
     ...(options.permissions ? { permissionMode: options.permissions } : {}),
     ...(options.accountFailover ? { accountFailover: options.accountFailover } : {}),

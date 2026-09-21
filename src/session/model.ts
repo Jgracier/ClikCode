@@ -28,6 +28,12 @@ export interface HarnessSession {
    * the harness's own title, or one the first turn asked the model for. A name
    * with no source is a legacy one derived from the first message. */
   nameSource?: 'user' | 'provider';
+  /** How many turns have carried an embedded title request (see
+   * withTitleRequest) while the session stayed unnamed. A model ignoring the
+   * request once is not rare enough to give up on permanently, but asking on
+   * every future turn forever would eventually annoy one that keeps ignoring
+   * it -- capped at TITLE_REQUEST_ATTEMPTS in title.ts. */
+  titleAttempts?: number;
   accountFailover: 'never' | 'on-quota-exhausted';
   createdAt: string;
   updatedAt: string;

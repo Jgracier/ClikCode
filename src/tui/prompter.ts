@@ -689,9 +689,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const provider = sessionProviderLabel(session);
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     // What the harness reported running beats what it was asked to run: a
-    // session set to `automatic` knows nothing until the vendor answers, and
-    // a vendor that substituted a model said so on its own stream.
-    const rawModel = harness?.modelArgvPrefix ? session.reported?.model ?? session.model ?? 'automatic' : undefined;
+    // session with no explicit choice knows nothing until the vendor
+    // answers, and a vendor that substituted a model said so on its own
+    // stream. Never a synthetic label -- there is no model named "automatic"
+    // to fall back to displaying.
+    const rawModel = harness?.modelArgvPrefix ? session.reported?.model ?? session.model ?? 'default' : undefined;
     const model = nativeModelLabel(harness?.command, rawModel);
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     // The title used to share this line with provider/model/directory, which

@@ -6,6 +6,7 @@ import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/l
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { applyDefaultSetting } from '../../session/options.js';
+import { assertRealModel } from './sessions.js';
 
 /** Read-only view of the defaults every new chat is built from. */
 /** Applies to every provider that doesn't have its own override. */
@@ -23,6 +24,7 @@ export async function aiSettingsSetProvider(providerOrHarness: string, key: stri
   if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
   const entry: Partial<HarnessDefaultSettings & { model: string }> = { ...state.providerSettings[harness.provider] };
   applyDefaultSetting(entry, key, value, harness);
+  if (key.toLowerCase() === 'model' && entry.model) await assertRealModel(harness, undefined, entry.model);
   state.providerSettings[harness.provider] = entry;
   await writeState(state);
   if (emit) emitJson({ provider: harness.provider, settings: entry });

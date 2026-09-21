@@ -13,6 +13,16 @@ import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './sessions.js';
 
+/** `nativeHarness` is deliberately not carried forward here, unlike
+ * `provider`/`accountId`/`route`/etc. It is the one field the empty-session
+ * prune (sessionIsEmpty in sessions.ts) treats as proof that a provider was
+ * explicitly chosen for THIS session (aiHarnessSelect, newProviderConversation
+ * set it directly, bypassing this function) -- carrying it forward here would
+ * make every fresh session look deliberately configured before a single turn
+ * ran, the same way `provider` does not need to prove that. The first real
+ * turn re-derives it from `provider` (localHarnessForProvider) regardless, so
+ * nothing routes differently; only the false "this was set up on purpose"
+ * signal on an untouched session goes away. */
 export function newConversationSession(
   state: HarnessState, source: HarnessSession, now = new Date().toISOString(),
 ): HarnessSession {
@@ -26,7 +36,6 @@ export function newConversationSession(
     ...(source.route === 'gateway' ? {} : { permissionMode: source.permissionMode ?? defaults.permissionMode }),
     accountFailover: source.accountFailover ?? defaults.accountFailover,
     workspace: source.workspace ?? process.cwd(),
-    ...(source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
     createdAt: now, updatedAt: now, status: 'active',
   };
 }

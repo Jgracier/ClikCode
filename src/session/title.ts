@@ -15,6 +15,7 @@
  */
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { HarnessSession } from './model.js';
 
 /** Long enough to say what a chat is about, short enough to sit on the rule
  * above the composer next to everything else that lives there. */
@@ -24,6 +25,19 @@ export const SESSION_TITLE_MAX = 20;
  * it; `ask` has no such thing, so the turn asks for one. */
 export function sessionTitleSource(harness: AiLocalHarnessDefinition | undefined): 'vendor' | 'ask' {
   return harness?.command === 'claude' ? 'vendor' : 'ask';
+}
+
+/** How many turns get an embedded title request before ClikCode stops
+ * asking. Retried once past the first turn: a model that ignores it is more
+ * often a one-off (a tool call before any text, an odd first prompt) than a
+ * standing refusal, and a second try is nearly free. Not retried forever --
+ * one that still ignores it twice is telling ClikCode something, and asking
+ * on every turn of an otherwise-normal chat would eventually be noise. */
+export const TITLE_REQUEST_ATTEMPTS = 2;
+
+/** Whether this turn should carry an embedded title request. */
+export function shouldRequestTitle(session: Pick<HarnessSession, 'name' | 'titleAttempts'>): boolean {
+  return !session.name && (session.titleAttempts ?? 0) < TITLE_REQUEST_ATTEMPTS;
 }
 
 const OPEN = '<clikcode-title>';
