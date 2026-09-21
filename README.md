@@ -1,42 +1,38 @@
 # ClikCode
 
-**One terminal for every coding-agent CLI.** Claude Code, Codex, Gemini CLI,
-GitHub Copilot, Cursor Agent, OpenCode, Qwen Code and seventeen others each have
-their own flags, session stores, permission vocabularies and output formats.
-ClikCode drives all 24 through one surface — accounts, sessions, models,
-reasoning effort, permissions — so changing tools stops meaning changing habits.
+You have five AI coding tools installed and none of them know about each
+other. ClikCode is the one place they all answer from.
 
-**Sign in once per account, and keep as many accounts as you want.**
-Authentication stays inside the vendor's own CLI: ClikCode never reads a token,
-it stores an opaque *reference* to a login. Nine of the harnesses can be given a
-home of their own, so several subscriptions of the same vendor sit side by side,
-each with its own sessions and its own quota.
+**Every tool, one way of working.** Claude Code, Codex, Gemini, Copilot,
+Cursor and nineteen more. Each arrived with its own commands, its own sign-in,
+its own idea of where your chats live. ClikCode gives you one of each — and the
+controls stay in the same place no matter which one is answering.
 
-**Resume any chat, including ones ClikCode never opened.** A conversation is one
-row whichever harness answered it, and provider hops live in that row's history
-rather than as duplicate sessions. ClikCode also finds threads in the vendors'
-own histories — started in Claude Code or Codex directly — and adopts them.
+**All your accounts, at once.** You still sign in inside the tool itself, the
+way you always have; ClikCode never sees your password or your key. It just
+remembers which account is which. Work and personal, two subscriptions, a spare
+— keep them side by side and move between them in a keystroke. (Nine of the
+tools can hold several accounts this way, Claude Code, Codex, Copilot and
+Gemini among them.)
 
-**Keep working past a usage limit.** ClikCode reads each account's remaining
-quota and, when a window is exhausted, moves the turn to the next account with
-headroom. This is on by default (`accountFailover: on-quota-exhausted`). It
-copies the vendor's own session file into that account's profile first, so the
-model resumes the actual thread instead of a retelling of it.
+**One list of conversations.** Not one per tool. Whichever one you were using
+when you started a chat, it is in the same list, and you can carry it on
+somewhere else. Chats you began in Claude Code or Codex directly, long before
+ClikCode was involved, are in that list too.
 
-Under all of that, ClikCode is a **normalized broker**: every per-vendor fact is
-a declared field in one catalog, never a name in a branch, and each vendor keeps
-its own authentication and its own interactive managers.
+**Run out, and keep going.** When an account hits its limit, ClikCode moves to
+the next one and the answer keeps coming. It takes the conversation with it, so
+the model continues from what was actually said rather than a summary of it.
+Nothing to click. You find out afterwards.
 
-A **hosted gateway** is the optional second route. There, the gateway provides
-the intelligence (model selection and inference) and ClikCode itself is the
-harness, rather than brokering a vendor CLI. Nothing requires it: without a
-gateway sign-in ClikCode works entirely against your local accounts, and
-`CLIKCODE_GATEWAY=off` removes the surface altogether. The default endpoint is
-ClikDeploy Gateway (`https://clikdeploy.com`) because that is the one that
-exists today; `CLIKCODE_GATEWAY_URL` points it anywhere else. Everything the
-gateway touches lives in `src/constants.ts` (the switch and the URL) and one
-folder, `src/gateway/` (credentials, sign-in, the gateway model harness) — so
-replacing it is a local change, not a refactor.
+Underneath, ClikCode is a translator. Everything it knows about a tool is
+written down as description rather than built into the code, which is why
+adding the twenty-fifth one is a paragraph and not a project.
+
+Sign in to a **hosted service** instead and ClikCode will do the thinking
+itself, no vendor tool required. That route is entirely optional — leave it
+alone and ClikCode works purely against the accounts on your machine.
+[Details below](#the-optional-gateway).
 
 ## Install
 
@@ -54,12 +50,12 @@ demand by `clikcode accounts login <harness>` when they support it.
 | Command | What it does |
 | --- | --- |
 | `clikcode` | Open (or resume) the default interactive session |
-| `clikcode doctor` | Installed harness versions and their normalized capabilities |
-| `clikcode accounts providers` | Supported harnesses and how each one signs in |
-| `clikcode accounts login <harness> [--label <label>]` | Run the vendor's own login into an isolated local account |
-| `clikcode accounts list` / `status` / `logout` / `remove` | Manage local account aliases |
-| `clikcode models`, `clikcode usage` | Models and usage across local accounts |
-| `clikcode sessions list` / `create` / `open` / `resume` / `set` / `close` | Persistent sessions, including resuming the vendor's native chat |
+| `clikcode doctor` | Which tools are installed, their versions and what each can do |
+| `clikcode accounts providers` | Every supported tool and how it signs in |
+| `clikcode accounts login <tool> [--label <label>]` | Run that tool's own login, kept separate from your others |
+| `clikcode accounts list` / `status` / `logout` / `remove` | Your accounts: what they are called, and what is left on each |
+| `clikcode models`, `clikcode usage` | Models you can pick, and how much each account has left |
+| `clikcode sessions list` / `create` / `open` / `resume` / `set` / `close` | Your conversations, including ones a tool started on its own |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
 | `clikcode gateway login [--github]` / `gateway status` | Optional gateway sign-in (Google by default); absent when `CLIKCODE_GATEWAY=off` |
 
@@ -209,6 +205,20 @@ those back at your real home so turns still commit, push and install as you.
 Switching account mid-session is explicit (`/accounts`), and automatic failover
 to another account happens only on a recognized quota-exhaustion failure and only
 if the session opted in (`--account-failover on-quota-exhausted`).
+
+## The optional gateway
+
+The second route is a hosted one. There, the service supplies the model and
+ClikCode runs the coding agent itself, rather than driving a vendor's CLI — so
+it works on a machine with none of those tools installed.
+
+Nothing requires it. Without a gateway sign-in ClikCode works entirely against
+your local accounts, and `CLIKCODE_GATEWAY=off` removes the commands
+altogether. The default endpoint is ClikDeploy Gateway
+(`https://clikdeploy.com`) because that is the one that exists today;
+`CLIKCODE_GATEWAY_URL` points it anywhere else. Everything the gateway touches
+lives in `src/constants.ts` (the switch and the URL) and one folder,
+`src/gateway/`, so replacing it is a local change rather than a refactor.
 
 ## Optional loopback control API
 
