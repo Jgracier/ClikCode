@@ -638,6 +638,15 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } },
     features: ['ACP', 'web UI'],
   },
+  // Amp is the only harness of the 25 that reports a CREDIT BALANCE rather
+  // than spend: `amp usage` is documented as "Show your current Amp usage and
+  // credit balance", with --details for a credit/token/thread breakdown.
+  //
+  // Not wired, and deliberately so: it needs an Amp login to return anything
+  // ("Invalid or missing API key"), so its output shape is unverified here. A
+  // parser written against a guessed shape would put an invented money figure
+  // on screen, which is worse than showing nothing. Wire it from a real
+  // response, not from this comment.
   amp: {
     options: [
       value('mcp-config', 'MCP configuration', 'Per-turn MCP server configuration', 'tools', ['--mcp-config']),
