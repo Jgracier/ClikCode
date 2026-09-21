@@ -99,7 +99,10 @@ export class ConversationStore {
   /** Every item ever recorded, ignoring compaction markers. */
   async loadFullHistory(): Promise<ConversationItem[]> {
     let raw: string;
-    try { raw = await fs.readFile(this.file, 'utf8'); } catch { return []; }
+    try { raw = await fs.readFile(this.file, 'utf8'); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
     const items: ConversationItem[] = [];
     for (const line of raw.split('\n')) {
       try {

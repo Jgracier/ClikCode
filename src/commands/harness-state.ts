@@ -15,7 +15,7 @@
  * one in-memory `HarnessState` with materialized messages -- but a write now
  * touches only the records that actually changed. */
 
-import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmod, copyFile, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
@@ -40,6 +40,12 @@ export const HARNESS_STATE_VERSION = 2;
 export const LOCAL_HARNESS_PROTOCOL = 1;
 /** Individual invocation records kept; older ones fold into per-day totals. */
 export const INVOCATION_KEEP = 1000;
+
+function sameSecret(left: string | undefined, right: string | undefined): boolean {
+  const a = Buffer.from(left ?? '', 'utf8');
+  const b = Buffer.from(right ?? '', 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 /** Defaults a brand-new session is built from. Provider-specific overrides win
  * over the global defaults, which win over the hardcoded fallback — replacing
@@ -860,8 +866,8 @@ export async function writeState(state: HarnessState): Promise<void> {
     }
 
     // 4. Secrets, only when this caller changed them.
-    const tokenChanged = baseline ? state.localApiToken !== baseline.localApiToken : !!state.localApiToken;
-    const keyChanged = baseline ? state.devicePrivateKeyPem !== baseline.devicePrivateKeyPem : !!state.devicePrivateKeyPem;
+    const tokenChanged = baseline ? !sameSecret(state.localApiToken, baseline.localApiToken) : !!state.localApiToken;
+    const keyChanged = baseline ? !sameSecret(state.devicePrivateKeyPem, baseline.devicePrivateKeyPem) : !!state.devicePrivateKeyPem;
     if (tokenChanged || keyChanged) {
       const secrets = await readSecretsFile();
       const updated: HarnessSecrets = {
