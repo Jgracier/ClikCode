@@ -1,7 +1,8 @@
 /** The public ClikCode command surface. It intentionally does not expose deployment commands. */
 import type { Command } from 'commander';
 import type Conf from 'conf';
-import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, aiGatewaySessionSend, aiGatewayStatus, aiModelsList, aiPermissions, aiSessionCommand, aiSessionClose, aiSessionCreate, aiSessionInteractive, aiSessionResume, aiSessionSet, aiSessionShow, aiSessionsList, aiUsage } from '../commands/ai.js';
+import { aiGatewaySessionSend } from '../commands/ai-turn.js';
+import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, aiGatewayStatus, aiModelsList, aiPermissions, aiSessionCommand, aiSessionClose, aiSessionCreate, aiSessionInteractive, aiSessionResume, aiSessionSet, aiSessionShow, aiSessionsList, aiUsage } from '../commands/ai.js';
 import { aiStart, aiStatus, aiStop } from '../commands/ai-daemon.js';
 import { gatewayLogin } from '../commands/gateway-login.js';
 
