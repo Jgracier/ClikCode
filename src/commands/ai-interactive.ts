@@ -33,18 +33,12 @@ import { customCommandPrompt } from './custom-commands.js';
 import { LiveTurnInputBroker } from './live-turn-input.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import {
-  addAccountForHarness, aiSessionCommand, aiSessionLeave,
-  autoSelectSessionHarness, capabilitiesText, compactConversation,
-  customCommandsFor, doctorSummary, exportTranscript,
-  initPrompt, interactiveAccountPicker, interactiveEffortPicker,
-  interactiveEnginePicker, interactiveHarnessOptionPicker, interactiveModelPicker,
-  interactivePermissionPicker, interactiveSessionManager, interactiveSessionPicker,
-  interactiveSettingsPicker, launchSession, manageAccountAction,
-  nativeManagerListing, newConversation, newProviderConversation,
-  readMemoryFile, releaseQueuedTurn, reviewPrompt,
-  sessionHarness, slashExtrasFor, slashRouteContextFor,
+  aiSessionCommand, aiSessionLeave, capabilitiesText, compactConversation, customCommandsFor, exportTranscript, initPrompt, launchSession, nativeManagerListing, newConversation, newProviderConversation, readMemoryFile, releaseQueuedTurn, reviewPrompt, sessionHarness, slashExtrasFor, slashRouteContextFor,
 } from './ai.js';
-import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from './ai.js';
+import {
+  addAccountForHarness, autoSelectSessionHarness, doctorSummary, interactiveAccountPicker, interactiveEffortPicker, interactiveEnginePicker, interactiveHarnessOptionPicker, interactiveModelPicker, interactivePermissionPicker, interactiveSessionManager, interactiveSessionPicker, interactiveSettingsPicker, manageAccountAction,
+} from './interactive-pickers.js';
+import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from './interactive-pickers.js';
 
 
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
