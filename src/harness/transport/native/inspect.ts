@@ -2,6 +2,8 @@
  * cached, because a picker asks this about every harness at once. */
 
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
+import { binaryFingerprint, rememberVersion, rememberedVersion, resetVersionMemo, saveVersionMemo } from './version-memo.js';
+import { resolveBinaryPath } from './binary.js';
 import { installFailureTail, runCaptured, startSpinner } from '../../install-progress.js';
 import { installInstructions } from '../../install-hints.js';
 import { NativeHarnessSpec, binaryOnPath } from './binary.js';
@@ -55,6 +57,10 @@ function clearNativeHarnessInspectionCache(command?: string): void {
   }
   inspectionCache.delete(command);
   pickerInspectionCache.delete(command);
+  // The binary just changed on disk, so its fingerprint has too -- but an
+  // install that lands on the same mtime (a reinstall of the same build)
+  // would still match. Forgetting is cheaper than reasoning about that.
+  resetVersionMemo();
 }
 
 /** Inspect availability without installing, logging in, or entering a vendor TUI. */
@@ -62,14 +68,40 @@ export async function inspectNativeHarness(spec: NativeHarnessSpec, timeoutMs = 
   if (spec.surface === 'editor-extension') return { installed: false, error: 'editor-extension-only' };
   const cached = inspectionCache.get(spec.command);
   if (cached && Date.now() - cached.at < INSPECTION_CACHE_TTL_MS) return cached.result;
-  const result = await inspectNativeHarnessUncached(spec, timeoutMs);
+  // What the binary is, before deciding whether it needs running. A version
+  // string is a fact about a file: same path, mtime and size means the same
+  // answer, however long ago it was learned.
+  const fingerprint = await binaryFingerprint(await resolveBinaryPath(spec.binary));
+  const remembered = await rememberedVersion(spec.command, fingerprint);
+  if (remembered) {
+    const result: NativeHarnessInspection = {
+      installed: true,
+      ...(remembered.version ? { version: remembered.version } : {}),
+      ...(remembered.error ? { error: remembered.error } : {}),
+    };
+    inspectionCache.set(spec.command, { at: Date.now(), result });
+    pickerInspectionCache.set(spec.command, { at: Date.now(), result });
+    return result;
+  }
+  const result = await inspectNativeHarnessUncached(spec, timeoutMs, fingerprint);
   inspectionCache.set(spec.command, { at: Date.now(), result });
   pickerInspectionCache.set(spec.command, { at: Date.now(), result });
+  // Only a completed probe is written down. A timeout says nothing durable
+  // about the binary, and remembering it would make one slow run permanent.
+  if (fingerprint && result.installed && result.error !== 'version probe timed out') {
+    await rememberVersion(spec.command, fingerprint, {
+      ...(result.version ? { version: result.version } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    });
+  }
   return result;
 }
 
-async function inspectNativeHarnessUncached(spec: NativeHarnessSpec, timeoutMs: number): Promise<NativeHarnessInspection> {
-  if (!await binaryOnPath(spec.binary)) return { installed: false };
+async function inspectNativeHarnessUncached(
+  spec: NativeHarnessSpec, timeoutMs: number,
+  fingerprint?: { path: string; mtimeMs: number; size: number },
+): Promise<NativeHarnessInspection> {
+  if (!(fingerprint ?? await binaryOnPath(spec.binary))) return { installed: false };
   return new Promise((resolve) => {
     const child = spawn(spec.binary, [...(spec.versionArgv ?? ['--version'])], {
       stdio: ['ignore', 'pipe', 'pipe'], env: process.env,

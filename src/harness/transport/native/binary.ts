@@ -29,6 +29,17 @@ export async function binaryOnPath(
   binary: string,
   options: { platform?: NodeJS.Platform; path?: string; pathExt?: string } = {},
 ): Promise<boolean> {
+  return Boolean(await resolveBinaryPath(binary, options));
+}
+
+/** Where a binary actually resolves on PATH, or undefined. Same search as
+ * binaryOnPath -- which is written in terms of this -- but it hands back the
+ * path, so a caller can stat the file it is about to run instead of only
+ * knowing that something by that name exists. */
+export async function resolveBinaryPath(
+  binary: string,
+  options: { platform?: NodeJS.Platform; path?: string; pathExt?: string } = {},
+): Promise<string | undefined> {
   const platform = options.platform ?? process.platform;
   const names = executableNames(binary, platform, options.pathExt ?? process.env.PATHEXT);
   const directories = isAbsolute(binary) ? [''] : (options.path ?? process.env.PATH ?? '').split(platform === 'win32' ? ';' : delimiter);
@@ -38,9 +49,9 @@ export async function binaryOnPath(
       const candidate = isAbsolute(name) ? name : join(directory, name);
       try {
         await access(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK);
-        return true;
+        return candidate;
       } catch { /* try next candidate */ }
     }
   }
-  return false;
+  return undefined;
 }
