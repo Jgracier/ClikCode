@@ -2,7 +2,9 @@
  * answer it. */
 
 import chalk from 'chalk';
-import { sanitizeTerminalText, visibleSlice, wrapCodeLine, wrapWords } from './markdown.js';
+import { sanitizeTerminalText } from './text.js';
+import { visibleSlice } from './width.js';
+import { wrapCodeLine, wrapWords } from './wrap.js';
 
 /** How long an approval ignores every key after it appears. A person typing
  * into the composer cannot stop within a frame of a prompt popping up; without

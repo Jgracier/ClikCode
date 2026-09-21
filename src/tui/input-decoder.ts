@@ -6,7 +6,7 @@
 import { NEWLINE_KEY, PASTE_END, PASTE_START } from './keys.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
-import { nextCharacterIndex } from './render/markdown.js';
+import { nextCharacterIndex } from './render/width.js';
 import { logCursorEvent } from './cursor-log.js';
 import { LEGACY_MOUSE_PREFIX } from './modes.js';
 

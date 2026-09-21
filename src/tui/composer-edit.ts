@@ -7,7 +7,7 @@
  * the prompter because what a key does to a line of text is a different
  * question from how that line is drawn.
  */
-import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth } from './render/markdown.js';
+import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth } from './render/width.js';
 import { NEWLINE_KEY, pastedText } from './keys.js';
 
 function previousWordIndex(value: string, cursor: number): number {

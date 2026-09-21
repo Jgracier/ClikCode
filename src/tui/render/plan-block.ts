@@ -1,7 +1,8 @@
 /** The todo block: a harness's plan, windowed around the step in progress. */
 
 import chalk from 'chalk';
-import { sanitizeTerminalText, visibleSlice } from './markdown.js';
+import { sanitizeTerminalText } from './text.js';
+import { visibleSlice } from './width.js';
 import type { HarnessPlanEntry } from '../../harness/events/turn-observer.js';
 
 /** The shared shape, so a plan entry means the same thing whichever harness

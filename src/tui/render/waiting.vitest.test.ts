@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { terminalCellWidth } from './markdown';
+import { terminalCellWidth } from './width';
 import { liveConversationLines, rightLabeledRule, waitingSpinnerFrame, waitingSpinnerGlyph } from './waiting';
 
 describe('the waiting band', () => {

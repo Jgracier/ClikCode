@@ -7,7 +7,7 @@
  * does to a line. Holding it here is what keeps those two from importing each
  * other.
  */
-import { sanitizeTerminalText } from './render/markdown.js';
+import { sanitizeTerminalText } from './render/text.js';
 
 function environmentFlag(...values: (string | undefined)[]): boolean {
   return values.some((value) => {
