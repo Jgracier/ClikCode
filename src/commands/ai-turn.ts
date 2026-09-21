@@ -96,6 +96,9 @@ export async function aiSessionSend(
     run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
     let switchedFrom: string | undefined;
+    /** Whether any account actually ran out, as opposed to failing some other
+     * way. Decides whether "Usage Exhausted" is the truth at the end. */
+    let exhaustedAnyAccount = false;
     const attemptedAccounts = new Set<string>();
     try {
     if (session.accountFailover === 'on-quota-exhausted' && account.quotaState === 'exhausted') {
@@ -441,9 +444,19 @@ export async function aiSessionSend(
           TERMINAL.active?.response('', 'replace');
           continue;
         }
-        if (failureKind !== 'quota-exhausted') throw failure;
-        account.quotaState = 'exhausted';
-        account.quotaRetryAt = undefined;
+        // Failover is about finding an account that can still work, so it is
+        // not gated on the failure being a quota refusal. A turn that died
+        // for any other reason still moves to the next account that has usage
+        // -- bounded by attemptedAccounts, so each is tried at most once and a
+        // genuinely broken harness cannot cycle forever.
+        //
+        // Only a quota refusal marks the account spent, though: a crash says
+        // nothing about how much allowance is left.
+        if (failureKind === 'quota-exhausted') {
+          account.quotaState = 'exhausted';
+          account.quotaRetryAt = undefined;
+          exhaustedAnyAccount = true;
+        }
         attemptedAccounts.add(account.id);
         await checkpoint.persistNow();
         // Same-provider failover for the native-CLI path: switching accounts means
@@ -455,6 +468,7 @@ export async function aiSessionSend(
         // same thing rather than leaking whatever the vendor happened to call
         // it ("Payment Required", "usage balance exhausted").
         if (session.accountFailover !== 'on-quota-exhausted') {
+          if (!exhaustedAnyAccount) throw failure;
           throw new Error(usageExhaustedMessage(account ? [account] : []));
         }
         const fallback = await nextUsableFailoverAccount(
@@ -462,9 +476,13 @@ export async function aiSessionSend(
         );
         if (!fallback) {
           await checkpoint.persistNow();
+          // Nothing left to try. "Usage Exhausted" only if running out is
+          // actually what happened -- if the last account died of something
+          // else, saying it ran out would be inventing a reason.
+          if (!exhaustedAnyAccount) throw failure;
           throw new Error(usageExhaustedMessage(
-          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
-        ));
+            state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
+          ));
         }
         // The vendor's own thread is carried into the account taking over, so
         // it resumes with everything it actually said and did rather than a
@@ -483,7 +501,10 @@ export async function aiSessionSend(
         // happens inside one continuous await chain, so without this the whole
         // thing looks instantaneous and the reply just silently comes from a
         // different account with nothing to explain the (brief) extra wait.
-        TERMINAL.active?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
+        // Say why it moved. Switching happens for any failure now, so calling
+        // every one of them "quota reached" would misreport a crash as a
+        // spent plan.
+        TERMINAL.active?.activity(`${chalk.yellow(failureKind === 'quota-exhausted' ? 'quota reached' : 'account failed')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
         TERMINAL.active?.phase(`retrying on ${fallback.label}`);
         await closePersistentTransport(session.id);
         account = fallback;
@@ -594,6 +615,9 @@ export async function aiSessionSend(
     });
   };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
+  /** Whether any account here actually ran out, as opposed to failing some
+   * other way -- decides whether "Usage Exhausted" is the truth at the end. */
+  let exhaustedAnyApiAccount = false;
   for (;;) {
     try {
       turn = await invoke(account);
@@ -604,10 +628,16 @@ export async function aiSessionSend(
         account.status = 'needs_login';
         await writeState(state);
       }
-      if (session.accountFailover !== 'on-quota-exhausted' || failureKind !== 'quota-exhausted') throw error;
+      // Same rule as the vendor-CLI path above: move to the next account that
+      // has usage whatever went wrong, but only call an account spent when it
+      // actually refused for quota.
+      if (session.accountFailover !== 'on-quota-exhausted') throw error;
       const exhaustedAccount = account;
-      exhaustedAccount.quotaState = 'exhausted';
-      exhaustedAccount.quotaRetryAt = undefined;
+      if (failureKind === 'quota-exhausted') {
+        exhaustedAccount.quotaState = 'exhausted';
+        exhaustedAccount.quotaRetryAt = undefined;
+        exhaustedAnyApiAccount = true;
+      }
       attemptedAccounts.add(exhaustedAccount.id);
       // Preserve every failed candidate before looking for the next one. A
       // chain of stale account records therefore terminates instead of merely
@@ -620,12 +650,13 @@ export async function aiSessionSend(
       );
       if (!fallback) {
         await writeState(state);
+        if (!exhaustedAnyApiAccount) throw error;
         throw new Error(usageExhaustedMessage(
           state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
         ));
       }
       switchedFrom ??= exhaustedAccount.id;
-      TERMINAL.active?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
+      TERMINAL.active?.activity(`${chalk.yellow(failureKind === 'quota-exhausted' ? 'quota reached' : 'account failed')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
       TERMINAL.active?.phase(`retrying on ${fallback.label}`);
       account = fallback;
       session.accountId = fallback.id;
