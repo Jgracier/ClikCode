@@ -6,6 +6,7 @@
  * checked against a real installed CLI or a real API response. */
 
 import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
+import { auggieUsageLabel } from './auggie-usage.js';
 import { quotaResetPhrase } from './usage-exhausted.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -651,9 +652,22 @@ export async function recordDerivedUsage(session: HarnessSession, usage: string 
   return reading.label;
 }
 
+
+/** Auggie publishes an account balance; ClikCode reads it from the harness
+ * rather than from Augment's API, the same rule every other usage source
+ * follows here. */
+export async function auggieUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+  const harness = localHarnessForCommand('auggie');
+  if (!harness) return undefined;
+  try {
+    return auggieUsageLabel(await captureNativeHarnessOutput(harness, ['account', 'status', '--json'], environment, NATIVE_USAGE_PROBE_TIMEOUT_MS));
+  } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
+}
+
 export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
   codex: codexUsageProbe,
   claude: claudeUsageProbe,
+  auggie: auggieUsageProbe,
 };
 
 export type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;

@@ -268,6 +268,26 @@ export async function aiSettingsClearProvider(providerOrHarness: string, emit = 
   if (emit) emitJson({ provider: harness.provider, settings: {} });
 }
 
+/** Find an account by id, or by label within the provider being asked for.
+ *
+ * A label is only unique per provider: one person signs in to Claude, Codex
+ * and Antigravity with the same email, and every one of those accounts is
+ * called that email. Matching on label alone returned whichever happened to
+ * be stored first, so `--provider antigravity --account me@example.com` could
+ * bind an Antigravity session to the OpenAI account of the same name -- and
+ * then report that provider's quota. Confirmed live: it surfaced as
+ * "Usage Exhausted" on an Antigravity account that was working perfectly.
+ *
+ * An id always wins, and with no provider named the old behaviour stands. */
+function findAccount(
+  state: HarnessState, labelOrId: string, provider?: string | null,
+): AiHarnessAccount | undefined {
+  const byId = state.accounts.find((item) => item.id === labelOrId);
+  if (byId) return byId;
+  const sameLabel = state.accounts.filter((item) => item.label === labelOrId);
+  return (provider ? sameLabel.find((item) => item.provider === provider) : undefined) ?? sameLabel[0];
+}
+
 export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
   if (options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
   if (options.route === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
@@ -275,10 +295,14 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   }
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   const state = await readState();
-  const account = options.account
-    ? state.accounts.find((item) => item.id === options.account || item.label === options.account)
-    : undefined;
+  const account = options.account ? findAccount(state, options.account, options.provider) : undefined;
   if (options.route === 'local' && options.account && !account) throw new Error(`local AI account "${options.account}" was not found`);
+  // The same guard aiSessionSet already applied. Without it, a label that
+  // exists under several providers silently bound the session to the wrong
+  // one instead of saying so.
+  if (account && options.provider && options.provider !== account.provider) {
+    throw new Error(`account "${account.label}" belongs to ${account.provider}, not ${options.provider}`);
+  }
   const provider = options.provider ?? account?.provider ?? null;
   const harness = provider ? localHarnessForProvider(provider) : undefined;
   if (provider && !harness && options.route === 'local') throw new Error(`unknown local provider "${provider}"`);
@@ -493,7 +517,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   }
   const account = options.account === undefined
     ? undefined
-    : state.accounts.find((item) => item.id === options.account || item.label === options.account);
+    : findAccount(state, options.account, options.provider ?? current.provider);
   if (options.account !== undefined && !account) throw new Error(`local AI account "${options.account}" was not found`);
   if (account && options.provider && options.provider !== account.provider) {
     throw new Error(`account "${account.label}" belongs to ${account.provider}, not ${options.provider}`);
