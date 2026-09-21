@@ -1,5 +1,6 @@
 /** The public ClikCode command surface. It intentionally does not expose deployment commands. */
 import type { Command } from 'commander';
+import { mcpAdd, mcpTargets } from '../commands/mcp-command.js';
 import type Conf from 'conf';
 import { aiGatewaySessionSend } from '../commands/ai-turn.js';
 import { aiPermissions } from '../commands/interactive-pickers.js';
@@ -36,6 +37,17 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   accounts.command('remove <labelOrId>').alias('rm').description('Remove a local account alias, not the provider credential').action(aiAccountRemove);
   program.command('models').description('List normalized models available through local accounts').action(aiModelsList);
   program.command('usage').description('Show normalized local AI invocation usage').action(aiUsage);
+  // One MCP server, added once, written into every harness that takes one.
+  const mcp = program.command('mcp').description('Share an MCP server with every harness that supports one');
+  mcp.command('add')
+    .argument('<name>', 'Name the server is known by')
+    .argument('<target>', 'Command to launch, or a URL for a remote server')
+    .argument('[args...]', 'Arguments for a launched command')
+    .description('Install an MCP server into every harness that supports MCP')
+    .action((name: string, target: string, args: string[]) => mcpAdd(name, target, args));
+  mcp.command('targets')
+    .description('Show which harnesses would receive it, and how each spells the request')
+    .action(mcpTargets);
   const gateway = program.command('gateway').description('Optionally connect ClikDeploy Gateway');
   gateway.command('status').description('Show the ClikDeploy Gateway connection state').action(() => aiGatewayStatus(config));
   gateway.command('login').description('Sign in to ClikDeploy for optional Gateway model access')

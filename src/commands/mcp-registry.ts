@@ -35,12 +35,27 @@ export function isRemoteTarget(target: string): boolean {
   return /^https?:\/\//i.test(target);
 }
 
-/** The argv this harness needs to register `entry`, or undefined when it has
- * no `mcp add` at all. */
+/** How one harness spells `mcp add`, as the catalog records it. */
+export type McpAddGrammar = {
+  argv: readonly string[];
+  shape: 'positional' | 'url-or-doubledash';
+  transportPrefix?: readonly string[];
+};
+
+/** What the catalog says about this harness, or undefined when it records no
+ * `mcp add` at all. */
+export function mcpAddGrammar(harness: AiLocalHarnessDefinition): McpAddGrammar | undefined {
+  return localHarnessCapabilityManifest(harness)?.managers?.mcp?.add;
+}
+
+/** The argv that registers `entry` under `add`.
+ *
+ * Takes the grammar rather than looking it up, so the part that has to be
+ * exactly right is a pure function of its inputs and can be tested without a
+ * catalog runtime behind it. */
 export function mcpAddArgv(
-  harness: AiLocalHarnessDefinition, entry: McpServerEntry,
+  add: McpAddGrammar | undefined, entry: McpServerEntry,
 ): readonly string[] | undefined {
-  const add = localHarnessCapabilityManifest(harness)?.managers?.mcp?.add;
   if (!add) return undefined;
   const remote = isRemoteTarget(entry.target);
   if (add.shape === 'url-or-doubledash') {
@@ -58,9 +73,7 @@ export function mcpAddArgv(
  * grammar recorded. A harness with an MCP manager but no recorded grammar is
  * deliberately not guessed at: a wrong argv writes a broken server entry. */
 export async function harnessesAcceptingMcp(): Promise<AiLocalHarnessDefinition[]> {
-  const candidates = allLocalHarnesses().filter(
-    (harness) => localHarnessCapabilityManifest(harness)?.managers?.mcp?.add,
-  );
+  const candidates = allLocalHarnesses().filter((harness) => mcpAddGrammar(harness));
   const installed = await Promise.all(candidates.map(async (harness) => {
     const inspection = await inspectNativeHarness(harness, 800).catch(() => undefined);
     return inspection?.installed ? harness : undefined;
@@ -77,7 +90,7 @@ export interface McpInstallResult { harness: string; account?: string; ok: boole
 export async function installMcpServer(
   harness: AiLocalHarnessDefinition, entry: McpServerEntry, account?: AiHarnessAccount,
 ): Promise<McpInstallResult> {
-  const argv = mcpAddArgv(harness, entry);
+  const argv = mcpAddArgv(mcpAddGrammar(harness), entry);
   const label = { harness: harness.command, ...(account?.label ? { account: account.label } : {}) };
   if (!argv) return { ...label, ok: false, detail: 'no mcp add grammar recorded' };
   try {
@@ -86,4 +99,30 @@ export async function installMcpServer(
   } catch (error) {
     return { ...label, ok: false, detail: error instanceof Error ? error.message.split('\n')[0] : 'failed' };
   }
+}
+
+/** Registers `entry` everywhere it can go: every installed harness with a
+ * recorded grammar, once per account that has its own isolated profile.
+ *
+ * One account per harness where none is isolated, because a harness without
+ * profile isolation has a single configuration and writing it twice would
+ * just repeat the same work.
+ */
+export async function installMcpServerEverywhere(
+  entry: McpServerEntry, accounts: readonly AiHarnessAccount[],
+): Promise<McpInstallResult[]> {
+  const harnesses = await harnessesAcceptingMcp();
+  const results: McpInstallResult[] = [];
+  for (const harness of harnesses) {
+    const profiles = harness.profileEnv
+      ? accounts.filter((account) => account.provider === harness.provider && account.nativeProfile)
+      : [];
+    const targets: Array<AiHarnessAccount | undefined> = profiles.length ? profiles : [undefined];
+    for (const account of targets) {
+      // Sequential on purpose: these write vendor config files, and two
+      // processes rewriting one file at once is how a config is lost.
+      results.push(await installMcpServer(harness, entry, account));
+    }
+  }
+  return results;
 }
