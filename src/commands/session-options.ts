@@ -283,6 +283,9 @@ export function accountPickerOptions(
   session: HarnessSession,
   harness: AiLocalHarnessDefinition,
 ): PickerOption<ProviderAccountChoice>[] {
-  return providerAccountPickerOptions(harness, accounts.filter(({ account }) => account.provider === harness.provider), session)
-    .filter((option) => option.value.kind === 'account');
+  // Every row the builder produces, including the trailing "+ Add account…".
+  // Filtering to kind === 'account' here is what made that row unreachable:
+  // it is the only way to connect a second login from inside /account, and
+  // this is the only caller, so it was dead.
+  return providerAccountPickerOptions(harness, accounts.filter(({ account }) => account.provider === harness.provider), session);
 }

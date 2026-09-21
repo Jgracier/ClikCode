@@ -372,6 +372,28 @@ export function turnIdleTimeoutMs(
     : DEFAULT_TURN_IDLE_TIMEOUT_MS;
 }
 
+/** The one line worth showing a person out of a failed harness's stderr.
+ *
+ * Vendor CLIs fail loudly: stack frames, module resolution traces, absolute
+ * paths, sometimes a JSON blob. The first line that is none of those is
+ * almost always the actual complaint, and it is all that belongs on screen.
+ */
+export function firstUsefulLine(stderr: string, limit = 200): string {
+  // Stack frames, brackets, bare paths, carets, and the runtime's own
+  // `throw err;` line -- none of them is the complaint.
+  const noise = /^\s*(?:at\s|[{}[\]]|"|\/|[A-Za-z]:\\|\.{3}|Require stack|throw\s|\^+\s*$|node:internal)/;
+  const lines = stderr.split(/\r?\n/).filter((line) => line.trim() && !noise.test(line));
+  const cut = (text: string): string =>
+    text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}\u2026` : text;
+  // The line that names the error wins over whatever merely came first: a
+  // runtime prints its banner lines before the message they belong to.
+  const named = lines.find((line) => /\berror\b/i.test(line));
+  if (named) return cut(named.trim());
+  if (lines.length) return cut(lines[0]!.trim());
+  const fallback = stderr.trim().split(/\r?\n/)[0]?.trim() ?? '';
+  return cut(fallback);
+}
+
 /** A failed turn keeps its two streams apart: stderr is the vendor CLI's own
  * diagnostics and is safe to classify, stdout may be model-authored text that
  * merely *mentions* "rate limit" or "unauthorized". */
@@ -567,7 +589,11 @@ export async function captureNativeHarnessTurn(
       const flags = truncated ? { truncated: true } : {};
       if (interrupted) return resolve({ stdout, stderr, exitCode: code ?? 130, interrupted: true, ...flags });
       if (code !== 0 && !stdout.trim()) {
-        const detail = stderr.trim().slice(-4000);
+        // The MESSAGE gets one line. The full tail still rides on the error
+        // for classification and logs, but it is not what a person reads: a
+        // crashing harness prints stack traces and absolute paths, and 4KB of
+        // those used to land in the conversation as the explanation.
+        const detail = firstUsefulLine(stderr);
         return reject(new NativeHarnessTurnError(
           `${spec.binary} ${signal ? `stopped (${signal})` : `exited ${code ?? 1}`}${detail ? `: ${detail}` : ''}`,
           { ...tails(), ...exit, reason: 'exit' },
