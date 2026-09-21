@@ -578,17 +578,6 @@ export function nextCharacterIndex(value: string, index: number): number {
   return index + (first ? first.segment.length : 1);
 }
 
-export function composerViewport(value: string, cursor: number, available: number): { text: string; cursorWidth: number } {
-  if (terminalCellWidth(value) <= available) return { text: value, cursorWidth: terminalCellWidth(value.slice(0, cursor)) };
-  let start = 0;
-  while (start < cursor && terminalCellWidth(value.slice(start, cursor)) > available - 2) start = nextCharacterIndex(value, start);
-  const prefix = start > 0 ? '…' : '';
-  let end = value.length;
-  while (end > cursor && terminalCellWidth(prefix + value.slice(start, end)) > available) end = previousCharacterIndex(value, end);
-  const suffix = end < value.length ? '…' : '';
-  while (end > cursor && terminalCellWidth(prefix + value.slice(start, end) + suffix) > available) end = previousCharacterIndex(value, end);
-  return { text: `${prefix}${value.slice(start, end)}${suffix}`, cursorWidth: terminalCellWidth(prefix + value.slice(start, cursor)) };
-}
 
 export interface ComposerLayout {
   rows: string[];

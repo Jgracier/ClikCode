@@ -88,17 +88,6 @@ export function resolveDefaultSettings(state: HarnessState, provider?: string | 
   };
 }
 
-/** Not called on first run any more: nothing in ClikCode signs with the device
- * key, so minting and storing a private key only created a secret to protect.
- * Kept for the day a signing protocol exists; an already-stored key is still
- * read from secrets.json. */
-export function newDeviceSigningIdentity(): Pick<HarnessState, 'devicePrivateKeyPem' | 'devicePublicKey'> {
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  return {
-    devicePrivateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
-    devicePublicKey: publicKey.export({ format: 'jwk' }) as Record<string, unknown>,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -162,10 +151,6 @@ export async function readLocalApiToken(): Promise<string> {
   });
 }
 
-/** A device private key stored by an earlier release, if any. Never generated. */
-export async function readDevicePrivateKeyPem(): Promise<string | undefined> {
-  return (await readSecretsFile()).devicePrivateKeyPem || undefined;
-}
 
 // ---------------------------------------------------------------------------
 // Index
@@ -402,27 +387,6 @@ function splitSession(session: HarnessSession): { meta: SessionMeta; transcript:
   return { meta, transcript: transcriptOf(session), claim };
 }
 
-/** Whole-state three-way merge, kept for callers that hold three full states.
- * Claims are never merged from snapshots; see session-claims.ts. */
-export function mergeHarnessState(baseline: HarnessState, working: HarnessState, disk: HarnessState): HarnessState {
-  const scalar = <K extends keyof HarnessState>(key: K): HarnessState[K] =>
-    !sameData(baseline[key], working[key]) ? working[key] : disk[key];
-  return {
-    ...disk,
-    // The on-disk version describes the on-disk layout; a writer's idea of the
-    // version is never stamped over it.
-    version: disk.version,
-    installationId: disk.installationId || working.installationId,
-    localApiToken: scalar('localApiToken'),
-    devicePrivateKeyPem: scalar('devicePrivateKeyPem'),
-    devicePublicKey: scalar('devicePublicKey'),
-    accounts: mergeById(baseline.accounts ?? [], working.accounts ?? [], disk.accounts ?? [], mergeAccount),
-    sessions: mergeById(baseline.sessions ?? [], working.sessions ?? [], disk.sessions ?? [], mergeFields),
-    invocations: mergeById(baseline.invocations ?? [], working.invocations ?? [], disk.invocations ?? []),
-    globalSettings: mergeRecord(baseline.globalSettings, working.globalSettings, disk.globalSettings),
-    providerSettings: mergeRecord(baseline.providerSettings, working.providerSettings, disk.providerSettings),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Baseline

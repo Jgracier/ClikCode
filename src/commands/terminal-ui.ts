@@ -73,24 +73,13 @@ function waitingInputAction(key: string): WaitingInputAction | undefined {
  * fences the payload and the whole thing arrives as one key. */
 export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
-/** Focus reporting: the terminal sends `CSI I` / `CSI O` as the window gains
- * and loses focus. ClikCode does not use the events -- it is enabled for what
- * announcing it means. A client that layers its own shell helpers over the
- * remote (a history popup, path completion drawn across the composer) decides
- * whether a shell or an application is reading the line from the modes the
- * remote sets, and this is the one both Claude Code and Codex set that
- * ClikCode did not. Captured from each of them in a pty, not guessed. */
-export const ENABLE_FOCUS_REPORTING = '\u001b[?1004h';
+/** Focus reporting and theme notifications are turned OFF on the way out and
+ * never on. Both doc comments here used to argue the opposite -- that each was
+ * enabled for what announcing it means, captured from Claude Code in a pty --
+ * but the enable constants had no caller, so the claim described an intention
+ * rather than the code. Clearing them on teardown still earns its place: a
+ * program that ran before this one may have left either set. */
 export const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
-/** Theme-change notifications: in Claude Code's opening bytes, captured in a
- * pty, and sent here for what it announces rather than any use made of it.
- *
- * Claude Code opens with a scroll-region reset too (`ESC 7 CSI r ESC 8`) and
- * this deliberately does not: DECSTBM homes the cursor, so the sequence is
- * only harmless on a terminal that implements the save/restore around it, and
- * on a client that does not the cursor lands below the status line -- which is
- * exactly what it did. A cosmetic parity is not worth a cursor. */
-export const ENABLE_THEME_NOTIFICATIONS = '\u001b[?2031h';
 export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
 /** Mouse tracking: normal (1000), button-event (1002), any-event (1003), SGR
  * encoding (1006). All four, and a swipe does not scroll without all four.
@@ -135,8 +124,6 @@ export const isMouseEvent = (key: string): boolean => MOUSE_EVENT.test(key) || L
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
 /** `CSI ? ... c`: the terminal answering Primary DA. Never a keystroke. */
 const DEVICE_ATTRIBUTES_REPLY = /^\u001b\[\?[0-9;]*c$/;
-export const BEGIN_SYNCHRONIZED_UPDATE = '\u001b[?2026h';
-export const END_SYNCHRONIZED_UPDATE = '\u001b[?2026l';
 const EXIT_CONFIRM_MS = 2000;
 /** How long a resize burst is given to finish before the screen is redrawn.
  * A phone dismissing its keyboard emits several SIGWINCHes a few tens of
@@ -237,9 +224,7 @@ function leaveInputModes(): string {
   const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE_TRACKING}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
   terminalModes.kittyKeyboard = false;
   terminalModes.bracketedPaste = false;
-  terminalModes.focusReporting = false;
   terminalModes.wheelReporting = false;
-  terminalModes.themeNotifications = false;
   return sequence;
 }
 

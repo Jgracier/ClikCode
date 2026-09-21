@@ -878,17 +878,6 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
  * thinking summary looks like in the persistent activity log -- every
  * harness's parser above feeds this same renderer, so the visual language
  * (glyph, color, wording) never drifts per-vendor. */
-/** A code-change tool call (Edit/Write, or any other harness's own naming
- * for the same thing) gets its own color -- magenta -- distinct from a
- * generic tool call's yellow/green, the same way Claude Code's own UI
- * visually separates "a tool ran" from "a file changed" rather than
- * treating every tool call identically. Name-pattern matching (not just
- * `event.diff`'s presence) so this applies even for harnesses where the
- * diff content itself isn't available yet -- Codex's file_change events,
- * for instance, still get the distinct color even without line content. */
-export function isCodeChangeLabel(label: string): boolean {
-  return /^(edit|write|patch)$/i.test(label) || /file/i.test(label);
-}
 
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
   if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];

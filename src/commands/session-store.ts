@@ -387,9 +387,6 @@ export async function readSessionTranscript(id: string): Promise<SessionTranscri
   });
 }
 
-export async function readSessionTranscriptRef(id: string): Promise<TranscriptRef | undefined> {
-  return (await loadSessionFile(id))?.transcriptRef;
-}
 
 function sameMessage(left: TranscriptMessage | undefined, right: TranscriptMessage | undefined): boolean {
   return !!left && !!right && left.role === right.role && left.content === right.content && sameData(left, right);
