@@ -13,7 +13,7 @@ import {
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalTeardown } from './terminal-restore.js';
+import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalPrepare, terminalTeardown } from './terminal-restore.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import { parkCursor, TranscriptStream } from './transcript-stream.js';
@@ -1624,6 +1624,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   constructor() {
     terminalModes.uiStarted = true;
+    // Undo whatever the last program left set, before asking for anything.
+    // The session before this one may have been closed from the client, in
+    // which case its teardown was written into a pty that no longer existed.
+    output.write(terminalPrepare());
     if (this.alternateScreen) {
       // Every mode in one breath, with the screen, in this order -- copied
       // from the bare script that receives the gesture on this user's phone

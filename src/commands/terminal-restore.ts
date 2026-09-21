@@ -32,6 +32,25 @@ export const terminalModes: {
   leaveLiveRegion?: () => string;
 } = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, wheelReporting: false, themeNotifications: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false };
 
+/** The main screen's state, cleared before this program takes the alternate
+ * one -- because the previous session may never have got the chance.
+ *
+ * A teardown is written into the terminal on the way out, and on a phone the
+ * usual way a session ends is the client hanging up first: the connection is
+ * already gone, the pty is dead, and every byte of that teardown goes nowhere.
+ * Measured exactly so -- ClikCode exits cleanly and the next run is fine, but
+ * close the session from the client and the next run is broken again.
+ *
+ * So the same state is cleared on the way IN, where the terminal is
+ * demonstrably alive. Whatever the last program left set, mouse reporting
+ * included, is undone before this one asks for anything. Clearing a mode that
+ * is already clear costs nothing. */
+export function terminalPrepare(): string {
+  return '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l'
+    + '\x1b[?2004l\x1b[?2031l\x1b[?1004l'
+    + '\x1b[>4m\x1b(B\x0f\x1b7\x1b[r\x1b8';
+}
+
 /** Everything a client may hold, cleared on BOTH screens.
  *
  * Transcribed from Claude Code's exit, and the order is the point: it clears
