@@ -13,11 +13,9 @@ export const terminalModes: {
   kittyKeyboard: boolean;
   /** Focus reporting (`CSI ?1004h`): what an interactive application sets, and
    * what a client reads to tell one from a shell. */
-  focusReporting: boolean;
   /** Wheel reporting (`CSI ?1000h` + SGR), for reading the transcript back. */
   wheelReporting: boolean;
   /** Theme-change notifications (`CSI ?2031h`), set for the same reason. */
-  themeNotifications: boolean;
   /** The UI is drawing on the alternate screen and owes the shell its own back. */
   alternateScreen: boolean;
   rawMode: boolean;
@@ -30,7 +28,7 @@ export const terminalModes: {
   /** Supplied by the live prompter: erases its composer and footer so whatever
    * is printed next (a stack trace, the shell prompt) starts on a clean row. */
   leaveLiveRegion?: () => string;
-} = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, wheelReporting: false, themeNotifications: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false };
+} = { bracketedPaste: false, kittyKeyboard: false, wheelReporting: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false };
 
 /** The main screen's state, cleared before this program takes the alternate
  * one -- because the previous session may never have got the chance.
@@ -78,8 +76,8 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // process that never drew must not write escape sequences into a shell it
     // was only ever piped through. This is also what keeps repeat calls silent.
     const touched = terminalModes.uiStarted || terminalModes.painted || terminalModes.kittyKeyboard
-      || terminalModes.bracketedPaste || terminalModes.themeNotifications || terminalModes.wheelReporting
-      || terminalModes.focusReporting || terminalModes.alternateScreen || terminalModes.rawMode;
+      || terminalModes.bracketedPaste || terminalModes.wheelReporting
+      || terminalModes.alternateScreen || terminalModes.rawMode;
     if (!touched) {
       if (input.isRaw && input.isTTY && typeof input.setRawMode === 'function') input.setRawMode(false);
       return;
@@ -120,9 +118,7 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     terminalModes.painted = false;
     terminalModes.kittyKeyboard = false;
     terminalModes.bracketedPaste = false;
-    terminalModes.focusReporting = false;
     terminalModes.wheelReporting = false;
-    terminalModes.themeNotifications = false;
     terminalModes.alternateScreen = false;
     terminalModes.rawMode = false;
     terminalModes.leaveLiveRegion = undefined;

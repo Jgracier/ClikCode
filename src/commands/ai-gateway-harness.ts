@@ -99,8 +99,3 @@ export function gatewayHarnessFallbackNotice(error: unknown): string {
   return 'this gateway does not serve coding-agent turns yet; using the platform assistant, which cannot read local files';
 }
 
-/** Writes one line to stdout for a headless run, where there is no prompter
- * to put an activity row in. */
-export function writeGatewayNotice(text: string): void {
-  output.write(`${text}\n`);
-}
