@@ -61,11 +61,16 @@ export function usageRemainingPercent(label?: string): number | undefined {
 export function paintLabeledRule(
   width: number, label: string | undefined, paint: (text: string) => string,
 ): string {
+  // The dashes are left unstyled, which is the terminal's own foreground --
+  // the same white the composer's text is drawn in. Dim made the frame recede
+  // so far it read as absent; at full weight the composer is a defined field
+  // rather than a faint suggestion of one. Unstyled rather than chalk.white
+  // so a light-background theme still gets its own foreground.
   const rule = rightLabeledRule(width, label);
-  if (!label) return chalk.dim(rule);
+  if (!label) return rule;
   const at = rule.lastIndexOf(label);
-  if (at < 0) return chalk.dim(rule);
-  return `${chalk.dim(rule.slice(0, at))}${paint(label)}`;
+  if (at < 0) return rule;
+  return `${rule.slice(0, at)}${paint(label)}`;
 }
 
 /** The two rule labels -- usage above the composer, the chat title below --

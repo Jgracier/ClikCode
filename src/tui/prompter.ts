@@ -797,7 +797,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // touch inner itself, so the notice/composer/meta lines below (which
     // share it) are unaffected.
     const conversationInner = rowWidth - 2;
-    const rule = chalk.dim('─'.repeat(rowWidth));
+    const rule = '─'.repeat(rowWidth);
     const stableMessages = session.messages ?? [];
     const pending = this.waitingLabel ? session.pendingTurn : undefined;
     const persistedMessages = pending
@@ -1166,9 +1166,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     footer.push(paintUsageRule(rowWidth, this.usageLabel));
     const composerStart = footer.length;
     for (const [index, row] of composerRows.rows.entries()) {
-      // The caret is the one thing on screen that says "type here", so it
-      // carries the accent rather than the same grey as the furniture.
-      footer.push(`  ${index === 0 ? chalk.cyanBright.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
+      // The caret is drawn in the same foreground as the rules and the text
+      // between them, so the whole composer reads as one field: white frame,
+      // white prompt, white input.
+      footer.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
     }
     // The rule below the composer carries the chat's title at its right
     // edge instead of a plain dashed line -- dashes fill from the left up to

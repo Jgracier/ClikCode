@@ -63,9 +63,11 @@ describe('usage reads by state, not as furniture', () => {
       .toBe(colourOf(paintUsageRule(40, '80% left'), '80% left'));
   });
 
-  it('leaves the rule itself dim, and says nothing when there is no label', () => {
-    expect(plain(paintUsageRule(20, undefined))).toBe('─'.repeat(20));
-    expect(paintUsageRule(20, undefined)).toContain('\u001b[2m');
+  it('draws the rule in the terminal\'s own foreground, and says nothing with no label', () => {
+    // The frame is white, matching the composer's text between the rules.
+    // Dim made it recede so far it read as absent. Unstyled rather than an
+    // explicit white, so a light-background theme still gets its foreground.
+    expect(paintUsageRule(20, undefined)).toBe('─'.repeat(20));
   });
 
   it('keeps a label it cannot read from shouting', () => {
