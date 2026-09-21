@@ -8,7 +8,7 @@
  * that none of those three has to import the other two to reach it.
  */
 import type { HarnessPlanEntry } from '../harness/events/turn-observer.js';
-import type { TerminalHarnessPrompter } from './terminal-ui.js';
+import type { TerminalHarnessPrompter } from './prompter.js';
 import type { NormalizedTurnUsage } from '../harness/transport/options.js';
 
 export const TERMINAL: {

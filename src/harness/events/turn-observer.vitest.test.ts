@@ -32,7 +32,7 @@ describe('the turn observer', () => {
   });
 
   it('carries one plan shape, not one per transport', () => {
-    for (const file of [...TRANSPORTS, 'tui/terminal-ui.ts', 'commands/ai.ts']) {
+    for (const file of [...TRANSPORTS, 'tui/prompter.ts', 'commands/ai.ts']) {
       const source = read(file);
       for (const stale of ['CodexPlanEntry', 'AcpPlanEntry', 'AcpAvailableCommand']) {
         expect(source, `${file} still refers to ${stale}`).not.toContain(stale);
