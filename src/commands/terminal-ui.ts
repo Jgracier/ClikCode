@@ -2595,9 +2595,51 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // partial update is exactly as safe as a whole one, which is the point of
     // drawing here. `EL` per row: replaced, never overprinted.
     const full = this.alternatePrevious.length !== rows.length;
+    // A scroll is a shift, and the terminal can do a shift itself.
+    //
+    // Row by row, a scroll changes every row on screen, so the diff below
+    // rewrites the whole thing: about 3.3KB at 63 rows against 1.6KB at 32 --
+    // and 63 rows is the keyboard-hidden height, the one case that never
+    // worked. The same UI drawing ~0.8KB frames receives the gesture at both
+    // heights. Cost per frame is the difference, and it scales with the screen.
+    //
+    // So when the new screen is the old one shifted -- which is exactly what a
+    // scroll produces -- the shift is handed to the terminal (SU/SD inside a
+    // region covering the transcript) and only the rows it exposed are drawn.
+    // Three rows instead of sixty-three.
+    //
+    // Claude Code never rewrites whole rows either: 4,182 relative motions in
+    // one captured session against 347 absolute jumps. This UI had zero.
+    // Only a transcript scroll hands the movement to the terminal. Other
+    // screens that happen to look shifted -- a palette opening, a picker
+    // closing -- are drawn, because SU inside a region discards what it pushes
+    // out and those are not rows this code can redraw from its own transcript.
+    const scrolling = this.paintingScroll;
+    this.paintingScroll = false;
+    const shift = full || !scrolling ? 0 : this.scrollShift(rows, above);
     const updates: string[] = [];
+    // Rows the shift already drew, so the diff below does not draw them twice
+    // -- a frame carrying the same row twice is a duplicated prompt on screen.
+    let exposedFrom = -1;
+    let exposedTo = -1;
+    if (shift !== 0) {
+      const span = Math.abs(shift);
+      // Region over the transcript only, so the live region stays put; reset
+      // straight after, because a region left set confines every later frame.
+      updates.push(`\u001b[1;${above}r`);
+      updates.push(shift > 0 ? `\u001b[${span}S` : `\u001b[${span}T`);
+      updates.push('\u001b[r');
+      const exposed = shift > 0 ? rows.slice(above - span, above) : rows.slice(0, span);
+      exposedFrom = shift > 0 ? above - span : 0;
+      exposedTo = exposedFrom + span;
+      for (const [offset, row] of exposed.entries()) {
+        updates.push(`\u001b[${exposedFrom + offset + 1};1H${row}\u001b[K`);
+      }
+    }
     for (const [index, row] of rows.entries()) {
       if (!full && this.alternatePrevious[index] === row) continue;
+      if (index >= exposedFrom && index < exposedTo) continue;
+      if (shift !== 0 && index < above && this.shiftedRow(index, shift) === row) continue;
       updates.push(`\u001b[${index + 1};1H${row}\u001b[K`);
     }
     this.alternatePrevious = rows;
@@ -2617,6 +2659,41 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.frameInFlight = false;
       if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
     });
+  }
+
+  /** How far the previous screen would have to move to become this one, or
+   * zero when it is not a clean shift. Positive means content moved up. */
+  private scrollShift(rows: readonly string[], above: number): number {
+    const previous = this.alternatePrevious;
+    // Only the transcript moves. The live region below it is drawn, not
+    // scrolled, so a whole-screen comparison never sees a clean shift.
+    if (previous.length !== rows.length || above < 4) return 0;
+    // Only when the transcript has actually moved. A keystroke changes one
+    // row, and a transcript padded with blank rows matches any shift you care
+    // to test -- so without this a keystroke looked like a scroll and redrew
+    // the screen, which is the opposite of the point.
+    let changed = 0;
+    for (let index = 0; index < above; index += 1) if (previous[index] !== rows[index]) changed += 1;
+    if (changed * 2 < above) return 0;
+    for (let shift = 2; shift < above; shift += 1) {
+      let up = true;
+      let down = true;
+      for (let index = 0; index + shift < above; index += 1) {
+        if (up && previous[index + shift] !== rows[index]) up = false;
+        if (down && previous[index] !== rows[index + shift]) down = false;
+        if (!up && !down) break;
+      }
+      if (up) return shift;
+      if (down) return -shift;
+    }
+    return 0;
+  }
+
+  /** What a row would hold after the shift, so the diff below can skip the
+   * rows the terminal has already moved into place. */
+  private shiftedRow(index: number, shift: number): string | undefined {
+    const source = index + shift;
+    return source >= 0 && source < this.alternatePrevious.length ? this.alternatePrevious[source] : undefined;
   }
 
   /** Asking is only safe once the terminal is in raw mode (otherwise its
@@ -2682,6 +2759,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     logCursorEvent(`scroll by=${rows} from=${this.alternateScrollback} to=${next} furthest=${furthest} rows=${this.alternateTranscript.length} above=${this.alternateAbove}`);
     if (next === this.alternateScrollback) return false;
     this.alternateScrollback = next;
+    this.paintingScroll = true;
     this.scheduleScrollPaint();
     return true;
   }
@@ -2701,6 +2779,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * becomes a handful of bounded frames instead of three hundred full
    * repaints, which is what made the client stop forwarding the gesture. */
   private pendingScroll = 0;
+  /** True while the frame being drawn is the result of a scroll. */
+  private paintingScroll = false;
   private scrollDrainTimer?: NodeJS.Timeout;
   private drainScroll(): void {
     if (this.closed || this.suspended || !this.pendingScroll) return;
