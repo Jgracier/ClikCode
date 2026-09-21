@@ -3,7 +3,9 @@
 
 import { hostname } from 'node:os';
 import type { HarnessSession, HarnessState } from '../../harness/types.js';
-import { deleteSessionTranscript, readSessionTranscript, sameData, transcriptOf, transcriptParentOf, withStateLock, writeSessionTranscript } from '../store.js';
+import { sameData } from '../store/data.js';
+import { withStateLock } from '../store/locks.js';
+import { deleteSessionTranscript, readSessionTranscript, transcriptOf, transcriptParentOf, writeSessionTranscript } from '../store/transcripts.js';
 import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from '../claims.js';
 import { HarnessStateVersionError, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';

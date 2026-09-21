@@ -3,7 +3,9 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmod, readFile, stat } from 'node:fs/promises';
-import { atomicWriteFile, cloneData, withStateLock } from '../store.js';
+import { cloneData } from '../store/data.js';
+import { atomicWriteFile } from '../store/files.js';
+import { withStateLock } from '../store/locks.js';
 import { harnessSecretsPath } from './paths.js';
 
 export function sameSecret(left: string | undefined, right: string | undefined): boolean {

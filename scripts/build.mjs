@@ -107,14 +107,14 @@ const index = await build({
 
 const catalog = await build({
   ...common,
-  entryPoints: ['src/runtime/catalog-runtime.ts'],
+  entryPoints: ['src/runtime/catalog.ts'],
   format: 'cjs',
   outfile: 'dist/harness-catalog.cjs',
 });
 
 const router = await build({
   ...common,
-  entryPoints: ['src/runtime/router-runtime.ts'],
+  entryPoints: ['src/runtime/router.ts'],
   format: 'cjs',
   external: [...FORCE_EXTERNAL],
   outfile: 'dist/ai-router-runtime.cjs',
