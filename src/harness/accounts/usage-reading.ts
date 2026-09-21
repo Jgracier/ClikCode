@@ -2,7 +2,7 @@
  * and how one is labelled, cached and judged current. No probing here. */
 
 import { quotaResetPhrase } from '../../turn/usage-exhausted.js';
-import type { AiHarnessAccount } from '../types.js';
+import type { AiHarnessAccount } from '../definition.js';
 
 /** One quota window as the vendor reported it. `usedPct` is the unrounded
  * percentage used (0..100+); the display label rounds, this does not, so

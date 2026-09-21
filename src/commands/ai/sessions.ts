@@ -3,7 +3,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { emitJson } from '../../cli/structured-output.js';
-import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, HarnessSession, HarnessState } from '../../harness/types.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute } from '../../harness/definition.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';

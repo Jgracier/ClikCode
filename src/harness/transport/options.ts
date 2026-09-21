@@ -5,7 +5,7 @@
  * through it, so before this module the options a user set with /options were
  * silently dropped for exactly the most-integrated harnesses. Pure: no I/O,
  * no harness names -- everything is read from the option declarations. */
-import type { AiHarnessOptionDefinition } from '../types.js';
+import type { AiHarnessOptionDefinition } from '../definition.js';
 
 const NORMALIZED_IDS = new Set(['model', 'workspace', 'effort', 'permissions']);
 

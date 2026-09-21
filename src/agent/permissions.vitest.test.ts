@@ -10,7 +10,8 @@ import {
 import type { PathScope } from './security.js';
 import { sessionState } from './session-state.js';
 import { defaultTools } from './tools/registry.js';
-import type { AiHarnessPermissionMode, ToolContext, ToolDefinition } from './types.js';
+import type { ToolContext, ToolDefinition } from './tool-contract.js';
+import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
 let root: string;
 let scope: PathScope;

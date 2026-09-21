@@ -1,6 +1,6 @@
 /** Deterministic ModelClient for tests of the loop and of callers that wire
  * the harness in. No test-framework imports, so it is safe to ship. */
-import type { ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from './types.js';
+import type { ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from './model-client.js';
 
 export interface ScriptedStep {
   text?: string;

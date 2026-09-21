@@ -1,6 +1,6 @@
 /** Token counts and the self-report a harness makes about its own turn. */
 
-import type { AiLocalHarnessDefinition } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 import { asRecord, parseJsonDocument, parseJsonLines } from './json-lines.js';
 
 export interface NativeTurnUsage {

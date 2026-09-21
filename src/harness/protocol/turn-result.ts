@@ -1,6 +1,6 @@
 /** One completed turn, read back out of a vendor's output. */
 
-import type { AiLocalHarnessDefinition } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 import { parseNativeActivityEventsFromValue } from './activity-events.js';
 import { nativeSessionIdsFromValues } from './session-ids.js';
 import { CLAUDE_SHAPED, JsonRecord, asRecord, parseJsonDocument, parseJsonLines } from './json-lines.js';

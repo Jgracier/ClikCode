@@ -1,7 +1,7 @@
 /** OpenCode's stored conversations. */
 
 import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
-import type { AiLocalHarnessDefinition } from '../../../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../../../harness/definition.js';
 import { ADOPTED_TRANSCRIPT_LIMIT } from '../transcript.js';
 
 /** opencode publishes a real export command (`opencode export <sessionID>`,

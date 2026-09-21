@@ -1,6 +1,6 @@
 /** The environment a vendor CLI is spawned with, per account profile. */
 
-import type { AiHarnessAccount } from '../types.js';
+import type { AiHarnessAccount } from '../definition.js';
 
 /** The one place that turns an account's nativeProfile into an actual
  * environment object -- every call site used to build `{ [env]: path }`

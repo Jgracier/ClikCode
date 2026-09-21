@@ -1,5 +1,5 @@
 /** Per-turn usage ledger. Pure: the loop owns when to report. */
-import type { TokenUsage } from './types.js';
+import type { TokenUsage } from './model-client.js';
 
 export interface UsageLedgerEntry {
   step: number;

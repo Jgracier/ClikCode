@@ -1,7 +1,8 @@
 /** What a slash command is given to work with: the session's harness, the
  * custom commands in scope, and the extras the grammar needs to route. */
 
-import type { AiLocalHarnessDefinition, HarnessSession } from '../../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { HarnessSession } from '../../session/model.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { sessionNativeCommands } from '../../turn/runtime.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';

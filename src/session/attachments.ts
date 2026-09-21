@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stdout as output } from 'node:process';
-import type { HarnessSession } from '../harness/types.js';
+import type { HarnessSession } from './model.js';
 
 function captureProcess(command: string, args: readonly string[], cwd?: string, stdinText?: string): Promise<string> {
   return new Promise((resolvePromise, reject) => {

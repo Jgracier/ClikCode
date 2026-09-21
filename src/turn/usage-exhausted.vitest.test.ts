@@ -1,7 +1,7 @@
 /** One sentence for running out, whatever the harness called it. */
 import { describe, expect, it } from 'vitest';
 import { usageExhaustedMessage, quotaResetPhrase, nextQuotaReset, isUsageExhaustedMessage } from './usage-exhausted';
-import type { AiHarnessAccount } from '../harness/types.js';
+import type { AiHarnessAccount } from '../harness/definition.js';
 
 const NOW = Date.parse('2026-09-21T14:00:00');
 const account = (windows: Array<{ name: string; usedPct: number; resetsAt?: string }>): AiHarnessAccount =>

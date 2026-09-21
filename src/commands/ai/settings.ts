@@ -1,7 +1,7 @@
 /** Durable settings, written globally or for one provider. */
 
 import { emitJson } from '../../cli/structured-output.js';
-import type { HarnessDefaultSettings } from '../../harness/types.js';
+import type { HarnessDefaultSettings } from '../../session/model.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';

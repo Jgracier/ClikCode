@@ -1,7 +1,7 @@
 /** Naming a conversation that the vendor never named. */
 
 import { failoverPromptRequest } from '../../turn/failover-prompt.js';
-import type { AiLocalHarnessDefinition } from '../../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { readFileSuffix } from './files.js';
 import { NativeSessionEnvironment, locateNativeSessionFile } from './locations.js';
 

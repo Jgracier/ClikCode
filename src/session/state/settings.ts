@@ -1,7 +1,7 @@
 /** Default effort, approval mode and failover policy, and how a session's own
  * values are normalized against them. */
 
-import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../../harness/types.js';
+import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../model.js';
 
 export const HARNESS_DEFAULT_SETTINGS: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' };
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { defineTool } from '../types.js';
+import { defineTool } from '../tool-contract.js';
 import { displayPath, resolveForRead } from './fs-helpers.js';
 
 interface ListDirArgs { path?: string }

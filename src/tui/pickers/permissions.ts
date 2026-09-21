@@ -1,7 +1,8 @@
 /** Choosing how tool calls are approved, from `clikcode permissions` and from
  * in-chat `/permissions`. */
 
-import type { AiHarnessPermissionMode, HarnessPrompter } from '../../harness/types.js';
+import type { AiHarnessPermissionMode } from '../../harness/definition.js';
+import type { HarnessPrompter } from '../../harness/prompter.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { TERMINAL } from '../active-terminal.js';

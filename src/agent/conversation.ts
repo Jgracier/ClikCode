@@ -3,7 +3,7 @@
  * compaction appends a `compaction` marker, so the full history survives. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { ConversationItem } from './types.js';
+import type { ConversationItem } from './model-client.js';
 
 export type TranscriptRecord =
   | { kind: 'item'; at: string; item: ConversationItem }

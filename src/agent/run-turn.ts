@@ -10,11 +10,9 @@ import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
 import { sessionState } from './session-state.js';
 import { defaultTools, mergeTools, toolSpecs } from './tools/registry.js';
-import {
-  isTurnCancelled, turnCancelledError,
-  type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind,
-  type ModelStepResult, type ModelToolCall, type TokenUsage, type ToolContext, type ToolDefinition, type ToolRunResult,
-} from './types.js';
+import { isTurnCancelled, turnCancelledError } from './cancellation.js';
+import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind, type ModelStepResult, type ModelToolCall, type TokenUsage } from './model-client.js';
+import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
 import { emptyLedger, recordUsage } from './usage.js';
 
 export const DEFAULT_MAX_STEPS = 60;

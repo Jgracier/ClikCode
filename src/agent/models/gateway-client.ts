@@ -1,7 +1,7 @@
 /** ModelClient for the ClikDeploy Gateway turn route:
  * `POST {baseUrl}/api/clikcode/v1/turn`, answered as Server-Sent Events. */
-import type { HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../types.js';
-import { turnCancelledError } from '../types.js';
+import type { HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../model-client.js';
+import { turnCancelledError } from '../cancellation.js';
 
 export interface GatewayModelClientOptions {
   baseUrl: string;

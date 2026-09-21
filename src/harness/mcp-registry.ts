@@ -20,7 +20,7 @@ import { nativeProfileEnvironment } from './transport/profile-environment.js';
 import { localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
 import { inspectNativeHarness } from './transport/native/inspect.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from './types.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
 
 /** What a user asked ClikCode to make available, in the one shape both
  * grammars can be produced from. */

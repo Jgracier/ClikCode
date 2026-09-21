@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { HarnessSession, HarnessState } from '../../harness/types.js';
+import type { HarnessSession, HarnessState } from '../model.js';
 import { cloneData, sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { stateDirectory } from '../store/paths.js';

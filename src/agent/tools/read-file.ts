@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { OUTPUT_CAPS } from '../security.js';
-import { defineTool } from '../types.js';
+import { defineTool } from '../tool-contract.js';
 import { displayPath, IMAGE_EXTENSIONS, looksBinary, resolveForRead } from './fs-helpers.js';
 
 interface ReadFileArgs { path: string; offset?: number; limit?: number }

@@ -20,7 +20,7 @@
 import { copyFile, mkdir, rename, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { locateNativeSessionFile, nativeSessionRoot, type NativeSessionEnvironment } from './discovery/locations.js';
-import type { AiLocalHarnessDefinition } from '../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 
 export type CarryNativeSessionInput = {
   harness: AiLocalHarnessDefinition;

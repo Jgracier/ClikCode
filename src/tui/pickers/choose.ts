@@ -4,7 +4,7 @@
 
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
-import type { HarnessPrompter, PickerOption } from '../../harness/types.js';
+import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 
 export async function chooseOption<T>(

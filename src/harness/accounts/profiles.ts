@@ -9,7 +9,7 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { homeRedirectEnvironment } from '../../runtime/lazy-bridge.js';
 import { harnessStatePath } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../types.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 
 /** The environment a vendor process runs under for this account: its isolated
  * profile root, plus -- when that root IS `HOME` -- the user's real git, npm,

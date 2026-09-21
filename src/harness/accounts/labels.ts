@@ -9,7 +9,8 @@ import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { inspectNativeHarness } from '../transport/native/inspect.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessState } from '../types.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
+import type { HarnessState } from '../../session/model.js';
 
 /** Reads real account info out of a harness's own credential storage right
  * after login -- verified so far only for Claude Code, whose

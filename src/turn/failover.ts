@@ -1,5 +1,5 @@
 import { activityLabelIsReadOnly, sessionTranscriptMessages, type PendingTurnWithHints } from './checkpoint.js';
-import type { HarnessSession } from '../harness/types.js';
+import type { HarnessSession } from '../session/model.js';
 import { FAILOVER_PREAMBLE } from './failover-prompt.js';
 
 export { FAILOVER_PREAMBLE };

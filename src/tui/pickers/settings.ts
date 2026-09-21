@@ -3,7 +3,7 @@
 
 import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
-import type { HarnessPrompter } from '../../harness/types.js';
+import type { HarnessPrompter } from '../../harness/prompter.js';
 import { harnessSupportsEffort, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';

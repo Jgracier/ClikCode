@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { globToRegExp, matchGlob } from '../glob-match.js';
 import { readDenyReason, resolvePath, writeDenyReason, type PathScope, type ResolvedPath } from '../security.js';
-import type { ToolContext } from '../types.js';
+import type { ToolContext } from '../tool-contract.js';
 
 export class ToolInputError extends Error {}
 

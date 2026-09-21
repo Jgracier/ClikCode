@@ -1,7 +1,7 @@
 /** `/cost` and the context-window line: tokens counted and priced. */
 
 import { stdin as input, stdout as output } from 'node:process';
-import type { HarnessSession, HarnessState } from '../../harness/types.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { sessionHarness } from './context.js';
 

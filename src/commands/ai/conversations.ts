@@ -2,7 +2,7 @@
  * handover a change of provider forces. */
 
 import { randomUUID } from 'node:crypto';
-import type { HarnessSession, HarnessState } from '../../harness/types.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';

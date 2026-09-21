@@ -34,9 +34,8 @@ import {
   applyDefaultSetting, normalizeFailoverWord, optionForControl, optionForHarness,
   parseHarnessOption, setSessionHarnessOption, VALID_EFFORTS, VALID_PERMISSION_MODES,
 } from './options';
-import type {
-  AiHarnessOptionDefinition, AiLocalHarnessDefinition, HarnessDefaultSettings, HarnessSession,
-} from '../harness/types.js';
+import type { AiHarnessOptionDefinition, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { HarnessDefaultSettings, HarnessSession } from './model.js';
 
 const option = (overrides: Partial<AiHarnessOptionDefinition>): AiHarnessOptionDefinition => ({
   id: 'flag', label: 'Flag', description: 'a flag', category: 'general', kind: 'boolean',

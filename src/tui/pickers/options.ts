@@ -2,7 +2,7 @@
 
 import chalk from 'chalk';
 import { vendorFacingOptions } from '../../harness/options.js';
-import type { HarnessPrompter } from '../../harness/types.js';
+import type { HarnessPrompter } from '../../harness/prompter.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';

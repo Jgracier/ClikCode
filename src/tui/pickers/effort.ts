@@ -1,6 +1,6 @@
 /** Choosing reasoning effort, for the harnesses that expose it. */
 
-import type { HarnessPrompter } from '../../harness/types.js';
+import type { HarnessPrompter } from '../../harness/prompter.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { optionForHarness, VALID_EFFORTS } from '../../session/options.js';

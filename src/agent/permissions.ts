@@ -7,7 +7,8 @@ import { matchGlob } from './glob-match.js';
 import {
   classifyCommand, OUTPUT_CAPS, readDenyReason, resolvePath, writeDenyReason, type PathScope, type ResolvedPath,
 } from './security.js';
-import type { AiHarnessPermissionMode, ToolContext, ToolDefinition } from './types.js';
+import type { ToolContext, ToolDefinition } from './tool-contract.js';
+import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
 export type PermissionVerdict = 'allow' | 'ask' | 'deny';
 export interface PermissionDecision { decision: PermissionVerdict; reason: string }

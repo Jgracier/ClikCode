@@ -14,7 +14,7 @@
  * the first thing the user happened to type.
  */
 
-import type { AiLocalHarnessDefinition } from '../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 
 /** Long enough to say what a chat is about, short enough to sit on the rule
  * above the composer next to everything else that lives there. */

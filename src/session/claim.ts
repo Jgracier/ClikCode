@@ -7,7 +7,7 @@
  * conversation twice.
  */
 import { hostname } from 'node:os';
-import type { HarnessSession } from '../harness/types.js';
+import type { HarnessSession } from './model.js';
 
 /** How long a claim survives without a heartbeat. Generous enough that a busy
  * turn never looks abandoned, short enough that a killed terminal frees its

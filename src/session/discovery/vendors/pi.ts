@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { newestFiles, readFilePrefix, walkFilesRecursive } from '../files.js';
 import { NativeSessionEnvironment } from '../locations.js';
-import { DiscoveredNativeSession } from '../types.js';
+import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Pi has no listing command at all (`-r`/`/resume` open an interactive
  * picker only) but its own docs describe one JSONL file per session under

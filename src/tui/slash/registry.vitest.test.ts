@@ -3,7 +3,8 @@ import {
   SLASH_COMMANDS, SLASH_HANDLER_KEYS, SLASH_PALETTE_PINNED, parseSlashInput, resolveSlashCommand, routeSlashInput, slashControls,
   slashHelpText, slashPalette, suggestSlashCommand, unknownSlashMessage,
 } from './registry';
-import type { AiLocalHarnessDefinition, HarnessSession } from '../../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { HarnessSession } from '../../session/model.js';
 
 const harness = (overrides: Partial<AiLocalHarnessDefinition> = {}): AiLocalHarnessDefinition => ({
   command: 'vendor', provider: 'vendor', displayName: 'Vendor', surface: 'terminal', localAuth: ['vendor-cli'], binary: 'vendor',

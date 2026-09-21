@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { streamLocalAiTurn } from '../../runtime/lazy-bridge.js';
 import { flattenForTransport, type FlatMessage } from '../conversation.js';
-import type { ModelClient, ModelStepRequest, ModelStepResult, TokenUsage } from '../types.js';
+import type { ModelClient, ModelStepRequest, ModelStepResult, TokenUsage } from '../model-client.js';
 
 /** Mirrors clikrouter's AiChatTurnInput (packages/clikrouter/src/ai-provider-models.ts). */
 export interface RouterTurnInput {

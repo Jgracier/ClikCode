@@ -2,12 +2,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { HarnessActivityEvent } from '../harness/types.js';
+import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { ConversationStore } from './conversation.js';
 import { runGatewayHarnessTurn } from './run-turn.js';
 import { disposeSessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
-import { defineTool, type GatewayHarnessTurnInput, type ToolDefinition } from './types.js';
+import { type GatewayHarnessTurnInput } from './model-client.js';
+import { defineTool, type ToolDefinition } from './tool-contract.js';
 
 let root: string;
 let cwd: string;

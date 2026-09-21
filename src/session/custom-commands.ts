@@ -8,7 +8,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { AiLocalHarnessDefinition } from '../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 
 export interface CustomCommand {
   /** Slash name without the slash; nested files use `dir:file`. */

@@ -3,7 +3,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { HarnessSession } from '../../harness/types.js';
+import type { HarnessSession } from '../../session/model.js';
 import { sessionHarness } from './context.js';
 
 function memoryFileName(session: HarnessSession): string {

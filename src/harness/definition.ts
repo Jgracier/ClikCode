@@ -1,0 +1,232 @@
+/** What a harness is: the declared shape every vendor CLI is described by,
+ * and the router runtime that reads it. One canonical definition, so a
+ * per-vendor fact is always a field here and never a name in a branch. */
+
+import type { HarnessSession } from '../session/model.js';
+
+export type AiHarnessRoute = 'local' | 'gateway';
+
+export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
+
+export type AiHarnessPermissionMode = 'ask' | 'bypass' | 'auto';
+
+export type AiHarnessIntegrationLevel = 'native' | 'structured' | 'compatibility' | 'editor-only';
+
+/** Mirrors of the catalog's declarative vocabulary (packages/clikrouter/src/
+ * ai-local-harness.ts). The CLI reads these instead of checking harness names. */
+export type AiHarnessTransport = 'codex-app-server' | 'acp' | 'structured-cli' | 'text-cli';
+
+export type AiHarnessTier = 'primary' | 'more' | 'experimental';
+
+export type AiHarnessParser =
+  | 'claude-stream-json' | 'codex-items' | 'opencode-json'
+  | 'cursor-stream-json' | 'pi-json' | 'cline-json' | 'antigravity' | 'goose'
+  | 'generic-json' | 'text';
+
+export type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWEN.md' | 'CONVENTIONS.md';
+
+export interface AiHarnessAcpDefinition {
+  argv: readonly string[];
+  binary?: string;
+  optionPlacement?: 'before' | 'after';
+  experimental?: boolean;
+  effortArgvPrefix?: readonly string[];
+  permissionArgv?: Readonly<Partial<Record<'bypass' | 'auto', readonly string[]>>>;
+}
+
+export interface AiHarnessAcpLaunch {
+  binary: string;
+  argv: string[];
+  modeArgv: string[];
+  optionArgv: string[];
+  optionPlacement: 'before' | 'after';
+  experimental: boolean;
+}
+
+export interface AiCustomAcpHarnessInput {
+  command: string;
+  binary: string;
+  argv: readonly string[];
+  displayName?: string;
+  provider?: string;
+  memoryFile?: AiHarnessMemoryFile;
+}
+
+export interface AiHarnessTurnDefinition {
+  startArgv: readonly string[];
+  resumeArgv?: readonly string[];
+  resumeIdPrefix?: readonly string[];
+  resumeIdSuffix?: readonly string[];
+  createIdPrefix?: readonly string[];
+  createIdSuffix?: readonly string[];
+  promptArgvPrefix?: readonly string[];
+  promptInput?: 'argv' | 'stdin';
+  stdinArgv?: readonly string[];
+  promptGuard?: 'double-dash' | 'space';
+  output: 'text' | 'json' | 'json-lines';
+  responseFields?: readonly string[];
+  resumeSupportsWorkspaceSelector?: boolean;
+}
+
+export type AiHarnessOptionKind = 'boolean' | 'string' | 'enum' | 'string-list' | 'path' | 'path-list' | 'number';
+
+export interface AiHarnessOptionDefinition {
+  id: string; label: string; description: string; category: string; kind: AiHarnessOptionKind;
+  values?: readonly string[]; dangerous?: boolean; requiresNewSession?: boolean;
+  /** Catalog argv mapping, mirrored so non-argv transports (ACP, app-server)
+   * can honour declared options too. */
+  argv?: readonly string[];
+  argvStyle?: 'value' | 'flag' | 'repeat' | 'csv' | 'config';
+  argvPlacement?: 'root' | 'turn';
+  configKey?: string;
+  appliesTo?: 'start' | 'resume' | 'both';
+}
+
+export interface AiHarnessCapabilityManifest {
+  options: readonly AiHarnessOptionDefinition[];
+  managers?: Readonly<Partial<Record<'mcp' | 'skills' | 'plugins' | 'agents' | 'hooks' | 'tools', {
+    label: string;
+    listArgv?: readonly string[];
+    manageArgv?: readonly string[];
+    /** How this harness spells "add an MCP server". Mirrors the catalog's own
+     * definition so one ClikCode entry can be installed into every harness. */
+    add?: { argv: readonly string[]; shape: 'positional' | 'url-or-doubledash' | 'doubledash-local'; transportPrefix?: readonly string[] };
+  }>>>;
+  features?: readonly string[];
+}
+
+export interface AiHarnessAccount {
+  id: string;
+  provider: string;
+  label: string;
+  authKind: AiHarnessAuthKind;
+  models: string[];
+  status: 'ready' | 'needs_login' | 'offline';
+  quotaState?: 'available' | 'exhausted';
+  quotaRetryAt?: string;
+  credentialRef: string;
+  /** Last usage reading for this account, shared across every terminal.
+   * The figure belongs to the account, not to one chat, so caching it per
+   * process meant the cost of displaying it scaled with the number of open
+   * terminals -- which is what rate-limited the account out of reading its
+   * own usage. */
+  usage?: { at: string; label?: string; failed?: boolean };
+  nativeProfile?: {
+    env: string;
+    path: string;
+    /** Static env vars a specific harness's isolation needs beyond the one
+     * profile-root variable -- currently only Antigravity CLI, whose
+     * per-account isolation depends on Application Default Credentials
+     * (a real file under the isolated HOME) rather than its own default
+     * keyring-based auth, which ignores HOME entirely and would otherwise
+     * silently collapse every isolated account back into one shared
+     * identity. Optional and unused by every other harness. */
+    extraEnv?: Readonly<Record<string, string>>;
+  };
+}
+
+export interface AiLocalHarnessDefinition {
+  command: string;
+  provider: string;
+  displayName: string;
+  surface: 'terminal' | 'editor-extension';
+  integration?: AiHarnessIntegrationLevel;
+  /** Declared on every catalog entry. Optional here only because tests and
+   * external callers build partial definitions by hand. */
+  tier?: AiHarnessTier;
+  transport?: AiHarnessTransport;
+  parser?: AiHarnessParser;
+  memoryFile?: AiHarnessMemoryFile;
+  nativeSlashPassthrough?: boolean;
+  customCommandDirs?: readonly string[];
+  acp?: AiHarnessAcpDefinition;
+  experimental?: boolean;
+  effortValues?: readonly string[];
+  normalizedPermissionOptionIds?: readonly string[];
+  retiredOptionIds?: readonly string[];
+  profileEnvPassthrough?: readonly string[];
+  fallbackTurn?: AiHarnessTurnDefinition;
+  localAuth: readonly AiHarnessAuthKind[];
+  binary: string;
+  npmPackage?: string;
+  loginArgv?: readonly string[];
+  loginCapturable?: boolean;
+  statusArgv?: readonly string[];
+  logoutArgv?: readonly string[];
+  versionArgv?: readonly string[];
+  launchArgv?: readonly string[];
+  modelArgvPrefix?: readonly string[];
+  modelDiscoveryArgv?: readonly string[];
+  workspaceArgvPrefix?: readonly string[];
+  effortArgvPrefix?: readonly string[];
+  effortConfigKey?: string;
+  permissionModes?: readonly AiHarnessPermissionMode[];
+  permissionArgv?: Readonly<Partial<Record<AiHarnessPermissionMode, {
+    argv: readonly string[];
+    placement?: 'root' | 'turn';
+  }>>>;
+  imageArgvPrefix?: readonly string[];
+  imageArgvStyle?: 'separate' | 'concatenated';
+  profileEnv?: string;
+  turn?: {
+    startArgv: readonly string[];
+    resumeArgv?: readonly string[];
+    resumeIdPrefix?: readonly string[];
+    resumeIdSuffix?: readonly string[];
+    createIdPrefix?: readonly string[];
+    createIdSuffix?: readonly string[];
+    promptArgvPrefix?: readonly string[];
+    promptInput?: 'argv' | 'stdin';
+    stdinArgv?: readonly string[];
+    promptGuard?: 'double-dash' | 'space';
+    output: 'text' | 'json' | 'json-lines';
+    responseFields?: readonly string[];
+    resumeSupportsWorkspaceSelector?: boolean;
+  };
+  session?: {
+    continueArgv?: readonly string[];
+    resumeIdPrefix?: readonly string[];
+    resumeIdSuffix?: readonly string[];
+    createIdPrefix?: readonly string[];
+    createIdSuffix?: readonly string[];
+    createSessionArgv?: readonly string[];
+    idKind?: 'uuid' | 'history-file';
+    discoverArgv?: readonly string[];
+    discoverFormat?: 'json' | 'json-lines' | 'text';
+  };
+}
+
+export interface AiRouterRuntime {
+  streamAiChatTurn(input: Record<string, unknown>): Promise<any>;
+  AI_LOCAL_HARNESS_ADAPTER_VERSION: number;
+  AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[];
+  localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined;
+  localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined;
+  localHarnessCapabilityManifest(harness: AiLocalHarnessDefinition): AiHarnessCapabilityManifest;
+  harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean;
+  harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean;
+  harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean;
+  harnessIntegrationLevel(harness: AiLocalHarnessDefinition): AiHarnessIntegrationLevel;
+  nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: {
+    prompt: string; nativeSessionId?: string; createdHere?: boolean; launchedBefore?: boolean;
+    model?: string | null; workspace?: string | null; effort?: string | null;
+    permissionMode?: AiHarnessPermissionMode;
+    images?: readonly string[];
+    options?: Readonly<Record<string, unknown>>;
+  }): string[];
+  maxPromptArgvBytes: number;
+  HOME_REDIRECT_ENV_DEFAULTS: Readonly<Record<string, string | null>>;
+  allLocalHarnesses(): readonly AiLocalHarnessDefinition[];
+  registerCustomHarnesses(definitions: readonly AiLocalHarnessDefinition[]): readonly AiLocalHarnessDefinition[];
+  customAcpHarness(definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition;
+  harnessAcpLaunch(harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode }): AiHarnessAcpLaunch | undefined;
+  harnessTurnTransport(harness: AiLocalHarnessDefinition, input?: { hasImages?: boolean; allowExperimentalAcp?: boolean }): AiHarnessTransport;
+  harnessCanRunTurns(harness: AiLocalHarnessDefinition): boolean;
+  harnessTierRank(harness: AiLocalHarnessDefinition): number;
+  guardedPromptArgv(turn: Pick<AiHarnessTurnDefinition, 'promptGuard' | 'promptArgvPrefix'>, prompt: string): string[];
+  promptExceedsArgvLimit(harness: AiLocalHarnessDefinition, prompt: string): boolean;
+}
+
+export type ModelCatalogResult = { configured?: string; models: string[]; labels?: Readonly<Record<string, string>> };
+
+export type NativeUsageProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<string | undefined>;

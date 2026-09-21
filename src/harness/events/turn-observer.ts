@@ -19,7 +19,7 @@
  * overrides -- is not part of this and stays with each transport, because it
  * genuinely differs.
  */
-import type { HarnessActivityEvent } from '../types.js';
+import type { HarnessActivityEvent } from '../prompter.js';
 
 /** One step of an agent's plan. Codex publishes `{content, status}`, ACP adds
  * a `priority`; the UI reads content and status and ignores the rest. */

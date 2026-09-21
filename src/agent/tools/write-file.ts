@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { eventDiff, renderDiffPreview } from '../line-diff.js';
-import { defineTool, type ToolContext } from '../types.js';
+import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, looksBinary, resolveForWrite } from './fs-helpers.js';
 
 interface WriteFileArgs { path: string; content: string }

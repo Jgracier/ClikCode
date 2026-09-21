@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { ensureNativeHarness, inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
-import type { AiHarnessAccount } from '../../harness/types.js';
+import type { AiHarnessAccount } from '../../harness/definition.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';

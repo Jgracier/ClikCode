@@ -20,7 +20,7 @@
 import { parseHarnessLine } from './adapters.js';
 import { nativeSelfReportFromLine, type NativeSelfReport } from '../protocol/turn-usage.js';
 import type { HarnessTurnObserver } from './turn-observer.js';
-import type { AiLocalHarnessDefinition } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessLineError } from './adapters.js';
 
 export interface StructuredLineOutcome {

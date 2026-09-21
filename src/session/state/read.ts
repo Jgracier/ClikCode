@@ -1,7 +1,7 @@
 /** Assembling one HarnessState from the index, the secrets file and the
  * per-session transcripts. */
 
-import type { HarnessSession, HarnessState } from '../../harness/types.js';
+import type { HarnessSession, HarnessState } from '../model.js';
 import { cloneData, sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { readSessionTranscript } from '../store/transcripts.js';

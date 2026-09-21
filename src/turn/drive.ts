@@ -25,7 +25,8 @@ import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, inter
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, StreamingTitle, withTitleRequest } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessActivityEvent } from '../harness/types.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { nativeTurnResult, type NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { nativeTurnUsage } from '../harness/protocol/turn-usage.js';

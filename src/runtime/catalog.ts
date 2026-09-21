@@ -13,7 +13,7 @@
  * name, so this is a drop-in for the catalog members of `AiRouterRuntime` (see
  * HarnessCatalogRuntime below).
  */
-import type { AiRouterRuntime } from '../harness/types.js';
+import type { AiRouterRuntime } from '../harness/definition.js';
 
 // `export *`, not a name list: router.ts re-exports a growing subset
 // of this module, and a wildcard is a superset of any such list by

@@ -1,4 +1,4 @@
-import { defineTool } from '../types.js';
+import { defineTool } from '../tool-contract.js';
 
 interface ExitPlanModeArgs { plan: string }
 

@@ -3,8 +3,8 @@
 
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
-import type { AiLocalHarnessDefinition } from '../../harness/types.js';
-import { DiscoveredNativeSession } from './types.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
+import { DiscoveredNativeSession } from './discovered-session.js';
 
 function splitTableColumns(line: string): string[] {
   return line.trim().split(/ {2,}/).map((cell) => cell.trim());

@@ -7,7 +7,7 @@ import {
   beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
   sessionTranscriptMessages, updatePendingResponse,
 } from './checkpoint.js';
-import type { HarnessSession } from '../harness/types.js';
+import type { HarnessSession } from '../session/model.js';
 
 function session(): HarnessSession {
   return {
