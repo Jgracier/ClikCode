@@ -1,13 +1,31 @@
 # ClikCode
 
-ClikCode is a local-first coding runtime that acts as a **normalized broker for
-vendor coding-agent harnesses**. Claude Code, Codex, GitHub Copilot, OpenCode,
-Qwen Code and the other supported CLIs each have their own flags, session
-stores, permission vocabularies and output formats. ClikCode drives them through
-one surface — accounts, sessions, models, reasoning effort, permissions — while
-leaving authentication and each vendor's interactive managers in the vendor's
-own CLI. Provider credentials never leave your machine and are never read by
-ClikCode: it stores an opaque *reference* to a login, not a token.
+**One terminal for every coding-agent CLI.** Claude Code, Codex, Gemini CLI,
+GitHub Copilot, Cursor Agent, OpenCode, Qwen Code and seventeen others each have
+their own flags, session stores, permission vocabularies and output formats.
+ClikCode drives all 24 through one surface — accounts, sessions, models,
+reasoning effort, permissions — so changing tools stops meaning changing habits.
+
+**Sign in once per account, and keep as many accounts as you want.**
+Authentication stays inside the vendor's own CLI: ClikCode never reads a token,
+it stores an opaque *reference* to a login. Nine of the harnesses can be given a
+home of their own, so several subscriptions of the same vendor sit side by side,
+each with its own sessions and its own quota.
+
+**Resume any chat, including ones ClikCode never opened.** A conversation is one
+row whichever harness answered it, and provider hops live in that row's history
+rather than as duplicate sessions. ClikCode also finds threads in the vendors'
+own histories — started in Claude Code or Codex directly — and adopts them.
+
+**Keep working past a usage limit.** ClikCode reads each account's remaining
+quota and, when a window is exhausted, moves the turn to the next account with
+headroom. This is on by default (`accountFailover: on-quota-exhausted`). It
+copies the vendor's own session file into that account's profile first, so the
+model resumes the actual thread instead of a retelling of it.
+
+Under all of that, ClikCode is a **normalized broker**: every per-vendor fact is
+a declared field in one catalog, never a name in a branch, and each vendor keeps
+its own authentication and its own interactive managers.
 
 A **hosted gateway** is the optional second route. There, the gateway provides
 the intelligence (model selection and inference) and ClikCode itself is the
