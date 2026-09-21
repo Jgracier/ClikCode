@@ -1062,6 +1062,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           content: sanitizeTerminalText(message.content), tools: turnTools(true), turnEnded: true, renderBlocks,
         }).finished);
       } else {
+        // A change of speaker is a bigger break than a change of paragraph.
+        // Every gap in the transcript was one row -- between messages and
+        // between the blocks inside them alike -- so a new question read as
+        // just another paragraph of the answer above it. Reported as "no
+        // buffer" repeatedly, and it was: the buffer was there, it just
+        // measured the same as everything else. Never at the very top, where
+        // there is nothing to separate from.
+        if (message.role === 'user' && index > 0) emit(['']);
         emit(messageRows(message.content, message.role === 'assistant' ? '·' : userMarker));
         if (message.role === 'user') this.retiredThisSession.add(message.content);
       }
