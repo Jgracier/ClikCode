@@ -3,7 +3,8 @@
  * processes editing different sessions do not clobber each other. */
 
 import { randomUUID } from 'node:crypto';
-import type { AiHarnessAccount, HarnessDefaultSettings, HarnessSession, HarnessState } from '../../harness/types.js';
+import type { AiHarnessAccount } from '../../harness/definition.js';
+import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../model.js';
 import { cloneData, sameData } from '../store/data.js';
 import { transcriptOf, type SessionTranscript } from '../store/transcripts.js';
 import { StateIndex } from './index-file.js';

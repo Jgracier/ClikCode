@@ -2,7 +2,8 @@
  * cached copy every read shares. */
 
 import { copyFile, readFile } from 'node:fs/promises';
-import type { AiHarnessAccount, HarnessDefaultSettings, HarnessState } from '../../harness/types.js';
+import type { AiHarnessAccount } from '../../harness/definition.js';
+import type { HarnessDefaultSettings, HarnessState } from '../model.js';
 import { cloneData } from '../store/data.js';
 import { atomicWriteFile } from '../store/files.js';
 import { stateDirectory } from '../store/paths.js';

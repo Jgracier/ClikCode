@@ -1,6 +1,7 @@
 /** Choosing a model from the active harness's catalog. */
 
-import type { HarnessPrompter, ModelCatalogResult, PickerOption } from '../../harness/types.js';
+import type { ModelCatalogResult } from '../../harness/definition.js';
+import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';

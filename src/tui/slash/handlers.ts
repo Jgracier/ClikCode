@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { stdin as input } from 'node:process';
-import type { HarnessSession, HarnessState } from '../../harness/types.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { harnessCommand } from '../../session/state/paths.js';

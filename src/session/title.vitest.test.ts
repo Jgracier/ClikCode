@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SESSION_TITLE_MAX, StreamingTitle, extractSessionTitle, normalizeSessionTitle, sessionTitleSource, withTitleRequest,
 } from './title';
-import type { AiLocalHarnessDefinition } from '../harness/types';
+import type { AiLocalHarnessDefinition } from '../harness/definition';
 
 const harness = (command: string): AiLocalHarnessDefinition => ({ command } as AiLocalHarnessDefinition);
 const OPEN = '<clikcode-title>';

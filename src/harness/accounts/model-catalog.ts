@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } from '../types.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } from '../definition.js';
 
 /**
  * Claude Code's `--model` aliases are deliberately version-less — they always

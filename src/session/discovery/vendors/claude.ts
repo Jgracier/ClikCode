@@ -9,7 +9,7 @@ import { newestFiles, readFilePrefix, readFileSuffix } from '../files.js';
 import { NativeSessionEnvironment, nativeDataRoot } from '../locations.js';
 import { conversationTitle } from '../titles.js';
 import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, visibleNativeUserText } from '../transcript.js';
-import { DiscoveredNativeSession } from '../types.js';
+import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Claude Code names a project folder by replacing EVERY non-alphanumeric
  * character of the cwd with `-` -- verified against real folders:

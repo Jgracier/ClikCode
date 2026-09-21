@@ -1,7 +1,8 @@
 /** Durable, provider-neutral representation of a turn that has started but
  * has not reached a successful provider completion yet. */
 
-import type { HarnessActivityEvent, HarnessSession } from '../harness/types.js';
+import type { HarnessActivityEvent } from '../harness/prompter.js';
+import type { HarnessSession } from '../session/model.js';
 import { normalizeImportedTranscript } from './failover-prompt.js';
 import type { LiveTurnSubmission } from './live-input.js';
 

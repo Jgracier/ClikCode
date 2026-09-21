@@ -1,6 +1,7 @@
 /** Redacted projections of state, safe to print or to hand to the control API. */
 
-import type { AiHarnessAccount, HarnessState } from '../../harness/types.js';
+import type { AiHarnessAccount } from '../../harness/definition.js';
+import type { HarnessState } from '../model.js';
 import { LOCAL_HARNESS_PROTOCOL } from './paths.js';
 
 export function accountView(account: AiHarnessAccount): Omit<AiHarnessAccount, 'credentialRef'> {

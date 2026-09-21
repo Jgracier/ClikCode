@@ -1,7 +1,7 @@
 /** One minimal vendor harness definition, shared by the parsing suites so a
  * change to the shape it models lands in one place. */
 
-import type { AiLocalHarnessDefinition } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 
 export const codex = {
   command: 'codex',

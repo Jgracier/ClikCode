@@ -3,7 +3,7 @@
 import { stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { isJsonDefaultMode } from '../../cli/output-mode.js';
-import type { HarnessSession } from '../../harness/types.js';
+import type { HarnessSession } from '../../session/model.js';
 import { compactPath, sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { decodeAttachmentPath, expandHomePath } from '../../session/attachments.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';

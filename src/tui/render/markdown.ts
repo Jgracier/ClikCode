@@ -4,7 +4,7 @@
 
 import chalk from 'chalk';
 import { Lexer, marked, type Token, type Tokens } from 'marked';
-import type { MessageBlock } from '../../harness/types.js';
+import type { MessageBlock } from '../../harness/prompter.js';
 import { HYPERLINK_CLOSE, closeOpenHyperlink, hyperlinkOpen, linksOn } from './hyperlinks.js';
 import { memoizeByText } from './memoize.js';
 import { SAFE_LINK } from './text.js';

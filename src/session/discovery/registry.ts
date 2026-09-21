@@ -2,14 +2,14 @@
  * can read a whole transcript back from. One table each, so adding a vendor
  * is one entry and not a search. */
 
-import type { AiLocalHarnessDefinition } from '../../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { discoverClaudeFsSessions, readClaudeFsTranscript } from './vendors/claude.js';
 import { discoverCodexFsSessions, readCodexFsTranscript } from './vendors/codex.js';
 import { discoverCursorFsSessions } from './vendors/cursor.js';
 import { NativeSessionEnvironment } from './locations.js';
 import { readOpencodeTranscript } from './vendors/opencode.js';
 import { discoverPiFsSessions } from './vendors/pi.js';
-import { DiscoveredNativeSession } from './types.js';
+import { DiscoveredNativeSession } from './discovered-session.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately

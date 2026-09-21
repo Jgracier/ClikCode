@@ -1,6 +1,6 @@
 /** Provider event envelopes terminate here. The orchestrator and terminal UI
  * consume only normalized response updates, never vendor JSON shapes. */
-import type { AiLocalHarnessDefinition } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 import { parseNativeActivityEventsFromValue, type NativeActivityEvent } from '../protocol/activity-events.js';
 import { nativeActivityPhaseFromValue } from '../protocol/activity-line.js';
 import { nativeSessionIdsFromValues } from '../protocol/session-ids.js';

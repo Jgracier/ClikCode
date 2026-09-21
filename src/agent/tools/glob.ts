@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { matchGlob } from '../glob-match.js';
-import { defineTool } from '../types.js';
+import { defineTool } from '../tool-contract.js';
 import { displayPath, resolveForRead, walkFiles } from './fs-helpers.js';
 
 interface GlobArgs { pattern: string; path?: string }

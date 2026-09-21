@@ -2,7 +2,8 @@
  * spinner shows beside it. */
 
 import chalk from 'chalk';
-import type { AiLocalHarnessDefinition, HarnessActivityEvent } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
+import type { HarnessActivityEvent } from '../prompter.js';
 import { ACTIVITY_PREVIEW_LINES } from './activity-events.js';
 import { CLAUDE_SHAPED, OPENCODE_SHAPED, asRecord } from './json-lines.js';
 

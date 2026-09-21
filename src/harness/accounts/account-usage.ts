@@ -4,7 +4,8 @@
 import { writeState } from '../../session/state/write.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
-import type { AiHarnessAccount, HarnessSession, HarnessState } from '../types.js';
+import type { AiHarnessAccount } from '../definition.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES, NATIVE_USAGE_READING_PROBES } from './usage-probes.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, usageCacheKey, usageReadingIsCurrent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';

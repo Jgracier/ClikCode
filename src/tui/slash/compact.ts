@@ -1,6 +1,6 @@
 /** `/compact`: replacing a long conversation with a summary of itself. */
 
-import type { HarnessSession } from '../../harness/types.js';
+import type { HarnessSession } from '../../session/model.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { closePersistentTransport } from '../../turn/runtime.js';

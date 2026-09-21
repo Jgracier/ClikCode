@@ -1,7 +1,7 @@
 /** `/capabilities`: what the active harness can actually do. */
 
 import { commonControlFor } from '../../harness/options.js';
-import type { HarnessSession } from '../../harness/types.js';
+import type { HarnessSession } from '../../session/model.js';
 import { localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
 import { sessionHarness } from './context.js';
 

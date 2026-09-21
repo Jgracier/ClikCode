@@ -16,13 +16,15 @@
  * /review and /init used to refuse on the gateway route.
  */
 import { stdout as output } from 'node:process';
-import {
-  GatewayModelClient, ModelClientError, runGatewayHarnessTurn,
-  type GatewayHarnessTurnResult, type HarnessActivityEvent as GatewayActivityEvent,
-} from '../agent/index.js';
+import { GatewayModelClient, ModelClientError } from '../agent/models/gateway-client.js';
+import { runGatewayHarnessTurn } from '../agent/run-turn.js';
+import type { GatewayHarnessTurnResult } from '../agent/model-client.js';
+import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
-import type { AiHarnessPermissionMode, HarnessPrompter, HarnessSession } from '../harness/types.js';
+import type { AiHarnessPermissionMode } from '../harness/definition.js';
+import type { HarnessPrompter } from '../harness/prompter.js';
+import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 
 /** The gateway's own refusals, as opposed to a turn that genuinely failed.

@@ -19,7 +19,7 @@ import { readState } from '../session/state/read.js';
 import { accountView, deviceManifest } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
-import type { AiHarnessAccount } from '../harness/types.js';
+import type { AiHarnessAccount } from '../harness/definition.js';
 
 async function acquireRuntimeLock(lockPath: string, runtimePath: string): Promise<FileHandle> {
   const attempt = () => open(lockPath, 'wx', 0o600);

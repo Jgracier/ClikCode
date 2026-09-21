@@ -3,7 +3,8 @@
  * output that the UI is allowed to show. */
 
 import { visibleSlice } from '../../tui/render/width.js';
-import type { AiLocalHarnessDefinition, HarnessActivityEvent } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
+import type { HarnessActivityEvent } from '../prompter.js';
 import { CLAUDE_SHAPED, JsonRecord, OPENCODE_SHAPED, asRecord } from './json-lines.js';
 import { categoryOf, toolCategory, toolLabel } from './tools.js';
 

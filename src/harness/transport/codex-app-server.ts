@@ -1,7 +1,8 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
-import type { AiHarnessPermissionMode, HarnessActivityEvent } from '../types.js';
+import type { AiHarnessPermissionMode } from '../definition.js';
+import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 
 type JsonObject = Record<string, unknown>;

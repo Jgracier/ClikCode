@@ -1,4 +1,5 @@
-import { defineTool, type PlanEntry } from '../types.js';
+import { type PlanEntry } from '../model-client.js';
+import { defineTool } from '../tool-contract.js';
 
 interface TodoWriteArgs { todos: PlanEntry[] }
 

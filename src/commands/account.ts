@@ -19,7 +19,8 @@ import { readState } from '../session/state/read.js';
 import { accountView } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
 import { accountUsageLabel } from '../harness/accounts/account-usage.js';
-import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition, HarnessState } from '../harness/types.js';
+import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, firstUnusedAccountLabel } from '../harness/accounts/labels.js';
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
 

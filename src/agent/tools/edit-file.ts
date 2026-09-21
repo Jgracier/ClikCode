@@ -1,5 +1,5 @@
 import { eventDiff, renderDiffPreview } from '../line-diff.js';
-import { defineTool, type ToolContext } from '../types.js';
+import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, resolveForWrite, ToolInputError } from './fs-helpers.js';
 import { readExisting, rememberWritten, writeTextAtomic } from './write-file.js';
 

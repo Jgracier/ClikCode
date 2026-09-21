@@ -1,5 +1,5 @@
 import { eventDiff, renderDiffPreview } from '../line-diff.js';
-import { defineTool } from '../types.js';
+import { defineTool } from '../tool-contract.js';
 import { commitEdit, prepareEdits, type EditOperation } from './edit-file.js';
 
 interface MultiEditArgs { path: string; edits: EditOperation[] }

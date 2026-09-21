@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { carryNativeSession } from './carry';
 import { resetNativeSessionDiscoveryCache } from './discovery/cache';
-import type { AiLocalHarnessDefinition } from '../harness/types';
+import type { AiLocalHarnessDefinition } from '../harness/definition';
 
 const harnessFor = (command: string): AiLocalHarnessDefinition => ({ command } as AiLocalHarnessDefinition);
 const WORKSPACE = '/home/someone/projects/thing';

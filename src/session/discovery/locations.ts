@@ -3,7 +3,7 @@
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AiLocalHarnessDefinition } from '../../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { claudeProjectDirectoryNames } from './vendors/claude.js';
 import { locateCodexRollout } from './vendors/codex.js';
 

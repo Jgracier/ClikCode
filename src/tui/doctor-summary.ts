@@ -2,7 +2,7 @@
  * one screen. */
 
 import { inspectNativeHarnessForPicker } from '../harness/transport/native/inspect.js';
-import type { HarnessState } from '../harness/types.js';
+import type { HarnessState } from '../session/model.js';
 import { compactPath } from '../harness/protocol/labels.js';
 import { harnessStatePath } from '../session/state/paths.js';
 import { allLocalHarnesses, harnessCanRunTurns } from '../runtime/lazy-bridge.js';

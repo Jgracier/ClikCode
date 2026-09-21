@@ -2,7 +2,7 @@
 
 import { homedir } from 'node:os';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
-import type { HarnessSession } from '../types.js';
+import type { HarnessSession } from '../../session/model.js';
 
 export function compactPath(path: string): string {
   const home = homedir();

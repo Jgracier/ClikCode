@@ -6,7 +6,7 @@
  * prompter because deciding which commands match is not the same job as
  * drawing them, and the matching rules are worth reading on their own.
  */
-import type { PickerOption } from '../harness/types.js';
+import type { PickerOption } from '../harness/prompter.js';
 
 /** Palette entries accept three optional fields beyond PickerOption:
  * `argHint` (shown after the command, and kept on screen while its argument is

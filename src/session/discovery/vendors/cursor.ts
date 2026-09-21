@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { newestFiles } from '../files.js';
 import { NativeSessionEnvironment, nativeDataRoot } from '../locations.js';
-import { DiscoveredNativeSession } from '../types.js';
+import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Cursor Agent's own `ls`/`--resume` are interactive pickers with no JSON
  * mode, but each chat has a real `meta.json` (schemaVersion, title, cwd,

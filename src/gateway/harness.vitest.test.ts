@@ -3,9 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from './harness';
-import { ModelClientError } from '../agent/index';
+import { ModelClientError } from '../agent/models/gateway-client';
 import { ScriptedModelClient } from '../agent/testing';
-import type { HarnessSession } from '../harness/types';
+import type { HarnessSession } from '../session/model';
 
 const workspace = (): string => {
   const dir = mkdtempSync(join(tmpdir(), 'gw-'));

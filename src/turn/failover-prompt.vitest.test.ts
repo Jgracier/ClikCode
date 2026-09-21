@@ -4,7 +4,7 @@ import { failoverPromptRequest, normalizeImportedTranscript } from './failover-p
 import { conversationTitle } from '../session/discovery/titles.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
-import type { HarnessSession } from '../harness/types.js';
+import type { HarnessSession } from '../session/model.js';
 
 const history = [
   { role: 'user' as const, content: 'use clikdeploy cli to see what we have connected' },

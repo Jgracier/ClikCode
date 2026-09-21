@@ -3,7 +3,7 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
-import type { HarnessSession, HarnessState } from '../../harness/types.js';
+import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
 import { writeState } from '../../session/state/write.js';
 import { closePersistentTransport } from '../../turn/runtime.js';

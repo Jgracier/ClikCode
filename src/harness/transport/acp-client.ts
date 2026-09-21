@@ -5,7 +5,8 @@
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import type { AiHarnessPermissionMode, HarnessActivityEvent } from '../types.js';
+import type { AiHarnessPermissionMode } from '../definition.js';
+import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';

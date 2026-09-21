@@ -4,7 +4,8 @@
  * (the interactive loop and the headless `aiSessionCommand`) are all generated
  * from SLASH_COMMANDS, so they cannot drift apart. Pure: no I/O, no state, no
  * harness names -- availability is decided from catalog fields only. */
-import type { AiLocalHarnessDefinition, HarnessSession } from '../../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { HarnessSession } from '../../session/model.js';
 
 export type SlashGroup =
   | 'Common' | 'Conversation' | 'Workspace' | 'Provider' | 'Settings' | 'Sessions' | 'Info' | 'Tools' | 'Custom' | 'Switch harness';

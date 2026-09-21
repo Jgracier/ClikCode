@@ -1,7 +1,7 @@
 /** A conversation as a list of messages: reading one, appending to it,
  * forking it, and the shared-prefix rule that keeps a fork cheap. */
 
-import type { HarnessSession } from '../../harness/types.js';
+import type { HarnessSession } from '../model.js';
 import { cloneData, sameData } from './data.js';
 import { withSessionLock, withStateLock } from './locks.js';
 import { SessionFile, listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile } from './records.js';

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AI_LOCAL_HARNESSES, harnessIntegrationLevel } from '@clikcode/router/ai-local-harness';
 import { harnessTurnTransport } from './select.js';
-import type { AiLocalHarnessDefinition } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const catalog = (command: string): AiLocalHarnessDefinition => {
   const found = AI_LOCAL_HARNESSES.find((candidate) => candidate.command === command);

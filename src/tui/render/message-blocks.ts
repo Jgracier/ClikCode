@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import { renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock } from './markdown.js';
 import { terminalCellWidth } from './width.js';
 import { wrapCodeLine, wrapWords } from './wrap.js';
-import type { MessageBlock } from '../../harness/types.js';
+import type { MessageBlock } from '../../harness/prompter.js';
 
 /** Rows for a run of parsed Markdown blocks, exactly as they appear in the
  * transcript.

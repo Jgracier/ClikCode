@@ -8,7 +8,7 @@ import { readFilePrefix, sortedSubdirectories } from '../files.js';
 import { NativeSessionEnvironment, nativeDataRoot } from '../locations.js';
 import { conversationTitle } from '../titles.js';
 import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, visibleNativeUserText } from '../transcript.js';
-import { DiscoveredNativeSession } from '../types.js';
+import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Codex writes one `rollout-<timestamp>-<uuid>.jsonl` file per session under
  * `~/.codex/sessions/<year>/<month>/<day>/`, not scoped by project directory —

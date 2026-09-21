@@ -3,7 +3,7 @@
 
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
-import type { HarnessSession } from '../types.js';
+import type { HarnessSession } from '../../session/model.js';
 import { claudeStreamReading, claudeStreamUsage, codexRateLimitsReading, recentReadingByLabel } from './usage-probes.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, UsageWindow, nativeUsageCache, usageCacheKey, usageReading, usageWindow } from './usage-reading.js';
 

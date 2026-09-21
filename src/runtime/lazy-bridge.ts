@@ -4,10 +4,7 @@
  * per-vendor fact is a declared field on the catalog entry. */
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import type {
-  AiCustomAcpHarnessInput, AiHarnessAcpLaunch, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel, AiHarnessPermissionMode,
-  AiHarnessTransport, AiLocalHarnessDefinition, AiRouterRuntime,
-} from '../harness/types.js';
+import type { AiCustomAcpHarnessInput, AiHarnessAcpLaunch, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition, AiRouterRuntime } from '../harness/definition.js';
 
 const require = createRequire(import.meta.url);
 let routerRuntime: AiRouterRuntime | undefined;

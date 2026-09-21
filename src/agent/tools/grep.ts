@@ -5,7 +5,7 @@ import path from 'node:path';
 import { killProcessTreePortable, spawnPortable } from '../../harness/transport/spawn.js';
 import { matchGlob } from '../glob-match.js';
 import { capHeadTail } from '../security.js';
-import { defineTool, type ToolContext } from '../types.js';
+import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, looksBinary, resolveForRead, throwIfAborted, walkFiles } from './fs-helpers.js';
 
 export interface GrepArgs {

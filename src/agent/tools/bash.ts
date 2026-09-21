@@ -6,7 +6,8 @@ import path from 'node:path';
 import { killProcessTreePortable, spawnPortable } from '../../harness/transport/spawn.js';
 import { classifyCommand, OUTPUT_CAPS, redactSecrets, scrubEnvironment, toolOutputDir } from '../security.js';
 import type { BackgroundShell } from '../session-state.js';
-import { defineTool, turnCancelledError, type ToolContext } from '../types.js';
+import { turnCancelledError } from '../cancellation.js';
+import { defineTool, type ToolContext } from '../tool-contract.js';
 import { scopeOf } from './fs-helpers.js';
 
 interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string }

@@ -20,7 +20,7 @@
  * A balance does not come back by itself, so there is nothing to wait for and
  * the wording says so instead.
  */
-import type { AiHarnessAccount } from '../harness/types.js';
+import type { AiHarnessAccount } from '../harness/definition.js';
 import type { AccountUsageReading, UsageWindow } from '../harness/accounts/usage-reading.js';
 
 /** The soonest a spent window comes back, across every account that was

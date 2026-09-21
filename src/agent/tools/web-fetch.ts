@@ -7,7 +7,9 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import { OUTPUT_CAPS } from '../security.js';
-import { defineTool, turnCancelledError, type NetworkSeams, type PinnedResponse, type ResolvedAddress } from '../types.js';
+import { turnCancelledError } from '../cancellation.js';
+import { type NetworkSeams, type PinnedResponse, type ResolvedAddress } from '../model-client.js';
+import { defineTool } from '../tool-contract.js';
 
 interface WebFetchArgs { url: string; raw?: boolean }
 

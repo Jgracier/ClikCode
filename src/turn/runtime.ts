@@ -17,7 +17,9 @@ import { usageLabelIsExhausted, usageLabelRemainingPercent } from './failover.js
 import { normalizeSessionTitle } from '../session/title.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessActivityEvent, HarnessDefaultSettings, HarnessSession, HarnessState } from '../harness/types.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { HarnessActivityEvent } from '../harness/prompter.js';
+import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../session/model.js';
 import type { HarnessAvailableCommand } from '../harness/events/turn-observer.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';

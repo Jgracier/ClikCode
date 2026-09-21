@@ -1,7 +1,7 @@
 import { hostname } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { SESSION_CLAIM_TTL_MS, claimSession, releaseSession, sessionClaimIsLive } from './claim.js';
-import type { HarnessSession } from '../harness/types.js';
+import type { HarnessSession } from './model.js';
 
 const NOW = Date.parse('2026-01-01T12:00:00.000Z');
 const at = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString();

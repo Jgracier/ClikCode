@@ -6,7 +6,7 @@ import { stdout as output } from 'node:process';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
-import type { HarnessActivityEvent, ToolCategory } from '../../harness/types.js';
+import type { HarnessActivityEvent, ToolCategory } from '../../harness/prompter.js';
 
 /** Keep the persisted history window stable while transient assistant and
  * queued rows are appended. Applying the history cap to the combined array

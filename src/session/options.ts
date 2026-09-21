@@ -16,10 +16,9 @@ import { harnessTierRank } from '../runtime/lazy-bridge.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { sessionProviderLabel } from '../harness/protocol/labels.js';
 import { harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
-import type {
-  AiHarnessAccount, AiHarnessOptionDefinition, AiHarnessPermissionMode,
-  AiLocalHarnessDefinition, HarnessDefaultSettings, HarnessSession, PickerOption,
-} from '../harness/types.js';
+import type { AiHarnessAccount, AiHarnessOptionDefinition, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { PickerOption } from '../harness/prompter.js';
+import type { HarnessDefaultSettings, HarnessSession } from './model.js';
 
 /** Effort words every harness understands, narrowed per harness by
  * harnessSupportsEffort. */

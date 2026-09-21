@@ -6,7 +6,8 @@ import { auggieUsageLabel } from '../auggie-usage.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLI_VERSION } from '../../cli/program.js';
-import type { HarnessSession, NativeUsageProbe } from '../types.js';
+import type { NativeUsageProbe } from '../definition.js';
+import type { HarnessSession } from '../../session/model.js';
 import { UsageReading, UsageWindow, usageReading, usageWindow, usageWindowName } from './usage-reading.js';
 
 /** The Claude probe runs a real (tiny) turn, so it waits on the model, not on

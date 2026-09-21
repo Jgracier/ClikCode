@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 import { nativeResponseUpdate } from './adapters.js';
 import { harnessTurnTransport } from '../transport/select.js';
-import type { AiLocalHarnessDefinition } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const harness = (command: string, output: 'text' | 'json' | 'json-lines' = 'json-lines'): AiLocalHarnessDefinition => ({
   command, provider: command, displayName: command, surface: 'terminal', localAuth: ['vendor-cli'], binary: command,

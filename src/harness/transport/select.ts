@@ -1,5 +1,5 @@
 import { harnessPreferredTransport } from '../../runtime/lazy-bridge.js';
-import type { AiLocalHarnessDefinition } from '../types.js';
+import type { AiLocalHarnessDefinition } from '../definition.js';
 
 export type HarnessTurnTransport = 'codex-app-server' | 'acp' | 'structured-cli' | 'text-cli';
 

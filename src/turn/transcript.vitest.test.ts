@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TurnTranscript, settledAnswerBlocks, settledToolRows } from './transcript';
-import type { MessageBlock } from '../harness/types.js';
+import type { MessageBlock } from '../harness/prompter.js';
 
 const text = (blocks: readonly MessageBlock[]): string[] =>
   blocks.map((block) => (block as { text?: string }).text ?? `[${block.kind}]`);

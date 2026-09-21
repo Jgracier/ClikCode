@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnPortable, terminatePortable } from '../harness/transport/spawn.js';
-import type { ConversationItem, ModelClient, TokenUsage } from './types.js';
+import type { ConversationItem, ModelClient, TokenUsage } from './model-client.js';
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const COMPACTION_THRESHOLD = 0.8;

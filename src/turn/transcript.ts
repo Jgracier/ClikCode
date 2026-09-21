@@ -1,5 +1,5 @@
 import { splitIntoBlocks } from '../tui/render/markdown.js';
-import type { MessageBlock } from '../harness/types.js';
+import type { MessageBlock } from '../harness/prompter.js';
 
 /** Which parts of a turn can never change again.
  *

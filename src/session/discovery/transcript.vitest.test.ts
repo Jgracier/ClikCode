@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ADOPTED_TRANSCRIPT_READERS } from './registry.js';
 import { mergeNativeTranscript, type NativeTranscriptMessage } from './transcript.js';
-import type { AiLocalHarnessDefinition } from '../../harness/types.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 
 const message = (role: NativeTranscriptMessage['role'], content: string): NativeTranscriptMessage => ({ role, content });
 
