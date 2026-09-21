@@ -371,8 +371,11 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   const explicit = label?.trim();
   let accountLabel = explicit || placeholder;
   if (!accountLabel) throw new Error('account label cannot be empty');
-  const existing = state.accounts.find((account) => account.label.toLowerCase() === accountLabel.toLowerCase());
-  if (existing) throw new Error(`a local AI account named "${accountLabel}" already exists`);
+  // Same scoping for the up-front duplicate check: an explicit label that is
+  // already in use on a DIFFERENT provider is not a conflict.
+  const existing = state.accounts.find((account) => account.provider === harness.provider
+    && account.label.toLowerCase() === accountLabel.toLowerCase());
+  if (existing) throw new Error(`a local AI account named "${accountLabel}" already exists for ${harness.displayName}`);
   // A harness with no profileEnv can only ever have one real vendor-cli
   // identity ClikCode can track (there's no isolated directory to give a
   // second one its own credentials) -- but the useful thing to do about
@@ -487,7 +490,15 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
       accountLabel = derived;
     }
   }
-  if (!state.accounts.some((account) => account.label.toLowerCase() === accountLabel.toLowerCase())) {
+  // Scoped to this provider, as the existingMatch check above already is.
+  // One person's email is their identity on every provider they use, so a
+  // cross-provider label check meant signing in to a second harness under an
+  // address already connected elsewhere silently created nothing: the guard
+  // matched an unrelated account, the push was skipped, and "connected" was
+  // still announced. The isolated profile directory it had just built was
+  // left orphaned, once per attempt.
+  if (!state.accounts.some((account) => account.provider === harness.provider
+    && account.label.toLowerCase() === accountLabel.toLowerCase())) {
     state.accounts.push({ id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) });
     await writeState(state);
   }
