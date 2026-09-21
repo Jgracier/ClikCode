@@ -1881,7 +1881,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // composer. It is a fixed status band, not transcript content, so a long
     // streamed answer cannot scroll it away. Optional bands share only the
     // rows left after one composer row and its three fixed footer rows.
-    const waitingRows = this.waitingLabel && targetHeight >= 5 ? 1 : 0;
+    // Two rows: the generating line, and one blank above it so the text still
+    // being written is not flush against the spinner. Counted here because
+    // this number is the height budget -- reserve one row for a band that
+    // draws two and the last line of the answer is pushed off the screen.
+    const waitingRows = this.waitingLabel && targetHeight >= 5 ? 2 : 0;
     let optionalRows = Math.max(0, targetHeight - 4 - waitingRows);
     const notice = this.transientNotice ?? this.currentNotice;
     const noticeRows = notice && optionalRows > 0 ? 1 : 0;
@@ -2174,7 +2178,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
     if (waitingRows) {
-      footer.push(`  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
+      footer.push('', `  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
     // When a window is exhausted, the harness-reported reset time sits
     // directly above the usage rule it describes.
