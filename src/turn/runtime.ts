@@ -19,7 +19,8 @@ import { ADOPTED_TRANSCRIPT_READERS, mergeNativeTranscript } from '../session/di
 import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessActivityEvent, HarnessDefaultSettings, HarnessSession, HarnessState } from '../harness/types.js';
 import type { HarnessAvailableCommand } from '../harness/events/turn-observer.js';
 import { localHarnessForCommand, nativeProfileEnvironment } from '../harness/transport/native-protocol.js';
-import { readState, writeState } from '../session/state.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
 import { accountUsageLabel } from '../harness/account-data.js';
 import { createCodexSession } from '../harness/transport/codex-app-server.js';
 import { createAcpSession } from '../harness/transport/acp-client.js';

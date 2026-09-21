@@ -8,7 +8,7 @@ import type { Command } from 'commander';
 import { mcpAdd, mcpTargets } from '../commands/mcp.js';
 import type Conf from 'conf';
 import { aiGatewaySessionSend } from '../turn/drive.js';
-import { aiPermissions } from '../tui/pickers.js';
+import { aiPermissions } from '../tui/pickers/permissions.js';
 import { aiSessionInteractive, aiSessionResume } from '../commands/ai-interactive.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, aiGatewayStatus, aiModelsList, aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList, aiUsage } from '../commands/ai.js';

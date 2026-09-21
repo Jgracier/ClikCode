@@ -19,7 +19,10 @@ import {
 import { localHarnessForCommand, localHarnessForProvider, localRouter, nativeProfileEnvironment } from '../harness/transport/native-protocol.js';
 import { homeRedirectEnvironment } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery.js';
-import { accountView, harnessCommand, harnessStatePath, readState, writeState } from '../session/state.js';
+import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
+import { readState } from '../session/state/read.js';
+import { accountView } from '../session/state/views.js';
+import { writeState } from '../session/state/write.js';
 import { accountUsageLabel } from '../harness/account-data.js';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition, HarnessState } from '../harness/types.js';
 

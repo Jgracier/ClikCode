@@ -17,7 +17,8 @@ import { runNativeHarnessCommand } from '../harness/transport/native.js';
 import { spawnPortable as spawn } from '../harness/transport/spawn.js';
 import type { HarnessPrompter, HarnessSession, HarnessState, PickerOption } from '../harness/types.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, compactPath, sessionProviderLabel } from '../harness/transport/native-protocol.js';
-import { readState, writeState } from '../session/state.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
 import { nativeModelCatalog, nativeUsageReading, usageResetLabel } from '../harness/account-data.js';
 import { closePersistentTransport, discardInterruptedTurn, nativeAvailableCommands, persistentTransports, preserveInterruptedTurn, synchronizeNativeTranscript, turnEnvironment } from '../turn/runtime.js';
 import { aiGatewaySessionSend } from '../turn/drive.js';
@@ -34,8 +35,16 @@ import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { aiSessionLeave, launchSession, newConversation, newProviderConversation, releaseQueuedTurn } from './ai.js';
 import { aiSessionCommand, capabilitiesText, compactConversation, customCommandsFor, exportTranscript, initPrompt, nativeManagerListing, readMemoryFile, reviewPrompt, sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/handlers.js';
-import { addAccountForHarness, autoSelectSessionHarness, doctorSummary, interactiveAccountPicker, interactiveEffortPicker, interactiveEnginePicker, interactiveHarnessOptionPicker, interactiveModelPicker, interactivePermissionPicker, interactiveSessionManager, interactiveSessionPicker, interactiveSettingsPicker, manageAccountAction } from '../tui/pickers.js';
-import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../tui/pickers.js';
+import { addAccountForHarness, interactiveAccountPicker, manageAccountAction } from '../tui/pickers/account.js';
+import { autoSelectSessionHarness, interactiveEnginePicker } from '../tui/pickers/engine.js';
+import { interactiveEffortPicker } from '../tui/pickers/effort.js';
+import { interactiveHarnessOptionPicker } from '../tui/pickers/options.js';
+import { interactiveModelPicker } from '../tui/pickers/model.js';
+import { interactivePermissionPicker } from '../tui/pickers/permissions.js';
+import { interactiveSessionManager, interactiveSessionPicker } from '../tui/pickers/session.js';
+import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
+import { doctorSummary } from '../tui/doctor-summary.js';
+import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
 
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();

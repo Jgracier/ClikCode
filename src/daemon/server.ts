@@ -14,7 +14,10 @@ import { join } from 'node:path';
 import type Conf from 'conf';
 import { emitJson } from '../cli/structured-output.js';
 import { isAllowedLoopbackHost } from './host-allowlist.js';
-import { accountView, deviceManifest, harnessCommand, harnessStatePath, readState, writeState } from '../session/state.js';
+import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
+import { readState } from '../session/state/read.js';
+import { accountView, deviceManifest } from '../session/state/views.js';
+import { writeState } from '../session/state/write.js';
 import { streamLocalAiTurn } from '../harness/transport/native-protocol.js';
 import type { AiHarnessAccount } from '../harness/types.js';
 
