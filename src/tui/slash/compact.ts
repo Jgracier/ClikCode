@@ -6,7 +6,7 @@ import { writeState } from '../../session/state/write.js';
 import { closePersistentTransport } from '../../turn/runtime.js';
 import { conversationIdFor, hasConversationContent } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import { newConversationSession } from '../../commands/ai.js';
+import { newConversationSession } from '../../commands/ai/conversations.js';
 import { sessionHarness } from './context.js';
 
 const COMPACT_PROMPT = 'Summarize this conversation so far for a fresh session that will continue the work. Include: the goal, decisions made and why, files created or changed (with paths), commands that matter, the current state, and the concrete next steps. Be complete but concise. Output only the summary.';

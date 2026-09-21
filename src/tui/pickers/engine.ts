@@ -8,7 +8,7 @@ import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
 import { providerPickerOptions } from '../../session/options.js';
-import { aiHarnessSelect } from '../../commands/ai.js';
+import { aiHarnessSelect } from '../../commands/ai/harness.js';
 import { chooseOption } from './choose.js';
 import { selectProviderConversation } from './conversation.js';
 

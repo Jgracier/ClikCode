@@ -1,0 +1,39 @@
+/** Durable settings, written globally or for one provider. */
+
+import { emitJson } from '../../cli/structured-output.js';
+import type { HarnessDefaultSettings } from '../../harness/types.js';
+import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { readState } from '../../session/state/read.js';
+import { writeState } from '../../session/state/write.js';
+import { applyDefaultSetting } from '../../session/options.js';
+
+/** Read-only view of the defaults every new chat is built from. */
+/** Applies to every provider that doesn't have its own override. */
+export async function aiSettingsSetGlobal(key: string, value: string, emit = true): Promise<void> {
+  const state = await readState();
+  applyDefaultSetting(state.globalSettings, key, value);
+  await writeState(state);
+  if (emit) emitJson({ globalSettings: state.globalSettings });
+}
+
+/** Overrides the global default for one provider only; existing sessions are untouched. */
+export async function aiSettingsSetProvider(providerOrHarness: string, key: string, value: string, emit = true): Promise<void> {
+  const state = await readState();
+  const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
+  if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
+  const entry: Partial<HarnessDefaultSettings & { model: string }> = { ...state.providerSettings[harness.provider] };
+  applyDefaultSetting(entry, key, value, harness);
+  state.providerSettings[harness.provider] = entry;
+  await writeState(state);
+  if (emit) emitJson({ provider: harness.provider, settings: entry });
+}
+
+/** Removes every override for one provider, falling back to the global defaults. */
+export async function aiSettingsClearProvider(providerOrHarness: string, emit = true): Promise<void> {
+  const state = await readState();
+  const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
+  if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
+  delete state.providerSettings[harness.provider];
+  await writeState(state);
+  if (emit) emitJson({ provider: harness.provider, settings: {} });
+}

@@ -8,7 +8,7 @@ import { TERMINAL } from '../active-terminal.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { terminalUiSupported } from '../capabilities.js';
 import { VALID_PERMISSION_MODES } from '../../session/options.js';
-import { aiSettingsSetGlobal } from '../../commands/ai.js';
+import { aiSettingsSetGlobal } from '../../commands/ai/settings.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 import { applySettingScope } from './settings.js';

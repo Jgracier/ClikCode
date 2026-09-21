@@ -11,7 +11,9 @@ import { synchronizeNativeTranscript } from '../../turn/runtime.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { conversationIdFor, hasConversationContent, requiresProviderHandoff } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import { aiHarnessSelect, applyGatewaySessionPolicy, newProviderConversation } from '../../commands/ai.js';
+import { newProviderConversation } from '../../commands/ai/conversations.js';
+import { aiHarnessSelect } from '../../commands/ai/harness.js';
+import { applyGatewaySessionPolicy } from '../../commands/ai/sessions.js';
 import { chooseOption } from './choose.js';
 
 async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<void> {

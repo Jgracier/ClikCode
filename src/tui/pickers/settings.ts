@@ -6,7 +6,7 @@ import { vendorFacingOptions } from '../../harness/options.js';
 import type { HarnessPrompter } from '../../harness/types.js';
 import { harnessSupportsEffort, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
-import { aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai.js';
+import { aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 import { interactiveEffortPicker } from './effort.js';
