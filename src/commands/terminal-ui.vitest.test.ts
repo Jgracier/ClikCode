@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './markdown-render';
-import { activityLifecyclePhase, commandPaletteMatches, composerRightArrowValue, editWaitingComposer, liveConversationLines, pickerConfirmsSelection, pickerDeletesSelection, rebaseActivityOffsets, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { activityLifecyclePhase, liveConversationLines, rebaseActivityOffsets, rightLabeledRule, TerminalInputDecoder, terminalUiSupported, transientAssistantRequired, upsertActivityEvent, waitingInputActions, waitingSpinnerFrame, waitingSpinnerGlyph } from './terminal-ui';
+import { editWaitingComposer } from './composer-edit';
+import { commandPaletteMatches, composerRightArrowValue, pickerConfirmsSelection, pickerDeletesSelection } from './command-palette';
 
 describe('terminal waiting input', () => {
   it('uses the inline renderer only on ANSI-capable interactive terminals', () => {
