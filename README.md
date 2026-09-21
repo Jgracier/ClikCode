@@ -2,23 +2,20 @@
 
 **One place to run every AI coding tool you have.**
 
-You probably have several installed. Claude Code for one thing, Codex for
-another, Copilot because it came with the editor, something you tried once and
-kept. Each has its own commands, its own sign-in, its own idea of where your
-conversations live — and none of them know the others exist. Choosing a tool
-means learning it again, and your work ends up scattered across all of them.
+Claude Code for one thing, Codex for another, Copilot because it came with the
+editor, something you tried once and kept. Each has its own commands, its own
+sign-in, its own idea of where your conversations live. None of them know the
+others exist, so picking one up means learning it again and leaving your work
+behind in the last one.
 
-ClikCode sits in front of all 24 of them. One way to sign in, one list of
-conversations, one set of controls, and the same keystrokes whichever tool is
-answering. Nothing is replaced: your tools stay yours, your existing logins
-keep working, and anything ClikCode cannot improve on it simply passes
-through.
+ClikCode sits in front of all 24. One sign-in, one list of conversations, one
+set of controls, the same keystrokes whichever tool answers. It replaces
+nothing — your tools stay yours, the logins you already had keep working — and
+what it adds is this:
 
-Four things follow from that, and the rest of this page is how to use them.
-
-**Every tool, one way of working.** You never have to remember a tool's own
-flags again. ClikCode asks each one what it supports and offers you that —
-models, reasoning level, approval behavior — in the same place every time.
+**Every tool, one way of working.** Stop memorizing flags. ClikCode asks each
+tool what it supports and offers you that — models, reasoning level, approval
+behavior — in the same place every time.
 
 **All your accounts, at once.** Work and personal, two subscriptions, an API
 key kept for spillover. Keep them side by side and move between them in a
@@ -41,9 +38,9 @@ it. Nothing to click. You find out afterwards.
 npm install -g clikcode
 ```
 
-Requires **Node.js 22.12 or newer**. There is nothing to configure, and you do
-not need any of the coding tools installed first — ClikCode will fetch one for
-you where the vendor allows it.
+Requires **Node.js 22.12 or newer**. Nothing to configure. You do not need any
+of the coding tools installed first — where a vendor ships an installable CLI,
+ClikCode installs it for you on first sign-in.
 
 ## Your first five minutes
 
@@ -72,8 +69,7 @@ of everything you can do from here. That is the whole setup.
 
 ## Three things to know
 
-Almost everything in ClikCode is one of three nouns, and they stack in this
-order. Once these are clear the rest of this page is mostly detail.
+Everything in ClikCode is one of three nouns, and they stack in this order.
 
 **A tool** is Claude Code, Codex, Gemini, Copilot — the thing that actually
 does the work. `clikcode doctor` tells you which ones are on this machine, what
@@ -90,8 +86,8 @@ the last one you were in.
 
 ## Everyday commands
 
-Every one of these also exists inside a session as a `/` command, so you can
-script it or type it, whichever suits the moment.
+Each of these is also a `/` command inside a session. Script them, or type
+them.
 
 | Command | What it does |
 | --- | --- |
@@ -105,8 +101,9 @@ script it or type it, whichever suits the moment.
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
 | `clikcode gateway login [--github]` / `gateway status` | Optional gateway sign-in (Google by default); absent when `CLIKCODE_GATEWAY=off` |
 
-Output is JSON by default so ClikCode can be scripted; pass `--human` for
-readable output, and `--debug` when something fails and you want the detail.
+Output is JSON by default, so ClikCode scripts cleanly. `--human` gives you
+readable output; `--debug` adds the stack and HTTP detail when something
+fails.
 
 ## Inside a session
 
@@ -114,10 +111,8 @@ Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
 Pressing `/` opens a searchable list. Six are pinned at the top, in the order
-people actually reach for them — pick a tool, pick an
-account on it, resume a conversation, change the model, and the two used
-mid-conversation more than any others: starting over, and changing what needs
-your approval.
+people reach for them: pick a tool, pick an account on it, resume a
+conversation, change the model, start over, change what needs your approval.
 
 | Command | What it does |
 | --- | --- |
@@ -224,9 +219,9 @@ named after the file.
 
 ## Working with several accounts
 
-Several accounts for the same tool can coexist, and this is the part that
-makes the rest possible — running out is only survivable if there is somewhere
-else to go.
+Several accounts for the same tool can run side by side. Everything else in
+this section depends on it: running out only survives if there is somewhere to
+go.
 
 Each account gets its own directory under `~/.clikcode/profiles/`, and
 ClikCode points the tool at it using that vendor's own supported setting —
@@ -236,13 +231,13 @@ one child process at a time. Nothing global changes, and the `~/.claude`,
 
 Nine tools work this way today: Claude Code, Codex, GitHub Copilot, Gemini
 CLI, Qwen Code, Antigravity, Pi, Hermes and Command Code. The rest hold one
-account each — usually an API key — which you add with `clikcode accounts add`.
+account each — usually an API key — added with `clikcode accounts add`.
 
-A few of the nine have no setting of their own and are separated by pointing
-`HOME` somewhere else for the child process. That would also hide your git,
-npm, GitHub CLI, Docker, GnuPG, Cargo and ssh-agent configuration from the
-agent, so ClikCode points those back at your real home. Turns still commit,
-push and install as you.
+Two of the nine, Antigravity and Command Code, have no such setting, so
+ClikCode points `HOME` elsewhere for that one process instead. On its own that
+would also hide your git, npm, GitHub CLI, Docker, GnuPG, Cargo and ssh-agent
+configuration from the agent, so ClikCode points those back at your real home.
+Turns still commit, push and install as you.
 
 Switch by hand with `/account` in a session, or
 `clikcode sessions set <id> --account <label>`.
@@ -254,10 +249,10 @@ sits in the corner of the screen while you work. When the one you are on is
 spent, the turn moves to another account of the same tool and the answer keeps
 arriving. You are told after the fact, not asked first.
 
-The part that matters is what travels. ClikCode copies the tool's own
-conversation file into the next account before resuming it, so the model picks
-up the real thread rather than a summary someone wrote for it. It does not
-re-read your project, and it does not forget what it just said.
+What travels is the point. ClikCode copies the tool's own conversation file
+into the next account and resumes it there, so the model continues the real
+thread instead of a summary of it. It does not re-read your project, and it
+does not forget what it just said.
 
 This is on by default. Turn it off for the current conversation with
 `/accounts failover never`, or for a new one with
@@ -265,29 +260,28 @@ This is on by default. Turn it off for the current conversation with
 
 ## Moving a conversation to another tool
 
-Switching accounts keeps you on the same tool. Switching tools is a separate
-move, and it is one command: `/provider` to choose from a list, or name it
-directly — `/claude`, `/codex`, `/gemini` — with your next message on the same
-line if you like.
+Switching accounts keeps you on the same tool. Switching tools is one command:
+`/provider` to pick from a list, or the tool's name directly — `/claude`,
+`/codex`, `/gemini` — with your next message on the same line.
 
 ```
 /codex have another look at the migration
 ```
 
-The conversation keeps its name, its history and its place in your list. What
-the new tool receives is the conversation so far, replayed as context, because
-no vendor can read another vendor's memory. Long threads cost a little time
-and a few tokens at the handover; nothing else changes.
+The conversation keeps its name, its history and its place in your list. No
+vendor can read another vendor's memory, so the new tool is sent the
+conversation so far as context. On a long thread that costs tokens and a few
+seconds. Nothing else changes.
 
 ## Picking up chats you started elsewhere
 
-The same list holds conversations ClikCode never opened. `/resume` shows both:
-yours, and chats the tools started on their own — ones you ran in Claude Code
-or Codex directly, before ClikCode was in the picture.
+`/resume` shows two things: your ClikCode conversations, and chats the tools
+started on their own — ones you ran in Claude Code or Codex directly, before
+ClikCode was involved.
 
-Adopt one and it becomes an ordinary conversation. It gets a row in your list,
-and you can carry it on, fork it, rename it or hand it to another tool like
-any other.
+Pick one of the second kind and it becomes one of the first. It gets a row in
+your list, and you can carry it on, fork it, rename it or hand it to another
+tool.
 
 Claude Code, Codex and OpenCode hand over their full history when adopted, so
 you can scroll back through it. For the others the thread is real and the tool
@@ -308,14 +302,13 @@ directly, exactly as it would if you had configured it by hand.
 
 ## Running without a vendor tool
 
-Everything so far assumes the tools are on your machine. There is a second
-route for when they are not: sign in to a hosted service and ClikCode runs the
-coding agent itself, with the service supplying only the model.
+Everything above assumes the tools are on your machine. When they are not,
+sign in to a hosted service instead: it supplies the model, and ClikCode runs
+the coding agent itself — same conversations, same commands, no vendor CLI.
 
-It is entirely optional. Without that sign-in ClikCode works purely against
-your local accounts, and `CLIKCODE_GATEWAY=off` removes the commands
-altogether. The default endpoint is ClikDeploy Gateway
-(`https://clikdeploy.com`), because that is the one that exists today;
+Optional, and off until you sign in. `CLIKCODE_GATEWAY=off` removes the
+commands entirely. The default endpoint is ClikDeploy Gateway
+(`https://clikdeploy.com`), the only one that exists today;
 `CLIKCODE_GATEWAY_URL` points it anywhere else.
 
 ## What ClikCode keeps, and where
@@ -338,9 +331,9 @@ existing sign-in keeps working; the next write moves it.
 
 ## Letting other programs drive it
 
-If you want an editor, a script or another agent to use ClikCode, there is a
-small HTTP API. `clikcode start` runs it, `clikcode status` and `clikcode stop`
-inspect and stop it. It is off unless you start it.
+An editor, a script or another agent can drive ClikCode over a small HTTP API.
+`clikcode start` runs it; `clikcode status` and `clikcode stop` inspect and
+stop it. It stays off until you start it.
 
 - Binds to `127.0.0.1` only, on an OS-assigned port (or `--port`); the URL is
   printed and recorded in `~/.clikcode/runtime.json`.
@@ -352,11 +345,10 @@ inspect and stop it. It is off unless you start it.
 
 ## Tuning and accessibility
 
-ClikCode reads a handful of environment variables. Two of them are worth
-knowing even if you never set anything else: `CLIKCODE_SCREEN_READER` switches
-to a plain, append-only view that a screen reader announces once and in order,
-and `CLIKCODE_REDUCED_MOTION` holds the spinner still without slowing the
-answer down.
+Two of these matter even if you set nothing else. `CLIKCODE_SCREEN_READER`
+switches to a plain, append-only view that a screen reader announces once and
+in order. `CLIKCODE_REDUCED_MOTION` holds the spinner still; the answer still
+streams at full speed.
 
 | Variable | Effect |
 | --- | --- |
