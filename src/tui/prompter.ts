@@ -1151,6 +1151,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
     if (waitingRows) {
+      // What is running right now, one row each, directly above the band.
+      //
+      // Not in the conversation: a row there is anchored at the offset where
+      // the tool STARTED, which pins every later paragraph into the repainted
+      // region and parks the call above the composer for the whole turn --
+      // a regression the monorepo's live-tools test covers, and caught. The
+      // footer has no anchor, so this costs nothing structurally.
+      //
+      // The band below says only what KIND of work it is; the label lives
+      // here, where there is room for it.
+      for (const tool of this.activeTools.values()) {
+        const style = tool.category ? TOOL_CATEGORY_STYLE[tool.category] : undefined;
+        const mark = style ? `${style.paint(style.glyph)} ` : '';
+        footer.push(`  ${mark}${chalk.dim(visibleSlice(tool.label, Math.max(1, inner - 2)))}`);
+      }
       footer.push('', `  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
     // When a window is exhausted, the harness-reported reset time sits

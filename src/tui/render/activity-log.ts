@@ -142,9 +142,13 @@ export function activityLifecyclePhase(
   if (!current) return { activeTools: next, phase: 'thinking' };
   // The verb is what the tool is doing, not a generic "running" for
   // everything. An unclassified tool keeps the word it always had.
+  // The verb alone. The tool's own row is now drawn in the conversation while
+  // it runs, so repeating its label down here said the same thing twice, one
+  // line apart -- and the band is the narrower place to say it, where a long
+  // label crowds out the elapsed counter and the interrupt hint.
   const verb = current.category ? TOOL_CATEGORY_STYLE[current.category].verb : 'running';
   return {
-    activeTools: next, phase: `${verb} ${current.label}`,
+    activeTools: next, phase: verb,
     ...(current.category ? { category: current.category } : {}),
   };
 }
