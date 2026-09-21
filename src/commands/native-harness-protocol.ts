@@ -498,6 +498,7 @@ export const GATEWAY_HARNESS_COMMAND = 'clikdeploy-gateway';
 export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>> = {
   claude: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'tool_use blocks carry name and input; Edit/Write also carry a diff, which settles them outright.' },
   qwen: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'Claude-shaped stream, parsed by the same branch and named the same way.' },
+  grok: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'Claude-shaped stream, confirmed live from its own init line, so the same branch reads it.' },
   codex: { stream: 'structured', note: 'command_execution is a run by the shape of its own envelope; mcp_tool_call classifies by the MCP tool name.' },
   opencode: { stream: 'structured', note: 'part.tool with part.state.input: the verb table reads the name, the input shape covers the rest.' },
   kilo: { stream: 'structured', note: 'an OpenCode fork emitting the same envelope.' },
