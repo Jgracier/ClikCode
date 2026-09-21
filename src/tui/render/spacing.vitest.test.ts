@@ -48,19 +48,19 @@ describe('usage reads by state, not as furniture', () => {
     expect(usageRemainingPercent(undefined)).toBeUndefined();
   });
 
-  it('stays the calm label colour until the allowance is actually gone', () => {
-    // Green-for-healthy was noise -- nothing is wrong, so nothing needs
-    // saying -- and yellow reads muddy on a dark terminal and fights whatever
-    // theme the user chose. Only running out is worth a colour of its own.
-    expect(colourOf(paintUsageRule(40, '80% left'), '80% left')).toBe('35');
-    expect(colourOf(paintUsageRule(40, '9% left'), '9% left')).toBe('35');
+  it('stays unpainted until the allowance is actually gone', () => {
+    // A figure that is fine needs no colour to say so, and spending one on it
+    // only makes the one that matters quieter by comparison. Green-for-healthy
+    // was noise; yellow read muddy and fought the user's own theme.
+    expect(colourOf(paintUsageRule(40, '80% left'), '80% left')).toBe('');
+    expect(colourOf(paintUsageRule(40, '9% left'), '9% left')).toBe('');
     expect(colourOf(paintUsageRule(40, '0% left'), '0% left')).toBe('31');
   });
 
-  it('shares one colour with the chat title, because they are the same kind of thing', () => {
-    // Both are a standing fact about this session, pinned to a rule's edge.
-    expect(colourOf(paintTitleRule(40, 'refactor the parser'), 'refactor the parser'))
-      .toBe(colourOf(paintUsageRule(40, '80% left'), '80% left'));
+  it('keeps a colour for the chat title, which names rather than measures', () => {
+    // The title identifies THIS conversation; usage describes its state. Only
+    // the first gets a colour of its own.
+    expect(colourOf(paintTitleRule(40, 'refactor the parser'), 'refactor the parser')).toBe('35');
   });
 
   it('draws the rule in the terminal\'s own foreground, and says nothing with no label', () => {
@@ -71,7 +71,7 @@ describe('usage reads by state, not as furniture', () => {
   });
 
   it('keeps a label it cannot read from shouting', () => {
-    // An unparseable figure is not an emergency: it reads as a label, not red.
-    expect(colourOf(paintUsageRule(40, 'tokens: 12k'), 'tokens: 12k')).toBe('35');
+    // An unparseable figure is not an emergency: it reads plain, not red.
+    expect(colourOf(paintUsageRule(40, 'tokens: 12k'), 'tokens: 12k')).toBe('');
   });
 });

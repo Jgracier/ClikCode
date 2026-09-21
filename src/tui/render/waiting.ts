@@ -73,22 +73,24 @@ export function paintLabeledRule(
   return `${rule.slice(0, at)}${paint(label)}`;
 }
 
-/** The two rule labels -- usage above the composer, the chat title below --
- * share one colour, because they are the same kind of thing: a standing fact
- * about this session, pinned to the edge of its rule. Magenta rather than
- * cyan, which belongs to ClikCode's own chrome (the caret, the status line),
- * and rather than yellow, which reads muddy on a dark terminal and fights
+/** The chat's name is the one thing on the frame that identifies THIS
+ * conversation rather than describing its state, so it keeps a colour of its
+ * own. Magenta rather than cyan, which belongs to ClikCode's own chrome, and
+ * rather than yellow, which reads muddy on a dark terminal and fights
  * whatever theme the user chose. */
 const RULE_LABEL = (text: string): string => chalk.magenta(text);
 
-/** Usage reads by state, but only one state is worth shouting about. Running
- * out is red; everything else is the same calm label colour as the title.
- * Green-for-healthy was noise: nothing is wrong, so nothing needs saying. */
+/** Usage reads by state, but only one state is worth shouting about.
+ *
+ * Running out is red. Everything else is the terminal's own foreground, the
+ * same white as the rule it sits on -- a figure that is fine needs no colour
+ * to say so, and spending one on it only makes the one that matters quieter
+ * by comparison. */
 export function paintUsageRule(width: number, label?: string): string {
   const remaining = usageRemainingPercent(label);
   const spent = label !== undefined
     && (/exhausted/i.test(label) || (remaining !== undefined && remaining <= 0));
-  return paintLabeledRule(width, label, spent ? chalk.red : RULE_LABEL);
+  return paintLabeledRule(width, label, spent ? chalk.red : (text) => text);
 }
 
 /** The chat's own name, on the rule below the composer. */

@@ -1178,17 +1178,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
     footer.push(paintTitleRule(rowWidth, this.titleText()));
-    // The whole status line is ClikCode's own chrome, so it takes the chrome
-    // colour at low intensity -- dull cyan, a family with the caret above it
-    // rather than the flat grey of the furniture. The provider is brighter
-    // inside that line: which harness is about to answer is the one part of
-    // it worth reading at a glance, and brightness carries that without
-    // introducing another colour.
-    const metaText = visibleSlice(meta, inner);
-    const separator = metaText.indexOf(' \u2022 ');
-    footer.push(separator > 0
-      ? `  ${chalk.cyan(metaText.slice(0, separator))}${chalk.cyan.dim(metaText.slice(separator))}`
-      : `  ${chalk.cyan.dim(metaText)}`);
+    // Provider, model, effort and directory are one statement -- what this
+    // conversation is running as -- so they read as one line in one colour
+    // rather than a bright word followed by a dimmer tail. Cyan is ClikCode's
+    // own chrome, the same family as the caret above it.
+    footer.push(`  ${chalk.cyan(visibleSlice(meta, inner))}`);
 
     // The live region is bounded by the viewport: it is erased and redrawn as
     // one block every frame, so it can never be taller than the terminal. A
