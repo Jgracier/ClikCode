@@ -1,5 +1,8 @@
 import { activityLabelIsReadOnly, sessionTranscriptMessages, type PendingTurnWithHints } from './turn-checkpoint.js';
 import type { HarnessSession } from './types.js';
+import { FAILOVER_PREAMBLE } from './failover-prompt-import.js';
+
+export { FAILOVER_PREAMBLE };
 
 export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'other';
 
@@ -169,7 +172,7 @@ export function failoverPrompt(
   options: FailoverPromptOptions = {},
 ): string {
   const maxBytes = Math.max(1024, options.maxBytes ?? FAILOVER_PROMPT_MAX_BYTES);
-  const preamble = 'Continue the same ClikCode conversation after an account or provider failover. Preserve all prior decisions, files, and task state. Do not repeat completed work.';
+  const preamble = FAILOVER_PREAMBLE;
   const touched = (options.touchedFiles ?? []).filter((file) => file.trim());
   const touchedBlock = touched.length
     ? `\n\n<touched_files>\nThe interrupted turn had started changing these files; they may be partially edited. Check each before editing again:\n${touched.map((file) => `- ${escapeFailoverContent(file)}`).join('\n')}\n</touched_files>`
