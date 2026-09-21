@@ -15,7 +15,28 @@ export interface CachedSessionFacts { id?: string; cwd?: string; title?: string;
  * unchanged (a directory's mtime moves when entries are added or removed). */
 interface CachedDirectory { mtimeMs: number; files: Record<string, CachedSessionFacts> }
 
-interface DiscoveryCacheFile { v: 1; directories: Record<string, CachedDirectory> }
+/** What a vendor's own `sessions list` returned for one workspace last time.
+ *
+ * These cost a subprocess each, and most of them return nothing: measured on
+ * this machine, /resume spent 2.5s spawning six CLIs, of which kilo (1.66s)
+ * and qwen (0.5s) found zero sessions between them. Remembering "this one had
+ * nothing here" skips the spawn until the memo expires.
+ *
+ * Only empty results are memoized. A harness that found something is asked
+ * again every time: the cost is already justified, and a stale list is worse
+ * than a slow one. */
+interface CachedListing { at: number; empty: true }
+
+interface DiscoveryCacheFile {
+  v: 1;
+  directories: Record<string, CachedDirectory>;
+  listings?: Record<string, CachedListing>;
+}
+
+/** How long "nothing here" is believed. Short enough that a session created
+ * in another terminal shows up in the resume list within a few minutes,
+ * long enough that opening /resume repeatedly costs one spawn, not six. */
+export const EMPTY_LISTING_TTL_MS = 5 * 60_000;
 
 const DISCOVERY_CACHE_MAX_DIRECTORIES = 400;
 
@@ -38,7 +59,9 @@ export async function loadDiscoveryCache(): Promise<DiscoveryCacheFile> {
   if (path) {
     try {
       const parsed = JSON.parse(await readFile(path, 'utf8')) as DiscoveryCacheFile;
-      if (parsed?.v === 1 && parsed.directories && typeof parsed.directories === 'object') data = parsed;
+      if (parsed?.v === 1 && parsed.directories && typeof parsed.directories === 'object') {
+        data = { ...parsed, listings: parsed.listings ?? {} };
+      }
     } catch { /* fail-open-ok: a missing or damaged cache only costs one full scan. */ }
   }
   discoveryCache = { path: path ?? '', data, dirty: false };
@@ -52,6 +75,16 @@ export async function saveDiscoveryCache(): Promise<void> {
   if (entries.length > DISCOVERY_CACHE_MAX_DIRECTORIES) {
     // Date-named vendor directories sort oldest first; drop those.
     discoveryCache.data.directories = Object.fromEntries(entries.sort(([left], [right]) => right.localeCompare(left)).slice(0, DISCOVERY_CACHE_MAX_DIRECTORIES));
+  }
+  // Expired memos are dropped rather than accumulating one key per workspace
+  // per account for the life of the install. An expired entry is already
+  // ignored on read, so this only keeps the file honest about its own size.
+  const listings = discoveryCache.data.listings;
+  if (listings) {
+    const now = Date.now();
+    for (const [key, entry] of Object.entries(listings)) {
+      if (now - entry.at >= EMPTY_LISTING_TTL_MS) delete listings[key];
+    }
   }
   discoveryCache.dirty = false;
   await atomicWriteFile(path, JSON.stringify(discoveryCache.data)).catch(() => undefined);
@@ -82,4 +115,38 @@ export async function cachedDirectory(directory: string, suffix: string): Promis
   cache.directories[directory] = next;
   discoveryCache!.dirty = true;
   return next;
+}
+
+/** Whether this harness is known to have found nothing here recently. */
+export async function listingKnownEmpty(
+  command: string, workspace: string | undefined, profile: string | undefined, now = Date.now(),
+): Promise<boolean> {
+  const cache = await loadDiscoveryCache();
+  const entry = cache.listings?.[listingKey(command, workspace, profile)];
+  return Boolean(entry && now - entry.at < EMPTY_LISTING_TTL_MS);
+}
+
+/** Keyed by profile as well as workspace: two accounts of the same provider
+ * have separate vendor stores, so "nothing here" for one says nothing about
+ * the other. Leaving the profile out would let the first empty account
+ * silence every other account's sessions. */
+function listingKey(command: string, workspace: string | undefined, profile: string | undefined): string {
+  return `${command}\u0000${workspace ?? ''}\u0000${profile ?? ''}`;
+}
+
+/** Record what a vendor listing returned. An empty result is remembered so the
+ * next /resume can skip the subprocess; a non-empty one forgets any memo, so a
+ * harness that starts having sessions is never held back by an old "nothing". */
+export async function rememberListing(
+  command: string, workspace: string | undefined, profile: string | undefined, found: number, now = Date.now(),
+): Promise<void> {
+  const cache = await loadDiscoveryCache();
+  cache.listings ??= {};
+  const key = listingKey(command, workspace, profile);
+  if (found > 0) {
+    if (cache.listings[key]) { delete cache.listings[key]; discoveryCache!.dirty = true; }
+    return;
+  }
+  cache.listings[key] = { at: now, empty: true };
+  discoveryCache!.dirty = true;
 }
