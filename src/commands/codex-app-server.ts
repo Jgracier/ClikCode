@@ -2,10 +2,11 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawnPortable } from './spawn-portable.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode, HarnessActivityEvent } from './types.js';
+import type { HarnessPlanEntry, HarnessTurnObserver } from './harness-turn-observer.js';
 
 type JsonObject = Record<string, unknown>;
 
-export interface CodexAppServerTurnInput {
+export interface CodexAppServerTurnInput extends HarnessTurnObserver {
   binary: string;
   prompt: string;
   nativeSessionId?: string;
@@ -16,23 +17,6 @@ export interface CodexAppServerTurnInput {
   images?: readonly string[];
   environment?: Readonly<Record<string, string>>;
   signal?: AbortSignal;
-  onSessionId?: (id: string) => Promise<void> | void;
-  onResponseDelta?: (text: string, mode?: 'append' | 'replace') => void;
-  onActivity?: (event: HarnessActivityEvent) => void;
-  /** Codex pushes account/rateLimits/updated mid-turn. Reading it here is free
-   * and replaces spawning a second app-server just to ask for the same numbers. */
-  onRateLimits?: (rateLimits: unknown) => void;
-  onPhase?: (phase: string) => void;
-  onApproval?: (title: string, detail?: string) => Promise<boolean>;
-  /** Published only while a real active turn id exists. */
-  onSteerReady?: (handler?: (text: string) => Promise<void>) => void;
-  /** turn/plan/updated. */
-  onPlan?: (entries: CodexPlanEntry[], explanation?: string) => void;
-  /** thread/tokenUsage/updated (or an equivalent token-usage notification).
-   * The payload is passed through as published. */
-  onUsage?: (usage: Record<string, unknown>) => void;
-  /** Reasoning summary/text deltas as they stream. */
-  onThought?: (text: string) => void;
   /** Per-harness Codex config overrides (`config` of thread/start|resume),
    * e.g. `{ 'tools.web_search': true, profile: 'work' }`. */
   configOverrides?: Record<string, unknown>;
@@ -42,7 +26,6 @@ export interface CodexAppServerTurnInput {
   setupTimeoutMs?: number;
 }
 
-export interface CodexPlanEntry { content: string; status: string }
 export type CodexErrorKind = 'quota' | 'auth' | 'other';
 export type CodexSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
@@ -159,7 +142,7 @@ export function codexApprovalDetail(params: JsonObject, item?: JsonObject): stri
   return lines.join('\n') || 'Codex requested additional permission';
 }
 
-export function codexPlanEntries(params: JsonObject): CodexPlanEntry[] {
+export function codexPlanEntries(params: JsonObject): HarnessPlanEntry[] {
   return Array.isArray(params.plan)
     ? params.plan.flatMap((entry) => {
       const step = (entry as JsonObject)?.step ?? (entry as JsonObject)?.content;

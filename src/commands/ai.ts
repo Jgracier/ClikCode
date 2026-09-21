@@ -34,6 +34,7 @@ import type {
   HarnessActivityEvent, HarnessDefaultSettings, HarnessPrompter, HarnessSession,
   HarnessState, PickerOption,
 } from './types.js';
+import type { HarnessAvailableCommand, HarnessPlanEntry } from './harness-turn-observer.js';
 import {
   harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
@@ -54,7 +55,7 @@ import {
 } from './account-management.js';
 import { TerminalHarnessPrompter, terminalUiSupported } from './terminal-ui.js';
 import { createCodexSession, runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from './codex-app-server.js';
-import { createAcpSession, runAcpTurn, type AcpAvailableCommand, type AcpSession, type AcpTurnInput } from './acp-client.js';
+import { createAcpSession, runAcpTurn, type AcpSession, type AcpTurnInput } from './acp-client.js';
 import { harnessTurnTransport, type HarnessTurnTransport } from './harness-transport.js';
 import {
   allLocalHarnesses, harnessAcpLaunch, harnessCanRunTurns, harnessTierRank, homeRedirectEnvironment, maxPromptArgvBytes,
@@ -91,7 +92,7 @@ interface TurnRunOptions {
 
 /** Prompter methods the terminal UI is gaining; feature-detected, never assumed. */
 interface OptionalTerminalMethods {
-  setPlan?(entries: ReadonlyArray<{ content: string; status: string; priority?: string }>): void;
+  setPlan?(entries: readonly HarnessPlanEntry[]): void;
   setTurnUsage?(usage: NormalizedTurnUsage): void;
 }
 function optionalTerminal(): OptionalTerminalMethods | undefined {
@@ -103,8 +104,8 @@ function optionalTerminal(): OptionalTerminalMethods | undefined {
 const fallbackTurnHarnesses = new Set<string>();
 
 /** ACP `available_commands_update`, per ClikCode session, for the slash registry. */
-const nativeAvailableCommands = new Map<string, readonly AcpAvailableCommand[]>();
-export function sessionNativeCommands(sessionId: string): readonly AcpAvailableCommand[] {
+const nativeAvailableCommands = new Map<string, readonly HarnessAvailableCommand[]>();
+export function sessionNativeCommands(sessionId: string): readonly HarnessAvailableCommand[] {
   return nativeAvailableCommands.get(sessionId) ?? [];
 }
 
