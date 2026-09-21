@@ -4,8 +4,15 @@
 import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
-import { ACTIVITY_PREVIEW_LINES } from './activity-events.js';
+import { previewLinesFor } from './activity-events.js';
+import { TOOL_CATEGORY_STYLE, toolGlyph } from '../../tui/render/activity-log.js';
 import { CLAUDE_SHAPED, OPENCODE_SHAPED, asRecord } from './json-lines.js';
+
+/** The glyph in its category's colour; uncoloured when there is no category,
+ * so an unclassified tool still gets a marker. */
+function paintGlyph(category: HarnessActivityEvent['category'], mark: string): string {
+  return category ? TOOL_CATEGORY_STYLE[category].paint(mark) : chalk.dim(mark);
+}
 
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
   if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
@@ -17,12 +24,22 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   // Failure is the exception, and it is a suffix rather than a prefix: colour
   // alone would carry it only on a terminal that has colour, and a piped or
   // NO_COLOR transcript would read a failed call as a successful one.
+  // A glyph for the kind of work, so the type reads without being spelled out
+  // and a column of tool rows scans as a list rather than a wall.
+  const mark = toolGlyph(event.category);
   const summary = `  ${event.kind === 'tool-error'
-    ? `${chalk.red(event.label)} ${chalk.red('failed')}`
-    : chalk.dim(event.label)}`;
+    ? `${chalk.red(`${mark} ${event.label}`)} ${chalk.red('failed')}`
+    : `${paintGlyph(event.category, mark)} ${chalk.dim(event.label)}`}`;
   if (!event.diff) {
     const output = event.output ?? [];
-    const visible = output.slice(0, ACTIVITY_PREVIEW_LINES);
+    // Budgeted by kind: a read's row already names the file, so repeating its
+    // contents underneath says nothing the label did not.
+    const budget = previewLinesFor(event.category);
+    // A budget of zero means this kind of call says everything in its label.
+    // Counting what is not shown ("… 3 more lines" under a filename) is
+    // noise about noise -- strictly worse than the single clean row.
+    if (budget === 0) return [summary];
+    const visible = output.slice(0, budget);
     const hidden = output.length - visible.length;
     return [summary, ...visible.map((line) => `    ${chalk.dim(line)}`),
       ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : [])];
@@ -31,10 +48,11 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   // deletion would otherwise consume the whole preview and hide every added
   // line, which is the half that says what the edit actually did.
   const { removed, added } = event.diff;
+  const budget = previewLinesFor(event.category ?? 'edit');
   const removedShown = Math.min(removed.length, Math.max(
-    Math.floor(ACTIVITY_PREVIEW_LINES / 2), ACTIVITY_PREVIEW_LINES - added.length,
+    Math.floor(budget / 2), budget - added.length,
   ));
-  const addedShown = Math.min(added.length, ACTIVITY_PREVIEW_LINES - removedShown);
+  const addedShown = Math.min(added.length, budget - removedShown);
   const hidden = (removed.length - removedShown) + (added.length - addedShown);
   return [
     summary,

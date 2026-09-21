@@ -4,7 +4,7 @@
 
 import { visibleSlice } from '../../tui/render/width.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
-import type { HarnessActivityEvent } from '../prompter.js';
+import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import { CLAUDE_SHAPED, JsonRecord, OPENCODE_SHAPED, asRecord } from './json-lines.js';
 import { categoryOf, toolCategory, toolLabel } from './tools.js';
 
@@ -18,6 +18,27 @@ const DIFF_CAPTURE_LINES = 8;
 /** How much of a tool's work a transcript row shows. Enough to recognise the
  * edit or command at a glance without the trail crowding out the answer. */
 export const ACTIVITY_PREVIEW_LINES = 8;
+
+/** Preview budget per kind of work, because one number cannot fit all of it.
+ *
+ * Eight lines is right for a diff -- the edit IS the lines -- and far too
+ * generous for everything else. A read's row already names the file, so its
+ * output repeats what the label said; a command's first lines are the ones
+ * that matter and the rest is scroll. At 8 for everything, three tool calls
+ * filled half a phone screen and the answer they were serving fell off the
+ * bottom. */
+export const CATEGORY_PREVIEW_LINES: Readonly<Record<ToolCategory, number>> = {
+  edit: ACTIVITY_PREVIEW_LINES,
+  run: 3,
+  search: 3,
+  fetch: 2,
+  read: 0,
+};
+
+/** Lines a settled tool row may show, given what kind of work it was. */
+export function previewLinesFor(category?: ToolCategory): number {
+  return category ? CATEGORY_PREVIEW_LINES[category] : ACTIVITY_PREVIEW_LINES;
+}
 
 function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
   const all = text.split(/\r?\n/);
