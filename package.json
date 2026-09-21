@@ -1,7 +1,7 @@
 {
   "name": "clikcode",
   "version": "1.0.0",
-  "description": "Drive 24 coding-agent CLIs from one terminal: many accounts per vendor, chats that resume across harnesses, and automatic account switching when a usage limit hits.",
+  "description": "One place to run every AI coding tool you have — all your accounts, one list of conversations, and no stopping when an account hits its limit.",
   "type": "module",
   "bin": {
     "clikcode": "./dist/index.js"
