@@ -1,0 +1,808 @@
+/**
+ * Running one turn, end to end.
+ *
+ * Both routes live here because they are the same shape seen twice: resolve an
+ * account, open a checkpoint, stream a reply somewhere, name the session, fail
+ * over if the account is spent, and close the checkpoint whatever happened.
+ * What differs is only where the reply comes from -- a local harness over one
+ * of four transports, or the gateway.
+ */
+import { randomUUID } from 'node:crypto';
+import { mkdir, open } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { stdout as output } from 'node:process';
+import type Conf from 'conf';
+import chalk from 'chalk';
+import { getApiKeyForUrl, getApiUrl } from './gateway-credentials.js';
+import { CLIKCODE_USER_AGENT, CLIKCODE_VERSION } from '../version.js';
+import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from './ai-gateway-harness.js';
+import { isJsonDefaultMode } from '../utils/output-mode.js';
+import { captureNativeHarness, captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent, loginNativeHarness } from './native-harness.js';
+import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './ai-failover.js';
+import { carryNativeSession } from './native-session-carry.js';
+import { extractSessionTitle, sessionTitleSource, StreamingTitle, withTitleRequest } from './session-title.js';
+import { nativeGeneratedTitle } from './native-session-discovery.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessActivityEvent } from './types.js';
+import { harnessSupportsImages, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeTurnResult, nativeTurnUsage, type NativeTurnResult, renderActivityLine, streamLocalAiTurn } from './native-harness-protocol.js';
+import { harnessCommand, harnessStatePath, readState, writeState } from './harness-state.js';
+import { accountUsageLabel, codexRateLimitsReading, recordDerivedUsage, recordNativeStreamUsage } from './native-account-data.js';
+import { harnessNeedsLogin, syncAccountIdentityAfterLogin } from './account-management.js';
+import { closePersistentTransport, DurableTurnCheckpoint, fallbackTurnHarnesses, nameSession, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './turn-runtime.js';
+import { TERMINAL, optionalTerminal } from './active-terminal.js';
+import { emitHarnessOutput, line } from './harness-output.js';
+import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from './codex-app-server.js';
+import { runAcpTurn, type AcpSession, type AcpTurnInput } from './acp-client.js';
+import { harnessTurnTransport } from './harness-transport.js';
+import { harnessAcpLaunch, harnessCanRunTurns, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from './harness-runtime.js';
+import { reportStructuredLine } from './harness-structured-events.js';
+import { prepareAttachments } from './session-attachments.js';
+import { localApiKey } from './ai-daemon.js';
+import { appServerThreadOverrides, declaredOptionArgv, normalizeTurnUsage, type NormalizedTurnUsage } from './transport-options.js';
+import { sessionTranscriptMessages } from './turn-checkpoint.js';
+
+/**
+ * Runs one durable local session turn. Local sessions resolve an env reference
+ * only in this process and record normalized, credential-free usage.
+ */
+export async function aiSessionSend(
+  id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
+): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.route === 'gateway') throw new Error('use aiGatewaySessionSend for gateway sessions');
+  if (!session.accountId) throw new Error('local AI session has no account selected');
+  let account = state.accounts.find((item) => item.id === session.accountId);
+  if (!account) throw new Error('local AI session account was removed');
+  const model = session.model ?? account.models[0] ?? null;
+  if (model && account.models.length > 0 && !account.models.includes(model)) {
+    throw new Error(`model "${model}" is not available through local account "${account.label}"`);
+  }
+  const text = prompt.trim();
+  if (!text) throw new Error('prompt is required');
+  const prepared = await prepareAttachments(session.attachments ?? []);
+  let turnText = `${text}${prepared.textContext}`;
+  const startedAt = Date.now();
+
+  if (account.authKind === 'vendor-cli') {
+    const harness = session.nativeHarness
+      ? localHarnessForCommand(session.nativeHarness)
+      : localHarnessForProvider(account.provider);
+    if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
+    if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
+    if (harness.provider !== account.provider) throw new Error(`session provider ${harness.displayName} does not match account "${account.label}"`);
+    // An unnamed chat gets a title from the harness that writes one, and asks
+    // the model for one where the harness does not. The request rides on this
+    // turn's text only -- never on what is stored as the user's message -- and
+    // the answer is stripped of it before anyone sees it.
+    const titleSource = sessionTitleSource(harness);
+    // The first prompt of a conversation, and no other: a chat with messages
+    // already in it has had its chance, and pinning the request to later turns
+    // would keep editing prompts the user can see the effect of.
+    const askingForTitle = !session.name && titleSource === 'ask' && !(session.messages ?? []).length;
+    const titleStream = askingForTitle ? new StreamingTitle() : undefined;
+    if (askingForTitle) turnText = withTitleRequest(turnText);
+    const supportsImages = harnessSupportsImages(harness);
+    const images = supportsImages ? prepared.images : [];
+    if (prepared.images.length && !supportsImages) {
+      turnText += `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`;
+    }
+    session.nativeHarness = harness.command;
+    session.provider = harness.provider;
+    session.workspace ??= process.cwd();
+    const baseMessages = sessionTranscriptMessages(session);
+    const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
+    run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
+    let switchedFrom: string | undefined;
+    const attemptedAccounts = new Set<string>();
+    try {
+    if (session.accountFailover === 'on-quota-exhausted' && account.quotaState === 'exhausted') {
+      const currentRemaining = usageLabelRemainingPercent(await accountUsageLabel(account, state));
+      if (currentRemaining !== undefined && currentRemaining > 0) account.quotaState = 'available';
+      else {
+        attemptedAccounts.add(account.id);
+        const fallback = await nextUsableFailoverAccount(
+          state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
+        );
+        if (!fallback) {
+          await writeState(state);
+          throw new Error('all usage exhausted');
+        }
+        switchedFrom = account.label;
+        TERMINAL.active?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
+        TERMINAL.active?.phase(`switching to ${fallback.label}`);
+        account = fallback;
+        session.accountId = fallback.id;
+        session.nativeSessionId = undefined;
+        session.nativeStartedAt = undefined;
+        await checkpoint.persistNow();
+      }
+    }
+    // A fresh native thread (no nativeSessionId yet) with prior ClikCode
+    // messages already on the session means this conversation is continuing
+    // under a different native identity than whatever produced those messages
+    // — a cross-provider /resume, most commonly. ClikCode's own transcript
+    // shows continuity either way, but the vendor process about to start has
+    // no memory of any of it unless it's carried in the prompt itself; without
+    // this, "continuing under Claude Code" is cosmetic in the UI only. The
+    // quota-failover retry below does its own version of this for the
+    // mid-conversation case; this covers every other route into a fresh
+    // native thread with history already behind it.
+    if ((!session.nativeSessionId || session.nativeSessionPreallocated) && baseMessages.length > 0) {
+      turnText = failoverPrompt(baseMessages, turnText);
+    }
+    // Bounded to one attempt: this is a reactive fallback for exactly the
+    // case aiHarnessSelect's own proactive check can't catch -- a harness
+    // with no statusArgv (nothing to scriptably ask "am I logged in?"
+    // before the turn even starts), where the *first* real signal is the
+    // turn itself failing. Retrying more than once would risk a loop if
+    // login genuinely doesn't fix it (wrong account, network issue, etc.).
+    let authRetried = false;
+    const declaredOptions = localHarnessCapabilityManifest(harness).options;
+    /** Shared by every transport: usage seen on the wire for this attempt. */
+    let turnUsage: NormalizedTurnUsage | undefined;
+    const noteUsage = (raw: unknown): void => {
+      const usage = normalizeTurnUsage(raw);
+      if (!usage) return;
+      turnUsage = { ...turnUsage, ...usage };
+      session.lastUsage = { ...turnUsage, at: new Date().toISOString() };
+      optionalTerminal()?.setTurnUsage?.(turnUsage);
+    };
+    const onActivity = (event: HarnessActivityEvent): void => {
+      checkpoint.activity(event);
+      if (TERMINAL.active) TERMINAL.active.activityEvent(event);
+      else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
+    };
+    const onThought = (thought: string): void => {
+      const label = thought.replace(/\s+/g, ' ').trim();
+      if (label) onActivity({ kind: 'thinking', label: label.slice(0, 200) });
+    };
+    const onSessionId = async (nativeSessionId: string): Promise<void> => {
+      if (session.nativeSessionId === nativeSessionId && !session.nativeSessionPreallocated) return;
+      session.nativeSessionId = nativeSessionId;
+      delete session.nativeSessionPreallocated;
+      await checkpoint.persistNow();
+    };
+    for (;;) {
+      const environment = turnEnvironment(harness, account);
+      const hasImages = images.length > 0;
+      const transport = harnessTurnTransport(harness, hasImages, { acpImages: true });
+      // A fresh native thread with prior ClikCode messages: see above. Also
+      // covers an id ClikCode minted that the vendor never confirmed.
+      let caughtTurnFailure: Error | undefined;
+      let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>> = { stdout: '', stderr: '', exitCode: 0 };
+      let result: NativeTurnResult | undefined;
+      let streamError: { message: string; statusCode?: number; kind?: string } | undefined;
+      let cliOutputStarted = false;
+      turnUsage = undefined;
+      const runStructuredCliTurn = async (): Promise<NativeTurnResult> => {
+        const cliHarness: AiLocalHarnessDefinition = fallbackTurnHarnesses.has(harness.command) && harness.fallbackTurn
+          ? { ...harness, turn: harness.fallbackTurn } : harness;
+        const turn = cliHarness.turn;
+        if (!turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
+        if (promptExceedsArgvLimit(cliHarness, turnText)) {
+          throw Object.assign(new Error(
+            `${harness.displayName} takes its prompt as a command-line argument, and this request is ${Math.ceil(Buffer.byteLength(turnText, 'utf8') / 1024)} KB (limit ${Math.floor(maxPromptArgvBytes() / 1024)} KB). Shorten it, or save the long content to a file in the workspace and ask the agent to read it.`,
+          ), { code: 'ERR_PROMPT_TOO_LARGE' });
+        }
+        // Only a structured-CLI harness gets an id minted here, and it stays
+        // marked "preallocated" until the vendor process is seen to own it:
+        // a first attempt that dies early must re-create, never `--resume` an
+        // id that was never created.
+        let createdHere = Boolean(session.nativeSessionId && session.nativeSessionPreallocated);
+        if (!session.nativeSessionId && cliHarness.session?.idKind === 'uuid' && turn.createIdPrefix) {
+          session.nativeSessionId = randomUUID();
+          session.nativeSessionPreallocated = true;
+          createdHere = true;
+        } else if (!session.nativeSessionId && cliHarness.session?.idKind === 'history-file' && turn.createIdPrefix) {
+          const nativeDirectory = join(harnessStatePath(), '..', 'native', cliHarness.command);
+          await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
+          session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
+          session.nativeSessionPreallocated = true;
+          createdHere = true;
+        } else if (!session.nativeSessionId && cliHarness.session?.createSessionArgv) {
+          session.nativeSessionId = await captureNativeHarness(cliHarness, cliHarness.session.createSessionArgv, environment);
+          createdHere = true;
+        }
+        const argv = nativeHarnessTurnArgv(cliHarness, {
+          prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
+          launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
+          permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
+        });
+        // Persist an allocated native identity before the provider starts so an
+        // interrupted turn cannot accidentally fork the centralized conversation.
+        if (createdHere) await checkpoint.persistNow();
+        const confirmNativeSession = (): void => {
+          if (!session.nativeSessionPreallocated) return;
+          delete session.nativeSessionPreallocated;
+          void checkpoint.persistNow().catch(() => undefined);
+        };
+        const idle = createTurnIdleController();
+        turnOutput = await captureNativeHarnessTurn(cliHarness, argv, environment, {
+          cwd: session.workspace,
+          signal,
+          idleController: idle,
+          stdinText: turn.promptInput === 'stdin' ? turnText : undefined,
+          onStdoutLine: (lineText) => {
+            // The same observer every other transport is handed. What is left
+            // here is the turn loop's own bookkeeping, which no line parser
+            // should be doing: confirming an optimistically minted session id,
+            // the quota probe, and persisting what the harness says about
+            // itself.
+            const outcome = reportStructuredLine(cliHarness, lineText, {
+              onResponseDelta: (text, mode) => {
+                cliOutputStarted = true;
+                idle.noteActivity();
+                checkpoint.response(text, mode);
+                TERMINAL.active?.response(text, mode);
+              },
+              onActivity: (event) => {
+                cliOutputStarted = true;
+                noteTurnActivityEvent(idle, event);
+                onActivity(event);
+              },
+              onPhase: (phase) => TERMINAL.active?.phase(phase),
+              onUsage: noteUsage,
+              onAvailableCommands: (commands) => nativeAvailableCommands.set(session.id, commands),
+            });
+            if (outcome.live) confirmNativeSession();
+            if (outcome.error) streamError = outcome.error;
+            // The harness reports its own quota on this stream. Reading it here
+            // costs nothing and refreshes on every turn, which is what keeps the
+            // shared OAuth usage endpoint -- a per-account budget several open
+            // chats used to exhaust between them -- down to a cold-start probe.
+            // (Self-gated on a substring, so it does not re-parse ordinary lines.)
+            void recordNativeStreamUsage(session, lineText).catch(() => undefined);
+            const reported = outcome.selfReport;
+            if (reported?.model || reported?.permissionMode) {
+              session.reported = {
+                at: new Date().toISOString(),
+                ...(reported.model ? { model: reported.model } : {}),
+                ...(reported.permissionMode ? { permissionMode: reported.permissionMode } : {}),
+              };
+              checkpoint.persistNow().catch(() => undefined);
+              TERMINAL.active?.render(session);
+            }
+          },
+        });
+        if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+        const cliResult = nativeTurnResult(cliHarness, turnOutput.stdout);
+        if (!cliResult.isError) confirmNativeSession();
+        noteUsage(cliResult.usage ?? nativeTurnUsage(cliHarness, turnOutput.stdout));
+        return cliResult;
+      };
+      try {
+        if (transport === 'structured-cli' || transport === 'text-cli') {
+          result = await runStructuredCliTurn();
+        } else {
+          // ACP and the app-server own session identity: never hand them an id
+          // ClikCode minted for a CLI attempt that the vendor never confirmed.
+          if (session.nativeSessionPreallocated) {
+            session.nativeSessionId = undefined;
+            delete session.nativeSessionPreallocated;
+          }
+          const persistent = run.persistentTransports
+            ? persistentTransportFor(session.id, transport, JSON.stringify([harness.command, account.id, environment, session.workspace]))
+            : undefined;
+          try {
+            if (transport === 'codex-app-server') {
+              const overrides = appServerThreadOverrides(declaredOptions, session.harnessOptions);
+              if (overrides.unmapped.length) TERMINAL.active?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${overrides.unmapped.join(', ')}`));
+              const codexInput: CodexAppServerTurnInput = {
+                binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
+                cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
+                images, environment, signal, onSessionId,
+                ...(overrides.configOverrides ? { configOverrides: overrides.configOverrides } : {}),
+                ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
+                // Codex reports its own quota on this connection during the turn,
+                // which is the same figure codexUsageProbe otherwise spawns a whole
+                // second app-server to ask for.
+                onRateLimits: (rateLimits) => {
+                  // The structured reading (not just its label) so the windows'
+                  // resetsAt survives into account.usage for the reset-time line.
+                  void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
+                },
+                onResponseDelta: (text, mode = 'append') => {
+                  const visible = titleStream ? titleStream.push(text, mode) : text;
+                  if (visible === undefined) return;
+                  checkpoint.response(visible, mode);
+                  TERMINAL.active?.response(visible, mode);
+                },
+                onPhase: (phase) => TERMINAL.active?.phase(phase),
+                onApproval: (title, detail) => TERMINAL.active?.approval(title, detail) ?? Promise.resolve(false),
+                onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText) => {
+                  await handler(steerText);
+                  await checkpoint.steer({ id: randomUUID(), text: steerText, submittedAt: new Date().toISOString() });
+                } : undefined),
+                onActivity, onThought, onUsage: noteUsage,
+                onPlan: (entries) => optionalTerminal()?.setPlan?.(entries),
+              };
+              result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
+            } else {
+              const launch = harnessAcpLaunch(harness, { model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask' });
+              if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
+              const acpInput: AcpTurnInput = {
+                binary: launch.binary, command: harness.command, prompt: turnText,
+                argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
+                extraArgv: [...launch.optionArgv, ...declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId))],
+                ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
+                cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
+                environment, signal, images, onSessionId,
+                onResponseDelta: (delta) => {
+                  checkpoint.response(delta, 'append');
+                  TERMINAL.active?.response(delta, 'append');
+                },
+                onActivity, onThought, onUsage: noteUsage,
+                onPlan: (entries) => optionalTerminal()?.setPlan?.(entries),
+                onAvailableCommands: (commands) => { nativeAvailableCommands.set(session.id, commands); },
+                onApproval: (title, detail) => TERMINAL.active?.approval(title, detail) ?? Promise.resolve(false),
+              };
+              try {
+                result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
+              } catch (error) {
+                if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback || !harness.turn) throw error;
+                TERMINAL.active?.phase('using structured CLI fallback');
+                result = await runStructuredCliTurn();
+              }
+            }
+          } catch (error) {
+            // After a failed turn the child's protocol state is unknown.
+            if (persistent) await closePersistentTransport(session.id);
+            throw error;
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError') throw error;
+        if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') throw error;
+        caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
+      }
+      result = caughtTurnFailure
+        ? { isError: true, text: caughtTurnFailure.message }
+        : result!;
+      if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
+      // A non-zero exit code alone is not treated as failure here: by this
+      // point nativeTurnResult has already thrown if it found neither assistant
+      // text nor tool work, so a result means a real, complete turn. A harness
+      // can legitimately exit non-zero because one internal sub-step failed
+      // (e.g. Codex's own shell-command execution) while still producing a full
+      // final answer -- the exit code by itself doesn't distinguish that from a
+      // genuine failure, but an explicit isError/errorMessage signal does. An
+      // empty `text` after tool work (`noAssistantText`) is success everywhere.
+      if (caughtTurnFailure || result.isError) {
+        const carried = (caughtTurnFailure ?? {}) as { statusCode?: number; errorKind?: string };
+        const failure = caughtTurnFailure ?? Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
+        const failureKind = classifyAccountFailure(failure, {
+          statusCode: result.statusCode ?? carried.statusCode ?? streamError?.statusCode,
+          errorKind: result.errorKind ?? carried.errorKind ?? streamError?.kind,
+          ...(result.rateLimitStatus ? { rateLimitStatus: result.rateLimitStatus } : {}),
+          // Only the vendor's own declared error result is safe to read as
+          // wording; a thrown transport error carries its own stderr/streams.
+          ...(caughtTurnFailure ? {} : { isResultError: true }),
+        });
+        // An `experimental` structured contract an older vendor build rejects
+        // outright: retry once on the proven fallback contract, and remember it.
+        if (failureKind === 'other' && !cliOutputStarted && harness.experimental && harness.fallbackTurn
+          && !fallbackTurnHarnesses.has(harness.command) && (transport === 'structured-cli' || transport === 'text-cli')) {
+          fallbackTurnHarnesses.add(harness.command);
+          TERMINAL.active?.phase('using compatibility turn');
+          continue;
+        }
+        if (failureKind === 'authentication-required') {
+          account.status = 'needs_login';
+          await checkpoint.persistNow();
+          // Reactive counterpart to aiHarnessSelect's proactive login check:
+          // a harness with no statusArgv gets no pre-turn "are you logged
+          // in?" probe at all (harnessNeedsLogin returns false without
+          // one), so its first real failure signal is the turn itself
+          // erroring out -- previously surfaced as a raw, unhelpful "exited
+          // N: {...}" message with no attempt to actually fix it. Same
+          // suspend/login/resume mechanism aiHarnessSelect uses, triggered
+          // here instead of only at provider-switch time.
+          if (!authRetried && TERMINAL.active && harness.loginArgv) {
+            authRetried = true;
+            await closePersistentTransport(session.id);
+            if (harness.loginCapturable) {
+              TERMINAL.active.startWaiting(`signing in to ${harness.displayName}…`);
+              try { await loginNativeHarness(harness, environment); } finally { TERMINAL.active.stopWaiting(); }
+            } else {
+              TERMINAL.active.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+              await TERMINAL.active.suspend();
+              try {
+                await loginNativeHarness(harness, environment);
+              } finally {
+                TERMINAL.active.resume();
+              }
+            }
+            account = await syncAccountIdentityAfterLogin(harness, account, state);
+            session.accountId = account.id;
+            continue;
+          }
+        }
+        if (failureKind === 'native-thread-invalid') {
+          // Confirmed live: switching this session to a different account of
+          // the same provider used to leave a stale nativeSessionId in
+          // place, and resuming it failed with exactly this vendor error.
+          // That specific write path is now fixed separately, but recovering
+          // here too means any OTHER way a thread id ends up invalid degrades
+          // to "start fresh with real context replayed" instead of a hard
+          // failure -- the actual answer to "how do conversations resume
+          // regardless of provider or account": session.messages is the
+          // durable, vendor-agnostic source of truth, and nativeSessionId is
+          // a disposable optimization, never a requirement.
+          session.nativeSessionId = undefined;
+          session.nativeStartedAt = undefined;
+          delete session.nativeSessionPreallocated;
+          turnText = interruptedTurnFailoverPrompt(session);
+          checkpoint.response('', 'replace');
+          TERMINAL.active?.response('', 'replace');
+          continue;
+        }
+        if (failureKind !== 'quota-exhausted') throw failure;
+        account.quotaState = 'exhausted';
+        account.quotaRetryAt = undefined;
+        attemptedAccounts.add(account.id);
+        await checkpoint.persistNow();
+        // Same-provider failover for the native-CLI path: switching accounts means
+        // switching vendor config roots, so the in-flight native conversation can't
+        // continue under the old identity — start a fresh one under the fallback.
+        if (session.accountFailover !== 'on-quota-exhausted') throw failure;
+        const fallback = await nextUsableFailoverAccount(
+          state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
+        );
+        if (!fallback) {
+          await checkpoint.persistNow();
+          throw new Error('all usage exhausted');
+        }
+        // The vendor's own thread is carried into the account taking over, so
+        // it resumes with everything it actually said and did rather than a
+        // retelling of it. Only where that cannot be done -- a harness whose
+        // transcript layout is not known, a file that is not on disk -- does
+        // the turn fall back to a fresh thread seeded from ClikCode's copy.
+        const carriedThread = await carryNativeSession({
+          harness,
+          nativeId: session.nativeSessionId,
+          workspace: session.workspace,
+          from: turnEnvironment(harness, account),
+          to: turnEnvironment(harness, fallback),
+        });
+        switchedFrom = account.label;
+        // Announced before the retry, not after it returns: switching accounts
+        // happens inside one continuous await chain, so without this the whole
+        // thing looks instantaneous and the reply just silently comes from a
+        // different account with nothing to explain the (brief) extra wait.
+        TERMINAL.active?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
+        TERMINAL.active?.phase(`retrying on ${fallback.label}`);
+        await closePersistentTransport(session.id);
+        account = fallback;
+        session.accountId = fallback.id;
+        if (carriedThread) {
+          // The same thread, under a new account: it holds the conversation,
+          // the interrupted request and every tool call it had already made.
+          // All it is owed is the word to carry on.
+          turnText = INTERRUPTED_TURN_REQUEST;
+        } else {
+          session.nativeSessionId = undefined;
+          session.nativeStartedAt = undefined;
+          delete session.nativeSessionPreallocated;
+          // Built while the interrupted attempt's touched-file hints are still
+          // on the checkpoint; only then is the partial response cleared,
+          // because the retry is a new response attempt (the direct-API path
+          // does the same).
+          turnText = interruptedTurnFailoverPrompt(session);
+        }
+        checkpoint.response('', 'replace');
+        TERMINAL.active?.response('', 'replace');
+        continue;
+      }
+      session.nativeStartedAt ??= new Date().toISOString();
+      delete session.nativeSessionPreallocated;
+      const usage = turnUsage as NormalizedTurnUsage | undefined;
+      const invocation = {
+        id: randomUUID(), accountId: account.id, provider: harness.provider, model: model ?? 'provider-default',
+        at: new Date().toISOString(), sessionId: session.id,
+        ...(usage?.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+        ...(usage?.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+        ...(usage?.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+        ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
+        ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+        latencyMs: Date.now() - startedAt,
+      };
+      state.invocations.push(invocation);
+      session.attachments = [];
+      const answer = titleStream ? extractSessionTitle(result.text) : { title: undefined, text: result.text };
+      await checkpoint.complete(answer.text);
+      await nameSession(session, {
+        title: titleStream?.title ?? answer.title,
+        ...(titleSource === 'vendor'
+          ? { vendor: () => nativeGeneratedTitle(harness, session.nativeSessionId, session.workspace, environment) }
+          : {}),
+      });
+      // The vendor subprocess owns persistence. Re-read its transcript after
+      // exit so any source-side turns/events that were not represented by the
+      // final response are reflected in ClikCode before the turn is saved.
+      await synchronizeNativeTranscript(state, session);
+      await writeState(state);
+      if (!TERMINAL.active) emitHarnessOutput({ session, text: answer.text, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+      return;
+    }
+    } finally {
+      await checkpoint.flush();
+    }
+  }
+
+  if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
+  if (!model) throw new Error('local AI session has no model selected');
+  const baseMessages = sessionTranscriptMessages(session);
+  // No harness on this path writes its own titles, so the first prompt of a
+  // conversation asks the model for one and the answer is stripped of it.
+  const titleStream = !session.name && !(session.messages ?? []).length ? new StreamingTitle() : undefined;
+  if (titleStream) turnText = withTitleRequest(turnText);
+  const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
+  run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
+  let switchedFrom: string | undefined;
+  const attemptedAccounts = new Set<string>();
+  try {
+  if (session.accountFailover === 'on-quota-exhausted' && account.quotaState === 'exhausted') {
+    attemptedAccounts.add(account.id);
+    const fallback = await nextUsableFailoverAccount(
+      state, account, (item) => item.authKind === 'api-key' && item.models.includes(model), attemptedAccounts,
+    );
+    if (!fallback) {
+      await writeState(state);
+      throw new Error('all usage exhausted');
+    }
+    switchedFrom = account.id;
+    TERMINAL.active?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
+    TERMINAL.active?.phase(`switching to ${fallback.label}`);
+    account = fallback;
+    session.accountId = fallback.id;
+    await checkpoint.persistNow();
+  }
+  const invoke = (active: AiHarnessAccount) => {
+    // A retry is a new response attempt. Clear any partial text from the
+    // exhausted account, then append each real provider delta directly to the
+    // checkpoint/UI. The router has always exposed onDelta;
+    // omitting it here was why direct-API responses appeared only at the end.
+    checkpoint.response('', 'replace');
+    TERMINAL.active?.response('', 'replace');
+    return streamLocalAiTurn({
+      provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
+      messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
+      ...(signal ? { abortSignal: signal } : {}),
+      onDelta: (delta: string) => {
+        const visible = titleStream ? titleStream.push(delta, 'append') : delta;
+        if (visible === undefined) return;
+        checkpoint.response(visible, 'append');
+        TERMINAL.active?.response(visible, 'append');
+      },
+    });
+  };
+  let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
+  for (;;) {
+    try {
+      turn = await invoke(account);
+      break;
+    } catch (error) {
+      const failureKind = classifyAccountFailure(error);
+      if (failureKind === 'authentication-required') {
+        account.status = 'needs_login';
+        await writeState(state);
+      }
+      if (session.accountFailover !== 'on-quota-exhausted' || failureKind !== 'quota-exhausted') throw error;
+      const exhaustedAccount = account;
+      exhaustedAccount.quotaState = 'exhausted';
+      exhaustedAccount.quotaRetryAt = undefined;
+      attemptedAccounts.add(exhaustedAccount.id);
+      // Preserve every failed candidate before looking for the next one. A
+      // chain of stale account records therefore terminates instead of merely
+      // moving the same failure to one alternate and abandoning the router.
+      await writeState(state);
+      const fallback = await nextUsableFailoverAccount(
+        state, exhaustedAccount,
+        (item) => item.authKind === 'api-key' && item.models.includes(model),
+        attemptedAccounts,
+      );
+      if (!fallback) {
+        await writeState(state);
+        throw new Error('all usage exhausted');
+      }
+      switchedFrom ??= exhaustedAccount.id;
+      TERMINAL.active?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
+      TERMINAL.active?.phase(`retrying on ${fallback.label}`);
+      account = fallback;
+      session.accountId = fallback.id;
+    }
+  }
+  const invocation = {
+    id: randomUUID(), sessionId: session.id, accountId: account.id, provider: session.provider ?? account.provider, model,
+    at: new Date().toISOString(), inputTokens: turn.usage.inputTokens,
+    outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt,
+  };
+  if (TERMINAL.active && Array.isArray(turn.toolCalls)) {
+    for (const call of turn.toolCalls) {
+      const name = call && typeof call.name === 'string' ? call.name : 'tool';
+      // The tool's own name, with nothing in front of it -- the same rule the
+      // native-harness rows follow. This is the Gateway/direct-API path, and
+      // it was the one place still prepending a status word.
+      TERMINAL.active.activity(chalk.dim(name));
+    }
+  }
+  state.invocations.push(invocation);
+  session.attachments = [];
+  const answer = titleStream ? extractSessionTitle(turn.text) : { title: undefined, text: turn.text };
+  await checkpoint.complete(answer.text);
+  await nameSession(session, { title: titleStream?.title ?? answer.title });
+  if (!TERMINAL.active) emitHarnessOutput({ session, text: answer.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+  } finally {
+    await checkpoint.flush();
+  }
+}
+
+/** What the Gateway's final `result` event says that the text did not. */
+export function gatewayResultNotice(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const result = data as { requiresConfirmation?: unknown; pendingToolCalls?: unknown };
+  const pending = Array.isArray(result.pendingToolCalls) ? result.pendingToolCalls : [];
+  if (result.requiresConfirmation !== true && pending.length === 0) return undefined;
+  const names = pending.map((call) => {
+    const record = call && typeof call === 'object' ? call as { name?: unknown; tool?: unknown; toolName?: unknown } : {};
+    return [record.name, record.tool, record.toolName].find((value): value is string => typeof value === 'string');
+  }).filter((name): name is string => Boolean(name));
+  const what = pending.length ? `${pending.length} action${pending.length === 1 ? '' : 's'}${names.length ? ` (${[...new Set(names)].slice(0, 5).join(', ')})` : ''}` : 'an action';
+  return `The platform is holding ${what} for your confirmation and has NOT run ${pending.length === 1 || !pending.length ? 'it' : 'them'}. ClikCode cannot confirm Gateway actions yet — approve ${pending.length === 1 || !pending.length ? 'it' : 'them'} in the ClikDeploy dashboard assistant.`;
+}
+
+/** Send a gateway session through the existing authenticated platform assistant stream. */
+export async function aiGatewaySessionSend(
+  config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
+): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (session.route !== 'gateway') return aiSessionSend(id, prompt, signal, run);
+  const text = prompt.trim();
+  if (!text) throw new Error('prompt is required');
+  const prepared = await prepareAttachments(session.attachments ?? []);
+  if (prepared.images.length) throw new Error('ClikDeploy Gateway does not accept image attachments. Switch to a local provider with /provider or clear them with /attachments clear.');
+  // The first prompt of a conversation carries the title request here too:
+  // the gateway's coding agent and the platform assistant both answer as a
+  // model, and neither writes a title of its own anywhere ClikCode can read.
+  const titleStream = !session.name && !(session.messages ?? []).length ? new StreamingTitle() : undefined;
+  const turnText = titleStream ? withTitleRequest(`${text}${prepared.textContext}`) : `${text}${prepared.textContext}`;
+  const baseUrl = getApiUrl(config).replace(/\/$/, '');
+  const apiKey = getApiKeyForUrl(config, baseUrl);
+  if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
+  const startedAt = Date.now();
+  const baseMessages = sessionTranscriptMessages(session);
+  const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
+  // The coding agent runs here, on this machine; the gateway supplies the
+  // model step and nothing else. Only a gateway that cannot serve that -- an
+  // administrator kill switch, or a deployment older than the endpoint --
+  // falls back to the platform assistant below, and says so when it does.
+  try {
+    const harnessTurn = await runGatewayHarnessSessionTurn({
+      session, prompt: turnText, baseUrl, apiKey, version: CLIKCODE_VERSION,
+      ...(TERMINAL.active ? { prompter: TERMINAL.active } : {}),
+      ...(signal ? { signal } : {}),
+      ...(prepared.images.length ? { images: prepared.images } : {}),
+      onActivity: (event) => checkpoint.activity(event),
+    });
+    if (harnessTurn.isError) throw new Error(harnessTurn.text || 'gateway harness turn failed');
+    const harnessInvocation = {
+      id: randomUUID(), sessionId: session.id, accountId: 'gateway',
+      provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform',
+      at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
+    };
+    state.invocations.push(harnessInvocation);
+    session.attachments = [];
+    const named = titleStream ? extractSessionTitle(harnessTurn.text) : { title: undefined, text: harnessTurn.text };
+    await checkpoint.complete(named.text);
+    await nameSession(session, { title: titleStream?.title ?? named.title });
+    if (!TERMINAL.active) {
+      emitHarnessOutput({
+        session, text: named.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation: harnessInvocation,
+      });
+    }
+    await checkpoint.flush();
+    return;
+  } catch (error) {
+    if (!gatewayHarnessUnavailable(error)) { await checkpoint.flush(); throw error; }
+    const notice = gatewayHarnessFallbackNotice(error);
+    if (TERMINAL.active) TERMINAL.active.activity(chalk.dim(notice));
+    else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('Gateway:')} ${notice}\n`);
+  }
+  run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
+  try {
+  const response = await fetch(`${baseUrl}/api/assistant/chat`, {
+    method: 'POST',
+    signal,
+    headers: { authorization: `Bearer ${apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
+    body: JSON.stringify({ message: turnText, messages: baseMessages, mode: 'plan' }),
+  });
+  if (!response.ok || !response.body) throw new Error(`gateway AI request failed (${response.status})`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let reply = '';
+  let gatewayNotice: string | undefined;
+  const streamToTerminal = !isJsonDefaultMode() && !TERMINAL.active;
+  let wroteDelta = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary >= 0) {
+      const frame = buffer.slice(0, boundary).trim();
+      buffer = buffer.slice(boundary + 2);
+      if (frame.startsWith('data:')) {
+        const event = JSON.parse(frame.slice('data:'.length).trim()) as { type?: string; text?: string; error?: string; label?: string; kind?: 'thinking' | 'tool-start'; tool?: string; data?: unknown };
+        // The server's final `result` carries what the text stream cannot:
+        // tool calls it is holding back for confirmation. Dropping it left
+        // the user with a reply that implied work the platform never did.
+        if (event.type === 'result') gatewayNotice = gatewayResultNotice(event.data) ?? gatewayNotice;
+        if (event.type === 'delta' && typeof event.text === 'string') {
+          reply += event.text;
+          const visible = titleStream ? titleStream.push(event.text, 'append') : event.text;
+          if (visible !== undefined) {
+            checkpoint.response(visible, 'append');
+            TERMINAL.active?.phase('generating response');
+            TERMINAL.active?.response(visible, 'append');
+            if (streamToTerminal) { output.write(visible); wroteDelta = true; }
+          }
+        }
+        // `kind`/`tool` are real, additive fields on the wire protocol
+        // (apps/web's chat-stream.ts / assistant/chat route) mapping the
+        // backend's own `{ status: 'thinking' }` / `{ status: 'tool_call',
+        // tool }` into the same canonical shape native harnesses' own
+        // parsers produce, so a Gateway tool call's *activity log line*
+        // renders identically to a Codex or Claude Code one — same glyph,
+        // same color, same bare-subject wording (renderActivityLine adds its
+        // own verb, so the canonical label here is the bare tool name via
+        // `tool`, not the backend's already-verbed `label`). The phase
+        // (spinner text) uses `label` directly instead, since the backend's
+        // phrasing ("Restarting the app…") is already the ideal spinner
+        // text and the terminal lifecycle's own "running X" wording is for
+        // bare native-harness tool names, not a pre-verbed phrase. There's
+        // no 'tool-done' here because AssistantChatEvent has no completion
+        // signal to report (verified: 'tool_call' fires once, nothing after
+        // it) — a real gap in what the agent loop reports, not something to
+        // fake here.
+        if (event.type === 'status' && typeof event.label === 'string') {
+          const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
+          checkpoint.activity(activityEvent);
+          if (TERMINAL.active) {
+            TERMINAL.active.activityEvent(activityEvent);
+            // Gateway labels are already humanized (for example,
+            // "Restarting the app…"). Apply that richer label after the
+            // generic lifecycle updates active-tool tracking.
+            TERMINAL.active.phase(event.label);
+          }
+          else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(activityEvent)) output.write(`${activity}\n`);
+        }
+        if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
+      }
+      boundary = buffer.indexOf('\n\n');
+    }
+  }
+  if (gatewayNotice) {
+    if (TERMINAL.active) TERMINAL.active.activity(`${chalk.yellow('gateway')} ${chalk.dim(gatewayNotice)}`);
+    else if (!isJsonDefaultMode()) output.write(`${wroteDelta ? '\n' : ''}${chalk.yellow('Gateway:')} ${gatewayNotice}\n`);
+    if (!reply) reply = gatewayNotice;
+  }
+  if (!reply) throw new Error('gateway AI response contained no text');
+  const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform', at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
+  state.invocations.push(invocation);
+  session.attachments = [];
+  const answered = titleStream ? extractSessionTitle(reply) : { title: undefined, text: reply };
+  await checkpoint.complete(answered.text);
+  await nameSession(session, { title: titleStream?.title ?? answered.title });
+  if (wroteDelta) output.write('\n\n');
+  else if (!TERMINAL.active) emitHarnessOutput({ session, text: answered.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
+  } finally {
+    await checkpoint.flush();
+  }
+}
