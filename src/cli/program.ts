@@ -115,7 +115,7 @@ export function buildBaseProgram(config: Conf, options: { banner?: string; versi
 
   program
     .name('clikcode')
-    .description('A local-first AI coding runtime')
+    .description('One place to run every AI coding tool you have')
     .version(options.version ?? CLI_VERSION)
     .option('--json', 'Render structured JSON output (default behavior; accepted for compatibility)')
     .option('--human', 'Render human-readable output (default is JSON)')

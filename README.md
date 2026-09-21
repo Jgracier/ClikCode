@@ -42,10 +42,60 @@ clikcode            # open the default session
 clikcode --help
 ```
 
-Requires **Node.js 22.12 or newer**. The vendor CLIs themselves are installed on
-demand by `clikcode accounts login <harness>` when they support it.
+Requires **Node.js 22.12 or newer**. There is nothing to configure. You do not
+need any of the coding tools installed first — `clikcode accounts login` will
+fetch one for you where the vendor allows it.
+
+## Your first five minutes
+
+```sh
+clikcode accounts providers          # what you can sign in to
+clikcode accounts login claude       # installs the CLI if you don't have it
+clikcode                             # start talking
+```
+
+`accounts login` runs the vendor's own sign-in — the same browser window you
+would have seen running `claude` yourself. ClikCode watches it happen and
+records that the account exists. It does not read what came back.
+
+Add a second one whenever you like, and give it a name so you can tell them
+apart:
+
+```sh
+clikcode accounts login claude --label work
+clikcode accounts login codex --label personal
+clikcode accounts list               # what you have, and what is left on each
+```
+
+Inside a session, `/` opens a searchable list of everything you can do. The
+six you will reach for most are pinned at the top: pick a tool, pick an
+account, resume a conversation, change the model, start fresh, change what
+needs approval.
+
+## Three things to know
+
+Almost everything in ClikCode is one of three nouns, and they stack in this
+order.
+
+**A tool** is Claude Code, Codex, Gemini, Copilot — the thing that actually
+does the work. `clikcode doctor` tells you which ones are on this machine and
+what each can do. You never have to remember a tool's own flags; ClikCode asks
+it what it supports and offers you only that.
+
+**An account** is one sign-in to one tool. Most people end up with several:
+a work subscription and a personal one, or an API key alongside a plan.
+Accounts are kept apart from each other and from the login you already had
+before ClikCode existed — that one keeps working exactly as it did.
+
+**A conversation** belongs to you, not to a tool. It has a name, a history and
+a working directory, and it survives changing your mind about which tool or
+account should answer it. `clikcode sessions list` shows them all; opening
+ClikCode with no arguments picks up the last one.
 
 ## Everyday commands
+
+Everything below also exists inside a session as a `/` command, so you can
+script it or type it, whichever suits the moment.
 
 | Command | What it does |
 | --- | --- |
@@ -64,11 +114,11 @@ readable output and `--debug` for stack traces and HTTP detail on failure.
 
 ## In-session commands
 
-Inside an open session, typing `/` opens a command palette. The six commands
-worth reaching without scrolling are pinned to the top, in the order they get
-used: pick a provider, pick an account on it, resume a conversation, change
-the model, then the two used mid-conversation more than anything else —
-starting over and changing what needs approval:
+Typing `/` inside a session opens a searchable list. Six are pinned at the
+top, in the order people actually reach for them — pick a tool, pick an
+account on it, resume a conversation, change the model, and the two used
+mid-conversation more than any others: starting over, and changing what needs
+your approval.
 
 | Command | What it does |
 | --- | --- |
@@ -170,6 +220,97 @@ ClikCode's own. User-defined commands — `*.md` prompt templates under
 `.clikcode/commands/` (workspace) or `~/.clikcode/commands/` (home) — show up
 the same way.
 
+## Working with several accounts
+
+Several accounts for the same vendor can coexist. Each one gets its own
+directory under `~/.clikcode/profiles/`, and ClikCode points the tool at it
+using that vendor's own supported setting — `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`COPILOT_HOME`, `QWEN_HOME` and so on — for one child process at a time.
+Nothing global changes, and the `~/.claude`, `~/.codex` logins you already had
+are untouched.
+
+Nine of the tools work this way today: Claude Code, Codex, GitHub Copilot,
+Gemini CLI, Qwen Code, Antigravity, Pi, Hermes and Command Code. The rest hold
+one account each — usually an API key — which you add with
+`clikcode accounts add`.
+
+A few of those nine have no setting of their own and are separated by pointing
+`HOME` somewhere else for the child process. That would also hide your git,
+npm, GitHub CLI, Docker, GnuPG, Cargo and ssh-agent configuration from the
+agent, so ClikCode points those back at your real home. Turns still commit,
+push and install as you.
+
+Switch by hand with `/account` inside a session, or `clikcode sessions set
+<id> --account <label>`.
+
+## When an account runs out
+
+ClikCode watches how much each account has left — `/usage` shows it, and it
+sits in the corner of the screen while you work. When the one you are on is
+spent, the turn moves to another account of the same tool and the answer keeps
+arriving. You are told after the fact, not asked first.
+
+The part that matters is what travels. ClikCode copies the tool's own
+conversation file into the next account before resuming it, so the model picks
+up the real thread rather than a summary someone wrote for it. It does not
+re-read your project, and it does not forget what it just said.
+
+This is on by default. Turn it off for one conversation with
+`/accounts failover never`, or for a new one with
+`clikcode sessions create --account-failover never`.
+
+## Moving a conversation to another tool
+
+Type `/provider` to choose, or name it directly — `/claude`, `/codex`,
+`/gemini` — optionally with your next message on the same line:
+
+```
+/codex have another look at the migration
+```
+
+The conversation keeps its name, its history and its place in your list. What
+the new tool receives is the conversation so far, replayed as context, because
+no vendor can read another vendor's memory. Long threads cost a little time
+and a few tokens at the handover; nothing else changes.
+
+## Picking up chats you started elsewhere
+
+`/resume` lists your ClikCode conversations *and* chats the tools started on
+their own — ones you ran in Claude Code or Codex directly, before ClikCode was
+in the picture. Adopt one and it becomes an ordinary conversation: it gets a
+row in your list, and you can carry it on, fork it or hand it to another tool.
+
+Claude Code, Codex and OpenCode hand over their full history when adopted, so
+you can scroll back through it. For the others the thread is real and the tool
+remembers it, but ClikCode's own view of it starts at your next message.
+
+## One MCP server, every tool
+
+Add an MCP server once and ClikCode installs it into every tool that supports
+one, each in that tool's own spelling:
+
+```sh
+clikcode mcp targets                        # who would receive it, and how
+clikcode mcp add postgres npx -y pg-mcp     # send it to all of them
+```
+
+ClikCode does not host or proxy these servers. The tool talks to them
+directly, exactly as it would if you had configured it by hand.
+
+## The optional gateway
+
+The second route is a hosted one. There, the service supplies the model and
+ClikCode runs the coding agent itself, rather than driving a vendor's CLI — so
+it works on a machine with none of those tools installed.
+
+Nothing requires it. Without a gateway sign-in ClikCode works entirely against
+your local accounts, and `CLIKCODE_GATEWAY=off` removes the commands
+altogether. The default endpoint is ClikDeploy Gateway
+(`https://clikdeploy.com`) because that is the one that exists today;
+`CLIKCODE_GATEWAY_URL` points it anywhere else. Everything the gateway touches
+lives in `src/constants.ts` (the switch and the URL) and one folder,
+`src/gateway/`, so replacing it is a local change rather than a refactor.
+
 ## Where state lives
 
 Everything ClikCode owns is under `~/.clikcode` (directories `0700`, files
@@ -187,38 +328,6 @@ credential, if you sign in, is stored separately in `~/.config/clikcode/auth.jso
 and `~/.clikcode/api-key`. A credential left behind by the ClikDeploy CLI
 (`~/.config/clikdeploy/auth.json`, `~/.clikdeploy/api-key`) is still read, so an
 existing sign-in keeps working; the next write moves it.
-
-## Account isolation
-
-Several accounts for the same vendor can coexist. Each account gets its own
-directory under `~/.clikcode/profiles/`, and ClikCode points the vendor CLI at it
-through that vendor's *own supported* configuration variable — for example
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `QWEN_HOME` — for that one
-child process only. Nothing global is changed, and your ordinary
-`~/.claude`, `~/.codex`, … logins are untouched.
-
-A few CLIs have no such variable and are isolated by redirecting `HOME` for the
-child process. Because that would also hide your git, npm, GitHub CLI, Docker,
-GnuPG, Cargo and ssh-agent configuration from the agent's tools, ClikCode points
-those back at your real home so turns still commit, push and install as you.
-
-Switching account mid-session is explicit (`/accounts`), and automatic failover
-to another account happens only on a recognized quota-exhaustion failure and only
-if the session opted in (`--account-failover on-quota-exhausted`).
-
-## The optional gateway
-
-The second route is a hosted one. There, the service supplies the model and
-ClikCode runs the coding agent itself, rather than driving a vendor's CLI — so
-it works on a machine with none of those tools installed.
-
-Nothing requires it. Without a gateway sign-in ClikCode works entirely against
-your local accounts, and `CLIKCODE_GATEWAY=off` removes the commands
-altogether. The default endpoint is ClikDeploy Gateway
-(`https://clikdeploy.com`) because that is the one that exists today;
-`CLIKCODE_GATEWAY_URL` points it anywhere else. Everything the gateway touches
-lives in `src/constants.ts` (the switch and the URL) and one folder,
-`src/gateway/`, so replacing it is a local change rather than a refactor.
 
 ## Optional loopback control API
 
