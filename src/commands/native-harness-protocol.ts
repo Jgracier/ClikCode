@@ -342,6 +342,15 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     if (typeof record.api_error_status === 'number') statusCode = record.api_error_status;
     else if (typeof record.status === 'number' && record.status >= 400) statusCode = record.status;
     if (!toolScoped && typeof record.error === 'string' && record.error.trim()) errorMessage = record.error.trim();
+    // Plural. Grok Build reports a failed turn as
+    // {type:"result",is_error:true,errors:["Internal error: {...402...}"]}
+    // with no `error` field at all, so a real reason -- "Grok Build usage
+    // balance exhausted" -- was dropped and the turn surfaced only as
+    // "returned no assistant text in its structured output".
+    if (!toolScoped && Array.isArray(record.errors)) {
+      const first = record.errors.find((item): item is string => typeof item === 'string' && item.trim().length > 0);
+      if (first) errorMessage = first.trim();
+    }
     const errorObject = toolScoped ? undefined : asRecord(record.error);
     if (errorObject) {
       if (typeof errorObject.type === 'string') errorKind = errorObject.type;
@@ -399,7 +408,12 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     // successful turn and, worse, invited a replay of edits already applied.
     const didToolWork = values.some((value) => parseNativeActivityEventsFromValue(harness, value).some((event) => event.kind !== 'thinking'));
     if (!isError && didToolWork) return { text: '', noAssistantText: true, ...extras };
-    throw new Error(`${harness.displayName} returned no assistant text in its structured output`);
+    // Say what the harness said. "No assistant text" describes the symptom;
+    // the reason it gave -- a balance, a quota, an expired key -- is the only
+    // part anyone can act on, and it is right there in the stream.
+    throw new Error(errorMessage
+      ? `${harness.displayName}: ${errorMessage}`
+      : `${harness.displayName} returned no assistant text in its structured output`);
   }
   return { text, ...(isError ? { isError } : {}), ...extras };
 }

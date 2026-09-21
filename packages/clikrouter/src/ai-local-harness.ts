@@ -88,6 +88,20 @@ export interface AiHarnessManagerDefinition {
   listArgv?: readonly string[];
   /** Vendor-owned interactive manager. ClikCode suspends its TUI before running it. */
   manageArgv?: readonly string[];
+  /** How this harness spells "add an MCP server", so one ClikCode-level entry
+   * can be installed into every harness that has one.
+   *
+   * Two shapes exist, read from the real CLIs. Most take the target as a
+   * positional -- `mcp add <name> <commandOrUrl> [args...]`, identical across
+   * Claude, Gemini and Grok. Codex instead demands `--url <url>` for a remote
+   * server or `-- <command> [args...]` for a local one, which no positional
+   * form can express. */
+  add?: {
+    argv: readonly string[];
+    shape: 'positional' | 'url-or-doubledash';
+    /** Flag carrying stdio|sse|http where the harness wants one stated. */
+    transportPrefix?: readonly string[];
+  };
 }
 
 export interface AiHarnessCapabilityManifest {
@@ -508,7 +522,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('chrome', 'Chrome integration', 'Enable Claude in Chrome integration', 'tools', ['--chrome']),
     ],
     managers: {
-      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] },
+      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--transport'] } },
       plugins: { label: 'Plugins', listArgv: ['plugin', 'list'], manageArgv: ['plugin'] },
       agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
     },
@@ -530,7 +544,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('strict-config', 'Strict configuration', 'Fail on unrecognized configuration keys', 'safety', ['--strict-config']),
     ],
     managers: {
-      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] },
+      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , add: { argv: ['mcp', 'add'], shape: 'url-or-doubledash' }},
       plugins: { label: 'Plugins', listArgv: ['plugin', 'list'], manageArgv: ['plugin'] },
       agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
     },
@@ -602,6 +616,24 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     ],
     managers: { mcp: { label: 'Extensions and MCP', manageArgv: ['configure'] }, skills: { label: 'Skills', listArgv: ['skills', 'list'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['extensions', 'recipes', 'ACP', 'scheduled recipes', 'session export'],
+  },
+  // MCP surfaces read from each CLI's own --help on a real install. These
+  // three support MCP and had no capability entry at all, so ClikCode offered
+  // them no /mcp even though the harness has one.
+  grok: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , add: { argv: ['mcp', 'add'], shape: 'positional' }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    features: ['skills', 'plugins', 'subagents', 'plan mode', 'memory'],
+  },
+  kimi: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } },
+    features: ['skills', 'agents', 'ACP'],
+  },
+  openhands: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } },
+    features: ['ACP', 'web UI'],
   },
   amp: {
     options: [
@@ -685,7 +717,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('include-directories', 'Additional directories', 'Additional directories included in context', 'context', ['--include-directories'], 'path-list'),
       value('extensions', 'Extensions', 'Extensions to load; all are used when unset', 'tools', ['--extensions'], 'string-list'),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, plugins: { label: 'Extensions', listArgv: ['extensions', 'list'], manageArgv: ['extensions'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--transport'] }}, plugins: { label: 'Extensions', listArgv: ['extensions', 'list'], manageArgv: ['extensions'] } },
     features: ['skills', 'agents', 'extensions', 'custom commands', 'memory'],
   },
   qwen: {
