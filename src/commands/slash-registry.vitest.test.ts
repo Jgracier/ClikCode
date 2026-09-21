@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SLASH_COMMANDS, SLASH_HANDLER_KEYS, parseSlashInput, resolveSlashCommand, routeSlashInput, slashControls,
+  SLASH_COMMANDS, SLASH_HANDLER_KEYS, SLASH_PALETTE_PINNED, parseSlashInput, resolveSlashCommand, routeSlashInput, slashControls,
   slashHelpText, slashPalette, suggestSlashCommand, unknownSlashMessage,
 } from './slash-registry';
 import type { AiLocalHarnessDefinition, HarnessSession } from './types.js';
@@ -79,13 +79,39 @@ describe('slash registry', () => {
     const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
     for (const entry of SLASH_COMMANDS) expect(palette.map((row) => row.value)).toContain(`/${entry.name}`);
     expect(palette.find((row) => row.value === '/ship')).toMatchObject({ group: 'Custom', argHint: '<ticket>' });
-    expect(palette.find((row) => row.value === '/model')).toMatchObject({ argHint: '[name]', group: 'Settings' });
+    // A row carries its registry group and hint through unchanged. /effort
+    // rather than /model because the palette pins /model to the top under a
+    // group of its own; see the pinning test below.
+    expect(palette.find((row) => row.value === '/effort')).toMatchObject({ argHint: '[level]', group: 'Settings' });
     const help = slashHelpText(session(), harness());
     const controls = slashControls().map((control) => control.command);
     for (const entry of SLASH_COMMANDS) {
       expect(help).toContain(`/${entry.name}`);
       expect(controls).toContain(`/${entry.name}`);
     }
+  });
+
+  /** Typing `/` on a phone shows about six rows before anything scrolls, so
+   * what sits in those rows is the whole of the feature for most uses. */
+  it('opens with the commands reached for most, in the order they are reached for', () => {
+    const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
+    // Spelled out rather than derived from SLASH_PALETTE_PINNED: comparing the
+    // constant to itself passes whatever the constant says.
+    expect(palette.slice(0, 6).map((row) => row.value))
+      .toEqual(['/provider', '/account', '/resume', '/model', '/new', '/permissions']);
+    // One header, not one per pinned command's real group.
+    expect(new Set(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.group))).toEqual(new Set(['Common']));
+    // Pinned once, not listed again under the group it came from.
+    const values = palette.map((row) => row.value);
+    expect(values.filter((value, index) => values.indexOf(value) !== index)).toEqual([]);
+  });
+
+  it('never pins a command this session cannot run', () => {
+    // /model is unavailable without a harness, and pinning must not put it
+    // back: the palette would offer a row that errors when chosen.
+    const palette = slashPalette({ ...session(), nativeHarness: undefined } as never, undefined, {});
+    const pinned = palette.filter((row) => row.group === 'Common').map((row) => row.value);
+    for (const value of pinned) expect(palette.filter((row) => row.value === value)).toHaveLength(1);
   });
 
   it('keeps the vendor harness out of the palette and in /help', () => {
