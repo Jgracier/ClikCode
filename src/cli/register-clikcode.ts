@@ -4,7 +4,8 @@ import type Conf from 'conf';
 import { aiGatewaySessionSend } from '../commands/ai-turn.js';
 import { aiPermissions } from '../commands/interactive-pickers.js';
 import { aiSessionInteractive, aiSessionResume } from '../commands/ai-interactive.js';
-import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, aiGatewayStatus, aiModelsList, aiSessionCommand, aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList, aiUsage } from '../commands/ai.js';
+import { aiSessionCommand } from '../commands/slash-handlers.js';
+import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, aiGatewayStatus, aiModelsList, aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList, aiUsage } from '../commands/ai.js';
 import { aiStart, aiStatus, aiStop } from '../commands/ai-daemon.js';
 import { gatewayLogin } from '../commands/gateway-login.js';
 

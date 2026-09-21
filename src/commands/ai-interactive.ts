@@ -7,13 +7,12 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import type Conf from 'conf';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import type Conf from 'conf';
 import chalk from 'chalk';
-import { emitJson } from '../utils/structured-output.js';
 import { runNativeHarnessCommand } from './native-harness.js';
 import { spawnPortable as spawn } from './spawn-portable.js';
 import type { HarnessPrompter, HarnessSession, HarnessState, PickerOption } from './types.js';
@@ -32,14 +31,10 @@ import { routeSlashInput, slashPalette, unknownSlashMessage, type SlashHandlerKe
 import { customCommandPrompt } from './custom-commands.js';
 import { LiveTurnInputBroker } from './live-turn-input.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
-import {
-  aiSessionCommand, aiSessionLeave, capabilitiesText, compactConversation, customCommandsFor, exportTranscript, initPrompt, launchSession, nativeManagerListing, newConversation, newProviderConversation, readMemoryFile, releaseQueuedTurn, reviewPrompt, sessionHarness, slashExtrasFor, slashRouteContextFor,
-} from './ai.js';
-import {
-  addAccountForHarness, autoSelectSessionHarness, doctorSummary, interactiveAccountPicker, interactiveEffortPicker, interactiveEnginePicker, interactiveHarnessOptionPicker, interactiveModelPicker, interactivePermissionPicker, interactiveSessionManager, interactiveSessionPicker, interactiveSettingsPicker, manageAccountAction,
-} from './interactive-pickers.js';
+import { aiSessionLeave, launchSession, newConversation, newProviderConversation, releaseQueuedTurn } from './ai.js';
+import { aiSessionCommand, capabilitiesText, compactConversation, customCommandsFor, exportTranscript, initPrompt, nativeManagerListing, readMemoryFile, reviewPrompt, sessionHarness, slashExtrasFor, slashRouteContextFor } from './slash-handlers.js';
+import { addAccountForHarness, autoSelectSessionHarness, doctorSummary, interactiveAccountPicker, interactiveEffortPicker, interactiveEnginePicker, interactiveHarnessOptionPicker, interactiveModelPicker, interactivePermissionPicker, interactiveSessionManager, interactiveSessionPicker, interactiveSettingsPicker, manageAccountAction } from './interactive-pickers.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from './interactive-pickers.js';
-
 
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();
