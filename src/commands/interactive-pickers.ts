@@ -19,11 +19,11 @@ import { vendorFacingOptions } from './harness-options.js';
 import { inspectNativeHarness, inspectNativeHarnessForPicker, loginNativeHarness, runNativeHarnessCommand } from './native-harness.js';
 import { spawnPortable as spawn } from './spawn-portable.js';
 import { ADOPTED_TRANSCRIPT_READERS, discoverNativeSessions, FS_SESSION_DISCOVERY, type DiscoveredNativeSession } from './native-session-discovery.js';
-import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition, HarnessPrompter, HarnessSession, HarnessState, PickerOption } from './types.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition, HarnessPrompter, HarnessSession, HarnessState, ModelCatalogResult, PickerOption } from './types.js';
 import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, compactPath, nativeProfileEnvironment } from './native-harness-protocol.js';
 import { harnessStatePath, readState, resolveDefaultSettings, writeState } from './harness-state.js';
 import { accountUsageLabel, cachedAccountUsageLabel, nativeModelCatalogForPicker, NATIVE_USAGE_PROBES } from './native-account-data.js';
-import { aiAccountAdd, aiAccountLogin, aiAccountRemove, announceBareInteractiveLogin, syncAccountIdentityAfterLogin } from './account-management.js';
+import { aiAccountAdd, aiAccountLogin, aiAccountRemove, announceBareInteractiveLogin, refreshPlaceholderAccountLabels, syncAccountIdentityAfterLogin } from './account-management.js';
 import { synchronizeNativeTranscript } from './turn-runtime.js';
 import { TERMINAL } from './active-terminal.js';
 import { emitHarnessOutput, line } from './harness-output.js';
@@ -204,6 +204,10 @@ export async function interactiveAccountPicker(
       rl.panel?.('Accounts', 'Choose a local provider before switching accounts.');
       return undefined;
     }
+    // Accounts named before their harness had identity derivation still carry
+    // the invented label. Opening /account is the one moment the user is
+    // looking at those names, so it is where they get corrected.
+    if (await refreshPlaceholderAccountLabels(state)) await writeState(state);
     const providerAccounts = state.accounts.filter((account) => account.provider === harness.provider);
     if (!providerAccounts.length) {
       rl.panel?.(`${harness.displayName} accounts`, `No accounts are connected. Use /accounts login ${harness.command} <label> to add one.`);
@@ -720,7 +724,19 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
     : session.provider ? localHarnessForProvider(session.provider) : undefined;
-  const catalog = harness ? nativeModelCatalogForPicker(harness, account) : { models: account?.models ?? [] };
+  // Awaited, not fired and forgotten: opening /model on a cold cache used to
+  // show an empty list, and the models only appeared if the user backed out
+  // and opened it a second time. The wait is bounded and a warm cache is
+  // instant, so this costs a beat once per provider rather than a wrong list
+  // every time.
+  let catalog: ModelCatalogResult = { models: account?.models ?? [] };
+  if (harness) {
+    // Feature-detected, never assumed: the headless prompter has no spinner.
+    const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
+    waiting?.startWaiting(`finding ${harness.displayName} models…`);
+    try { catalog = await nativeModelCatalogForPicker(harness, account); }
+    finally { waiting?.stopWaiting(); }
+  }
   const effective = session.model ?? catalog.configured;
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
@@ -732,10 +748,17 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
       ].filter((part): part is string => Boolean(part));
       return { label: model, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
     }),
-    { label: 'Automatic provider default', detail: effective ? undefined : '· current', value: 'default' },
     { label: 'Enter a model ID…', value: '__custom__' },
   ];
-  const selected = await chooseOption(rl, 'Choose a model', options);
+  // No synthetic "Automatic provider default" row. It resolved to nothing the
+  // user could see -- it set session.model to null and left the real model
+  // whatever the vendor happened to pick -- and it sat at the top of the list
+  // looking like a choice. A model picker lists models.
+  const selected = await chooseOption(
+    rl,
+    discoveredModels.length ? 'Choose a model' : `${harness?.displayName ?? 'This provider'} reported no models — enter one`,
+    options,
+  );
   if (!selected) return;
   const value = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : selected;
   // Applies to this chat only, no further "apply to" step: a model choice is

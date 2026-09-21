@@ -57,9 +57,50 @@ export function nativeModelLabel(
 export const modelCatalogCache = new Map<string, { at: number; result: ModelCatalogResult }>();
 export const MODEL_CATALOG_CACHE_TTL_MS = 300_000;
 
-/** Choice lists use cached/local metadata synchronously and refresh discovery
- * after their first frame. They must not wait on a vendor subprocess. */
-export function nativeModelCatalogForPicker(
+/** How long the model picker will wait for a vendor's own model list before
+ * opening with whatever it already has. Measured on the installed harnesses:
+ * `grok models` 708ms, `cursor-agent models` 1307ms, `agy models` 1807ms. The
+ * 12-second cap in nativeModelCatalogUncached is a worst case for a harness
+ * that hangs, not a typical cost, and waiting that long is what the
+ * fire-and-forget path below was avoiding. Three seconds clears every
+ * measured harness with room to spare and still bounds a bad one. */
+export const MODEL_CATALOG_PICKER_WAIT_MS = 3_000;
+
+/** The model list for a picker that is about to open.
+ *
+ * A warm cache returns instantly. A cold one used to return `account.models`
+ * -- usually empty -- and kick discovery off in the background, so the first
+ * /model of a session showed nothing and the list only appeared if the user
+ * backed out and opened it again. Now the picker waits, but only briefly:
+ * past the deadline it opens with what it has and the background fill still
+ * warms the cache for next time. */
+export async function nativeModelCatalogForPicker(
+  harness: AiLocalHarnessDefinition,
+  account?: AiHarnessAccount,
+  waitMs = MODEL_CATALOG_PICKER_WAIT_MS,
+): Promise<ModelCatalogResult> {
+  const cacheKey = `${harness.command}:${account?.nativeProfile?.path ?? account?.id ?? 'default'}`;
+  const cached = modelCatalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < MODEL_CATALOG_CACHE_TTL_MS) return cached.result;
+  const fallback = { models: [...new Set(account?.models ?? [])] };
+  // The discovery promise is never abandoned, only outrun: it keeps going and
+  // populates the cache whether or not this picker still cares.
+  const discovery = nativeModelCatalog(harness, account).catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), waitMs);
+    timer.unref?.();
+  });
+  try {
+    return (await Promise.race([discovery, deadline])) ?? fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Synchronous variant for callers that genuinely cannot await: returns only
+ * what is already cached or known locally, and refreshes in the background. */
+export function nativeModelCatalogCached(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
 ): ModelCatalogResult {

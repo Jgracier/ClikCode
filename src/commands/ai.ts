@@ -127,15 +127,18 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       // default"/"Codex default" etc. undefined profilePath is correct
       // here: this is always the harness's one default, unisolated profile,
       // never one under an isolated CLAUDE_CONFIG_DIR-style directory.
-      // Falls back to the placeholder if derivation finds nothing (most
-      // harnesses currently), AND if the derived label would collide with
+      // Falls back to the harness's own name if derivation finds nothing
+      // (OpenCode, Hermes and Copilot keep no identity anywhere on disk --
+      // checked), AND if the derived label would collide with
       // an account that already exists under a different provider (the
       // same real person's email showing up on two harnesses is entirely
-      // possible and not a bug) -- labels must stay globally unique, and
-      // the safe "X default" naming always is, by construction.
+      // possible and not a bug) -- labels must stay globally unique, and a
+      // bare harness name always is, by construction. It used to be
+      // "X default", which read as a placeholder row in /account rather than
+      // as the one account that harness actually has.
       const derived = await deriveAccountLabel(harness, undefined);
       const label = derived && !state.accounts.some((item) => item.label.toLowerCase() === derived.toLowerCase())
-        ? derived : `${harness.displayName} default`;
+        ? derived : harness.displayName;
       const account: AiHarnessAccount = {
         id: randomUUID(), provider: harness.provider, label, authKind: 'vendor-cli',
         models: [], status: 'ready', credentialRef: `native:${harness.binary}:default`,
