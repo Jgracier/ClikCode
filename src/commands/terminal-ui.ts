@@ -267,6 +267,10 @@ function leaveInputModes(): string {
   return sequence;
 }
 
+/** Attached for the life of the prompter so stdin never falls back to paused
+ * mode between readers. It reads nothing; presence is the whole point. */
+const KEEP_STDIN_FLOWING = (): void => {};
+
 const PASTE_START = '\u001b[200~';
 const PASTE_END = '\u001b[201~';
 
@@ -1662,6 +1666,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   constructor() {
     terminalModes.uiStarted = true;
+    // Stdin is kept flowing for the whole session.
+    //
+    // Every reader attaches its own `data` listener and removes it again --
+    // seven attach/detach cycles a session -- and removing the LAST one puts
+    // the stream back into paused mode. So between a prompt ending and the
+    // next one opening, stdin was stopped, and anything the client sent in
+    // that window sat in the pty buffer instead of being read. The diagnostic
+    // UI which does receive the keyboard-hidden swipe on this user's phone
+    // never stops reading, and neither does Claude Code.
+    //
+    // A listener that does nothing is enough: its presence is what keeps the
+    // stream flowing. The readers still come and go and still do the work.
+    input.on('data', KEEP_STDIN_FLOWING);
+    input.resume();
     // Undo whatever the last program left set, before asking for anything.
     // The session before this one may have been closed from the client, in
     // which case its teardown was written into a pty that no longer existed.
@@ -3404,6 +3422,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.scrollDrainTimer = undefined;
     this.pendingScroll = 0;
 
+    input.off('data', KEEP_STDIN_FLOWING);
     process.off('SIGWINCH', this.onResize);
     process.off('SIGCONT', this.onContinue);
     process.off('exit', restoreTerminal);
