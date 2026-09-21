@@ -16,9 +16,9 @@ gateway sign-in ClikCode works entirely against your local accounts, and
 `CLIKCODE_GATEWAY=off` removes the surface altogether. The default endpoint is
 ClikDeploy Gateway (`https://clikdeploy.com`) because that is the one that
 exists today; `CLIKCODE_GATEWAY_URL` points it anywhere else. Everything the
-gateway touches lives in two files — `src/constants.ts` (the switch and the
-URL) and `src/commands/gateway-credentials.ts` (the credential) — so replacing
-it is a local change, not a refactor.
+gateway touches lives in `src/constants.ts` (the switch and the URL) and one
+folder, `src/gateway/` (credentials, sign-in, the gateway model harness) — so
+replacing it is a local change, not a refactor.
 
 ## Install
 
@@ -234,8 +234,11 @@ pnpm test:pack      # assert tarball contents, install it in a temp dir, run it
 
 Two packages, one lockfile:
 
-- `src/` — the CLI: the command surface (`src/cli/`), the harness broker and
-  built-in agent harness (`src/commands/`), and a handful of shared utilities.
+- `src/` — the CLI, one folder per layer: `cli/` (argv, output modes, errors),
+  `commands/` (the verbs), `session/` and `turn/` (state and the turn loop),
+  `agent/` (ClikCode's own harness: tools, permissions, checkpoints),
+  `harness/` (driving external vendor CLIs over argv/ACP/app-server),
+  `gateway/` (the optional adapter), `tui/`, `daemon/`, `runtime/`.
 - `packages/clikrouter` (`@clikcode/router`) — provider-agnostic request
   normalization and router selection across ~40 providers, consumed as source
   and bundled into `dist/*.cjs`.
