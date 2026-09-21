@@ -54,8 +54,11 @@ export interface HarnessTurnObserver {
   onThought?: (text: string) => void;
   /** The agent's plan, republished whole each time it changes. */
   onPlan?: (entries: readonly HarnessPlanEntry[], explanation?: string) => void;
-  /** Token usage, passed through as published. */
-  onUsage?: (usage: Record<string, unknown>) => void;
+  /** Token usage, as the harness published it. Deliberately `unknown`: one
+   * transport reports a raw payload and another a shape its own parser has
+   * already normalised, and the caller normalises either way. Narrowing this
+   * would only push a cast to every call site. */
+  onUsage?: (usage: unknown) => void;
   /** A tool or command needing a yes or no before it runs. */
   onApproval?: (title: string, detail?: string) => Promise<boolean>;
   /** Coarse progress ("generating response", "retrying"), for the waiting line. */
