@@ -12,7 +12,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from './transport/native.js';
-import { readState, writeState } from '../session/state.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
 import { localHarnessForCommand, localHarnessForProvider, nativeProfileEnvironment } from './transport/native-protocol.js';
 import { CLI_VERSION } from '../cli/program.js';
 import type {

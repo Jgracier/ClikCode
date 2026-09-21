@@ -25,7 +25,9 @@ import { extractSessionTitle, sessionTitleSource, StreamingTitle, withTitleReque
 import { nativeGeneratedTitle } from '../session/discovery.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessActivityEvent } from '../harness/types.js';
 import { harnessSupportsImages, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeTurnResult, nativeTurnUsage, type NativeTurnResult, renderActivityLine, streamLocalAiTurn } from '../harness/transport/native-protocol.js';
-import { harnessCommand, harnessStatePath, readState, writeState } from '../session/state.js';
+import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
 import { accountUsageLabel, codexRateLimitsReading, recordDerivedUsage, recordNativeStreamUsage } from '../harness/account-data.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
 import { closePersistentTransport, DurableTurnCheckpoint, fallbackTurnHarnesses, nameSession, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';

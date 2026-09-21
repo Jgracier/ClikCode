@@ -8,7 +8,7 @@
  */
 import chalk from 'chalk';
 import { stdout as output } from 'node:process';
-import { readState } from '../session/state.js';
+import { readState } from '../session/state/read.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitJson } from '../cli/structured-output.js';
 import {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readState } from './state.js';
+import { readState } from './read.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 
