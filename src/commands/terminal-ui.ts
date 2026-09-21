@@ -222,8 +222,6 @@ function enterInputModes(): string {
   // The flags were already tracked here. They were simply never read.
   let sequence = '';
   if (!terminalModes.bracketedPaste) { sequence += ENABLE_BRACKETED_PASTE; terminalModes.bracketedPaste = true; }
-  if (!terminalModes.themeNotifications) { sequence += ENABLE_THEME_NOTIFICATIONS; terminalModes.themeNotifications = true; }
-  if (!terminalModes.focusReporting) { sequence += ENABLE_FOCUS_REPORTING; terminalModes.focusReporting = true; }
   if (!classicScreen() && !terminalModes.wheelReporting) {
     sequence += ENABLE_MOUSE_TRACKING;
     terminalModes.wheelReporting = true;
@@ -1699,11 +1697,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // deciding how to route touches has something to notice.
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
-      output.write(`${ENABLE_BRACKETED_PASTE}${ENABLE_THEME_NOTIFICATIONS}${ENABLE_FOCUS_REPORTING}`
-        + '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h');
+      // Asked for: bracketed paste, because pasted text must not be read as
+      // keystrokes, and the mouse, because that is how the transcript is read
+      // back. Nothing else.
+      //
+      // Focus reporting (?1004h) and theme notifications (?2031h) used to be
+      // asked for here and then thrown away where keys are read -- neither is
+      // acted on anywhere. Asking a phone to send two streams of events that
+      // are discarded on arrival is waste at best, and at worst it is more
+      // state for a client to hold about a session that is already failing to
+      // forward the one gesture that matters. The filters that drop them stay,
+      // for a terminal that volunteers them unasked.
+      output.write(`${ENABLE_BRACKETED_PASTE}\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h`);
       terminalModes.bracketedPaste = true;
-      terminalModes.themeNotifications = true;
-      terminalModes.focusReporting = true;
       terminalModes.wheelReporting = true;
     }
     // The screen and its saved lines are cleared once, and the first frame
