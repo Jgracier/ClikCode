@@ -9,7 +9,8 @@ import { commandPaletteMatches, composerRightArrowValue, exactPaletteCommand, pa
 import { stdin as input, stdout as output } from 'node:process';
 import { closeOpenHyperlink, composerLayout, createStreamingBlockParser, nextCharacterIndex, previousCharacterIndex, sanitizeTerminalText, splitIntoBlocks, terminalCellWidth, visibleSlice, wrapCodeLine } from './render/markdown.js';
 import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
-import { compactPath, harnessSupportsEffort, localHarnessForCommand, sessionProviderLabel } from '../harness/transport/native-protocol.js';
+import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
+import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/account-data.js';

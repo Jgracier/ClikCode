@@ -16,7 +16,8 @@ import { emitJson } from '../cli/structured-output.js';
 import {
   captureNativeHarnessOutput, ensureNativeHarness, inspectNativeHarness, loginNativeHarness, runNativeHarnessCommand,
 } from '../harness/transport/native.js';
-import { localHarnessForCommand, localHarnessForProvider, localRouter, nativeProfileEnvironment } from '../harness/transport/native-protocol.js';
+import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
+import { localHarnessForCommand, localHarnessForProvider, localRouter } from '../runtime/lazy-bridge.js';
 import { homeRedirectEnvironment } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery.js';
 import { harnessCommand, harnessStatePath } from '../session/state/paths.js';

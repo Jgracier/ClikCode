@@ -4,7 +4,7 @@ import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { inspectNativeHarness, inspectNativeHarnessForPicker } from '../../harness/transport/native.js';
 import type { AiLocalHarnessDefinition, HarnessPrompter } from '../../harness/types.js';
-import { localHarnessForProvider } from '../../harness/transport/native-protocol.js';
+import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
 import { providerPickerOptions } from '../../session/options.js';

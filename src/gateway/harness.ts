@@ -20,7 +20,7 @@ import {
   GatewayModelClient, ModelClientError, runGatewayHarnessTurn,
   type GatewayHarnessTurnResult, type HarnessActivityEvent as GatewayActivityEvent,
 } from '../agent/index.js';
-import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/transport/native-protocol.js';
+import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store.js';
 import type { AiHarnessPermissionMode, HarnessPrompter, HarnessSession } from '../harness/types.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';

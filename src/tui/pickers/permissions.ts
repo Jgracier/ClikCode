@@ -2,7 +2,7 @@
  * in-chat `/permissions`. */
 
 import type { AiHarnessPermissionMode, HarnessPrompter } from '../../harness/types.js';
-import { harnessSupportsPermissionMode, localHarnessForCommand } from '../../harness/transport/native-protocol.js';
+import { harnessSupportsPermissionMode, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { TERMINAL } from '../active-terminal.js';
 import { TerminalHarnessPrompter } from '../prompter.js';

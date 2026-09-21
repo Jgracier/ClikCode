@@ -14,7 +14,8 @@ import { readFile } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from './transport/native.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { localHarnessForCommand, localHarnessForProvider, nativeProfileEnvironment } from './transport/native-protocol.js';
+import { nativeProfileEnvironment } from './transport/profile-environment.js';
+import { localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { CLI_VERSION } from '../cli/program.js';
 import type {
   AiHarnessAccount, AiLocalHarnessDefinition, HarnessSession, HarnessState, ModelCatalogResult, NativeUsageProbe,

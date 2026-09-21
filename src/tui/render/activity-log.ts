@@ -4,7 +4,7 @@
 import chalk from 'chalk';
 import { stdout as output } from 'node:process';
 import { sanitizeTerminalText, visibleSlice } from './markdown.js';
-import { renderActivityLine } from '../../harness/transport/native-protocol.js';
+import { renderActivityLine } from '../../harness/protocol/activity-line.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../harness/types.js';
 
 /** Keep the persisted history window stable while transient assistant and

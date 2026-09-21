@@ -1,0 +1,341 @@
+/** Parsing a vendor's activity stream into ClikCode's own events: tool
+ * starts and completions, thinking, and the capped previews of their
+ * output that the UI is allowed to show. */
+
+import { visibleSlice } from '../../tui/render/markdown.js';
+import type { AiLocalHarnessDefinition, HarnessActivityEvent } from '../types.js';
+import { CLAUDE_SHAPED, JsonRecord, OPENCODE_SHAPED, asRecord } from './json-lines.js';
+import { categoryOf, toolCategory, toolLabel } from './tools.js';
+
+/** Line-capped, not byte-capped: a diff that's still readable at a glance
+ * beats a byte-perfect one that pushes everything else out of the 5-line
+ * activity window. */
+/** Captured per side, so a balanced preview always has something to show from
+ * both halves of an edit. */
+const DIFF_CAPTURE_LINES = 8;
+
+/** How much of a tool's work a transcript row shows. Enough to recognise the
+ * edit or command at a glance without the trail crowding out the answer. */
+export const ACTIVITY_PREVIEW_LINES = 8;
+
+export function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
+  const all = text.split(/\r?\n/);
+  return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
+}
+
+function cappedActivityOutput(text: string): string[] | undefined {
+  const normalized = text.trim();
+  if (!normalized) return undefined;
+  // Machine-readable tool output belongs to the native event protocol, not
+  // the human transcript. Printing JSON/JSONL here was the reason a working
+  // turn looked like a wall of tool-call envelopes until the final response
+  // replaced it. Keep the useful tool label/status and omit its raw payload.
+  const records = normalized.split(/\r?\n/).filter(Boolean);
+  const isJson = (candidate: string): boolean => {
+    if (!/^(?:\{|\[)/.test(candidate.trim())) return false;
+    try { JSON.parse(candidate); return true; } catch { return false; }
+  };
+  if (isJson(normalized) || (records.length > 0 && records.every(isJson))) return undefined;
+  const capped = capDiffLines(normalized, 3);
+  return [...capped.lines, ...(capped.truncated ? [`… ${capped.truncated} more line${capped.truncated === 1 ? '' : 's'}`] : [])];
+}
+
+/** HarnessActivityEvent plus the id of the tool call that spawned it, when the
+ * activity belongs to a subagent (Claude's `parent_tool_use_id`). Structurally
+ * a HarnessActivityEvent, so it can be passed anywhere one is accepted. */
+export type NativeActivityEvent = HarnessActivityEvent & { parentId?: string };
+
+const truncationNote = (count: number): string[] => count ? [`… ${count} more line${count === 1 ? '' : 's'}`] : [];
+
+function blockText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.flatMap((part) => {
+    const record = asRecord(part);
+    return typeof record?.text === 'string' ? [record.text] : [];
+  }).join('\n');
+}
+
+/** One Claude-shaped `tool_use` block. */
+function claudeToolStart(tool: JsonRecord, command: string): NativeActivityEvent {
+  const name = String(tool.name ?? 'tool');
+  const input = asRecord(tool.input);
+  const identity = typeof tool.id === 'string' ? { id: tool.id } : {};
+  // Verified against a real session transcript: Edit's input carries
+  // old_string/new_string verbatim, Write carries the full new file as
+  // `content` with no prior text to diff against.
+  if (name === 'Edit' && typeof input?.old_string === 'string' && typeof input?.new_string === 'string') {
+    const removed = capDiffLines(input.old_string, DIFF_CAPTURE_LINES);
+    const added = capDiffLines(input.new_string, DIFF_CAPTURE_LINES);
+    return {
+      kind: 'tool-start', label: toolLabel(name, input), category: toolCategory(name, input, true), ...identity,
+      diff: { removed: [...removed.lines, ...truncationNote(removed.truncated)], added: [...added.lines, ...truncationNote(added.truncated)] },
+    };
+  }
+  if (name === 'Write' && typeof input?.content === 'string') {
+    const added = capDiffLines(input.content, DIFF_CAPTURE_LINES);
+    return {
+      kind: 'tool-start', label: toolLabel(name, input), category: toolCategory(name, input, true), ...identity,
+      diff: { removed: [], added: [...added.lines, ...truncationNote(added.truncated)] },
+    };
+  }
+  return { kind: 'tool-start', label: toolLabel(name, input), ...categoryOf(name, input, command), ...identity };
+}
+
+/** Every activity one record describes. A single Claude message routinely
+ * carries several parallel tool_use blocks (and the following user message all
+ * of their tool_results); reporting only the first left the rest running
+ * forever in the UI and unrecorded in the checkpoint. */
+export function parseNativeActivityEventsFromValue(harness: AiLocalHarnessDefinition, parsed: unknown): NativeActivityEvent[] {
+  const value = asRecord(parsed);
+  if (!value) return [];
+  if (CLAUDE_SHAPED.has(harness.command)) {
+    const claude = claudeShapedActivity(value, harness.command);
+    if (claude) return claude;
+  }
+  if (harness.command === 'goose') {
+    const goose = gooseActivity(value, harness.command);
+    if (goose) return goose;
+  }
+  const single = singleActivityEvent(harness, value);
+  return single ? [single] : [];
+}
+
+export function parseNativeActivityEvents(harness: AiLocalHarnessDefinition, lineText: string): NativeActivityEvent[] {
+  const candidate = lineText.trim();
+  if (candidate[0] !== '{') return [];
+  try {
+    return parseNativeActivityEventsFromValue(harness, JSON.parse(candidate));
+  } catch {
+    // fail-open-ok: plain-text harness output has no structured activity metadata to parse.
+    return [];
+  }
+}
+
+/** First activity on the line. Prefer parseNativeActivityEvents: a line can
+ * describe several. */
+export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: string): NativeActivityEvent | undefined {
+  return parseNativeActivityEvents(harness, lineText)[0];
+}
+
+/** Claude Code stream-json (also Qwen Code). Returns undefined for records
+ * this shape does not own, so the generic branches still get a look. */
+function claudeShapedActivity(value: JsonRecord, command: string): NativeActivityEvent[] | undefined {
+  const type = String(value.type ?? '');
+  const parent = typeof value.parent_tool_use_id === 'string' && value.parent_tool_use_id ? { parentId: value.parent_tool_use_id } : {};
+  if (type === 'system' || type === 'result' || type === 'rate_limit_event') return [];
+  if (type === 'stream_event') {
+    // The completed block (below) carries the thinking text; the block START is
+    // what tells the UI the model has gone quiet because it is thinking.
+    const event = asRecord(value.event);
+    const block = asRecord(event?.content_block);
+    return event?.type === 'content_block_start' && (block?.type === 'thinking' || block?.type === 'redacted_thinking')
+      ? [{ kind: 'thinking', label: 'thinking', ...parent }] : [];
+  }
+  const content = asRecord(value.message)?.content;
+  if (type === 'assistant') {
+    if (!Array.isArray(content)) return [];
+    return content.flatMap((part): NativeActivityEvent[] => {
+      const block = asRecord(part);
+      if (block?.type === 'tool_use' || block?.type === 'server_tool_use') return [{ ...claudeToolStart(block, command), ...parent }];
+      if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
+        return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140), ...parent }];
+      }
+      return [];
+    });
+  }
+  if (type === 'user') {
+    if (!Array.isArray(content)) return [];
+    return content.flatMap((part): NativeActivityEvent[] => {
+      const result = asRecord(part);
+      if (result?.type !== 'tool_result') return [];
+      const output = cappedActivityOutput(blockText(result.content));
+      return [{
+        kind: result.is_error === true ? 'tool-error' : 'tool-done', label: 'tool',
+        ...(typeof result.tool_use_id === 'string' ? { id: result.tool_use_id } : {}),
+        ...(output?.length ? { output } : {}), ...parent,
+      }];
+    });
+  }
+  return undefined;
+}
+
+/** Goose stream-json: `{type:'message', message:{role, content:[...]}}` where
+ * content parts are Goose's own Message serialization -- `toolRequest`
+ * ({id, toolCall:{status, value:{name, arguments}}}) on assistant messages and
+ * `toolResponse` ({id, toolResult:{status, value|error}}) on user messages. */
+function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[] | undefined {
+  if (value.type !== 'message') return undefined;
+  const content = asRecord(value.message)?.content;
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((part): NativeActivityEvent[] => {
+    const block = asRecord(part);
+    const identity = typeof block?.id === 'string' ? { id: block.id } : {};
+    if (block?.type === 'toolRequest') {
+      const call = asRecord(block.toolCall);
+      const detail = asRecord(call?.value) ?? call;
+      const name = String(detail?.name ?? 'tool');
+      const args = asRecord(detail?.arguments);
+      if (call?.status === 'error') return [{ kind: 'tool-error', label: name, ...categoryOf(name, args, command), ...identity }];
+      return [{ kind: 'tool-start', label: toolLabel(name, args), ...categoryOf(name, args, command), ...identity }];
+    }
+    if (block?.type === 'toolResponse') {
+      const result = asRecord(block.toolResult);
+      const failed = result?.status === 'error' || result?.isError === true || asRecord(result?.value)?.isError === true;
+      const payload = Array.isArray(result?.value) ? result.value : asRecord(result?.value)?.content;
+      const output = cappedActivityOutput(blockText(payload));
+      return [{ kind: failed ? 'tool-error' : 'tool-done', label: 'tool', ...identity, ...(output?.length ? { output } : {}) }];
+    }
+    if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
+      return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140) }];
+    }
+    return [];
+  });
+}
+
+function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecord): NativeActivityEvent | undefined {
+  const type = String(value.type ?? '');
+  if (harness.command === 'antigravity' && value.event === 'step_update') {
+    const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
+    if (step?.step_type === 'tool') {
+      const state = String(step.state ?? '');
+      return {
+        kind: /error|fail/i.test(state) ? 'tool-error' : state === 'DONE' ? 'tool-done' : 'tool-start',
+        label: String(step.tool_name ?? 'tool'),
+        ...categoryOf(String(step.tool_name ?? 'tool'), undefined, harness.command),
+      };
+    }
+  }
+  const item = value.item && typeof value.item === 'object' ? value.item as Record<string, unknown> : undefined;
+  const itemType = String(item?.type ?? '');
+  const reasoningSummary = (candidate: unknown): string | undefined => {
+    if (typeof candidate === 'string') return candidate.trim() || undefined;
+    if (!Array.isArray(candidate)) return undefined;
+    const text = candidate.flatMap((part) => {
+      if (typeof part === 'string') return [part];
+      if (part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') return [String((part as Record<string, unknown>).text)];
+      return [];
+    }).join(' ').trim();
+    return text || undefined;
+  };
+  if (type === 'thread.started' || type === 'turn.started') return undefined;
+  if (/reasoning|thinking/.test(itemType) && /completed|done/.test(type)) {
+    const summary = reasoningSummary(item?.summary) ?? reasoningSummary(item?.text) ?? reasoningSummary(item?.content);
+    return summary ? { kind: 'thinking', label: visibleSlice(summary.replace(/\s+/g, ' '), 140) } : undefined;
+  }
+  if (/command_execution/.test(itemType) && /started|completed/.test(type)) {
+    const command = String(item?.command ?? item?.command_line ?? '').trim();
+    const startedId = typeof item?.id === 'string' ? item.id : undefined;
+    // A `started` event often carries no command text yet. Dropping it meant
+    // the tool was first recorded at its COMPLETION, which anchored the row
+    // after everything the model said while the tool was running -- so that
+    // prose rendered above the tool call that produced it. Emit the start
+    // keyed by its id; the completion upserts the real label and output onto
+    // this same row, at the position where the tool actually began.
+    if (!command) {
+      return type.endsWith('completed') || !startedId ? undefined
+        : { kind: 'tool-start', label: 'tool', category: 'run', id: startedId };
+    }
+    const rawOutput = typeof item?.aggregated_output === 'string' ? item.aggregated_output
+      : typeof item?.output === 'string' ? item.output : '';
+    const output = cappedActivityOutput(rawOutput);
+    return {
+      kind: type.endsWith('completed')
+        ? (item?.status === 'failed' || item?.status === 'error'
+          || (typeof item?.exit_code === 'number' && item.exit_code !== 0)
+          || (typeof item?.exitCode === 'number' && item.exitCode !== 0) ? 'tool-error' : 'tool-done')
+        : 'tool-start', label: command,
+      ...(typeof item?.id === 'string' ? { id: item.id } : {}),
+      ...(output?.length ? { output } : {}),
+    };
+  }
+  if (/file_change/.test(itemType) && /started|completed/.test(type)) {
+    return {
+      kind: type.endsWith('completed')
+        ? (item?.status === 'failed' || item?.status === 'error' ? 'tool-error' : 'tool-done')
+        : 'tool-start', label: 'files updated',
+      ...(typeof item?.id === 'string' ? { id: item.id } : {}),
+    };
+  }
+  if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
+    const name = String(item?.name ?? item?.server ?? 'tool');
+    return {
+      kind: type.endsWith('completed')
+        ? (item?.status === 'failed' || item?.status === 'error' ? 'tool-error' : 'tool-done')
+        : 'tool-start', label: name, ...categoryOf(name, undefined, harness.command),
+      ...(typeof item?.id === 'string' ? { id: item.id } : {}),
+    };
+  }
+  // opencode's own envelope is a different shape entirely: a top-level `type`
+  // (not nested under `item`) and a `part` object instead of an `item` one.
+  // Verified against a real `opencode run --format json` turn, including one
+  // that actually called a tool — `part.tool` is the tool name and
+  // `part.state.status` tracks completion.
+  // Kilo Code CLI is an OpenCode fork and emits the same envelope.
+  if (OPENCODE_SHAPED.has(harness.command) && type === 'tool_use') {
+    const part = asRecord(value.part);
+    const state = asRecord(part?.state);
+    const name = String(part?.tool ?? 'tool');
+    const status = String(state?.status ?? '');
+    const output = typeof state?.output === 'string' ? cappedActivityOutput(state.output) : undefined;
+    return {
+      kind: /error|fail/i.test(status) ? 'tool-error' : status === 'completed' ? 'tool-done' : 'tool-start',
+      label: toolLabel(name, asRecord(state?.input)), ...categoryOf(name, asRecord(state?.input), harness.command),
+      ...(typeof part?.callID === 'string' ? { id: part.callID } : typeof part?.id === 'string' ? { id: part.id } : {}),
+      ...(output?.length ? { output } : {}),
+    };
+  }
+  // Command Code wraps each lifecycle event under a top-level
+  // `{ type: 'event', event: {...} }` (distinct from its `{ type: 'result' }`
+  // terminal frame). The event names and payloads below are read from the
+  // published CLI itself (command-code 1.58 dist/cli.mjs): every tool emits
+  // tool_running {toolCallId, toolName, description} and then exactly one of
+  // tool_completed {toolCallId, toolName, result:[content blocks]} or
+  // tool_errored {toolCallId, toolName, error}; a refused call emits
+  // tool_denied / tool_hook_blocked instead of ever running.
+  if (harness.command === 'command') {
+    const inner = type === 'event' ? asRecord(value.event) : value;
+    const innerType = String(inner?.type ?? '');
+    const kind = innerType === 'tool_running' ? 'tool-start' as const
+      : innerType === 'tool_completed' ? 'tool-done' as const
+        : /^tool_(?:errored|denied|hook_blocked)$/.test(innerType) ? 'tool-error' as const : undefined;
+    if (inner && kind) {
+      const name = String(inner.toolName ?? 'tool');
+      const description = typeof inner.description === 'string' ? inner.description.trim().split(/\r?\n/, 1)[0] : '';
+      const rawOutput = innerType === 'tool_completed' ? blockText(inner.result) : typeof inner.error === 'string' ? inner.error : '';
+      const output = cappedActivityOutput(rawOutput);
+      return {
+        kind, label: kind === 'tool-start' && description ? `${name}(${visibleSlice(description, 72)})` : name,
+        ...categoryOf(name, undefined, harness.command),
+        ...(typeof inner.toolCallId === 'string' ? { id: inner.toolCallId } : {}),
+        ...(output?.length ? { output } : {}),
+      };
+    }
+  }
+  // Pi's own envelope: a flat `{ type: 'toolcall_start', toolName }` --
+  // verified from its own docs (packages/coding-agent/docs/json.md), but
+  // the docs excerpt available didn't name a paired completion event, so
+  // (same as Command Code above) this only ever reports 'tool-start'.
+  if (harness.command === 'pi') {
+    if (type === 'tool_execution_start') {
+      return { kind: 'tool-start', label: String(value.toolName ?? 'tool'), ...categoryOf(String(value.toolName ?? 'tool'), undefined, harness.command) };
+    }
+    if (type === 'tool_execution_end') return {
+      kind: value.isError === true || value.error ? 'tool-error' : 'tool-done',
+      label: String(value.toolName ?? 'tool'),
+    };
+    if (type === 'message_update') {
+      const event = value.assistantMessageEvent && typeof value.assistantMessageEvent === 'object'
+        ? value.assistantMessageEvent as Record<string, unknown> : undefined;
+      if (event?.type === 'toolcall_start') {
+        return { kind: 'tool-start', label: String(event.toolName ?? 'tool'), ...categoryOf(String(event.toolName ?? 'tool'), undefined, harness.command) };
+      }
+    }
+  }
+  return undefined;
+}
+
+/** The one place that decides what a completed/in-progress tool call or a
+ * thinking summary looks like in the persistent activity log -- every
+ * harness's parser above feeds this same renderer, so the visual language
+ * (glyph, color, wording) never drifts per-vendor. */

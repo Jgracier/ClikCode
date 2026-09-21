@@ -4,7 +4,7 @@
 import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { HarnessPrompter } from '../../harness/types.js';
-import { harnessSupportsEffort, localHarnessCapabilityManifest, localHarnessForCommand } from '../../harness/transport/native-protocol.js';
+import { harnessSupportsEffort, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai.js';
 import { aiSessionCommand } from '../slash/handlers.js';
