@@ -6,6 +6,7 @@
  * checked against a real installed CLI or a real API response. */
 
 import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
+import { quotaResetPhrase } from './usage-exhausted.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -212,12 +213,11 @@ export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now
     .sort((a, b) => Date.parse(a.resetsAt) - Date.parse(b.resetsAt));
   const next = exhausted[0];
   if (!next) return undefined;
-  const date = new Date(next.resetsAt);
-  const hours24 = date.getHours();
-  const period = hours24 >= 12 ? 'PM' : 'AM';
-  const hours12 = hours24 % 12 || 12;
-  const minutes = date.getMinutes().toString().padStart(2, '0');
-  return `resets at ${hours12}:${minutes}${period}`;
+  // Same phrasing as the message shown when every account is spent, so the
+  // status line and the failure agree about when quota comes back -- and the
+  // date appears whenever the reset is not today, which the time alone
+  // misrepresents for a weekly window.
+  return `resets ${quotaResetPhrase(new Date(next.resetsAt), now)}`;
 }
 
 function usageReading(windows: Array<UsageWindow | undefined>): UsageReading | undefined {

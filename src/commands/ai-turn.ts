@@ -8,6 +8,7 @@
  * of four transports, or the gateway.
  */
 import { randomUUID } from 'node:crypto';
+import { usageExhaustedMessage } from './usage-exhausted.js';
 import { mkdir, open } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { stdout as output } from 'node:process';
@@ -107,7 +108,9 @@ export async function aiSessionSend(
         );
         if (!fallback) {
           await writeState(state);
-          throw new Error('all usage exhausted');
+          throw new Error(usageExhaustedMessage(
+          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
+        ));
         }
         switchedFrom = account.label;
         TERMINAL.active?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
@@ -452,7 +455,9 @@ export async function aiSessionSend(
         );
         if (!fallback) {
           await checkpoint.persistNow();
-          throw new Error('all usage exhausted');
+          throw new Error(usageExhaustedMessage(
+          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
+        ));
         }
         // The vendor's own thread is carried into the account taking over, so
         // it resumes with everything it actually said and did rather than a
@@ -551,7 +556,9 @@ export async function aiSessionSend(
     );
     if (!fallback) {
       await writeState(state);
-      throw new Error('all usage exhausted');
+      throw new Error(usageExhaustedMessage(
+          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
+        ));
     }
     switchedFrom = account.id;
     TERMINAL.active?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
@@ -606,7 +613,9 @@ export async function aiSessionSend(
       );
       if (!fallback) {
         await writeState(state);
-        throw new Error('all usage exhausted');
+        throw new Error(usageExhaustedMessage(
+          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
+        ));
       }
       switchedFrom ??= exhaustedAccount.id;
       TERMINAL.active?.activity(`${chalk.yellow('quota reached')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
