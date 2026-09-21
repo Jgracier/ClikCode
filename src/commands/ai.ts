@@ -38,7 +38,7 @@ import type { HarnessAvailableCommand, HarnessPlanEntry } from './harness-turn-o
 import {
   harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode,
   localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider,
-  nativeSelfReportFromLine, nativeTurnResult, nativeTurnUsage, type NativeTurnResult,
+  nativeTurnResult, nativeTurnUsage, type NativeTurnResult,
   compactPath, nativeProfileEnvironment, renderActivityLine, sessionProviderLabel, streamLocalAiTurn,
 } from './native-harness-protocol.js';
 import {
@@ -61,7 +61,7 @@ import {
   allLocalHarnesses, harnessAcpLaunch, harnessCanRunTurns, harnessTierRank, homeRedirectEnvironment, maxPromptArgvBytes,
   nativeHarnessTurnArgv, promptExceedsArgvLimit,
 } from './harness-runtime.js';
-import { parseHarnessLine } from './harness-event-adapters.js';
+import { reportStructuredLine } from './harness-structured-events.js';
 import { appServerThreadOverrides, declaredOptionArgv, normalizeTurnUsage, type NormalizedTurnUsage } from './transport-options.js';
 import { existsSync } from 'node:fs';
 import {
@@ -3889,45 +3889,44 @@ export async function aiSessionSend(
           idleController: idle,
           stdinText: turn.promptInput === 'stdin' ? turnText : undefined,
           onStdoutLine: (lineText) => {
-            // One JSON.parse per line: everything the line means at once.
-            const parsed = parseHarnessLine(cliHarness, lineText);
-            if (parsed.sessionId || parsed.response || parsed.activities?.length) confirmNativeSession();
-            if (parsed.response) {
-              cliOutputStarted = true;
-              idle.noteActivity();
-              checkpoint.response(parsed.response.text, parsed.response.mode);
-              activeTerminalHarness?.response(parsed.response.text, parsed.response.mode);
-            }
-            if (parsed.phase) activeTerminalHarness?.phase(parsed.phase);
-            if (parsed.usage) noteUsage(parsed.usage);
-            if (parsed.error) streamError = parsed.error;
+            // The same observer every other transport is handed. What is left
+            // here is the turn loop's own bookkeeping, which no line parser
+            // should be doing: confirming an optimistically minted session id,
+            // the quota probe, and persisting what the harness says about
+            // itself.
+            const outcome = reportStructuredLine(cliHarness, lineText, {
+              onResponseDelta: (text, mode) => {
+                cliOutputStarted = true;
+                idle.noteActivity();
+                checkpoint.response(text, mode);
+                activeTerminalHarness?.response(text, mode);
+              },
+              onActivity: (event) => {
+                cliOutputStarted = true;
+                noteTurnActivityEvent(idle, event);
+                onActivity(event);
+              },
+              onPhase: (phase) => activeTerminalHarness?.phase(phase),
+              onUsage: noteUsage,
+              onAvailableCommands: (commands) => nativeAvailableCommands.set(session.id, commands),
+            });
+            if (outcome.live) confirmNativeSession();
+            if (outcome.error) streamError = outcome.error;
             // The harness reports its own quota on this stream. Reading it here
             // costs nothing and refreshes on every turn, which is what keeps the
             // shared OAuth usage endpoint -- a per-account budget several open
             // chats used to exhaust between them -- down to a cold-start probe.
             // (Self-gated on a substring, so it does not re-parse ordinary lines.)
             void recordNativeStreamUsage(session, lineText).catch(() => undefined);
-            // And what it says about itself: the model it actually resolved,
-            // the permission mode it applied, the commands it offers. All of
-            // it arrives on this same stream, for free, and was previously
-            // taken from what ClikCode had ASKED for instead.
-            const selfReport = nativeSelfReportFromLine(lineText);
-            if (selfReport) {
-              if (selfReport.model || selfReport.permissionMode) {
-                session.reported = {
-                  at: new Date().toISOString(),
-                  ...(selfReport.model ? { model: selfReport.model } : {}),
-                  ...(selfReport.permissionMode ? { permissionMode: selfReport.permissionMode } : {}),
-                };
-                checkpoint.persistNow().catch(() => undefined);
-                activeTerminalHarness?.render(session);
-              }
-              if (selfReport.commands?.length) nativeAvailableCommands.set(session.id, selfReport.commands);
-            }
-            for (const event of parsed.activities ?? []) {
-              cliOutputStarted = true;
-              noteTurnActivityEvent(idle, event);
-              onActivity(event);
+            const reported = outcome.selfReport;
+            if (reported?.model || reported?.permissionMode) {
+              session.reported = {
+                at: new Date().toISOString(),
+                ...(reported.model ? { model: reported.model } : {}),
+                ...(reported.permissionMode ? { permissionMode: reported.permissionMode } : {}),
+              };
+              checkpoint.persistNow().catch(() => undefined);
+              activeTerminalHarness?.render(session);
             }
           },
         });
