@@ -17,6 +17,7 @@ import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminal
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import { TurnTranscript, type SettlingTool } from './turn-transcript.js';
+import type { HarnessPlanEntry } from './harness-turn-observer.js';
 import { nativeModelLabel } from './native-account-data.js';
 import type { LiveTurnInputResult } from './live-turn-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBlock, PickerOption, ToolCategory } from './types.js';
@@ -1014,7 +1015,10 @@ export function approvalBlockRows(
   return [...title.slice(0, Math.max(1, maxRows - 1)), ...body, answer];
 }
 
-export type PlanEntry = { content: string; status?: 'pending' | 'in_progress' | 'completed' };
+/** The shared shape, so a plan entry means the same thing whichever harness
+ * produced it. Status is compared, never exhaustively matched: a harness may
+ * publish anything, and anything unrecognised reads as not-yet-done. */
+export type PlanEntry = HarnessPlanEntry;
 const PLAN_MAX_ROWS = 6;
 
 /** A compact todo block: at most PLAN_MAX_ROWS rows, windowed around the step

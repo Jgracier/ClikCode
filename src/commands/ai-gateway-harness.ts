@@ -23,6 +23,7 @@ import {
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from './native-harness-protocol.js';
 import { stateDirectory } from './session-store.js';
 import type { AiHarnessPermissionMode, HarnessPrompter, HarnessSession } from './types.js';
+import type { HarnessTurnObserver } from './harness-turn-observer.js';
 
 /** The gateway's own refusals, as opposed to a turn that genuinely failed.
  * 503 CLIKCODE_DISABLED is the documented administrator kill switch, and a 404
@@ -33,7 +34,7 @@ export function gatewayHarnessUnavailable(error: unknown): boolean {
   return error.statusCode === 404 || error.code === 'CLIKCODE_DISABLED';
 }
 
-export interface GatewayHarnessSessionTurn {
+export interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   session: HarnessSession;
   prompt: string;
   baseUrl: string;
@@ -44,8 +45,6 @@ export interface GatewayHarnessSessionTurn {
   images?: readonly string[];
   /** Injected by tests; production uses the real gateway client. */
   modelClient?: ConstructorParameters<typeof GatewayModelClient>[0] extends never ? never : Parameters<typeof runGatewayHarnessTurn>[0]['modelClient'];
-  onActivity?: (event: GatewayActivityEvent) => void;
-  onResponseDelta?: (text: string, mode?: 'append' | 'replace') => void;
 }
 
 /** One gateway turn, run as a real coding agent on this machine. */

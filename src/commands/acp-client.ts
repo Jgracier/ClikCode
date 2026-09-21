@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import type { AiHarnessPermissionMode, HarnessActivityEvent } from './types.js';
+import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from './harness-turn-observer.js';
 import { spawnPortable } from './spawn-portable.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 
@@ -19,11 +20,9 @@ const OUTPUT_LINE_CAP = 20;
 const DETAIL_LINE_CAP = 12;
 const CANCEL_SETTLE_MS = 2000;
 
-export interface AcpPlanEntry { content: string; status: string; priority?: string }
-export interface AcpAvailableCommand { name: string; description?: string; hint?: string }
 export type AcpSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
-export interface AcpTurnInput {
+export interface AcpTurnInput extends HarnessTurnObserver {
   binary: string;
   command: string;
   cwd: string;
@@ -54,14 +53,6 @@ export interface AcpTurnInput {
   /** Setup request timeout (initialize, session/new|resume|load). */
   setupTimeoutMs?: number;
   signal?: AbortSignal;
-  onSessionId?: (id: string) => void | Promise<void>;
-  onResponseDelta?: (delta: string) => void;
-  onActivity?: (event: HarnessActivityEvent) => void;
-  onApproval?: (title: string, detail?: string) => Promise<boolean>;
-  onThought?: (text: string) => void;
-  onPlan?: (entries: AcpPlanEntry[]) => void;
-  onAvailableCommands?: (commands: AcpAvailableCommand[]) => void;
-  onUsage?: (usage: Record<string, unknown>) => void;
 }
 
 export interface AcpTurnResult { text: string; nativeSessionId: string }
@@ -116,14 +107,14 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   };
 }
 
-export function acpPlanEntries(update: Json): AcpPlanEntry[] | undefined {
+export function acpPlanEntries(update: Json): HarnessPlanEntry[] | undefined {
   if (update.sessionUpdate !== 'plan' || !Array.isArray(update.entries)) return undefined;
   return update.entries.flatMap((entry: Json) => typeof entry?.content === 'string'
     ? [{ content: entry.content, status: String(entry.status ?? 'pending'), ...(typeof entry.priority === 'string' ? { priority: entry.priority } : {}) }]
     : []);
 }
 
-export function acpAvailableCommands(update: Json): AcpAvailableCommand[] | undefined {
+export function acpAvailableCommands(update: Json): HarnessAvailableCommand[] | undefined {
   if (update.sessionUpdate !== 'available_commands_update' || !Array.isArray(update.availableCommands)) return undefined;
   return update.availableCommands.flatMap((entry: Json) => typeof entry?.name === 'string'
     ? [{
