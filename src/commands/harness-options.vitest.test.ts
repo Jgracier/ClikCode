@@ -56,8 +56,8 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // than a list of duplicates.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(77);
-    expect(kept.length).toBe(151);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(73);
+    expect(kept.length).toBe(149);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     expect(emptied.map((h) => h.command)).toEqual(['grok', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']);
   });
