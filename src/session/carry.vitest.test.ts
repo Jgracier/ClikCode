@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { carryNativeSession } from './carry';
-import { resetNativeSessionDiscoveryCache } from './discovery';
+import { resetNativeSessionDiscoveryCache } from './discovery/cache';
 import type { AiLocalHarnessDefinition } from '../harness/types';
 
 const harnessFor = (command: string): AiLocalHarnessDefinition => ({ command } as AiLocalHarnessDefinition);

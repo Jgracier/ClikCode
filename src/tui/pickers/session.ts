@@ -3,7 +3,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native.js';
-import { ADOPTED_TRANSCRIPT_READERS, discoverNativeSessions, FS_SESSION_DISCOVERY, type DiscoveredNativeSession } from '../../session/discovery.js';
+import { discoverNativeSessions } from '../../session/discovery/cli-listing.js';
+import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../../session/discovery/registry.js';
+import { type DiscoveredNativeSession } from '../../session/discovery/types.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessPrompter, HarnessSession, HarnessState, PickerOption } from '../../harness/types.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
