@@ -76,7 +76,7 @@ describe('plain-text harness streaming', () => {
   // same stdout, so echoing lines live cannot diverge from what is persisted.
   it('echoes each line so a long turn is not a blank screen', () => {
     expect(update('aider', 'thinking about it', 'text')).toEqual({ text: 'thinking about it\n', mode: 'append' });
-    expect(update('crush', '{"looks":"like json"}', 'text')).toEqual({ text: '{"looks":"like json"}\n', mode: 'append' });
+    expect(update('aider', '{"looks":"like json"}', 'text')).toEqual({ text: '{"looks":"like json"}\n', mode: 'append' });
   });
 
   it('leaves a vendor-parsed harness on its own parser', () => {

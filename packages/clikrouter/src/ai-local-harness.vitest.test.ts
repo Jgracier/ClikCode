@@ -50,7 +50,6 @@ describe('local harness catalog', () => {
     expect(harnessIntegrationLevel(localHarnessForCommand('cursor')!)).toBe('structured');
     expect(harnessIntegrationLevel(localHarnessForCommand('aider')!)).toBe('compatibility');
     expect(harnessIntegrationLevel(localHarnessForCommand('copilot')!)).toBe('structured');
-    expect(harnessIntegrationLevel(localHarnessForCommand('crush')!)).toBe('compatibility');
   });
 
   it('uses the documented Kiro auth and OpenCode discovery contracts', () => {
@@ -63,7 +62,7 @@ describe('local harness catalog', () => {
   it('uses one reversible command/provider mapping for every supported local harness', () => {
     expect(AI_LOCAL_HARNESSES.map((item) => item.command)).toEqual([
       'claude', 'codex', 'gemini', 'opencode', 'copilot', 'aider', 'goose', 'amp', 'antigravity', 'pi',
-      'droid', 'kiro', 'qwen', 'cline', 'kilo', 'cursor', 'crush',
+      'droid', 'kiro', 'qwen', 'cline', 'kilo', 'cursor',
       'hermes', 'command', 'kimi', 'auggie', 'vibe', 'openhands', 'cn',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
@@ -180,7 +179,7 @@ describe('local harness catalog', () => {
     const askAndAuto = new Set(['kilo']);
     const askAndBypass = new Set([
       'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'cline',
-      'crush', 'hermes', 'command',
+      'hermes', 'command',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(harnessSupportsPermissionMode(harness, 'ask')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || askAndAuto.has(harness.command));
@@ -222,7 +221,6 @@ describe('local harness catalog', () => {
       ['aider', [], ['--yes-always']],
       ['kiro', [], ['--trust-all-tools']],
       ['cline', ['--auto-approve', 'false'], ['--auto-approve', 'true']],
-      ['crush', [], ['--yolo']],
       ['command', [], ['--yolo']],
     ];
     for (const [command, askArgs, bypassArgs] of cases) {
@@ -391,7 +389,7 @@ describe('local harness catalog', () => {
   });
 
   it('orders pickers by declared tier and keeps basic adapters behind More', () => {
-    for (const command of ['aider', 'amp', 'crush', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']) expect(localHarnessForCommand(command)!.tier, command).toBe('more');
+    for (const command of ['aider', 'amp', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']) expect(localHarnessForCommand(command)!.tier, command).toBe('more');
     expect(localHarnessForCommand('claude')!.tier).toBe('primary');
     expect(harnessTierRank(localHarnessForCommand('codex')!)).toBeLessThan(harnessTierRank(localHarnessForCommand('aider')!));
   });
