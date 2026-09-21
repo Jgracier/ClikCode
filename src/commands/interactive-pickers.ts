@@ -22,7 +22,7 @@ import { ADOPTED_TRANSCRIPT_READERS, discoverNativeSessions, FS_SESSION_DISCOVER
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition, HarnessPrompter, HarnessSession, HarnessState, PickerOption } from './types.js';
 import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, compactPath, nativeProfileEnvironment } from './native-harness-protocol.js';
 import { harnessStatePath, readState, resolveDefaultSettings, writeState } from './harness-state.js';
-import { accountUsageLabel, cachedAccountUsageLabel, nativeModelCatalogForPicker } from './native-account-data.js';
+import { accountUsageLabel, cachedAccountUsageLabel, nativeModelCatalogForPicker, NATIVE_USAGE_PROBES } from './native-account-data.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountRemove, announceBareInteractiveLogin, syncAccountIdentityAfterLogin } from './account-management.js';
 import { synchronizeNativeTranscript } from './turn-runtime.js';
 import { TERMINAL } from './active-terminal.js';
@@ -209,7 +209,11 @@ export async function interactiveAccountPicker(
       rl.panel?.(`${harness.displayName} accounts`, `No accounts are connected. Use /accounts login ${harness.command} <label> to add one.`);
       return undefined;
     }
-    let usagePending = true;
+    // Only spin where a figure can actually arrive. A harness that reports on
+    // its own turn stream has no probe to wait on, so the row shows what its
+    // last turn reported -- or nothing, if it has not run one here -- rather
+    // than a spinner that resolves to nothing.
+    let usagePending = NATIVE_USAGE_PROBES[harness.command] !== undefined;
     const accountOptions = (): PickerOption<ProviderAccountChoice>[] => accountPickerOptions(
       providerAccounts.map((account) => ({
         account,
@@ -219,10 +223,9 @@ export async function interactiveAccountPicker(
       session,
       harness,
     );
-    // The one reading a harness cannot give us: an account this session has
-    // not driven has no stream to have reported on. Asking the vendor for it
-    // happens here and only here -- when someone opened the account picker to
-    // compare accounts -- rather than on every paint of every terminal.
+    // Refresh whatever has a probe behind it. Harnesses that report on their
+    // own turn stream are not asked -- there is nobody to ask but the vendor,
+    // and the figure they already gave is the only one anyone truly has.
     const usageRefresh = Promise.allSettled(providerAccounts.map((account) => accountUsageLabel(account, state, { network: true })))
       .then(() => { usagePending = false; });
     let actionPerformed = false;
