@@ -106,7 +106,21 @@ export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
  * Presses and drags are still decoded and dropped rather than acted on. What
  * they cost is the client's own selection gesture, which is why Claude Code
  * prints "Hold Shift while selecting to use your terminal's native copy". */
-export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
+/** Button events and SGR encoding. Not drag, and emphatically not motion.
+ *
+ * The wheel is reported as a button (64 up, 65 down) under `?1000h`, so that
+ * plus SGR is everything this UI reads. `?1002h` adds reports while a button
+ * is held and `?1003h` adds a report for EVERY pointer movement -- and on a
+ * touchscreen every movement is a finger crossing the glass, so one swipe
+ * became hundreds of motion reports travelling up a phone link to be thrown
+ * away on arrival: `wheelScrollRows` returns zero for them and the handler
+ * drops them. Asking for them flooded the very uplink the wheel had to share,
+ * at the one moment it mattered.
+ *
+ * Claude Code carries exactly this distinction in its own settings -- mouse
+ * tracking is "off", "scroll" or "full", with a CLAUDE_CODE_DISABLE_MOUSE_CLICKS
+ * that selects "scroll". This asked for full and used none of it. */
+export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1006h';
 export const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l';
 /** SGR: `CSI < button ; column ; row M|m`. Wheel up is 64, wheel down 65. */
 const MOUSE_EVENT = /^\u001b\[<(\d+);\d+;\d+[Mm]$/;
@@ -1708,7 +1722,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // state for a client to hold about a session that is already failing to
       // forward the one gesture that matters. The filters that drop them stay,
       // for a terminal that volunteers them unasked.
-      output.write(`${ENABLE_BRACKETED_PASTE}\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h`);
+      output.write(`${ENABLE_BRACKETED_PASTE}\u001b[?1000h\u001b[?1006l\u001b[?1006h`);
       terminalModes.bracketedPaste = true;
       terminalModes.wheelReporting = true;
     }
