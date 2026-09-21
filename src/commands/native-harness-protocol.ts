@@ -516,9 +516,9 @@ export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>>
   aider: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
   crush: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
   hermes: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
-  kimi: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
-  vibe: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
-  openhands: { stream: 'text', note: 'text-only turn output; its ACP surface is session-level, not a tool stream.' },
+  kimi: { stream: 'structured', note: 'its CLI turn emits stream-json, and its ACP surface is a subcommand rather than a flag.' },
+  vibe: { stream: 'structured', note: '--output streaming is newline-delimited JSON per message; vibe-acp is a separate binary.' },
+  openhands: { stream: 'structured', note: '--json streams JSONL events in headless mode; `acp` is a subcommand.' },
   cn: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
   [GATEWAY_HARNESS_COMMAND]: {
     stream: 'structured',
