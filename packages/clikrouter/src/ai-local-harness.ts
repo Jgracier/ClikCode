@@ -91,14 +91,14 @@ export interface AiHarnessManagerDefinition {
   /** How this harness spells "add an MCP server", so one ClikCode-level entry
    * can be installed into every harness that has one.
    *
-   * Two shapes exist, read from the real CLIs. Most take the target as a
+   * Three shapes exist, each read from a real CLI. Most take the target as a
    * positional -- `mcp add <name> <commandOrUrl> [args...]`, identical across
-   * Claude, Gemini and Grok. Codex instead demands `--url <url>` for a remote
-   * server or `-- <command> [args...]` for a local one, which no positional
-   * form can express. */
+   * Claude, Gemini, Grok and Antigravity. Codex demands `--url <url>` for a
+   * remote server or `-- <command> [args...]` for a local one. Copilot, Amp
+   * and Cline take a URL positionally but need `--` before a local command. */
   add?: {
     argv: readonly string[];
-    shape: 'positional' | 'url-or-doubledash';
+    shape: 'positional' | 'url-or-doubledash' | 'doubledash-local';
     /** Flag carrying stdio|sse|http where the harness wants one stated. */
     transportPrefix?: readonly string[];
   };
@@ -579,7 +579,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('no-remote-export', 'Disable remote export', 'Do not export this session to GitHub remote clients', 'safety', ['--no-remote-export']),
       flag('worktree', 'Managed worktree', 'Run in a separate managed Git worktree', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list', '--json'], manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, agents: { label: 'Instructions and agents', manageArgv: ['instruction'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list', '--json'], manageArgv: ['mcp'] , add: { argv: ['mcp', 'add'], shape: 'doubledash-local', transportPrefix: ['--transport'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, agents: { label: 'Instructions and agents', manageArgv: ['instruction'] } },
     features: ['skills', 'custom agents', 'hooks', 'plugins', 'built-in GitHub MCP'],
   },
   aider: {
@@ -627,7 +627,10 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   },
   kimi: {
     options: [],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } },
+    // No MCP here: `kimi --help` lists export/fork/provider/session/acp/web/
+    // server/rc/login/doctor/vis/install-desktop and mentions mcp nowhere.
+    // An earlier entry claimed one on a misreading of that list.
+    managers: {},
     features: ['skills', 'agents', 'ACP'],
   },
   openhands: {
@@ -641,7 +644,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('fast', 'Fast mode', 'Use Amp Fast mode for this invocation', 'mode', ['--fast']),
       value('plugin-ready-timeout', 'Plugin startup timeout', 'Wait this many seconds for plugins before starting', 'tools', ['--plugin-ready-timeout'], 'number'),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } },
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] , add: { argv: ['mcp', 'add'], shape: 'doubledash-local' }} },
     features: ['skills', 'plugins', 'orbs', 'settings layers'],
   },
   antigravity: {
@@ -656,7 +659,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('disable-skills', 'Disable skills', 'Disable slash-command and skill expansion', 'tools', ['--disable-slash-commands']),
     ],
     managers: {
-      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] },
+      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--type'] }},
       plugins: { label: 'Plugins', listArgv: ['plugin', 'list'], manageArgv: ['plugin'] },
       agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
     },
@@ -691,7 +694,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('worktree', 'Managed worktree', 'Run in an isolated Droid worktree', 'session', ['--worktree'], { requiresNewSession: true }),
       flag('mission', 'Mission mode', 'Run multi-agent mission orchestration', 'mode', ['--mission']),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] , add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--type'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['skills', 'custom droids', 'hooks', 'missions', 'auto/spec modes', 'JSON-RPC permission transport'],
   },
   kiro: {
@@ -745,7 +748,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('plan', 'Plan mode', 'Run read-only planning behavior', 'mode', ['--plan']),
       flag('worktree', 'Managed worktree', 'Run in a detached managed worktree', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, hooks: { label: 'Hooks', manageArgv: ['hook'] } },
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] , add: { argv: ['mcp', 'add', '--yes'], shape: 'doubledash-local', transportPrefix: ['--transport'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, hooks: { label: 'Hooks', manageArgv: ['hook'] } },
     features: ['skills', 'rules', 'checkpoints', 'plan/act modes', 'schedules'],
   },
   kilo: {
@@ -783,6 +786,10 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     ],
     features: ['MCP', 'LSP', 'provider/model configuration', 'tool allow/deny rules'],
   },
+  // Hermes is deliberately absent from the `mcp add` grammars even though it
+  // has one: `hermes mcp add --url ...` opens an interactive prompt ("Does
+  // this server require authentication?") and waits on stdin, so driving it
+  // headlessly hangs the fan-out rather than failing it. Checked live.
   hermes: {
     options: [
       value('provider', 'Inference provider', 'Override the inference provider', 'model', ['--provider']),

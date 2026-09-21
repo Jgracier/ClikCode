@@ -38,7 +38,7 @@ export function isRemoteTarget(target: string): boolean {
 /** How one harness spells `mcp add`, as the catalog records it. */
 export type McpAddGrammar = {
   argv: readonly string[];
-  shape: 'positional' | 'url-or-doubledash';
+  shape: 'positional' | 'url-or-doubledash' | 'doubledash-local';
   transportPrefix?: readonly string[];
 };
 
@@ -63,6 +63,14 @@ export function mcpAddArgv(
     // command positionally here is accepted and then read as a URL.
     return remote
       ? [...add.argv, entry.name, '--url', entry.target]
+      : [...add.argv, entry.name, '--', entry.target, ...(entry.args ?? [])];
+  }
+  if (add.shape === 'doubledash-local') {
+    // Copilot, Amp and Cline take a URL positionally but insist on `--`
+    // before a local command, so its arguments are not read as their own.
+    const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
+    return remote
+      ? [...add.argv, ...transport, entry.name, entry.target]
       : [...add.argv, entry.name, '--', entry.target, ...(entry.args ?? [])];
   }
   const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
