@@ -13,7 +13,7 @@ import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
-import { nativeModelLabel } from '../harness/account-data.js';
+import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, HarnessSession, MessageBlock, PickerOption, ToolCategory } from '../harness/types.js';
 import { ActivityEntry, TOOL_CATEGORY_STYLE, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';

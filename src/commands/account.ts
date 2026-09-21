@@ -24,7 +24,7 @@ import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
 import { readState } from '../session/state/read.js';
 import { accountView } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
-import { accountUsageLabel } from '../harness/account-data.js';
+import { accountUsageLabel } from '../harness/accounts/account-usage.js';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition, HarnessState } from '../harness/types.js';
 
 // emitHarnessOutput is defined in ai.ts (the HTTP-server-adjacent JSON/panel

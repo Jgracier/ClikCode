@@ -10,7 +10,8 @@ import { nativeProfileEnvironment } from '../../harness/transport/profile-enviro
 import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
-import { accountUsageLabel, cachedAccountUsageLabel, NATIVE_USAGE_PROBES } from '../../harness/account-data.js';
+import { accountUsageLabel, cachedAccountUsageLabel } from '../../harness/accounts/account-usage.js';
+import { NATIVE_USAGE_PROBES } from '../../harness/accounts/usage-probes.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountRemove, announceBareInteractiveLogin, refreshPlaceholderAccountLabels, syncAccountIdentityAfterLogin } from '../../commands/account.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { accountPickerOptions, type ProviderAccountChoice } from '../../session/options.js';

@@ -31,7 +31,9 @@ import { harnessSupportsImages, localHarnessCapabilityManifest, localHarnessForC
 import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { accountUsageLabel, codexRateLimitsReading, recordDerivedUsage, recordNativeStreamUsage } from '../harness/account-data.js';
+import { accountUsageLabel } from '../harness/accounts/account-usage.js';
+import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
+import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
 import { closePersistentTransport, DurableTurnCheckpoint, fallbackTurnHarnesses, nameSession, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { TERMINAL, optionalTerminal } from '../tui/active-terminal.js';
