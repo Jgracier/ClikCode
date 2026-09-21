@@ -180,6 +180,24 @@ const SCROLL_DRAIN_MS = 16;
  *
  * So: alternate screen for both behaviours, main screen when scrolling matters
  * more than the composer staying put. */
+/** Progressive stripping of this UI, for finding what costs the gesture.
+ *
+ * CLIKCODE_STRIP=N removes everything up to level N. Each level is cumulative,
+ * so the smallest N that makes a keyboard-hidden swipe work puts the cause in
+ * the step between N-1 and N. Things break at the higher levels; that is the
+ * point, and it is why this is behind an environment variable.
+ *
+ *   1  frames carry no styling at all -- every SGR sequence stripped on the
+ *      way out, so a frame is text and cursor moves and nothing else
+ *   2  + no repaint on resize, at all
+ *   3  + no write gating: every frame goes straight out, with no completion
+ *      callback and no coalescing behind one in flight
+ */
+export function stripLevel(): number {
+  const raw = Number(process.env.CLIKCODE_STRIP);
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
 export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
@@ -1625,6 +1643,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * land after the client has finished. */
   private resizePaintTimer?: NodeJS.Timeout;
   private repaintAfterResize(): void {
+    if (stripLevel() >= 2) return;   // level 2: the screen is left as it is
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
     this.resizePaintTimer = setTimeout(() => {
       this.resizePaintTimer = undefined;
@@ -2697,7 +2716,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // below depends on whether the frame shows it.
     const park = `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
     if (!updates.length && !park) return;
-    const frame = `\u001b[?25l${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
+    let frame = `\u001b[?25l${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
+    // Level 1: no styling on the wire. Colour is most of a frame's bytes.
+    if (stripLevel() >= 1) frame = frame.replace(/\u001b\[[0-9;]*m/g, '');
+    // Level 3: straight out, no completion callback, no coalescing.
+    if (stripLevel() >= 3) {
+      terminalModes.painted = true;
+      output.write(frame);
+      return;
+    }
     this.frameInFlight = true;
     terminalModes.painted = true;
     logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
