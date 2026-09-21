@@ -270,16 +270,8 @@ export async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter,
     if (!session) throw new Error(`AI session "${id}" was not found`);
     const gatewayConnected = Boolean(getApiKeyForUrl(config, getApiUrl(config)));
     const configuredProviders = new Set(state.accounts.map((account) => account.provider));
-    let provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected, configuredProviders));
+    const provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected, configuredProviders));
     if (!provider) return undefined;
-    if (provider.kind === 'more') {
-      const primaryHarnesses = new Set(providerPickerOptions(available, session, gatewayConnected, configuredProviders)
-        .flatMap((option) => option.value.kind === 'provider' ? [option.value.harness] : []));
-      const more = providerPickerOptions(available, session, gatewayConnected, configuredProviders, true)
-        .filter((option) => option.value.kind === 'provider' && !primaryHarnesses.has(option.value.harness));
-      provider = await chooseOption(rl, 'More providers', more);
-      if (!provider) continue;
-    }
     if (provider.kind === 'gateway') return selectProviderConversation(config, rl, id, '__gateway__');
     if (provider.kind !== 'provider') continue;
     return selectProviderConversation(config, rl, id, provider.harness);

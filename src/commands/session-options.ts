@@ -30,8 +30,7 @@ export const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['ask'
 
 export type ProviderChoice =
   | { kind: 'gateway' }
-  | { kind: 'provider'; harness: string }
-  | { kind: 'more' };
+  | { kind: 'provider'; harness: string };
 
 export type ProviderAccountChoice =
   | { kind: 'account'; harness: string; accountId: string }
@@ -219,15 +218,16 @@ export function providerPickerOptions(
   session: HarnessSession,
   gatewayConnected: boolean,
   configuredProviders: ReadonlySet<string> = new Set(),
-  includeAll = false,
 ): PickerOption<ProviderChoice>[] {
   // Installed first, then the catalog's declared tier, then catalog order
   // (Array.prototype.sort is stable) -- never a hardcoded name ranking.
   const ordered = [...available].sort((left, right) => Number(right.inspection.installed) - Number(left.inspection.installed)
     || harnessTierRank(left.harness) - harnessTierRank(right.harness));
-  const visible = includeAll ? ordered : ordered.filter(({ harness, inspection }) => inspection.installed
-    || configuredProviders.has(harness.provider) || session.nativeHarness === harness.command);
-  const hiddenCount = ordered.length - visible.length;
+  // Every provider, in one list. Splitting it left the catalog's own entries
+  // behind a "More providers…" row, so the answer to "what can I use?" was
+  // two screens deep and looked like a shorter catalog than it is. Installed
+  // ones still sort to the top, which is what the split was really for.
+  const visible = ordered;
   return [{
     label: 'ClikDeploy Gateway',
     detail: `· ${gatewayConnected ? 'connected' : 'sign in with OAuth'}${session.route === 'gateway' ? ' · current' : ''}`,
@@ -238,7 +238,7 @@ export function providerPickerOptions(
         ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
         : harness.npmPackage ? '· install when needed' : '· vendor install required'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''}`,
       value: { kind: 'provider' as const, harness: harness.command },
-    })), ...(hiddenCount > 0 ? [{ label: 'More providers…', detail: `· ${hiddenCount} available to install`, value: { kind: 'more' as const } }] : []),
+    })),
   ];
 }
 
