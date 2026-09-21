@@ -3,6 +3,12 @@
  * region contains only the changing response, controls, and composer. */
 
 import chalk from 'chalk';
+import { kittyKeyboardSafe, NEWLINE_KEY, PASTE_END, PASTE_START, pastedText, POP_KITTY_KEYBOARD, PUSH_KITTY_KEYBOARD } from './terminal-keys.js';
+import { backslashNewline, composerVerticalMove, editComposer, editWaitingComposer } from './composer-edit.js';
+import {
+  commandPaletteMatches, composerRightArrowValue, exactPaletteCommand, paletteDisplayRows, pickerConfirmsSelection,
+  pickerDeletesSelection, SWITCH_HARNESS_GROUP, type PaletteEntry,
+} from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import {
@@ -232,41 +238,6 @@ function leaveInputModes(): string {
  * mode between readers. It reads nothing; presence is the whole point. */
 const KEEP_STDIN_FLOWING = (): void => {};
 
-const PASTE_START = '\u001b[200~';
-const PASTE_END = '\u001b[201~';
-
-/** The text of a pasted key as it should enter a draft, or undefined for an
- * ordinary keystroke. Terminals deliver a pasted line break as a bare `\r`
- * (and Windows sources as `\r\n`), which drew as one row that kept rewinding
- * over itself instead of a multi-line draft; tabs and any escape sequences
- * smuggled inside the paste are neutralised by the same sanitizer. */
-export function pastedText(key: string): string | undefined {
-  return key.startsWith(PASTE_START) && key.endsWith(PASTE_END)
-    ? sanitizeTerminalText(key.slice(PASTE_START.length, key.length - PASTE_END.length))
-    : undefined;
-}
-
-/** Kitty keyboard protocol, "disambiguate escape codes" flag only. It is what
- * makes Shift+Enter distinguishable from Enter. It also re-encodes Esc and
- * every Ctrl/Alt chord as `CSI code ; modifiers u`, which normalizeTerminalKey
- * folds back into the legacy bytes the rest of this file matches on. */
-export const PUSH_KITTY_KEYBOARD = '\u001b[>1u';
-export const POP_KITTY_KEYBOARD = '\u001b[<u';
-/** One internal spelling for "insert a newline" however the terminal said it:
- * Alt+Enter, Shift+Enter via CSI u, or xterm's modifyOtherKeys form. */
-export const NEWLINE_KEY = '\u001b\r';
-
-/** Pushing the flag is only safe where it is understood: an unaware terminal
- * may echo the sequence, and inside tmux the pop never reaches the outer
- * terminal, leaving the user's shell receiving CSI-u for Ctrl+C. */
-export function kittyKeyboardSafe(environment: NodeJS.ProcessEnv = process.env): boolean {
-  if (environmentFlag(environment.CLIKCODE_NO_KITTY_KEYBOARD)) return false;
-  if (environment.TMUX || environment.STY || /^(?:screen|tmux)/.test(environment.TERM ?? '')) return false;
-  const program = (environment.TERM_PROGRAM ?? '').toLowerCase();
-  return Boolean(environment.KITTY_WINDOW_ID || environment.GHOSTTY_RESOURCES_DIR || environment.WEZTERM_PANE
-    || /^(?:xterm-kitty|xterm-ghostty|foot|alacritty|wezterm)/.test(environment.TERM ?? '')
-    || program === 'wezterm' || program === 'ghostty' || program === 'kitty');
-}
 
 /** `CSI code ; modifiers u` and `CSI 27 ; modifiers ; code ~` back to the bytes
  * a legacy terminal would have sent, or undefined to leave the key alone. */
@@ -548,96 +519,6 @@ export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[
   });
 }
 
-function previousWordIndex(value: string, cursor: number): number {
-  let index = cursor;
-  while (index > 0 && /\s/.test(value[index - 1]!)) index -= 1;
-  while (index > 0 && !/\s/.test(value[index - 1]!)) index -= 1;
-  return index;
-}
-
-function nextWordIndex(value: string, cursor: number): number {
-  let index = cursor;
-  while (index < value.length && /\s/.test(value[index]!)) index += 1;
-  while (index < value.length && !/\s/.test(value[index]!)) index += 1;
-  return index;
-}
-
-const lineStartIndex = (value: string, cursor: number): number => value.lastIndexOf('\n', cursor - 1) + 1;
-const lineEndIndex = (value: string, cursor: number): number => {
-  const end = value.indexOf('\n', cursor);
-  return end === -1 ? value.length : end;
-};
-
-/** Move one logical line up or down keeping the display column. Undefined at
- * the first/last line, which is the caller's cue to fall through to history. */
-export function composerVerticalMove(value: string, cursor: number, direction: -1 | 1): number | undefined {
-  const start = lineStartIndex(value, cursor);
-  const column = terminalCellWidth(value.slice(start, cursor));
-  let targetStart: number;
-  if (direction < 0) {
-    if (start === 0) return undefined;
-    targetStart = lineStartIndex(value, start - 1);
-  } else {
-    const end = lineEndIndex(value, cursor);
-    if (end >= value.length) return undefined;
-    targetStart = end + 1;
-  }
-  const targetEnd = lineEndIndex(value, targetStart);
-  let index = targetStart;
-  while (index < targetEnd) {
-    const next = nextCharacterIndex(value, index);
-    if (terminalCellWidth(value.slice(targetStart, next)) > column) break;
-    index = next;
-  }
-  return index;
-}
-
-/** A trailing backslash turns Enter into a line break, the one newline
- * spelling that works in every terminal and over every SSH client. */
-export function backslashNewline(value: string, cursor: number): { value: string; cursor: number } | undefined {
-  if (cursor <= 0 || value[cursor - 1] !== '\\') return undefined;
-  return { value: `${value.slice(0, cursor - 1)}\n${value.slice(cursor)}`, cursor };
-}
-
-/** Every text-editing key, shared by the prompt composer and the composer that
- * stays live during a turn. `changed: false` means the key is not an edit and
- * the caller may give it another meaning (history, submit, exit). */
-export function editWaitingComposer(value: string, cursor: number, key: string): { value: string; cursor: number; changed: boolean } {
-  const pasted = pastedText(key);
-  const insert = (text: string) => ({ value: value.slice(0, cursor) + text + value.slice(cursor), cursor: cursor + text.length, changed: true });
-  const remove = (from: number, to: number) => ({ value: value.slice(0, from) + value.slice(to), cursor: from, changed: true });
-  if (pasted !== undefined) return insert(pasted);
-  if (key === NEWLINE_KEY || key === '\n') return insert('\n');
-  if (key === '\u001b[D') return { value, cursor: previousCharacterIndex(value, cursor), changed: true };
-  if (key === '\u001b[C') return { value, cursor: nextCharacterIndex(value, cursor), changed: true };
-  if (key === '\u001b[A' || key === '\u001b[B') {
-    const moved = composerVerticalMove(value, cursor, key === '\u001b[A' ? -1 : 1);
-    return moved === undefined ? { value, cursor, changed: false } : { value, cursor: moved, changed: true };
-  }
-  if (key === '\u001bb') return { value, cursor: previousWordIndex(value, cursor), changed: true };
-  if (key === '\u001bf') return { value, cursor: nextWordIndex(value, cursor), changed: true };
-  if (key === '\u007f' || key === '\b') {
-    if (cursor <= 0) return { value, cursor, changed: true };
-    return remove(previousCharacterIndex(value, cursor), cursor);
-  }
-  if (key === '\u0017' || key === '\u001b\u007f') return remove(previousWordIndex(value, cursor), cursor);
-  // Kill to the start / end of the current line. On an empty remainder Ctrl+K
-  // joins the next line, as it does in readline and emacs.
-  if (key === '\u0015') return remove(lineStartIndex(value, cursor), cursor);
-  if (key === '\u000b') {
-    const end = lineEndIndex(value, cursor);
-    return remove(cursor, end === cursor ? Math.min(value.length, cursor + 1) : end);
-  }
-  if (key === '\u0001') return { value, cursor: lineStartIndex(value, cursor), changed: true };
-  if (key === '\u0005') return { value, cursor: lineEndIndex(value, cursor), changed: true };
-  if (key === '\u001b[3~' || key === '\u0004') {
-    if (cursor >= value.length) return { value, cursor, changed: true };
-    return remove(cursor, nextCharacterIndex(value, cursor));
-  }
-  if (!key.startsWith('\u001b') && !/[\u0000-\u001f\u007f]/.test(key)) return insert(key);
-  return { value, cursor, changed: false };
-}
-export const editComposer = editWaitingComposer;
 
 /** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
  * the same compact shape without changing its dimensions. */
@@ -660,118 +541,6 @@ export function waitingSpinnerGlyph(frame: number): string {
   return [0, 2].map((start) => String.fromCodePoint(0x2800
     | bit(start, 0) | bit(start, 1) | bit(start, 2) | bit(start, 3)
     | bit(start + 1, 0) | bit(start + 1, 1) | bit(start + 1, 2) | bit(start + 1, 3))).join('');
-}
-
-/** Palette entries accept three optional fields beyond PickerOption:
- * `argHint` (shown after the command, and kept on screen while its argument is
- * typed), `group` (rendered under a header, after every ungrouped command) and
- * `aliases` (matched like the command itself). */
-export type PaletteEntry = PickerOption<string> & { argHint?: string; group?: string; aliases?: readonly string[] };
-export const SWITCH_HARNESS_GROUP = 'Switch harness';
-
-const paletteGroup = (entry: PaletteEntry): string | undefined =>
-  // One `/<harness>` command per installed harness would otherwise crowd every
-  // short query: `/c` is for /clear and /compact, not a list of eight vendors.
-  entry.group ?? (/^switch to /i.test(entry.detail ?? '') ? SWITCH_HARNESS_GROUP : undefined);
-
-function isSubsequence(needle: string, haystack: string): boolean {
-  let index = 0;
-  for (const character of haystack) if (character === needle[index]) index += 1;
-  return index >= needle.length;
-}
-
-/** Lower is better; undefined is no match. Exact, then prefix, then a match at
- * a word boundary, then anywhere, then fuzzy subsequence -- and only after all
- * of those, a match in the description. */
-function paletteRank(entry: PaletteEntry, query: string): number | undefined {
-  if (!query) return 0;
-  const names = [entry.value, ...(entry.aliases ?? [])].map((name) => name.replace(/^\//, '').toLowerCase());
-  let best: number | undefined;
-  const consider = (rank: number): void => { if (best === undefined || rank < best) best = rank; };
-  for (const [index, name] of names.entries()) {
-    const alias = index > 0 ? 0.5 : 0;
-    if (name === query) consider(0 + alias);
-    else if (name.startsWith(query)) consider(1 + alias);
-    else if (new RegExp(`[-_:. ]${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(name)) consider(2 + alias);
-    else if (name.includes(query)) consider(3 + alias);
-    else if (isSubsequence(query, name)) consider(4 + alias);
-  }
-  // A one- or two-letter query occurs in nearly every description; matching
-  // those would list every command for `/c`.
-  if (best === undefined && query.length >= 3 && `${entry.detail ?? ''}`.toLowerCase().includes(query)) consider(5);
-  return best;
-}
-
-/** The exact command (or alias) the typed text names, case-insensitively. */
-export function exactPaletteCommand(value: string, commands: readonly PaletteEntry[]): string | undefined {
-  const typed = value.trim().toLowerCase();
-  if (!typed.startsWith('/')) return undefined;
-  for (const entry of commands) {
-    if (entry.value.toLowerCase() === typed) return entry.value;
-    if (entry.aliases?.some((alias) => alias.toLowerCase() === typed)) return value.trim();
-  }
-  return undefined;
-}
-
-export function commandPaletteMatches(
-  value: string,
-  commands: readonly PaletteEntry[],
-): readonly PaletteEntry[] {
-  if (!value.startsWith('/')) return [];
-  const space = value.indexOf(' ');
-  if (space !== -1) {
-    // Typing an argument: keep just that command up so its hint stays visible.
-    const name = value.slice(0, space).toLowerCase();
-    const entry = commands.find((candidate) => candidate.value.toLowerCase() === name
-      || candidate.aliases?.some((alias) => alias.toLowerCase() === name));
-    return entry?.argHint ? [entry] : [];
-  }
-  const query = value.slice(1).toLowerCase();
-  const groupOrder = new Map<string | undefined, number>([[undefined, 0]]);
-  const ranked = commands.flatMap((entry, index) => {
-    const rank = paletteRank(entry, query);
-    if (rank === undefined) return [];
-    const group = paletteGroup(entry);
-    if (!groupOrder.has(group)) groupOrder.set(group, groupOrder.size);
-    return [{ entry: group === entry.group ? entry : { ...entry, group }, rank, index, group: groupOrder.get(group)! }];
-  });
-  return ranked.sort((left, right) => left.group - right.group || left.rank - right.rank || left.index - right.index)
-    .map((item) => item.entry);
-}
-
-/** Display rows for a palette window: group headers are rows, but never
- * selectable, and the window is centred on the selected option. */
-export function paletteDisplayRows(
-  options: readonly PaletteEntry[], selected: number, capacity: number,
-): Array<{ header: string } | { option: PaletteEntry; index: number }> {
-  const rows: Array<{ header: string } | { option: PaletteEntry; index: number }> = [];
-  let group: string | undefined;
-  for (const [index, option] of options.entries()) {
-    if (option.group !== group) {
-      group = option.group;
-      if (group) rows.push({ header: group });
-    }
-    rows.push({ option, index });
-  }
-  const selectedRow = Math.max(0, rows.findIndex((row) => 'index' in row && row.index === selected));
-  let start = Math.max(0, Math.min(selectedRow - Math.floor(capacity / 2), rows.length - capacity));
-  // Keep a group's header attached when its first command is at the top.
-  if (start > 0 && 'index' in rows[start]! && 'header' in rows[start - 1]! && selectedRow < start + capacity - 1) start -= 1;
-  return rows.slice(start, start + capacity);
-}
-
-export function composerRightArrowValue(
-  value: string, hasPaletteOptions: boolean, opensPalette = false,
-): string | undefined {
-  return opensPalette && !value && !hasPaletteOptions ? '/' : undefined;
-}
-
-export function pickerConfirmsSelection(key: string): boolean {
-  return key === '\r' || key === '\n' || key === '\u001b[C';
-}
-
-export function pickerDeletesSelection(key: string): boolean {
-  return key === '\u001b[3~';
 }
 
 /** Fill a terminal-width rule from the left and pin a short label to its
