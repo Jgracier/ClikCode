@@ -66,3 +66,14 @@ export function usageExhaustedMessage(
   const reset = nextQuotaReset(accounts, now);
   return reset ? `Usage Exhausted · Resets ${quotaResetPhrase(reset, now)}` : 'Credits Exhausted';
 }
+
+/** Whether a failure message is one ClikCode composed itself, rather than a
+ * vendor's or a crash's.
+ *
+ * These are finished sentences stating what happened -- "Usage Exhausted ·
+ * Resets 5:34PM". Prefixing them with "Error:" reads as though something
+ * broke, when running out of quota is an ordinary outcome the user is simply
+ * being told about. */
+export function isUsageExhaustedMessage(message: string): boolean {
+  return /^(?:Usage Exhausted|Credits Exhausted)\b/.test(message.trim());
+}

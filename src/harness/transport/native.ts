@@ -219,16 +219,14 @@ export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: 
     }
     return;
   }
-  // Every harness gets the same treatment, because the vendors do not agree
-  // on any of it: some auto-open and print nothing, some print a URL and no
-  // more, some bury it in a JSON dump. ClikCode watches the login, and once a
-  // sign-in URL appears it puts its own screen in front: the short link, the
-  // clipboard copy, and one field wired to the vendor's stdin. Where there is
-  // no script(1) (Windows), this falls back to the original
-  // hand-the-terminal-over path, which is exactly today's behaviour.
+  // The vendor owns the terminal, exactly as it always has. ClikCode watches
+  // the output through script(1) and, on the first sign-in URL, copies it to
+  // the terminal's clipboard and opens a browser where one is any use -- the
+  // half no vendor does for a user on a phone. Where there is no script(1)
+  // (Windows) this falls back to plain inherited stdio.
   const teed = await runLoginSession({
     binary: spec.binary, args: spec.loginArgv ?? [], env: envOverrides, displayName: spec.displayName,
-    io: { write: (chunk) => process.stdout.write(chunk), input: process.stdin },
+    io: { write: (chunk) => process.stdout.write(chunk) },
   });
   if (!teed.teed) { await run(spec.binary, spec.loginArgv ?? [], envOverrides); return; }
   if (teed.exitCode !== 0 && teed.exitCode !== null) {
