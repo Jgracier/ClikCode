@@ -15,7 +15,7 @@ import { CLIKCODE_VERSION } from './version.js';
 const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
 const program = buildBaseProgram(config, { banner: CLIKCODE_BANNER, version: CLIKCODE_VERSION })
   .name('clikcode')
-  .description('A local-first AI coding runtime. Connect providers locally, or optionally connect a hosted gateway.')
+  .description('One place to run every AI coding tool you have. Keep all your accounts, keep one list of conversations, and keep working when an account hits its limit.')
   .action(() => aiSessionOpenDefault(config));
 
 registerClikCodeCommands(program, config);
