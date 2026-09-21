@@ -604,6 +604,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.settleApprovals();
     this.waitingLabel = '';
     this.latestThought = undefined;
+    // Anything typed during the turn and not submitted is still the user's
+    // text. It lives in waitingDraft while the turn runs, and the composer
+    // that opens afterwards reads queuedDraft -- so without this handoff a
+    // message typed while the answer streamed was simply gone the moment the
+    // turn finished. Appended rather than assigned: a queued submission may
+    // already be waiting there, and neither should overwrite the other.
+    if (this.waitingDraft.trim()) {
+      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${this.waitingDraft}` : this.waitingDraft;
+    }
+    this.waitingDraft = '';
+    this.waitingCursor = 0;
     if (refresh && !this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
