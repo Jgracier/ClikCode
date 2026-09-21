@@ -244,6 +244,12 @@ export async function interactiveAccountPicker(
       return undefined;
     }
     if (actionPerformed) continue;
+    if (selected?.kind === 'add-account') {
+      // Connect one, then come back to the list with it in place rather than
+      // dropping the user out of the picker they were working in.
+      await addAccountForHarness(rl, harness);
+      continue;
+    }
     if (!selected || selected.kind !== 'account') return undefined;
     await aiSessionCommand(id, `/settings account ${selected.accountId}`);
     return id;
