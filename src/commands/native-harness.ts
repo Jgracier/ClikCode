@@ -3,6 +3,8 @@ import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
+import { LoginUrlWatcher } from './login-url.js';
+import { runTeedLogin } from './login-tee.js';
 
 export interface NativeHarnessSpec {
   command: string;
@@ -206,7 +208,23 @@ export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: 
     }
     return;
   }
-  await run(spec.binary, spec.loginArgv ?? [], envOverrides);
+  // Every harness gets the same treatment, because the vendors do not agree
+  // on any of it: some auto-open and print nothing, some print a URL and no
+  // more, some print a URL the user cannot select on a phone. Teeing the
+  // login means ClikCode can do the missing half itself -- open the browser
+  // where there is one, and put the link on the phone's clipboard where
+  // there is not -- without changing what the vendor does or what the user
+  // sees. Where there is no script(1) (Windows), this falls back to the
+  // original hand-the-terminal-over path, which is exactly today's behaviour.
+  const watcher = new LoginUrlWatcher({ write: (chunk) => process.stdout.write(chunk) });
+  const teed = await runTeedLogin({
+    binary: spec.binary, args: spec.loginArgv ?? [], env: envOverrides,
+    onOutput: (chunk) => { watcher.push(chunk); },
+  });
+  if (!teed.teed) { await run(spec.binary, spec.loginArgv ?? [], envOverrides); return; }
+  if (teed.exitCode !== 0 && teed.exitCode !== null) {
+    throw new Error(`${spec.displayName} sign-in exited with status ${teed.exitCode}`);
+  }
 }
 
 /** Run a declared vendor lifecycle command with foreground terminal ownership. */
