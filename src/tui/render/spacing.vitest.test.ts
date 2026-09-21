@@ -17,16 +17,18 @@ describe('the composer has room to breathe', () => {
    * reported as "no buffer": the prompt butting against the answer above it,
    * and the rule above the composer sitting on the answer's last line.
    */
-  it('opens the composer block with a clear row', async () => {
+  it('opens the resting composer with a clear row', async () => {
     const source = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
     const footer = source.slice(source.indexOf('const footer: string[] = [];'));
     const firstPush = footer.slice(0, footer.indexOf('if (noticeRows'));
-    expect(firstPush, 'the footer must start with a blank row').toContain("footer.push('')");
+    expect(firstPush, 'the footer must open with a blank row').toContain("footer.push('')");
   });
 
-  it('puts a blank row before a prompt, not just after every message', async () => {
+  it('does not add that row while a turn is generating', async () => {
+    // The generating band already carries a blank, budgeted into the height.
+    // A second one there doubles the gap and pushes an answer row off screen.
     const source = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
-    expect(source).toContain("if (message.role === 'user' && index > 0) emit([''])");
+    expect(source).toContain("if (!this.waitingLabel) footer.push('')");
   });
 });
 

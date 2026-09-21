@@ -1062,12 +1062,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           content: sanitizeTerminalText(message.content), tools: turnTools(true), turnEnded: true, renderBlocks,
         }).finished);
       } else {
-        // A prompt is framed, not butted against the answer above it. One
-        // blank row after every message was not enough separation to read as
-        // a break: the eye sees the question continuing the answer. The
-        // opening blank is skipped at the very top, where there is nothing to
-        // separate from.
-        if (message.role === 'user' && index > 0) emit(['']);
         emit(messageRows(message.content, message.role === 'assistant' ? '·' : userMarker));
         if (message.role === 'user') this.retiredThisSession.add(message.content);
       }
@@ -1115,11 +1109,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const conversationLines = liveConversationLines(liveConversation, true);
     const meta = this.statusText();
     const footer: string[] = [];
-    // The composer block starts with a clear row. Without it the rule above
-    // the composer sits directly on the last line of the answer, and the
-    // reply appears to run into the furniture -- the same missing breath the
-    // transcript needed before a prompt.
-    footer.push('');
+    // The resting composer starts with a clear row, or its rule sits directly
+    // on the last line of the answer. While a turn runs the generating band
+    // already carries its own blank, budgeted into the height -- adding a
+    // second one there would double the gap and push an answer row off.
+    if (!this.waitingLabel) footer.push('');
     if (noticeRows && notice) footer.push(`  ${chalk.yellow(visibleSlice(notice, inner))}`);
     if (paletteCapacity) {
       footer.push(rule);
