@@ -1,7 +1,7 @@
 /** The waiting band: the spinner, and the rules and dimming that mark which
  * conversation lines are still live. */
 
-import { terminalCellWidth, visibleSlice } from './markdown.js';
+import { terminalCellWidth, visibleSlice } from './width.js';
 
 /** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
  * the same compact shape without changing its dimensions. */

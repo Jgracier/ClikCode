@@ -1,7 +1,7 @@
 /** Naming and categorizing a tool call, per harness. A category decides how
  * the call is painted, so an unmapped tool must still land somewhere sane. */
 
-import { visibleSlice } from '../../tui/render/markdown.js';
+import { visibleSlice } from '../../tui/render/width.js';
 import type { ToolCategory } from '../types.js';
 
 /** `Edit(src/app.ts)` rather than a bare `Edit`. The tool name alone says

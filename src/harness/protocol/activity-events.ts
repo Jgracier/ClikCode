@@ -2,7 +2,7 @@
  * starts and completions, thinking, and the capped previews of their
  * output that the UI is allowed to show. */
 
-import { visibleSlice } from '../../tui/render/markdown.js';
+import { visibleSlice } from '../../tui/render/width.js';
 import type { AiLocalHarnessDefinition, HarnessActivityEvent } from '../types.js';
 import { CLAUDE_SHAPED, JsonRecord, OPENCODE_SHAPED, asRecord } from './json-lines.js';
 import { categoryOf, toolCategory, toolLabel } from './tools.js';

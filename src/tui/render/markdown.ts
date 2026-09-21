@@ -1,143 +1,15 @@
-/** Pure text/markdown rendering for the terminal UI -- header, bullet, and
- * inline (bold/italic/code/link) formatting, plus ANSI-cell-width-aware
- * word-wrapping and composer-viewport scrolling. Nothing here depends on
- * HarnessSession/HarnessState -- every function takes plain strings and
- * returns plain strings, so this is safe to import from anywhere without
- * pulling in the whole broker. */
+/** Markdown to terminal text: inline formatting, block parsing (including
+ * the streaming parser that must not change a block's shape as the rest of
+ * it arrives), and tables. */
 
 import chalk from 'chalk';
 import { Lexer, marked, type Token, type Tokens } from 'marked';
 import type { MessageBlock } from '../../harness/types.js';
-
-
-/** Least-recently-USED, not least-recently-added: a Map iterates in insertion
- * order, so re-inserting on every hit keeps the entries a repaint actually
- * touches (the forty messages on screen) and evicts the ones it does not. */
-export class LruCache<K, V> {
-  private readonly entries = new Map<K, V>();
-  constructor(private readonly limit: number) {}
-
-  get(key: K): V | undefined {
-    if (!this.entries.has(key)) return undefined;
-    const value = this.entries.get(key)!;
-    this.entries.delete(key);
-    this.entries.set(key, value);
-    return value;
-  }
-
-  set(key: K, value: V): void {
-    this.entries.delete(key);
-    this.entries.set(key, value);
-    while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value!);
-  }
-
-  has(key: K): boolean { return this.entries.has(key); }
-  get size(): number { return this.entries.size; }
-}
-
-/** A repaint re-lays-out every message on screen. Keying on the exact source
- * text turns the settled messages into cache hits. Text that is still being
- * streamed must NOT come through here -- every delta is a brand new key holding
- * the whole answer so far, which filled the cache with dead prefixes and
- * evicted the settled messages it exists for; see createStreamingBlockParser
- * and renderInlineMarkdownLive. Results are immutable by contract. */
-function memoizeByText<T>(compute: (text: string) => T, limit = 256): (text: string) => T {
-  const cache = new LruCache<string, { value: T }>(limit);
-  return (text) => {
-    const hit = cache.get(text);
-    if (hit) return hit.value;
-    const value = compute(text);
-    cache.set(text, { value });
-    return value;
-  };
-}
-
-/** Every escape sequence a terminal acts on. OSC and DCS/SOS/PM/APC bodies end
- * at their terminator or, failing that, at the end of the line: a model that
- * emits an unterminated `ESC ]` must not swallow the rest of its own answer. */
-const ESCAPE_SEQUENCE = new RegExp([
-  '\\u001b\\][^\\u0007\\u001b\\n]*(?:\\u0007|\\u001b\\\\)?',
-  '\\u001b[PX^_][^\\u001b\\n]*(?:\\u001b\\\\)?',
-  '(?:\\u001b\\[|\\u009b)[0-?]*[ -/]*[@-~]?',
-  '\\u001b[ -/]*[0-~]?',
-].join('|'), 'g');
-const SGR_SEQUENCE = /^\u001b\[[0-9;]*m$/;
-/** The two zero-width sequences this UI writes inside a row: SGR styling and
- * OSC 8 hyperlink open/close. Everything that measures, slices or sanitizes a
- * styled row treats exactly these as atomic and invisible. */
-const OSC8_SEQUENCE = /^\u001b\]8;[^\u0007\u001b\n]*\u001b\\$/;
-const ZERO_WIDTH_SEQUENCES = /\u001b\[[0-9;]*m|\u001b\]8;[^\u0007\u001b\n]*\u001b\\/g;
-const HYPERLINK_CLOSE = '\u001b]8;;\u001b\\';
-const hyperlinkOpen = (href: string): string => `\u001b]8;;${href}\u001b\\`;
-
-/** OSC 8 is only emitted where it is known to render as a link. Elsewhere it
- * is at best ignored and at worst printed, so the fallback is `text (href)`.
- * tmux forwards OSC 8 only with passthrough configured, which cannot be
- * detected from inside it; CLIKCODE_HYPERLINKS=1 opts in there. */
-export function hyperlinksSupported(environment: NodeJS.ProcessEnv = process.env, isTty = Boolean(process.stdout.isTTY)): boolean {
-  const flag = (value: string | undefined): boolean => value !== undefined && value !== '' && value !== '0' && value.toLowerCase() !== 'false';
-  if (flag(environment.CLIKCODE_NO_HYPERLINKS)) return false;
-  if (!isTty || (environment.TERM ?? '').toLowerCase() === 'dumb') return false;
-  if (flag(environment.CLIKCODE_HYPERLINKS) || flag(environment.FORCE_HYPERLINK)) return true;
-  if (environment.TMUX || environment.STY || /^(?:screen|tmux)/.test(environment.TERM ?? '')) return false;
-  const program = (environment.TERM_PROGRAM ?? '').toLowerCase();
-  if (['iterm.app', 'wezterm', 'vscode', 'ghostty', 'hyper', 'kitty', 'rio', 'warpterminal'].includes(program)) return true;
-  if (environment.KITTY_WINDOW_ID || environment.WT_SESSION || environment.KONSOLE_VERSION || environment.DOMTERM) return true;
-  if (Number(environment.VTE_VERSION ?? 0) >= 5000) return true;
-  return /^(?:xterm-kitty|xterm-ghostty|foot|alacritty|wezterm|contour)/.test(environment.TERM ?? '');
-}
-let hyperlinksEnabled: boolean | undefined;
-/** Tests and callers that know better than the environment can decide. */
-export function setHyperlinksEnabled(enabled: boolean | undefined): void { hyperlinksEnabled = enabled; }
-const SAFE_LINK = /^(?:https?:\/\/|mailto:)[^\s\u0000-\u001f\u007f-\u009f]+$/i;
-const NEEDS_SANITIZING = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\t]/;
-const UNSAFE_IN_STYLED_TEXT = /[\u0000-\u0009\u000b-\u001a\u001c-\u001f\u007f-\u009f]|\u001b(?!\[[0-9;]*m|\]8;[^\u0007\u001b\n]*\u001b\\)/;
-const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
-export const TAB_WIDTH = 4;
-
-/** Advance each tab to the next tab stop measured from the start of its own
- * line, which is what keeps tab-aligned code aligned. */
-export function expandTabs(value: string, tabWidth = TAB_WIDTH): string {
-  if (!value.includes('\t')) return value;
-  return value.split('\n').map((line) => {
-    if (!line.includes('\t')) return line;
-    let column = 0;
-    let expanded = '';
-    for (const [index, part] of line.split('\t').entries()) {
-      if (index > 0) {
-        const fill = tabWidth - (column % tabWidth);
-        expanded += ' '.repeat(fill);
-        column += fill;
-      }
-      expanded += part;
-      column += terminalCellWidth(part);
-    }
-    return expanded;
-  }).join('\n');
-}
-
-/** The single choke point for text that did not originate in this program: a
- * paste, model output, tool output. A raw `\r` rewinds the row and overwrites
- * it, a tab moves the cursor by an amount the layout never measured, and an
- * escape sequence can retitle the window, write the clipboard (OSC 52), or
- * move the cursor out of the live region and corrupt every later frame.
- *
- * `keepSgr` is for rows this UI styled itself; untrusted text never keeps any
- * escape. Newlines survive unless `singleLine` folds them into spaces. */
-export function sanitizeTerminalText(
-  value: string, options: { keepSgr?: boolean; singleLine?: boolean; tabWidth?: number } = {},
-): string {
-  // Styled rows are checked on every frame, so the common clean case must not
-  // pay for a rewrite just because it carries this UI's own color codes.
-  const clean = options.keepSgr ? !UNSAFE_IN_STYLED_TEXT.test(value) : !NEEDS_SANITIZING.test(value);
-  if (clean && !(options.singleLine && value.includes('\n'))) return value;
-  let text = value.replace(/\r\n?/g, '\n');
-  text = text.replace(ESCAPE_SEQUENCE, (sequence) => (
-    options.keepSgr && (SGR_SEQUENCE.test(sequence) || OSC8_SEQUENCE.test(sequence)) ? sequence : ''));
-  text = text.replace(CONTROL_CHARACTERS, (character) => (character === '\u001b' && options.keepSgr ? character : ''));
-  text = expandTabs(text, options.tabWidth ?? TAB_WIDTH);
-  return options.singleLine ? text.replace(/\n/g, ' ') : text;
-}
+import { HYPERLINK_CLOSE, closeOpenHyperlink, hyperlinkOpen, linksOn } from './hyperlinks.js';
+import { memoizeByText } from './memoize.js';
+import { SAFE_LINK } from './text.js';
+import { terminalCellWidth, visibleSlice } from './width.js';
+import { wrapWords } from './wrap.js';
 
 /** Applies `style` to each word of `text` individually, leaving whitespace
  * untouched -- not one open/close pair around the whole phrase. wrapWords
@@ -184,13 +56,15 @@ const renderInlineMarkdownWith = (text: string, hyperlinks: boolean): string => 
   }).join('');
   return render(Lexer.lexInline(text, { gfm: true, breaks: false }));
 };
-const linksOn = (): boolean => hyperlinksEnabled ?? (hyperlinksEnabled = hyperlinksSupported());
+
 const renderInlineLinked = memoizeByText((text: string) => renderInlineMarkdownWith(text, true));
+
 const renderInlinePlain = memoizeByText((text: string) => renderInlineMarkdownWith(text, false));
+
 export const renderInlineMarkdown = (text: string): string => (linksOn() ? renderInlineLinked : renderInlinePlain)(text);
+
 /** For the block that is still receiving tokens: same output, no cache entry. */
 export const renderInlineMarkdownLive = (text: string): string => renderInlineMarkdownWith(text, linksOn());
-
 
 /** Convert the original CommonMark/GFM block tree into the small semantic
  * document model used by the terminal. Code remains distinct from prose so
@@ -286,6 +160,7 @@ const parseBlocks = (text: string): ParsedBlocks => {
   }
   return { blocks, ...(stable ? { stable } : {}), hasDefinitions };
 };
+
 export const splitIntoBlocks = memoizeByText((text: string): MessageBlock[] => parseBlocks(text).blocks);
 
 /** Block parser for one growing message. Re-lexing the whole answer on every
@@ -322,13 +197,6 @@ export function createStreamingBlockParser(): (text: string) => MessageBlock[] {
     }
     return blocks;
   };
-}
-
-/** A hard-wrapped link can leave its hyperlink open at the end of a row. Rows
- * are repainted independently, so the attribute must never outlive its row. */
-export function closeOpenHyperlink(row: string): string {
-  const last = row.lastIndexOf('\u001b]8;');
-  return last === -1 || row.startsWith(HYPERLINK_CLOSE, last) ? row : `${row}${HYPERLINK_CLOSE}`;
 }
 
 /** Width-bounded GFM table rendering. Columns take their natural width when
@@ -377,285 +245,4 @@ export function renderTableBlock(
   const separator = `├${widths.map((columnWidth) => '─'.repeat(columnWidth + 2)).join('┼')}┤`;
   return [...line(rendered[0]!, true), separator, ...rendered.slice(1).flatMap((cells) => line(cells))]
     .map((row) => closeOpenHyperlink(visibleSlice(row, width)));
-}
-
-export function visibleSlice(value: string, width: number): string {
-  if (terminalCellWidth(value) <= width) return value;
-  const available = Math.max(0, width - 1);
-  let rendered = '';
-  let renderedWidth = 0;
-  let sawAnsi = false;
-  // Control sequences are atomic zero-width tokens. Slicing their individual
-  // bytes can leave a partial escape in the terminal, causing color bleed,
-  // question marks, and adjacent rows that appear to run together.
-  const tokens = displayTokens(value);
-  let linkOpen = false;
-  for (const token of tokens) {
-    if (token[0] === '\u001b') {
-      rendered += token;
-      if (OSC8_SEQUENCE.test(token)) linkOpen = token !== HYPERLINK_CLOSE;
-      else sawAnsi = true;
-      continue;
-    }
-    const tokenWidth = terminalCellWidth(token);
-    if (renderedWidth + tokenWidth > available) break;
-    rendered += token;
-    renderedWidth += tokenWidth;
-  }
-  return `${rendered}${linkOpen ? HYPERLINK_CLOSE : ''}${sawAnsi ? '\u001b[0m' : ''}…`;
-}
-
-/** Split a code line into display-only continuation rows without modifying
- * the underlying Markdown. Unlike visibleSlice this preserves every byte;
- * continuation markers make it clear that wrapping is presentation, not a
- * newline in the model's code. */
-export function wrapCodeLine(value: string, width: number): string[] {
-  const safeWidth = Math.max(1, width);
-  if (!value) return [''];
-  const rows: string[] = [];
-  // Expanded before measuring: a literal tab has no fixed cell width, so a row
-  // that "fit" could still run past the edge once the terminal advanced it.
-  let remaining = expandTabs(value);
-  while (remaining && terminalCellWidth(remaining) > safeWidth) {
-    const head = sliceToWidth(remaining, safeWidth);
-    rows.push(head);
-    remaining = remaining.slice(head.length);
-  }
-  rows.push(remaining);
-  return rows;
-}
-
-/** A user-perceived character is a grapheme cluster, not a code point: a
- * combining accent, a skin-tone modifier, a variation selector, and a ZWJ
- * family emoji are all several code points the terminal draws -- and the user
- * edits -- as one unit. Width, cursor motion, and deletion all agree on this
- * boundary, so backspace can never strand half an emoji in the composer. */
-const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-
-/** No realistic cluster approaches this many code units, so bounding the
- * segmented window keeps cursor motion O(1) rather than re-segmenting the
- * whole buffer on every keystroke -- which the input decoder does once per
- * pasted character. */
-const CLUSTER_WINDOW = 32;
-
-function isWideCodePoint(code: number): boolean {
-  if (code < 0x1100) return false;
-  return code <= 0x115f || code === 0x2329 || code === 0x232a
-    || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3)
-    || (code >= 0xf900 && code <= 0xfaff)
-    // A regional-indicator pair renders as one two-cell flag.
-    || (code >= 0x1f1e6 && code <= 0x1f1ff)
-    || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd);
-}
-
-/** Split into atomic display tokens: each SGR sequence stays whole (slicing
- * one leaks a partial escape into the terminal) and each grapheme cluster
- * stays whole (slicing one strands a dangling joiner or combining mark, which
- * renders as a broken glyph). Everything that truncates or hard-wraps shares
- * this so no caller has to rediscover either rule. */
-function displayTokens(value: string): string[] {
-  const tokens: string[] = [];
-  const pushText = (text: string): void => {
-    for (const { segment } of graphemes.segment(text)) tokens.push(segment);
-  };
-  let consumed = 0;
-  for (const match of value.matchAll(ZERO_WIDTH_SEQUENCES)) {
-    const start = match.index;
-    if (start > consumed) pushText(value.slice(consumed, start));
-    tokens.push(match[0]);
-    consumed = start + match[0].length;
-  }
-  if (consumed < value.length) pushText(value.slice(consumed));
-  return tokens;
-}
-
-/** Longest prefix of `value` fitting `width` cells, never splitting an SGR
- * sequence or a grapheme cluster. Zero-width tokens are always carried along,
- * so a style never survives as a half-written escape in the terminal.
- *
- * It always consumes at least one visible cluster: a character wider than the
- * row (a CJK glyph in a one-column gutter) must still advance, or every caller
- * that loops on the remainder would spin forever. */
-function sliceToWidth(value: string, width: number): string {
-  let taken = '';
-  let takenWidth = 0;
-  for (const token of displayTokens(value)) {
-    const tokenWidth = terminalCellWidth(token);
-    if (tokenWidth && takenWidth + tokenWidth > width) break;
-    taken += token;
-    takenWidth += tokenWidth;
-  }
-  if (takenWidth > 0) return taken;
-  let forced = '';
-  for (const token of displayTokens(value)) {
-    forced += token;
-    if (terminalCellWidth(token)) return forced;
-  }
-  return value;
-}
-
-export function terminalCellWidth(value: string): number {
-  const plain = value.includes('\u001b') ? value.replace(ZERO_WIDTH_SEQUENCES, '') : value;
-  let width = 0;
-  for (const { segment } of graphemes.segment(plain)) {
-    if (segment === '\t') { width += TAB_WIDTH - (width % TAB_WIDTH); continue; }
-    // Other control characters occupy no cell (and are stripped before paint).
-    if (segment.length === 1 && /[\u0000-\u001f\u007f-\u009f]/.test(segment)) continue;
-    // The base character decides the cell count; whatever the cluster attaches
-    // to it (marks, variation selectors, joiners) draws inside those cells.
-    const base = String.fromCodePoint(segment.codePointAt(0) ?? 0);
-    if (/\p{Mark}/u.test(base)) continue;
-    // Presentation is part of the width. U+FE0F asks for the emoji glyph, which
-    // terminals draw two cells wide even for a symbol that is one cell as text
-    // (U+2611 BALLOT BOX, U+2764 HEART); U+FE0E asks for the narrow text glyph.
-    // Symbols that default to emoji presentation (U+26A1, U+2705) are wide on
-    // their own.
-    const wide = segment.includes('\ufe0e') ? isWideCodePoint(base.codePointAt(0) ?? 0) && (base.codePointAt(0) ?? 0) >= 0x1f000
-      : isWideCodePoint(base.codePointAt(0) ?? 0)
-        || /\p{Emoji_Presentation}/u.test(base)
-        || (segment.includes('\ufe0f') && /\p{Emoji}/u.test(base) && !/^[0-9#*]$/.test(base))
-        || (segment.includes('\u20e3'));
-    width += wide ? 2 : 1;
-  }
-  return width;
-}
-
-/** Greedy word-wrap that never splits a word across lines, measuring by
- * terminal cell width (so wide/CJK characters count correctly) rather than
- * raw string length. A single word longer than `width` on its own still has
- * to be hard-broken -- there's no other way to fit it -- but that's the
- * fallback, not the common case the plain character-slice loop this
- * replaced used unconditionally. */
-export function wrapWords(text: string, width: number): string[] {
-  const safeWidth = Math.max(1, width);
-  const lines: string[] = [];
-  let current = '';
-  let currentWidth = 0;
-  for (const word of text.split(/(\s+)/)) {
-    if (!word) continue;
-    if (/^\s+$/.test(word)) {
-      if (currentWidth > 0) { current += word; currentWidth += terminalCellWidth(word); }
-      continue;
-    }
-    const wordWidth = terminalCellWidth(word);
-    if (currentWidth > 0 && currentWidth + wordWidth > safeWidth) {
-      lines.push(current.replace(/\s+$/, ''));
-      current = '';
-      currentWidth = 0;
-    }
-    if (wordWidth > safeWidth) {
-      // Hard-breaking used to walk code points and measure the raw prefix,
-      // which sliced an SGR sequence into separate rows on a narrow terminal
-      // and wrote the escape out as literal `ESC [ 1 m` text.
-      let remaining = word;
-      while (terminalCellWidth(remaining) > safeWidth) {
-        const head = sliceToWidth(remaining, safeWidth);
-        lines.push(head);
-        remaining = remaining.slice(head.length);
-      }
-      current = remaining;
-      currentWidth = terminalCellWidth(remaining);
-      continue;
-    }
-    current += word;
-    currentWidth += wordWidth;
-  }
-  if (current || lines.length === 0) lines.push(current.replace(/\s+$/, ''));
-  return lines;
-}
-
-export function previousCharacterIndex(value: string, index: number): number {
-  if (index <= 0) return 0;
-  const start = Math.max(0, index - CLUSTER_WINDOW);
-  let boundary = 0;
-  for (const { index: offset } of graphemes.segment(value.slice(start, index))) boundary = offset;
-  return start + boundary;
-}
-
-export function nextCharacterIndex(value: string, index: number): number {
-  if (index >= value.length) return value.length;
-  const [first] = graphemes.segment(value.slice(index, index + CLUSTER_WINDOW));
-  return index + (first ? first.segment.length : 1);
-}
-
-
-export interface ComposerLayout {
-  rows: string[];
-  cursorRow: number;
-  cursorWidth: number;
-}
-
-/** Soft-wrap the composer like a normal terminal editor. The old horizontal
- * viewport hid the beginning of long prompts and made typing appear stuck on
- * one line; this preserves the whole nearby draft and exposes a real cursor
- * row for absolute-positioned TUI painting. */
-export function composerLayout(value: string, cursor: number, available: number, maxRows = 6): ComposerLayout {
-  const width = Math.max(1, available);
-  const ranges: Array<{ start: number; end: number }> = [];
-  let rowStart = 0;
-  let lastWhitespaceStart: number | undefined;
-  let lastWhitespaceEnd: number | undefined;
-  let previousWasWhitespace = false;
-  let column = 0;
-  for (let index = 0; index < value.length;) {
-    const next = nextCharacterIndex(value, index);
-    const character = value.slice(index, next);
-    if (character === '\n') {
-      ranges.push({ start: rowStart, end: index });
-      rowStart = next;
-      column = 0;
-      lastWhitespaceStart = undefined;
-      lastWhitespaceEnd = undefined;
-      previousWasWhitespace = false;
-      index = next;
-      continue;
-    }
-    const characterWidth = Math.max(1, terminalCellWidth(character));
-    if (column > 0 && column + characterWidth > width) {
-      if (/\s/u.test(character)) {
-        ranges.push({ start: rowStart, end: index });
-        rowStart = next;
-        index = next;
-      } else if (lastWhitespaceStart !== undefined && lastWhitespaceEnd !== undefined && lastWhitespaceEnd > rowStart) {
-        ranges.push({ start: rowStart, end: lastWhitespaceStart });
-        rowStart = lastWhitespaceEnd;
-        index = rowStart;
-      } else {
-        ranges.push({ start: rowStart, end: index });
-        rowStart = index;
-      }
-      column = 0;
-      lastWhitespaceStart = undefined;
-      lastWhitespaceEnd = undefined;
-      previousWasWhitespace = false;
-      continue;
-    }
-    column += characterWidth;
-    if (/\s/u.test(character)) {
-      if (!previousWasWhitespace) lastWhitespaceStart = index;
-      lastWhitespaceEnd = next;
-      previousWasWhitespace = true;
-    } else {
-      previousWasWhitespace = false;
-    }
-    index = next;
-  }
-  ranges.push({ start: rowStart, end: value.length });
-  const rows = ranges.map(({ start, end }) => value.slice(start, end));
-  let position = { row: Math.max(0, rows.length - 1), column: 0 };
-  for (const [row, range] of ranges.entries()) {
-    if (cursor < range.start) {
-      position = { row, column: 0 };
-      break;
-    }
-    if (cursor > range.end) continue;
-    position = { row, column: terminalCellWidth(value.slice(range.start, cursor)) };
-    // A soft-wrap boundary belongs to the following row so the cursor does
-    // not remain visually stranded at the end of the previous full line.
-    if (cursor === range.end && ranges[row + 1]?.start === cursor) continue;
-    break;
-  }
-  const start = Math.max(0, Math.min(position.row - maxRows + 1, rows.length - maxRows));
-  const visible = rows.slice(start, start + maxRows);
-  return { rows: visible, cursorRow: position.row - start, cursorWidth: position.column };
 }

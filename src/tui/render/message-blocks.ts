@@ -2,7 +2,9 @@
  * lands in the terminal's own scrollback once and is never addressed again. */
 
 import chalk from 'chalk';
-import { renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock, terminalCellWidth, wrapCodeLine, wrapWords } from './markdown.js';
+import { renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock } from './markdown.js';
+import { terminalCellWidth } from './width.js';
+import { wrapCodeLine, wrapWords } from './wrap.js';
 import type { MessageBlock } from '../../harness/types.js';
 
 /** Rows for a run of parsed Markdown blocks, exactly as they appear in the

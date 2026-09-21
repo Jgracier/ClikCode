@@ -3,7 +3,8 @@
 
 import chalk from 'chalk';
 import { stdout as output } from 'node:process';
-import { sanitizeTerminalText, visibleSlice } from './markdown.js';
+import { sanitizeTerminalText } from './text.js';
+import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../harness/types.js';
 
