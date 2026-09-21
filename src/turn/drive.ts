@@ -23,7 +23,7 @@ import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
-import { extractSessionTitle, sessionTitleSource, StreamingTitle, withTitleRequest } from '../session/title.js';
+import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, withTitleRequest } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -87,12 +87,16 @@ export async function aiSessionSend(
     // turn's text only -- never on what is stored as the user's message -- and
     // the answer is stripped of it before anyone sees it.
     const titleSource = sessionTitleSource(harness);
-    // The first prompt of a conversation, and no other: a chat with messages
-    // already in it has had its chance, and pinning the request to later turns
-    // would keep editing prompts the user can see the effect of.
-    const askingForTitle = !session.name && titleSource === 'ask' && !(session.messages ?? []).length;
+    // Up to TITLE_REQUEST_ATTEMPTS turns, and no more: a chat that has used
+    // up its attempts has had its chance, and pinning the request to every
+    // later turn forever would keep editing prompts the user can see the
+    // effect of.
+    const askingForTitle = titleSource === 'ask' && shouldRequestTitle(session);
     const titleStream = askingForTitle ? new StreamingTitle() : undefined;
-    if (askingForTitle) turnText = withTitleRequest(turnText);
+    if (askingForTitle) {
+      turnText = withTitleRequest(turnText);
+      session.titleAttempts = (session.titleAttempts ?? 0) + 1;
+    }
     const supportsImages = harnessSupportsImages(harness);
     const images = supportsImages ? prepared.images : [];
     if (prepared.images.length && !supportsImages) {
@@ -592,10 +596,13 @@ export async function aiSessionSend(
   if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
   const baseMessages = sessionTranscriptMessages(session);
-  // No harness on this path writes its own titles, so the first prompt of a
-  // conversation asks the model for one and the answer is stripped of it.
-  const titleStream = !session.name && !(session.messages ?? []).length ? new StreamingTitle() : undefined;
-  if (titleStream) turnText = withTitleRequest(turnText);
+  // No harness on this path writes its own titles, so the first turns of a
+  // conversation ask the model for one and the answer is stripped of it.
+  const titleStream = shouldRequestTitle(session) ? new StreamingTitle() : undefined;
+  if (titleStream) {
+    turnText = withTitleRequest(turnText);
+    session.titleAttempts = (session.titleAttempts ?? 0) + 1;
+  }
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
@@ -738,11 +745,12 @@ export async function aiGatewaySessionSend(
   if (!text) throw new Error('prompt is required');
   const prepared = await prepareAttachments(session.attachments ?? []);
   if (prepared.images.length) throw new Error('ClikDeploy Gateway does not accept image attachments. Switch to a local provider with /provider or clear them with /attachments clear.');
-  // The first prompt of a conversation carries the title request here too:
-  // the gateway's coding agent and the platform assistant both answer as a
+  // The first turns of a conversation carry the title request here too: the
+  // gateway's coding agent and the platform assistant both answer as a
   // model, and neither writes a title of its own anywhere ClikCode can read.
-  const titleStream = !session.name && !(session.messages ?? []).length ? new StreamingTitle() : undefined;
+  const titleStream = shouldRequestTitle(session) ? new StreamingTitle() : undefined;
   const turnText = titleStream ? withTitleRequest(`${text}${prepared.textContext}`) : `${text}${prepared.textContext}`;
+  if (titleStream) session.titleAttempts = (session.titleAttempts ?? 0) + 1;
   const baseUrl = getApiUrl(config).replace(/\/$/, '');
   const apiKey = getApiKeyForUrl(config, baseUrl);
   if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);

@@ -90,7 +90,7 @@ export function sessionPickerOptions(
     const model = nativeModelLabel(latest.nativeHarness, latest.model);
     return {
       label: title,
-      detail: `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''} · ${model ?? 'automatic'} · ${new Date(latest.updatedAt).toLocaleString()}${history.length > 1 ? ` · Tab: ${history.length} history entries` : ''}`,
+      detail: `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''} · ${model ?? 'default'} · ${new Date(latest.updatedAt).toLocaleString()}${history.length > 1 ? ` · Tab: ${history.length} history entries` : ''}`,
       value: latest.id,
       alternates: history.length > 1 ? history.map((session) => ({
         label: `${'  '.repeat(depthFor(session))}${providerLabel(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${new Date(session.updatedAt).toLocaleString()}`,
@@ -169,6 +169,15 @@ export function normalizeFailoverWord(value: string): 'never' | 'on-quota-exhaus
   throw new Error('failover must be auto or never');
 }
 
+/** 'auto' and 'default' clear the field back to "no override" rather than
+ * being stored as literal model ids -- no vendor CLI has a model named
+ * either word. Every entry point that can set a model (slash commands,
+ * `/settings`, and the `sessions create`/`sessions set` CLI flags) routes
+ * through this so they can't drift out of sync on which words clear it. */
+export function normalizeModelWord(value: string): string | null {
+  return value === 'auto' || value === 'default' ? null : value;
+}
+
 /** Both `/settings global <key> <value>` and `/settings provider <id> <key> <value>`
  * write into the same three fields; this is the one place that validates a value
  * for a given key so the two entry points can't drift out of sync.
@@ -193,7 +202,7 @@ export function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { m
   } else if (normalizedKey === 'failover') {
     target.accountFailover = normalizeFailoverWord(value);
   } else if (normalizedKey === 'model' && 'model' in target) {
-    target.model = value === 'auto' || value === 'default' ? undefined : value;
+    target.model = normalizeModelWord(value) ?? undefined;
   } else {
     throw new Error(`unknown setting "${key}"; choose ${'model' in target ? 'model, ' : ''}effort, permissions, or failover`);
   }

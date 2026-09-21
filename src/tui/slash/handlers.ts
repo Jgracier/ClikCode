@@ -26,13 +26,13 @@ import { SELECTION_MODE, setSelectionMode } from '../modes.js';
 import { TERMINAL } from '../active-terminal.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../session/attachments.js';
-import { conversationIdFor, requiresProviderHandoff, setSessionHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
+import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, setSessionHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey } from './registry.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
-import { aiSessionClose, aiSessionLeave, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy } from '../../commands/ai/sessions.js';
+import { aiSessionClose, aiSessionLeave, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, assertRealModel } from '../../commands/ai/sessions.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
 import { capabilitiesText } from './capabilities-text.js';
 import { compactConversation } from './compact.js';
@@ -195,7 +195,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!value) throw new Error('Choose a model from /model or use /model <name>.');
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
-    session.model = value === 'default' || value === 'auto' ? null : value;
+    const model = normalizeModelWord(value);
+    if (model) await assertRealModel(harness, state.accounts.find((item) => item.id === session.accountId), model);
+    session.model = model;
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
@@ -315,7 +317,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     } else if (setting === 'model') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
-      session.model = value === 'default' || value === 'auto' ? null : value;
+      const model = normalizeModelWord(value);
+      if (model) await assertRealModel(harness, state.accounts.find((item) => item.id === session.accountId), model);
+      session.model = model;
     } else if (setting === 'effort') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!harness) throw new Error('Choose a provider before setting effort.');
