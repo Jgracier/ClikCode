@@ -4,21 +4,21 @@ import type Conf from 'conf';
 import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import chalk from 'chalk';
-import { getApiKeyForUrl, getApiUrl } from './gateway-credentials.js';
-import { emitJson } from '../utils/structured-output.js';
-import { ensureNativeHarness, inspectNativeHarness, loginNativeHarness } from './native-harness.js';
-import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, HarnessDefaultSettings, HarnessSession, HarnessState } from './types.js';
-import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, nativeProfileEnvironment, sessionProviderLabel } from './native-harness-protocol.js';
-import { accountView, harnessCommand, readState, resolveDefaultSettings, writeState } from './harness-state.js';
-import { nativeModelCatalog } from './native-account-data.js';
-import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList, aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin, syncAccountIdentityAfterLogin, setEmitHarnessOutput } from './account-management.js';
-import { createHandoffBranch, synchronizeNativeTranscript } from './turn-runtime.js';
-import { TERMINAL } from './active-terminal.js';
-import { emitHarnessOutput } from './harness-output.js';
-import { harnessCanRunTurns } from './harness-runtime.js';
-import { markSessionLeftOpen } from './session-claim.js';
-import { applyDefaultSetting, optionForHarness, parseHarnessOption, requiresProviderHandoff, VALID_PERMISSION_MODES } from './session-options.js';
-import { consumeSessionTurn, sessionTranscriptMessages } from './turn-checkpoint.js';
+import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
+import { emitJson } from '../cli/structured-output.js';
+import { ensureNativeHarness, inspectNativeHarness, loginNativeHarness } from '../harness/transport/native.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, HarnessDefaultSettings, HarnessSession, HarnessState } from '../harness/types.js';
+import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, nativeProfileEnvironment, sessionProviderLabel } from '../harness/transport/native-protocol.js';
+import { accountView, harnessCommand, readState, resolveDefaultSettings, writeState } from '../session/state.js';
+import { nativeModelCatalog } from '../harness/account-data.js';
+import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList, aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin, syncAccountIdentityAfterLogin, setEmitHarnessOutput } from './account.js';
+import { createHandoffBranch, synchronizeNativeTranscript } from '../turn/runtime.js';
+import { TERMINAL } from '../tui/active-terminal.js';
+import { emitHarnessOutput } from '../harness/output.js';
+import { harnessCanRunTurns } from '../runtime/lazy-bridge.js';
+import { markSessionLeftOpen } from '../session/claim.js';
+import { applyDefaultSetting, optionForHarness, parseHarnessOption, requiresProviderHandoff, VALID_PERMISSION_MODES } from '../session/options.js';
+import { consumeSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
 
 export {
   aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,

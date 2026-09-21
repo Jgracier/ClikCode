@@ -7,8 +7,8 @@
  * bundle, which node rejects outright.
  */
 import Conf from 'conf';
-import { buildBaseProgram, runProgram, CLIKCODE_BANNER } from './cli/program-base.js';
-import { registerClikCodeCommands } from './cli/register-clikcode.js';
+import { buildBaseProgram, runProgram, CLIKCODE_BANNER } from './cli/program.js';
+import { registerClikCodeCommands } from './cli/register.js';
 import { aiSessionOpenDefault } from './commands/ai-interactive.js';
 import { CLIKCODE_VERSION } from './version.js';
 
