@@ -26,7 +26,7 @@ export function profileEnvironment(
 
 /** Root of every profile directory ClikCode itself created. Nothing outside it
  * is ever deleted by account removal or garbage collection. */
-export function clikcodeProfilesRoot(): string {
+function clikcodeProfilesRoot(): string {
   return resolve(join(harnessStatePath(), '..', 'profiles'));
 }
 
@@ -76,7 +76,7 @@ export async function purgeAccountProfile(
  * by a build that did not purge, profiles replaced by a re-login. A directory
  * younger than `minAgeMs` is left alone -- a login in progress has created its
  * directory but not yet saved its account. */
-export async function collectOrphanProfiles(options: { dryRun?: boolean; minAgeMs?: number; now?: number } = {}): Promise<{ removed: string[]; kept: string[] }> {
+async function collectOrphanProfiles(options: { dryRun?: boolean; minAgeMs?: number; now?: number } = {}): Promise<{ removed: string[]; kept: string[] }> {
   const minAgeMs = options.minAgeMs ?? 60 * 60_000;
   const now = options.now ?? Date.now();
   const root = clikcodeProfilesRoot();

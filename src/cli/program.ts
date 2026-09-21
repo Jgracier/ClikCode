@@ -73,7 +73,7 @@ function logCrashToDisk(kind: 'uncaughtException' | 'unhandledRejection', error:
   } catch { /* fail-open-ok: a broken crash log must never block the actual crash handling below it. */ }
 }
 
-export function handleCommandError(error: unknown): void {
+function handleCommandError(error: unknown): void {
   if (isJsonDefaultMode()) {
     emitJson(toCliErrorJson(error));
     process.exitCode = 1;

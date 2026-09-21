@@ -15,13 +15,13 @@ import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnes
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
 import { emptyLedger, recordUsage } from './usage.js';
 
-export const DEFAULT_MAX_STEPS = 60;
-export const NO_PROGRESS_LIMIT = 3;
+const DEFAULT_MAX_STEPS = 60;
+const NO_PROGRESS_LIMIT = 3;
 const STREAM_EVENT_INTERVAL_MS = 150;
 
 /** Structured classification only: a status code or an explicit kind set by
  * the model client. Message text is never pattern-matched here. */
-export function classifyModelError(error: unknown): { kind: HarnessErrorKind; retryAfter?: number } {
+function classifyModelError(error: unknown): { kind: HarnessErrorKind; retryAfter?: number } {
   const record = (error ?? {}) as { kind?: unknown; errorKind?: unknown; statusCode?: unknown; status?: unknown; response?: { status?: unknown }; retryAfter?: unknown };
   const retryAfter = typeof record.retryAfter === 'number' && Number.isFinite(record.retryAfter) ? record.retryAfter : undefined;
   const explicit = record.errorKind ?? record.kind;

@@ -3,7 +3,7 @@
 import type { HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
 
-export interface GatewayModelClientOptions {
+interface GatewayModelClientOptions {
   baseUrl: string;
   apiKey: string;
   version: string;
@@ -31,7 +31,7 @@ export class ModelClientError extends Error {
   }
 }
 
-export function errorKindForStatus(status: number | undefined): HarnessErrorKind {
+function errorKindForStatus(status: number | undefined): HarnessErrorKind {
   if (status === 401 || status === 403) return 'auth';
   if (status === 402 || status === 429) return 'quota';
   return 'other';
@@ -40,7 +40,7 @@ export function errorKindForStatus(status: number | undefined): HarnessErrorKind
 const AUTH_CODES = new Set(['unauthorized', 'unauthenticated', 'forbidden', 'auth', 'invalid_api_key', 'auth_required']);
 const QUOTA_CODES = new Set(['quota', 'quota_exceeded', 'quota_exhausted', 'rate_limited', 'rate_limit', 'insufficient_credits', 'payment_required']);
 
-export function errorKindForCode(code: unknown): HarnessErrorKind {
+function errorKindForCode(code: unknown): HarnessErrorKind {
   if (typeof code === 'number') return errorKindForStatus(code);
   const text = String(code ?? '').toLowerCase();
   if (/^\d{3}$/.test(text)) return errorKindForStatus(Number(text));
@@ -48,7 +48,7 @@ export function errorKindForCode(code: unknown): HarnessErrorKind {
 }
 
 /** `Retry-After` is either delta-seconds or an HTTP date. */
-export function parseRetryAfter(value: unknown, now: number = Date.now()): number | undefined {
+function parseRetryAfter(value: unknown, now: number = Date.now()): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : undefined;
   if (typeof value !== 'string' || !value.trim()) return undefined;
   if (/^\d+(?:\.\d+)?$/.test(value.trim())) return Number(value.trim());
@@ -56,12 +56,12 @@ export function parseRetryAfter(value: unknown, now: number = Date.now()): numbe
   return Number.isNaN(date) ? undefined : Math.max(0, Math.ceil((date - now) / 1000));
 }
 
-export interface SseEvent { event?: string; data: string }
+interface SseEvent { event?: string; data: string }
 
 /** Incremental SSE parser. Bytes go in at arbitrary boundaries (mid-line,
  * mid-UTF-8 sequence, between the CR and LF of a CRLF); complete events come
  * out. Follows the WHATWG event-stream rules for the fields used here. */
-export class SseParser {
+class SseParser {
   private readonly decoder = new TextDecoder('utf-8');
   private buffer = '';
   private data: string[] = [];

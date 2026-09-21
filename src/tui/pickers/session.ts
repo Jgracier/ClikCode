@@ -83,13 +83,13 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
 
 /** Indirection so tests can hold discovery open and observe the picker while
  * it is still pending. */
-export const NATIVE_SESSION_DISCOVERY = { run: discoverAdoptableSessions };
+const NATIVE_SESSION_DISCOVERY = { run: discoverAdoptableSessions };
 
 const NATIVE_DISCOVERY_TTL_MS = 60_000;
 
 let nativeDiscoveryCache: { key: string; at: number; result: Promise<AdoptableNativeSession[]> } | undefined;
 
-export function resetNativeDiscoveryCache(): void {
+function resetNativeDiscoveryCache(): void {
   nativeDiscoveryCache = undefined;
 }
 

@@ -65,14 +65,14 @@ const INTERACTIVE_ONLY = (name: string): HeadlessSlashHandler => async () => {
 };
 
 /** Indirection so the interactive loop and tests can observe/replace the turn. */
-export const SLASH_TURN = { send: (id: string, prompt: string): Promise<void> => aiSessionSend(id, prompt) };
+const SLASH_TURN = { send: (id: string, prompt: string): Promise<void> => aiSessionSend(id, prompt) };
 
 const sendSessionTurn = (id: string, prompt: string): Promise<void> => SLASH_TURN.send(id, prompt);
 
 /** Headless half of the slash registry. Typed by SlashHandlerKey, so a
  * registry entry without a handler here (or a handler without an entry) does
  * not compile; slash-registry.vitest.test.ts asserts the same at runtime. */
-export const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
+const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   help: async ({ session }) => {
     const harness = sessionHarness(session);
     const extras = slashExtrasFor(session, harness);

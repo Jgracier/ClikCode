@@ -28,7 +28,7 @@ let catalogRuntime: HarnessCatalogRuntime | undefined;
  * catalog call goes through this ONE bundle: registerCustomHarnesses() keeps
  * module state, and a second copy inside ai-router-runtime.cjs would not see
  * it. Falls back to the full router runtime where only that was built. */
-export function localCatalog(): HarnessCatalogRuntime {
+function localCatalog(): HarnessCatalogRuntime {
   if (!catalogRuntime) {
     try {
       catalogRuntime = require('../harness-catalog.cjs') as HarnessCatalogRuntime;
@@ -64,8 +64,8 @@ export const harnessSupportsImages = (harness: AiLocalHarnessDefinition): boolea
 
 /** Built-in catalog plus any registered custom ACP harnesses. */
 export const allLocalHarnesses = (): readonly AiLocalHarnessDefinition[] => localCatalog().allLocalHarnesses();
-export const registerCustomHarnesses = (definitions: readonly AiLocalHarnessDefinition[]): readonly AiLocalHarnessDefinition[] => localCatalog().registerCustomHarnesses(definitions);
-export const customAcpHarness = (definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition => localCatalog().customAcpHarness(definition);
+const registerCustomHarnesses = (definitions: readonly AiLocalHarnessDefinition[]): readonly AiLocalHarnessDefinition[] => localCatalog().registerCustomHarnesses(definitions);
+const customAcpHarness = (definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition => localCatalog().customAcpHarness(definition);
 export const harnessAcpLaunch = (
   harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode },
 ): AiHarnessAcpLaunch | undefined => localCatalog().harnessAcpLaunch(harness, input);

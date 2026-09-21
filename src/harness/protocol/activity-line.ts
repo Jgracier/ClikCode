@@ -66,7 +66,7 @@ export function nativeActivityPhaseFromValue(harness: AiLocalHarnessDefinition, 
   return undefined;
 }
 
-export function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText: string): 'generating response' | undefined {
+function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText: string): 'generating response' | undefined {
   const candidate = lineText.trim();
   if (candidate[0] !== '{') return undefined;
   try {

@@ -5,7 +5,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { killProcessTreePortable } from './spawn.js';
 
-export type JsonRpcMessage = Record<string, any>;
+type JsonRpcMessage = Record<string, any>;
 
 export const JSONRPC_SETUP_TIMEOUT_MS = 20_000;
 const NOISE_LIMIT = 8000;
@@ -14,7 +14,7 @@ const NOISE_LIMIT = 8000;
  * must never hang on a process that is already gone. */
 const CLOSE_AFTER_EXIT_MS = 500;
 
-export interface JsonRpcRequestOptions {
+interface JsonRpcRequestOptions {
   /** No timeout when omitted: a prompt request legitimately runs for hours. */
   timeoutMs?: number;
   /** Treat the timeout as an idle window: any inbound message restarts it.
@@ -22,7 +22,7 @@ export interface JsonRpcRequestOptions {
   idleReset?: boolean;
 }
 
-export interface JsonRpcPeerOptions {
+interface JsonRpcPeerOptions {
   /** Human label used in error messages, e.g. `copilot ACP`. */
   label: string;
   /** ACP requires the `jsonrpc: "2.0"` member; Codex app-server omits it. */
@@ -40,7 +40,7 @@ export interface JsonRpcPeerOptions {
   onClose?: (error: Error) => void;
 }
 
-export interface JsonRpcShutdownOptions {
+interface JsonRpcShutdownOptions {
   /** Protocol-level cancel (e.g. `turn/interrupt`) attempted before signals. */
   cancel?: () => Promise<unknown> | void;
   /** Budget for cancel + stdin EOF to produce an exit before SIGTERM. */
@@ -49,7 +49,7 @@ export interface JsonRpcShutdownOptions {
   killMs?: number;
 }
 
-export class JsonRpcError extends Error {
+class JsonRpcError extends Error {
   constructor(message: string, readonly rpcCode?: number, readonly data?: unknown) {
     super(message);
     this.name = 'JsonRpcError';

@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-export interface CheckpointEntry {
+interface CheckpointEntry {
   path: string;
   existed: boolean;
   mode?: number;
@@ -14,21 +14,21 @@ export interface CheckpointEntry {
   size?: number;
 }
 
-export interface CheckpointManifest {
+interface CheckpointManifest {
   sessionId: string;
   turnId: string;
   createdAt: string;
   entries: CheckpointEntry[];
 }
 
-export interface CheckpointTurnSummary {
+interface CheckpointTurnSummary {
   turnId: string;
   createdAt: string;
   files: string[];
   bytes: number;
 }
 
-export interface UndoResult {
+interface UndoResult {
   turnIds: string[];
   restored: string[];
   deleted: string[];
@@ -36,9 +36,9 @@ export interface UndoResult {
   text: string;
 }
 
-export interface UndoOptions { roots?: readonly string[] }
+interface UndoOptions { roots?: readonly string[] }
 
-export const BASH_UNDO_CAVEAT = 'Only changes made through the file tools were reverted. Anything a shell command changed (generated files, installs, git operations) was NOT tracked and is unchanged.';
+const BASH_UNDO_CAVEAT = 'Only changes made through the file tools were reverted. Anything a shell command changed (generated files, installs, git operations) was NOT tracked and is unchanged.';
 
 const RETAIN_TURNS = 50;
 const RETAIN_BYTES = 200 * 1024 * 1024;

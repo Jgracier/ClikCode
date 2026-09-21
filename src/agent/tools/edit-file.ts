@@ -15,7 +15,7 @@ function countOccurrences(haystack: string, needle: string): number {
 /** Apply one exact-match replacement. The file's dominant line ending is
  * preserved: the model almost always sends `\n`, so on a CRLF file both the
  * search and the replacement are converted before matching. */
-export function applyEdit(content: string, edit: EditOperation, label = 'old_string'): string {
+function applyEdit(content: string, edit: EditOperation, label = 'old_string'): string {
   if (edit.old_string === edit.new_string) throw new ToolInputError(`${label} and new_string are identical; nothing to change.`);
   if (!edit.old_string) throw new ToolInputError(`${label} is empty. To create a file use write_file.`);
   const crlf = (content.match(/\r\n/g)?.length ?? 0) > (content.match(/(?<!\r)\n/g)?.length ?? 0);
@@ -30,7 +30,7 @@ export function applyEdit(content: string, edit: EditOperation, label = 'old_str
   return edit.replace_all ? content.split(needle).join(replacement) : content.replace(needle, () => replacement);
 }
 
-export interface PreparedEdit { real: string; shown: string; before: string; after: string; mode: number }
+interface PreparedEdit { real: string; shown: string; before: string; after: string; mode: number }
 
 /** Validate everything (guards + all edits) without touching the disk. */
 export async function prepareEdits(filePath: string, edits: readonly EditOperation[], ctx: ToolContext, enforceReadGuard = true): Promise<PreparedEdit> {

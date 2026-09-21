@@ -19,7 +19,7 @@ export function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
 }
 
-export function renderSessionCard(session: HarnessSession, account?: string): string {
+function renderSessionCard(session: HarnessSession, account?: string): string {
   const modelLabel = nativeModelLabel(session.nativeHarness, session.model);
   return [
     chalk.bold.cyan('ClikCode'),

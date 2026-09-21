@@ -17,7 +17,7 @@
 export const FAILOVER_PREAMBLE = 'Continue the same ClikCode conversation after an account or provider failover. Preserve all prior decisions, files, and task state. Do not repeat completed work.';
 
 /** Inverse of `escapeFailoverContent`: restore frame tags the prompt neutered. */
-export function unescapeFailoverContent(text: string): string {
+function unescapeFailoverContent(text: string): string {
   return text.replace(/&lt;(\/?)(message|conversation|current_request|touched_files)\b/gi, '<$1$2');
 }
 

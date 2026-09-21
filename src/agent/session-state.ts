@@ -5,7 +5,7 @@ import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { killProcessTreePortable } from '../harness/transport/spawn.js';
 
-export interface FileReadStamp { mtimeMs: number; size: number }
+interface FileReadStamp { mtimeMs: number; size: number }
 
 export interface BackgroundShell {
   id: string;

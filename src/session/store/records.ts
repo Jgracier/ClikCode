@@ -14,7 +14,7 @@ export interface SessionFile extends SessionTranscript {
   transcriptRef?: TranscriptRef;
 }
 
-export const SESSION_STORE_STATS = { fileWrites: 0, fileReads: 0 };
+const SESSION_STORE_STATS = { fileWrites: 0, fileReads: 0 };
 
 interface CachedFile { ino: number; mtimeMs: number; ctimeMs: number; size: number; file: SessionFile }
 

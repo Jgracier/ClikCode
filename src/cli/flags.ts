@@ -15,7 +15,7 @@
  * before, so nothing regresses when commander is not in the picture.
  */
 
-export interface GlobalFlags {
+interface GlobalFlags {
   json?: boolean;
   human?: boolean;
   debug?: boolean;

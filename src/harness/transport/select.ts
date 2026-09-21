@@ -3,7 +3,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 
 export type HarnessTurnTransport = 'codex-app-server' | 'acp' | 'structured-cli' | 'text-cli';
 
-export interface HarnessTurnTransportOptions {
+interface HarnessTurnTransportOptions {
   /** The caller forwards `images` to runAcpTurn and honours its
    * `acpSafeToFallback` error. Image support is only known after the agent's
    * initialize response (`promptCapabilities.image`), so ACP is attempted and

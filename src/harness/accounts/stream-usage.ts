@@ -23,7 +23,7 @@ import { AccountUsageReading, UsageCacheEntry, UsageReading, UsageWindow, native
  *     utilization is a 0..1 fraction;
  *   - a `rate_limits` object with `primary`/`secondary` windows (Codex, and
  *     anything else carrying the app-server's shape), in 0..100 percent. */
-export function streamQuotaReading(value: unknown): UsageReading | undefined {
+function streamQuotaReading(value: unknown): UsageReading | undefined {
   const record = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
   if (!record) return undefined;
   const info = record.rate_limit_info ?? record.rateLimitInfo;
@@ -46,7 +46,7 @@ export function streamQuotaReading(value: unknown): UsageReading | undefined {
 }
 
 /** Read a stream line for quota, whatever harness produced it. */
-export function streamQuotaReadingFromLine(lineText: string): UsageReading | undefined {
+function streamQuotaReadingFromLine(lineText: string): UsageReading | undefined {
   // Self-gated: ordinary output lines are not re-parsed as JSON.
   if (!lineText.includes('rate_limit') && !lineText.includes('rateLimit')) return undefined;
   try {
@@ -61,7 +61,7 @@ export function streamQuotaReadingFromLine(lineText: string): UsageReading | und
 /** Harnesses whose quota arrives on their turn stream. Every harness is read
  * by shape, so this says "this one reports for itself", nothing more: it is
  * what tells the caller not to ask an endpoint for what the harness gives. */
-export const NATIVE_STREAM_USAGE: Readonly<Partial<Record<string, (lineText: string) => string | undefined>>> = {
+const NATIVE_STREAM_USAGE: Readonly<Partial<Record<string, (lineText: string) => string | undefined>>> = {
   claude: claudeStreamUsage,
 };
 

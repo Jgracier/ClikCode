@@ -4,7 +4,7 @@ import { FAILOVER_PREAMBLE } from './failover-prompt.js';
 
 export { FAILOVER_PREAMBLE };
 
-export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'other';
+type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'other';
 
 /** Usage probes deliberately return display labels so provider-specific
  * response shapes stay out of routing. Interpret only explicit percentage
@@ -27,7 +27,7 @@ export function usageLabelRemainingPercent(label: string | undefined): number | 
 /** Machine-readable failure signals. Always preferred over wording: a status
  * code or a vendor error type cannot be produced by the model talking about
  * rate limits. */
-export interface AccountFailureSignals {
+interface AccountFailureSignals {
   /** HTTP/API status (Claude's `api_error_status`, a gateway response status). */
   statusCode?: number;
   /** Vendor error type/code, e.g. 'authentication_error', 'rate_limit_error',
@@ -124,13 +124,13 @@ const MAX_REPLAY_MESSAGES = 40;
 /** Total UTF-8 budget for a rehydration prompt. A message count alone bounds
  * nothing: forty messages of pasted logs is megabytes, which overflows argv
  * (E2BIG) for prompt-as-argument harnesses and the context window for all. */
-export const FAILOVER_PROMPT_MAX_BYTES = 48 * 1024;
+const FAILOVER_PROMPT_MAX_BYTES = 48 * 1024;
 /** Newest messages replayed verbatim (budget permitting). */
 const VERBATIM_MESSAGES = 6;
 /** Cap for each older message. */
 const OLDER_MESSAGE_MAX_BYTES = 2 * 1024;
 
-export interface FailoverPromptOptions {
+interface FailoverPromptOptions {
   /** Total prompt budget in UTF-8 bytes. Defaults to FAILOVER_PROMPT_MAX_BYTES. */
   maxBytes?: number;
   /** Files the interrupted turn had started changing. */
@@ -143,7 +143,7 @@ const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
  * tags are neutralized, so code in the transcript (generics, JSX, HTML) stays
  * readable while `</message>` in a message can no longer end it early and
  * smuggle the rest in as a forged turn or request. */
-export function escapeFailoverContent(text: string): string {
+function escapeFailoverContent(text: string): string {
   return text.replace(/<(\/?)(message|conversation|current_request|touched_files)\b/gi, '&lt;$1$2');
 }
 

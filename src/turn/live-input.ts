@@ -16,9 +16,9 @@ type SteerHandler = (text: string) => Promise<void>;
 type LateSteerHandler = (submission: LiveTurnSubmission) => void;
 
 /** How long a native steer may take before the message is queued instead. */
-export const DEFAULT_STEER_TIMEOUT_MS = 5_000;
+const DEFAULT_STEER_TIMEOUT_MS = 5_000;
 
-export interface LiveTurnInputBrokerOptions {
+interface LiveTurnInputBrokerOptions {
   /** Zero or negative waits for the steer handler indefinitely. */
   steerTimeoutMs?: number;
 }

@@ -64,7 +64,7 @@ export function activityLabelIsReadOnly(label: string): boolean {
 }
 
 /** File an activity is changing, when its label or diff says so. */
-export function touchedFileFromActivity(event: HarnessActivityEvent): string | undefined {
+function touchedFileFromActivity(event: HarnessActivityEvent): string | undefined {
   const call = /^([\w.:-]+)\(([\s\S]*)\)$/.exec(event.label.trim());
   if (!call) return undefined;
   const name = call[1]!.replace(/^mcp__\w+?__|^\w+__/, '');
@@ -90,7 +90,7 @@ function activitySummary(activities: readonly string[], touchedFiles: readonly s
  *     hearing the steer (a vendor's "final answer only" result), so the steer
  *     precedes it. It is never placed after the reply: a transcript ending in
  *     a user message reads as an unanswered prompt to the next provider. */
-export function remapSteerOffset(streamed: string, final: string, offset: number): number {
+function remapSteerOffset(streamed: string, final: string, offset: number): number {
   const clamped = Math.max(0, Math.min(streamed.length, offset));
   if (streamed === final || clamped === 0) return Math.min(clamped, final.length);
   let shared = 0;

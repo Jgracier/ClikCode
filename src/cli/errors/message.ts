@@ -40,7 +40,7 @@ function decodeProblem(error: unknown): ProblemJson | null {
  *     stopped being a second, partial reading of the same body.
  *  3. The `x-request-id` response header we echoed on the request.
  */
-export function extractTraceId(error: unknown): string | undefined {
+function extractTraceId(error: unknown): string | undefined {
   const e = error as
     | {
         traceId?: unknown;
@@ -69,7 +69,7 @@ export function extractTraceId(error: unknown): string | undefined {
 }
 
 /** Human-readable base message for an error (without the trace line). */
-export function toCliErrorMessageBase(error: unknown): string {
+function toCliErrorMessageBase(error: unknown): string {
   // Platform unreachable (origin down / Cloudflare 5xx / connection reset) — almost
   // always a transient deploy/restart window. Give a clear, actionable message instead
   // of a raw axios/undici/stack error.
@@ -137,7 +137,7 @@ export function toCliErrorMessage(error: unknown): string {
  * every command surfaces the friendly fetch-failed mapping and a `trace <id>` line
  * instead of a raw `fetch failed` / `Request failed with status code 502`.
  */
-export function apiErrorMessage(error: unknown): string {
+function apiErrorMessage(error: unknown): string {
   return toCliErrorMessage(error);
 }
 

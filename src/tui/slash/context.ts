@@ -20,7 +20,7 @@ export function customCommandsFor(session: HarnessSession, harness: AiLocalHarne
 }
 
 /** Test seam: redirect `~` and ClikCode's own command directories. */
-export const CUSTOM_COMMAND_ROOTS: { home?: string; clikcodeDirs?: readonly string[] } = {};
+const CUSTOM_COMMAND_ROOTS: { home?: string; clikcodeDirs?: readonly string[] } = {};
 
 export function slashExtrasFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): SlashExtras {
   const managers = harness ? localHarnessCapabilityManifest(harness).managers ?? {} : {};

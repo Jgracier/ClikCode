@@ -29,7 +29,7 @@ export interface ToolRunResult {
   diff?: { removed: string[]; added: string[] };
 }
 
-export type ToolClass = 'read' | 'write' | 'exec' | 'network' | 'meta';
+type ToolClass = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
 export interface ToolDefinition<A = Record<string, unknown>> {
   name: string;

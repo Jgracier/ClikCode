@@ -36,7 +36,7 @@ export interface SessionClaim {
   terminalId?: string;
 }
 
-export interface ClaimOptions {
+interface ClaimOptions {
   now?: number;
   host?: string;
   pid?: number;
@@ -46,7 +46,7 @@ export interface ClaimOptions {
   heartbeatAt?: string;
 }
 
-export type ClaimResult =
+type ClaimResult =
   | { acquired: true; claim: SessionClaim }
   | { acquired: false; claim: SessionClaim };
 
@@ -54,7 +54,7 @@ export function claimsDirectory(): string {
   return join(stateDirectory(), 'claims');
 }
 
-export function claimFilePath(sessionId: string): string {
+function claimFilePath(sessionId: string): string {
   return join(claimsDirectory(), `${safeRecordFileName(sessionId)}.json`);
 }
 

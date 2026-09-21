@@ -22,7 +22,7 @@ import { wrapWords } from './wrap.js';
  * styling means every word carries its own complete open+close pair, so a
  * mid-phrase wrap just ends one styled run and starts another identical
  * one -- no dependency on where the line happens to break. */
-export function styleWords(text: string, style: (word: string) => string): string {
+function styleWords(text: string, style: (word: string) => string): string {
   return text.split(/(\s+)/).map((part) => (part && !/^\s+$/.test(part) ? style(part) : part)).join('');
 }
 

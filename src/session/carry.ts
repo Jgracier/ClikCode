@@ -22,7 +22,7 @@ import { dirname, join, relative } from 'node:path';
 import { locateNativeSessionFile, nativeSessionRoot, type NativeSessionEnvironment } from './discovery/locations.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 
-export type CarryNativeSessionInput = {
+type CarryNativeSessionInput = {
   harness: AiLocalHarnessDefinition;
   nativeId: string | undefined;
   workspace: string | undefined;

@@ -37,7 +37,7 @@ export function isRemoteTarget(target: string): boolean {
 }
 
 /** How one harness spells `mcp add`, as the catalog records it. */
-export type McpAddGrammar = {
+type McpAddGrammar = {
   argv: readonly string[];
   shape: 'positional' | 'url-or-doubledash' | 'doubledash-local';
   transportPrefix?: readonly string[];
@@ -90,13 +90,13 @@ export async function harnessesAcceptingMcp(): Promise<AiLocalHarnessDefinition[
   return installed.filter((harness): harness is AiLocalHarnessDefinition => harness !== undefined);
 }
 
-export interface McpInstallResult { harness: string; account?: string; ok: boolean; detail?: string }
+interface McpInstallResult { harness: string; account?: string; ok: boolean; detail?: string }
 
 /** Registers `entry` with one harness, under one account's own profile.
  *
  * Failures are reported, never thrown: one harness refusing a server is not a
  * reason for the other eighteen to go without it. */
-export async function installMcpServer(
+async function installMcpServer(
   harness: AiLocalHarnessDefinition, entry: McpServerEntry, account?: AiHarnessAccount,
 ): Promise<McpInstallResult> {
   const argv = mcpAddArgv(mcpAddGrammar(harness), entry);

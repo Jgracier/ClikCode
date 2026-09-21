@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ConversationItem } from './model-client.js';
 
-export type TranscriptRecord =
+type TranscriptRecord =
   | { kind: 'item'; at: string; item: ConversationItem }
   /** Everything before this record is represented by `summary` when loading. */
   | { kind: 'compaction'; at: string; summary: string; keep: ConversationItem[] };
@@ -15,7 +15,7 @@ function safeSessionId(sessionId: string): string {
   return sessionId;
 }
 
-export function transcriptPath(stateDir: string, sessionId: string): string {
+function transcriptPath(stateDir: string, sessionId: string): string {
   return path.join(stateDir, 'sessions', safeSessionId(sessionId), 'harness.jsonl');
 }
 
@@ -116,7 +116,7 @@ export class ConversationStore {
 
 /** A crash or cancel can leave a tool_call with no result. Structured
  * provider APIs reject that, so resume closes each one explicitly. */
-export function repairDanglingCalls(items: readonly ConversationItem[]): ConversationItem[] {
+function repairDanglingCalls(items: readonly ConversationItem[]): ConversationItem[] {
   const answered = new Set(items.flatMap((item) => item.type === 'tool_result' ? [item.id] : []));
   const out: ConversationItem[] = [];
   let pending: Extract<ConversationItem, { type: 'tool_call' }>[] = [];
@@ -137,7 +137,7 @@ export function repairDanglingCalls(items: readonly ConversationItem[]): Convers
 
 export interface FlatMessage { role: 'user' | 'assistant'; content: string }
 
-export interface FlattenOptions {
+interface FlattenOptions {
   /** Cap for one tool result body. */
   maxResultChars?: number;
   maxArgsChars?: number;
@@ -149,7 +149,7 @@ function clip(text: string, max: number): string {
   return `${text.slice(0, half)}\n… [${text.length - half * 2} characters truncated] …\n${text.slice(text.length - half)}`;
 }
 
-export function renderToolCallLine(item: Extract<ConversationItem, { type: 'tool_call' }>, maxArgsChars = 4000): string {
+function renderToolCallLine(item: Extract<ConversationItem, { type: 'tool_call' }>, maxArgsChars = 4000): string {
   return `[tool call ${item.id}] ${item.name}(${clip(JSON.stringify(item.args), maxArgsChars)})`;
 }
 
@@ -178,14 +178,14 @@ export function flattenForTransport(items: readonly ConversationItem[], options:
 
 /** Future-proof structured form: one message per role run, with typed parts a
  * native tool-calling transport can map 1:1 onto its wire format. */
-export type StructuredPart =
+type StructuredPart =
   | { type: 'text'; text: string }
   | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> }
   | { type: 'tool-result'; toolCallId: string; toolName: string; output: string; isError: boolean };
 
-export interface StructuredMessage { role: 'user' | 'assistant' | 'tool'; content: StructuredPart[] }
+interface StructuredMessage { role: 'user' | 'assistant' | 'tool'; content: StructuredPart[] }
 
-export function toStructuredMessages(items: readonly ConversationItem[]): StructuredMessage[] {
+function toStructuredMessages(items: readonly ConversationItem[]): StructuredMessage[] {
   const out: StructuredMessage[] = [];
   const push = (role: StructuredMessage['role'], part: StructuredPart): void => {
     const last = out[out.length - 1];

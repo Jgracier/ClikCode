@@ -1,13 +1,13 @@
 /** Per-turn usage ledger. Pure: the loop owns when to report. */
 import type { TokenUsage } from './model-client.js';
 
-export interface UsageLedgerEntry {
+interface UsageLedgerEntry {
   step: number;
   usage: TokenUsage;
   servedModel?: string;
 }
 
-export interface UsageLedger {
+interface UsageLedger {
   entries: UsageLedgerEntry[];
   total: TokenUsage;
   /** Input size of the most recent step: the best available measure of how
@@ -19,7 +19,7 @@ const FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMic
 
 /** Sum two usages. A field stays absent when neither side reported it, so
  * "the vendor said nothing" never degrades into a fabricated 0. */
-export function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
+function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
   const out: TokenUsage = {};
   for (const field of FIELDS) {
     const a = left[field];
@@ -46,6 +46,6 @@ export function recordUsage(ledger: UsageLedger, entry: UsageLedgerEntry): Usage
   };
 }
 
-export function aggregateUsage(usages: readonly TokenUsage[]): TokenUsage {
+function aggregateUsage(usages: readonly TokenUsage[]): TokenUsage {
   return usages.reduce<TokenUsage>((total, usage) => addUsage(total, usage), {});
 }

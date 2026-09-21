@@ -8,7 +8,7 @@ import { flattenForTransport, type FlatMessage } from '../conversation.js';
 import type { ModelClient, ModelStepRequest, ModelStepResult, TokenUsage } from '../model-client.js';
 
 /** Mirrors clikrouter's AiChatTurnInput (packages/clikrouter/src/ai-provider-models.ts). */
-export interface RouterTurnInput {
+interface RouterTurnInput {
   provider: string;
   model: string;
   apiKey?: string;
@@ -28,7 +28,7 @@ export interface RouterTurnInput {
 }
 
 /** Mirrors the parts of AiChatTurnResult this client reads. */
-export interface RouterTurnResult {
+interface RouterTurnResult {
   text?: string;
   toolCalls?: { name: string; args: Record<string, unknown> }[];
   usage?: {
@@ -41,7 +41,7 @@ export interface RouterTurnResult {
   warnings?: { type: string; feature?: string; details?: string }[];
 }
 
-export interface RouterModelClientOptions {
+interface RouterModelClientOptions {
   provider: string;
   model: string;
   apiKey?: string;
@@ -63,7 +63,7 @@ export interface RouterModelClientOptions {
 const TOOL_PROTOCOL_NOTE = `\n\n# Tool transcript format
 Earlier tool activity appears in the conversation as text: lines starting with "[tool call <id>]" are calls you made, and user messages starting with "Tool result for" are their outputs from the harness. Never write either form yourself — to use a tool, make a real tool call.`;
 
-export function routerUsage(result: RouterTurnResult): TokenUsage {
+function routerUsage(result: RouterTurnResult): TokenUsage {
   const usage = result.usage ?? {};
   const out: TokenUsage = {};
   if (typeof usage.inputTokens === 'number') out.input = usage.inputTokens;
@@ -75,7 +75,7 @@ export function routerUsage(result: RouterTurnResult): TokenUsage {
   return out;
 }
 
-export class RouterModelClient implements ModelClient {
+class RouterModelClient implements ModelClient {
   constructor(private readonly options: RouterModelClientOptions) {}
 
   async step(request: ModelStepRequest): Promise<ModelStepResult> {

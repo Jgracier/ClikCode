@@ -12,10 +12,10 @@ import type { ConversationItem, ModelClient, TokenUsage } from './model-client.j
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const COMPACTION_THRESHOLD = 0.8;
-export const MEMORY_CAP_BYTES = 32 * 1024;
+const MEMORY_CAP_BYTES = 32 * 1024;
 const KEEP_RECENT_ITEMS = 6;
 
-export const STATIC_INSTRUCTIONS = `You are ClikCode, a coding agent working directly in the user's repository through tools. You act; you do not just advise.
+const STATIC_INSTRUCTIONS = `You are ClikCode, a coding agent working directly in the user's repository through tools. You act; you do not just advise.
 
 # Working method
 - Understand before changing: locate code with grep and glob, then read_file the relevant parts. Never guess at file contents, APIs or paths.
@@ -50,7 +50,7 @@ export const STATIC_INSTRUCTIONS = `You are ClikCode, a coding agent working dir
 export const PLAN_MODE_INSTRUCTIONS = `# Plan mode is ACTIVE
 You may only research: read, search and fetch. File changes and commands are disabled. Investigate until you can write a concrete plan, then call exit_plan_mode with it. Do not ask the user whether to proceed in prose; exit_plan_mode is how approval is requested.`;
 
-export interface SystemPromptInput {
+interface SystemPromptInput {
   cwd: string;
   addDirs?: readonly string[];
   /** Directory holding the user-level AGENTS.md. */
@@ -61,7 +61,7 @@ export interface SystemPromptInput {
   git?: (args: readonly string[], cwd: string) => Promise<string | undefined>;
 }
 
-export function runGit(args: readonly string[], cwd: string, timeoutMs = 2000): Promise<string | undefined> {
+function runGit(args: readonly string[], cwd: string, timeoutMs = 2000): Promise<string | undefined> {
   return new Promise((resolve) => {
     let settled = false;
     const done = (value: string | undefined): void => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
@@ -92,7 +92,7 @@ async function readCapped(file: string, remaining: number): Promise<string | und
 /** User AGENTS.md, then AGENTS.md (or, failing that, CLAUDE.md) for each
  * directory from the repository root down to cwd. Outer first, so the most
  * specific instructions come last and win. */
-export async function loadMemoryChain(input: { cwd: string; userConfigDir: string; repoRoot?: string }): Promise<{ file: string; text: string }[]> {
+async function loadMemoryChain(input: { cwd: string; userConfigDir: string; repoRoot?: string }): Promise<{ file: string; text: string }[]> {
   const out: { file: string; text: string }[] = [];
   let remaining = MEMORY_CAP_BYTES;
   const take = async (candidates: string[]): Promise<void> => {
@@ -156,11 +156,11 @@ export async function buildSystemPrompt(input: SystemPromptInput): Promise<strin
 
 // ── token estimation ─────────────────────────────────────────────────────────
 
-export function estimateTextTokens(text: string): number {
+function estimateTextTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-export function estimateItemTokens(item: ConversationItem): number {
+function estimateItemTokens(item: ConversationItem): number {
   switch (item.type) {
     case 'text': case 'summary': return estimateTextTokens(item.text) + 4;
     case 'tool_call': return estimateTextTokens(item.name) + estimateTextTokens(JSON.stringify(item.args)) + 8;
@@ -187,7 +187,7 @@ const ELIDE_KEEP_CHARS = 600;
 
 /** Stage 1: shrink old tool results to head+tail. Cheap, no model call, and
  * usually what is actually filling the window. */
-export function elideOldToolResults(items: readonly ConversationItem[], keepRecent = KEEP_RECENT_ITEMS): ConversationItem[] {
+function elideOldToolResults(items: readonly ConversationItem[], keepRecent = KEEP_RECENT_ITEMS): ConversationItem[] {
   const boundary = Math.max(0, items.length - keepRecent);
   return items.map((item, index) => {
     if (index >= boundary || item.type !== 'tool_result' || item.output.length <= ELIDE_KEEP_CHARS * 2 + 80) return item;
@@ -215,7 +215,7 @@ function renderForSummary(items: readonly ConversationItem[]): string {
   }).join('\n\n');
 }
 
-export interface CompactionInput {
+interface CompactionInput {
   items: readonly ConversationItem[];
   modelClient: ModelClient;
   signal?: AbortSignal;
@@ -225,7 +225,7 @@ export interface CompactionInput {
   system?: string;
 }
 
-export interface CompactionResult {
+interface CompactionResult {
   items: ConversationItem[];
   stage: 'none' | 'elided' | 'summarized';
   summary?: string;

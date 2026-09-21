@@ -6,7 +6,7 @@ import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
 
-export interface NativeHarnessTurnOutput {
+interface NativeHarnessTurnOutput {
   stdout: string;
   stderr: string;
   exitCode: number;
@@ -21,7 +21,7 @@ export interface NativeHarnessTurnOutput {
 /** Lets the caller tell the idle watchdog what it has learned from the stream.
  * A harness running a long silent build says nothing for many minutes, yet is
  * not hung: the caller saw the tool start and has not seen it finish. */
-export interface NativeTurnIdleController {
+interface NativeTurnIdleController {
   /** Any externally observed sign of life; restarts the idle countdown. */
   noteActivity(): void;
   /** A tool began. While any tool is outstanding the (much longer) tool idle
@@ -73,7 +73,7 @@ export function noteTurnActivityEvent(
   else controller.noteActivity();
 }
 
-export interface NativeHarnessTurnOptions {
+interface NativeHarnessTurnOptions {
   cwd?: string;
   stdinText?: string;
   signal?: AbortSignal;
@@ -97,18 +97,18 @@ export interface NativeHarnessTurnOptions {
  * agentic turn can run for a very long time, but it narrates while it does.
  * A harness that has said nothing at all for this long is wedged, and without
  * this the turn blocks forever with only Ctrl+C to break it. */
-export const DEFAULT_TURN_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_TURN_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** A build or test suite can legitimately be silent far longer than a model. */
-export const DEFAULT_TOOL_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_TOOL_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 
 /** Hard cap on retained output when nothing streams it away. */
-export const TURN_OUTPUT_LIMIT = 16 * 1024 * 1024;
+const TURN_OUTPUT_LIMIT = 16 * 1024 * 1024;
 
 /** Retained tail per stream when the caller consumes lines as they arrive. */
-export const TURN_OUTPUT_TAIL_LIMIT = 4 * 1024 * 1024;
+const TURN_OUTPUT_TAIL_LIMIT = 4 * 1024 * 1024;
 
-export function turnIdleTimeoutMs(
+function turnIdleTimeoutMs(
   override?: number, environment: NodeJS.ProcessEnv = process.env,
 ): number {
   if (override !== undefined) return override;
@@ -124,7 +124,7 @@ export function turnIdleTimeoutMs(
  * paths, sometimes a JSON blob. The first line that is none of those is
  * almost always the actual complaint, and it is all that belongs on screen.
  */
-export function firstUsefulLine(stderr: string, limit = 200): string {
+function firstUsefulLine(stderr: string, limit = 200): string {
   // Stack frames, brackets, bare paths, carets, and the runtime's own
   // `throw err;` line -- none of them is the complaint.
   const noise = /^\s*(?:at\s|[{}[\]]|"|\/|[A-Za-z]:\\|\.{3}|Require stack|throw\s|\^+\s*$|node:internal)/;
@@ -143,7 +143,7 @@ export function firstUsefulLine(stderr: string, limit = 200): string {
 /** A failed turn keeps its two streams apart: stderr is the vendor CLI's own
  * diagnostics and is safe to classify, stdout may be model-authored text that
  * merely *mentions* "rate limit" or "unauthorized". */
-export class NativeHarnessTurnError extends Error {
+class NativeHarnessTurnError extends Error {
   stderrTail: string;
   stdoutTail: string;
   exitCode?: number;

@@ -25,7 +25,7 @@ import type { HarnessDefaultSettings, HarnessSession } from './model.js';
 export const VALID_EFFORTS = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['ask', 'bypass', 'auto'];
 
-export type ProviderChoice =
+type ProviderChoice =
   | { kind: 'gateway' }
   | { kind: 'provider'; harness: string };
 
@@ -240,13 +240,13 @@ export function providerPickerOptions(
 }
 
 /** Whether the account menu can actually complete an add operation. */
-export function harnessCanAddAccount(harness: AiLocalHarnessDefinition): boolean {
+function harnessCanAddAccount(harness: AiLocalHarnessDefinition): boolean {
   return harness.localAuth.includes('api-key') || Boolean(harness.loginArgv);
 }
 
 /** Account usage is loaded only after its provider is opened, avoiding a
  * wall of rows and avoiding quota probes for providers the user never views. */
-export function providerAccountPickerOptions(
+function providerAccountPickerOptions(
   harness: AiLocalHarnessDefinition,
   accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string; usagePending?: boolean }>,
   session: HarnessSession,

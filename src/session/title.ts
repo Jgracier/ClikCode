@@ -30,7 +30,7 @@ const OPEN = '<clikcode-title>';
 const CLOSE = '</clikcode-title>';
 
 /** Appended to the first turn of an unnamed chat, and to no other turn. */
-export function titleRequest(): string {
+function titleRequest(): string {
   return `\n\n${OPEN}Before anything else, on its very first line, reply with `
     + `${OPEN}a title${CLOSE} — at most ${SESSION_TITLE_MAX} characters, naming what this `
     + `conversation is about (not what it literally says). Then answer normally. `

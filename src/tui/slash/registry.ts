@@ -7,10 +7,10 @@
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 
-export type SlashGroup =
+type SlashGroup =
   | 'Common' | 'Conversation' | 'Workspace' | 'Provider' | 'Settings' | 'Sessions' | 'Info' | 'Tools' | 'Custom' | 'Switch harness';
 
-export const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
+const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
   'Common', 'Conversation', 'Workspace', 'Provider', 'Settings', 'Sessions', 'Info', 'Tools', 'Custom', 'Switch harness',
 ];
 
@@ -41,9 +41,9 @@ export const SLASH_HANDLER_KEYS = [
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
 
-export interface SlashAvailability { available: boolean; reason?: string }
+interface SlashAvailability { available: boolean; reason?: string }
 
-export interface SlashCommandEntry {
+interface SlashCommandEntry {
   /** Without the leading slash. */
   name: string;
   aliases: readonly string[];
@@ -153,7 +153,7 @@ export function resolveSlashCommand(head: string): SlashCommandEntry | undefined
   return BY_NAME.get(head.toLowerCase());
 }
 
-export interface ParsedSlashInput { head: string; args: string; words: string[] }
+interface ParsedSlashInput { head: string; args: string; words: string[] }
 
 /** `head + args`, uniformly: `/model gpt-5` and `/model` reach the same handler. */
 export function parseSlashInput(line: string): ParsedSlashInput | undefined {
@@ -163,7 +163,7 @@ export function parseSlashInput(line: string): ParsedSlashInput | undefined {
   return { head: match[1]!.toLowerCase(), args, words: args ? args.split(/\s+/) : [] };
 }
 
-export interface SlashPaletteEntry { label: string; value: string; detail: string; argHint?: string; group: SlashGroup }
+interface SlashPaletteEntry { label: string; value: string; detail: string; argHint?: string; group: SlashGroup }
 export interface SlashExtras {
   /** Vendor managers the harness declares (mcp, skills, …). */
   managers?: ReadonlyArray<{ name: string; label: string }>;
@@ -241,7 +241,7 @@ export function slashPalette(
 }
 
 /** `[usage, description]` rows per group, for the human /help panel. */
-export function slashHelpSections(
+function slashHelpSections(
   session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, extras: SlashExtras = {},
 ): Array<{ group: SlashGroup; rows: Array<[string, string]> }> {
   const sections = new Map<SlashGroup, Array<[string, string]>>();
@@ -315,7 +315,7 @@ export interface SlashRouteContext {
   pathExists?: (path: string) => boolean;
 }
 
-export type SlashRoute =
+type SlashRoute =
   | { kind: 'prompt'; prompt: string }
   | { kind: 'command'; entry: SlashCommandEntry; head: string; args: string; words: string[] }
   | { kind: 'harness'; command: string; args: string }

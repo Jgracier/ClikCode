@@ -12,17 +12,17 @@ import { scopeOf } from './fs-helpers.js';
 
 interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string }
 
-export const BASH_DEFAULT_TIMEOUT_MS = 120_000;
-export const BASH_MAX_TIMEOUT_MS = 600_000;
+const BASH_DEFAULT_TIMEOUT_MS = 120_000;
+const BASH_MAX_TIMEOUT_MS = 600_000;
 const KILL_GRACE_MS = 1500;
 const BACKGROUND_BUFFER_CHARS = 1024 * 1024;
 
-export function shellInvocation(command: string): { file: string; args: string[] } {
+function shellInvocation(command: string): { file: string; args: string[] } {
   if (process.platform === 'win32') return { file: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command] };
   return { file: existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', args: ['-c', command] };
 }
 
-export function shellEnvironment(): Record<string, string> {
+function shellEnvironment(): Record<string, string> {
   return { ...scrubEnvironment(process.env), CLIKCODE: '1', TERM: 'dumb', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', PAGER: 'cat' };
 }
 
@@ -74,7 +74,7 @@ class CappedOutput {
 /** SIGTERM the group, then SIGKILL it. The escalation signals the GROUP
  * directly: killProcessTreePortable stops once the shell itself has exited,
  * but a grandchild that ignored SIGTERM is still holding the pipes open. */
-export function killTree(child: BackgroundShell['child'], detached: boolean): void {
+function killTree(child: BackgroundShell['child'], detached: boolean): void {
   killProcessTreePortable(child, 'SIGTERM', detached);
   const timer = setTimeout(() => {
     if (detached && process.platform !== 'win32' && child.pid) {

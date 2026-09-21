@@ -10,7 +10,7 @@ export const hyperlinkOpen = (href: string): string => `\u001b]8;;${href}\u001b\
  * is at best ignored and at worst printed, so the fallback is `text (href)`.
  * tmux forwards OSC 8 only with passthrough configured, which cannot be
  * detected from inside it; CLIKCODE_HYPERLINKS=1 opts in there. */
-export function hyperlinksSupported(environment: NodeJS.ProcessEnv = process.env, isTty = Boolean(process.stdout.isTTY)): boolean {
+function hyperlinksSupported(environment: NodeJS.ProcessEnv = process.env, isTty = Boolean(process.stdout.isTTY)): boolean {
   const flag = (value: string | undefined): boolean => value !== undefined && value !== '' && value !== '0' && value.toLowerCase() !== 'false';
   if (flag(environment.CLIKCODE_NO_HYPERLINKS)) return false;
   if (!isTty || (environment.TERM ?? '').toLowerCase() === 'dumb') return false;
@@ -26,7 +26,7 @@ export function hyperlinksSupported(environment: NodeJS.ProcessEnv = process.env
 let hyperlinksEnabled: boolean | undefined;
 
 /** Tests and callers that know better than the environment can decide. */
-export function setHyperlinksEnabled(enabled: boolean | undefined): void { hyperlinksEnabled = enabled; }
+function setHyperlinksEnabled(enabled: boolean | undefined): void { hyperlinksEnabled = enabled; }
 
 /** Resolved once per process unless something sets it explicitly. */
 export const linksOn = (): boolean => hyperlinksEnabled ?? (hyperlinksEnabled = hyperlinksSupported());

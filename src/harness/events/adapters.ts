@@ -6,7 +6,7 @@ import { nativeActivityPhaseFromValue } from '../protocol/activity-line.js';
 import { nativeSessionIdsFromValues } from '../protocol/session-ids.js';
 import { nativeUsageFromValue, type NativeTurnUsage } from '../protocol/turn-usage.js';
 
-export interface NativeResponseUpdate { text: string; mode: 'append' | 'replace' }
+interface NativeResponseUpdate { text: string; mode: 'append' | 'replace' }
 type Json = Record<string, unknown>;
 type ResponseParser = (value: Json, harness: AiLocalHarnessDefinition) => NativeResponseUpdate | undefined;
 
@@ -45,7 +45,7 @@ function streamState(harness: AiLocalHarnessDefinition, value: Json): StreamStat
 
 /** Forget all per-turn streaming state (tests; or before reusing a session id
  * for a new turn on a harness that emits no init record). */
-export function resetHarnessStreamState(): void {
+function resetHarnessStreamState(): void {
   streamStates.clear();
 }
 
@@ -195,7 +195,7 @@ const genericParser: ResponseParser = (value) => {
 };
 
 /** The response update carried by one already-parsed record. */
-export function nativeResponseUpdateFromValue(harness: AiLocalHarnessDefinition, value: unknown): NativeResponseUpdate | undefined {
+function nativeResponseUpdateFromValue(harness: AiLocalHarnessDefinition, value: unknown): NativeResponseUpdate | undefined {
   const record = object(value);
   if (!record || Array.isArray(value)) return undefined;
   return (parsers[harness.command] ?? genericParser)(record, harness);
@@ -207,7 +207,7 @@ export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText
 
 export interface HarnessLineError { message: string; statusCode?: number; kind?: string }
 
-export interface ParsedHarnessLine {
+interface ParsedHarnessLine {
   /** Live assistant text carried by this line. */
   response?: NativeResponseUpdate;
   /** First activity on the line (see `activities`). */
@@ -264,7 +264,7 @@ export function parseHarnessLine(harness: AiLocalHarnessDefinition, lineText: st
 }
 
 /** parseHarnessLine for a record the caller has already parsed. */
-export function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Record<string, unknown>): ParsedHarnessLine {
+function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Record<string, unknown>): ParsedHarnessLine {
   const response = nativeResponseUpdateFromValue(harness, value);
   const activities = parseNativeActivityEventsFromValue(harness, value);
   const phase = nativeActivityPhaseFromValue(harness, value);

@@ -3,7 +3,7 @@
 
 import { nextCharacterIndex, terminalCellWidth } from './width.js';
 
-export interface ComposerLayout {
+interface ComposerLayout {
   rows: string[];
   cursorRow: number;
   cursorWidth: number;

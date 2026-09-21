@@ -294,7 +294,7 @@ export function announceBareInteractiveLogin(harness: AiLocalHarnessDefinition):
   }
 }
 
-export function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {
+function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {
   const account = state.accounts.find((item) => item.id === labelOrId || item.label.toLowerCase() === labelOrId.toLowerCase());
   if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
   if (account.authKind !== 'vendor-cli') throw new Error(`account "${account.label}" is not owned by a vendor CLI`);
@@ -379,7 +379,7 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   emitJson({ account: accountView(account), credentialBoundary: 'local-only' });
 }
 
-export interface AccountRemoveOptions {
+interface AccountRemoveOptions {
   /** Delete the account's profile directory (its vendor credentials). Defaults
    * to true, and only ever applies to a directory ClikCode created under its
    * own profiles root -- anything else is left exactly where it is. */

@@ -25,7 +25,7 @@ export { parseProblemJson, problemJsonMessage } from './catalog.generated.js';
 
 import { ERROR_CATALOG } from './catalog.generated.js';
 
-export interface ResolvedCatalogError {
+interface ResolvedCatalogError {
   code: string;
   message: string;
   remediation?: string;
@@ -41,7 +41,7 @@ export interface ResolvedCatalogError {
  * a specific verdict as the generic BUILDER_BUILD_FAILED. Showing the user the real code, or no
  * code and the raw error, is strictly more honest than showing a confident wrong one.
  */
-export function resolveCatalogError(
+function resolveCatalogError(
   explicitCode?: string | null
 ): ResolvedCatalogError | null {
   const code = explicitCode && ERROR_CATALOG[explicitCode] ? explicitCode : null;

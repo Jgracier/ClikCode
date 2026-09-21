@@ -83,7 +83,7 @@ export type SettlingTool = {
   id: string; done: boolean; lines: readonly string[]; responseOffset?: number;
 };
 
-export type BlockRenderer = (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
+type BlockRenderer = (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
 
 /** Merge newly settled tool rows into newly settled prose by response offset,
  * using the same rule responseTimeline uses on screen: a tool belongs after
