@@ -84,10 +84,129 @@ a working directory, and it survives changing your mind about which tool or
 which account should answer it. Running `clikcode` with no arguments picks up
 the last one you were in.
 
+## Driving it
+
+Two keys do almost everything.
+
+**Right Arrow opens, and Right Arrow selects.** On an empty line it opens the
+command list. On a highlighted row it opens that row — a tool, an account, a
+conversation. You can go a long way without typing anything.
+
+**Left Arrow goes back**, always, and never confirms. That one rule is why you
+can explore a menu without worrying about setting something by accident.
+
+| Key | What it does |
+| --- | --- |
+| **→** | Open the command list, or select what is highlighted |
+| **←** | Back, one level |
+| **↑ ↓** | Move through a list; in an empty composer, your previous messages |
+| **Enter** | Send, or confirm the highlighted row |
+| **Tab** | Complete the highlighted command |
+| **Delete** | The destructive action on a row — remove an account, delete a conversation |
+| **Esc** | Stop the current answer, keeping what you typed. Clears a draft otherwise |
+| **Ctrl+C** | Stop the answer. On a draft, clears it; twice within two seconds exits |
+| **Ctrl+D** | Exit, on an empty line |
+| **Ctrl+Z** | Drop to a shell; `fg` brings you back |
+| **PgUp / PgDn** | Scroll back through the conversation |
+
+Enter sends. For a newline that works in every terminal and over every SSH
+client, end the line with a backslash and press Enter; Shift+Enter also works
+where the terminal supports it.
+
+Scrolling with a mouse or a trackpad works. When you want your terminal's own
+selection instead — to copy something out — `/select` releases the mouse, and
+`/select` again takes it back.
+
+## Signing in, and adding more
+
+`clikcode accounts login <tool>` runs that tool's own sign-in and gives the
+result a name. Run it again with a different `--label` and you have a second
+account. Nothing stops you at two.
+
+That is what makes the rest possible — running out only survives if there is
+somewhere else to go.
+
+Each account gets its own directory under `~/.clikcode/profiles/`, and
+ClikCode points the tool at it using that vendor's own supported setting —
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `QWEN_HOME` and so on — for
+one child process at a time. Nothing global changes, and the `~/.claude`,
+`~/.codex` logins you already had are untouched.
+
+Nine tools work this way today: Claude Code, Codex, GitHub Copilot, Gemini
+CLI, Qwen Code, Antigravity, Pi, Hermes and Command Code. The rest hold one
+account each — usually an API key — added with `clikcode accounts add`.
+
+Two of the nine, Antigravity and Command Code, have no such setting, so
+ClikCode points `HOME` elsewhere for that one process instead. On its own that
+would also hide your git, npm, GitHub CLI, Docker, GnuPG, Cargo and ssh-agent
+configuration from the agent, so ClikCode points those back at your real home.
+Turns still commit, push and install as you.
+
+Switch by hand with `/account` in a session, or
+`clikcode sessions set <id> --account <label>`.
+
+## When an account runs out
+
+ClikCode watches how much each account has left — `/usage` shows it, and it
+sits in the corner of the screen while you work. When the one you are on is
+spent, the turn moves to another account of the same tool and the answer keeps
+arriving. You are told after the fact, not asked first.
+
+What travels is the point. ClikCode copies the tool's own conversation file
+into the next account and resumes it there, so the model continues the real
+thread instead of a summary of it. It does not re-read your project, and it
+does not forget what it just said.
+
+This is on by default. Turn it off for the current conversation with
+`/accounts failover never`, or for a new one with
+`clikcode sessions create --account-failover never`.
+
+## Resume anything, from anywhere
+
+`/resume` shows two things: your ClikCode conversations, and chats the tools
+started on their own — ones you ran in Claude Code or Codex directly, before
+ClikCode was involved.
+
+Pick one of the second kind and it becomes one of the first. It gets a row in
+your list, and you can carry it on, fork it, rename it or hand it to another
+tool.
+
+Claude Code, Codex and OpenCode hand over their full history when adopted, so
+you can scroll back through it. For the others the thread is real and the tool
+remembers all of it, but ClikCode's own view starts at your next message.
+
+## Moving a conversation to another tool
+
+Changing accounts keeps you on the same tool. Changing the tool is one
+command: `/provider` to pick from a list, or its name directly — `/claude`,
+`/codex`, `/gemini` — with your next message on the same line.
+
+```
+/codex have another look at the migration
+```
+
+The conversation keeps its name, its history and its place in your list. No
+vendor can read another vendor's memory, so the new tool is sent the
+conversation so far as context. On a long thread that costs tokens and a few
+seconds. Nothing else changes.
+
+## One MCP server, every tool
+
+Tools that support MCP each want it configured their own way. Add a server
+once and ClikCode installs it into all of them, in each one's spelling:
+
+```sh
+clikcode mcp targets                        # who would receive it, and how
+clikcode mcp add postgres npx -y pg-mcp     # send it to all of them
+```
+
+ClikCode does not host or proxy these servers. Each tool talks to them
+directly, exactly as it would if you had configured it by hand.
+
 ## Everyday commands
 
-Each of these is also a `/` command inside a session. Script them, or type
-them.
+Everything above is reachable from the command line too, for scripting or for
+when you would rather type than pick.
 
 | Command | What it does |
 | --- | --- |
@@ -216,89 +335,6 @@ but stay out of the pinned list so they don't read as ClikCode's. So do your
 own: drop a `*.md` prompt template in `.clikcode/commands/` for this project,
 or `~/.clikcode/commands/` for all of them, and it becomes a slash command
 named after the file.
-
-## Working with several accounts
-
-Several accounts for the same tool can run side by side. Everything else in
-this section depends on it: running out only survives if there is somewhere to
-go.
-
-Each account gets its own directory under `~/.clikcode/profiles/`, and
-ClikCode points the tool at it using that vendor's own supported setting —
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `QWEN_HOME` and so on — for
-one child process at a time. Nothing global changes, and the `~/.claude`,
-`~/.codex` logins you already had are untouched.
-
-Nine tools work this way today: Claude Code, Codex, GitHub Copilot, Gemini
-CLI, Qwen Code, Antigravity, Pi, Hermes and Command Code. The rest hold one
-account each — usually an API key — added with `clikcode accounts add`.
-
-Two of the nine, Antigravity and Command Code, have no such setting, so
-ClikCode points `HOME` elsewhere for that one process instead. On its own that
-would also hide your git, npm, GitHub CLI, Docker, GnuPG, Cargo and ssh-agent
-configuration from the agent, so ClikCode points those back at your real home.
-Turns still commit, push and install as you.
-
-Switch by hand with `/account` in a session, or
-`clikcode sessions set <id> --account <label>`.
-
-## When an account runs out
-
-ClikCode watches how much each account has left — `/usage` shows it, and it
-sits in the corner of the screen while you work. When the one you are on is
-spent, the turn moves to another account of the same tool and the answer keeps
-arriving. You are told after the fact, not asked first.
-
-What travels is the point. ClikCode copies the tool's own conversation file
-into the next account and resumes it there, so the model continues the real
-thread instead of a summary of it. It does not re-read your project, and it
-does not forget what it just said.
-
-This is on by default. Turn it off for the current conversation with
-`/accounts failover never`, or for a new one with
-`clikcode sessions create --account-failover never`.
-
-## Moving a conversation to another tool
-
-Switching accounts keeps you on the same tool. Switching tools is one command:
-`/provider` to pick from a list, or the tool's name directly — `/claude`,
-`/codex`, `/gemini` — with your next message on the same line.
-
-```
-/codex have another look at the migration
-```
-
-The conversation keeps its name, its history and its place in your list. No
-vendor can read another vendor's memory, so the new tool is sent the
-conversation so far as context. On a long thread that costs tokens and a few
-seconds. Nothing else changes.
-
-## Picking up chats you started elsewhere
-
-`/resume` shows two things: your ClikCode conversations, and chats the tools
-started on their own — ones you ran in Claude Code or Codex directly, before
-ClikCode was involved.
-
-Pick one of the second kind and it becomes one of the first. It gets a row in
-your list, and you can carry it on, fork it, rename it or hand it to another
-tool.
-
-Claude Code, Codex and OpenCode hand over their full history when adopted, so
-you can scroll back through it. For the others the thread is real and the tool
-remembers all of it, but ClikCode's own view starts at your next message.
-
-## One MCP server, every tool
-
-Tools that support MCP each want it configured their own way. Add a server
-once and ClikCode installs it into all of them, in each one's spelling:
-
-```sh
-clikcode mcp targets                        # who would receive it, and how
-clikcode mcp add postgres npx -y pg-mcp     # send it to all of them
-```
-
-ClikCode does not host or proxy these servers. Each tool talks to them
-directly, exactly as it would if you had configured it by hand.
 
 ## Running without a vendor tool
 
