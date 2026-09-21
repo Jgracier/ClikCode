@@ -33,9 +33,10 @@ describe('tool glyphs', () => {
     }
   });
 
-  it('still marks a tool with no category', () => {
-    expect(toolGlyph(undefined)).toBe('·');
-    expect(terminalCellWidth(toolGlyph(undefined))).toBe(1);
+  it('leaves a tool with no category bare', () => {
+    // A marker on every row was tried and removed: it read as a column of
+    // dots. A glyph is for saying which KIND of work this was.
+    expect(toolGlyph(undefined)).toBe('');
   });
 });
 
