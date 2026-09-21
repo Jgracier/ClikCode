@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import chalk from 'chalk';
-import { paintUsageRule, usageRemainingPercent } from './waiting.js';
+import { paintTitleRule, paintUsageRule, usageRemainingPercent } from './waiting.js';
 
 // Colour is off by default with no TTY, which would make every assertion
 // below vacuously pass. These tests are about which colour is chosen.
@@ -48,17 +48,19 @@ describe('usage reads by state, not as furniture', () => {
     expect(usageRemainingPercent(undefined)).toBeUndefined();
   });
 
-  it('goes green with headroom, yellow when low, red when gone', () => {
-    const green = paintUsageRule(40, '80% left');
-    const low = paintUsageRule(40, '9% left');
-    const gone = paintUsageRule(40, '0% left');
-    expect(colourOf(green, '80% left')).toBe('32');
-    expect(colourOf(low, '9% left')).toBe('33');
-    expect(colourOf(gone, '0% left')).toBe('31');
+  it('stays the calm label colour until the allowance is actually gone', () => {
+    // Green-for-healthy was noise -- nothing is wrong, so nothing needs
+    // saying -- and yellow reads muddy on a dark terminal and fights whatever
+    // theme the user chose. Only running out is worth a colour of its own.
+    expect(colourOf(paintUsageRule(40, '80% left'), '80% left')).toBe('35');
+    expect(colourOf(paintUsageRule(40, '9% left'), '9% left')).toBe('35');
+    expect(colourOf(paintUsageRule(40, '0% left'), '0% left')).toBe('31');
   });
 
-  it('reads Credits Exhausted as gone even with no percentage in it', () => {
-    expect(colourOf(paintUsageRule(40, 'Credits Exhausted'), 'Credits Exhausted')).toBe('31');
+  it('shares one colour with the chat title, because they are the same kind of thing', () => {
+    // Both are a standing fact about this session, pinned to a rule's edge.
+    expect(colourOf(paintTitleRule(40, 'refactor the parser'), 'refactor the parser'))
+      .toBe(colourOf(paintUsageRule(40, '80% left'), '80% left'));
   });
 
   it('leaves the rule itself dim, and says nothing when there is no label', () => {
@@ -67,7 +69,7 @@ describe('usage reads by state, not as furniture', () => {
   });
 
   it('keeps a label it cannot read from shouting', () => {
-    // An unparseable figure is not an emergency; it stays furniture-coloured.
-    expect(colourOf(paintUsageRule(40, 'tokens: 12k'), 'tokens: 12k')).toBe('2');
+    // An unparseable figure is not an emergency: it reads as a label, not red.
+    expect(colourOf(paintUsageRule(40, 'tokens: 12k'), 'tokens: 12k')).toBe('35');
   });
 });

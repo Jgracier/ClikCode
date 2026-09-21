@@ -31,7 +31,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, listenForTerminalKeys, onKeyBatchEnd, w
 import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { formatTurnUsage } from './render/usage-line.js';
-import { liveConversationLines, paintUsageRule, rightLabeledRule, waitingSpinnerGlyph } from './render/waiting.js';
+import { liveConversationLines, paintTitleRule, paintUsageRule, rightLabeledRule, waitingSpinnerGlyph } from './render/waiting.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
@@ -1176,15 +1176,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // rule rather than needing a line of its own. Provider/model/directory
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
-    footer.push(chalk.dim(rightLabeledRule(rowWidth, this.titleText())));
-    // The provider is identity -- which harness is about to answer -- and is
-    // the one part of this line worth reading at a glance. The rest (model,
-    // effort, directory) stays dim, so the line still recedes as a whole.
+    footer.push(paintTitleRule(rowWidth, this.titleText()));
+    // The whole status line is ClikCode's own chrome, so it takes the chrome
+    // colour at low intensity -- dull cyan, a family with the caret above it
+    // rather than the flat grey of the furniture. The provider is brighter
+    // inside that line: which harness is about to answer is the one part of
+    // it worth reading at a glance, and brightness carries that without
+    // introducing another colour.
     const metaText = visibleSlice(meta, inner);
     const separator = metaText.indexOf(' \u2022 ');
     footer.push(separator > 0
-      ? `  ${chalk.cyan(metaText.slice(0, separator))}${chalk.dim(metaText.slice(separator))}`
-      : `  ${chalk.dim(metaText)}`);
+      ? `  ${chalk.cyan(metaText.slice(0, separator))}${chalk.cyan.dim(metaText.slice(separator))}`
+      : `  ${chalk.cyan.dim(metaText)}`);
 
     // The live region is bounded by the viewport: it is erased and redrawn as
     // one block every frame, so it can never be taller than the terminal. A
