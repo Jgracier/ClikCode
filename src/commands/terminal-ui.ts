@@ -141,6 +141,11 @@ const EXIT_CONFIRM_MS = 2000;
  * milliseconds apart; this is longer than that gap and shorter than a frame a
  * reader would notice missing. */
 const RESIZE_SETTLE_MS = 120;
+/** The least a pending scroll moves in one frame, so a drain always finishes.
+ * Claude Code's value. */
+const SCROLL_DRAIN_MIN = 4;
+/** One frame, roughly: the gap between drains of an outstanding scroll. */
+const SCROLL_DRAIN_MS = 16;
 
 /** The alternate screen, which is what delivers both halves of reading back.
  *
@@ -2681,6 +2686,53 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return true;
   }
 
+  /** How much of a pending scroll to apply now, carrying the rest.
+   *
+   * Transcribed from Claude Code's proportional drain, which is what it runs
+   * on a terminal that is not xterm.js:
+   *
+   *     const step = Math.min(height - 1, Math.max(4, |delta| * 3 >> 2));
+   *     if (|delta| <= step) return delta;          // small moves land whole
+   *     pending = delta - step; return step;        // the rest drains later
+   *
+   * Three quarters of what is outstanding, never more than a screenful in one
+   * frame, and at least four rows so it always finishes. A single notch is
+   * three rows and lands whole and at once; a flick of three hundred notches
+   * becomes a handful of bounded frames instead of three hundred full
+   * repaints, which is what made the client stop forwarding the gesture. */
+  private pendingScroll = 0;
+  private scrollDrainTimer?: NodeJS.Timeout;
+  private drainScroll(): void {
+    if (this.closed || this.suspended || !this.pendingScroll) return;
+    const magnitude = Math.abs(this.pendingScroll);
+    const step = Math.min(Math.max(1, this.viewportRows() - 1), Math.max(SCROLL_DRAIN_MIN, (magnitude * 3) >> 2));
+    const applied = magnitude <= step ? this.pendingScroll : (this.pendingScroll > 0 ? step : -step);
+    this.pendingScroll -= applied;
+    const moved = this.scrollTranscript(applied);
+    // Nowhere further to go: drop the rest rather than drain against the end.
+    if (!moved) this.pendingScroll = 0;
+    if (!this.pendingScroll || this.scrollDrainTimer) return;
+    this.scrollDrainTimer = setTimeout(() => {
+      this.scrollDrainTimer = undefined;
+      this.drainScroll();
+    }, SCROLL_DRAIN_MS);
+    this.scrollDrainTimer.unref();
+  }
+
+  /** Wheel notches go here, not straight to the viewport. */
+  queueScroll(rows: number): boolean {
+    if (!this.alternateScreen) return false;
+    this.pendingScroll += rows;
+    if (inKeyBatch()) { this.drainAtBatchEnd(); return true; }
+    this.drainScroll();
+    return true;
+  }
+
+  private stopDrainBatch?: () => void;
+  private drainAtBatchEnd(): void {
+    this.stopDrainBatch ??= onKeyBatchEnd(() => this.drainScroll());
+  }
+
   /** One repaint per burst of wheel notches, not one per notch.
    *
    * A flick on a phone is not a few notches, it is momentum: the client
@@ -2729,7 +2781,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // Every mouse report is consumed, wheel or not: a click belongs to the
       // client's own selection, never to the composer.
       const rows = wheelScrollRows(key);
-      if (rows) this.scrollTranscript(rows);
+      // Queued and drained -- a flick is hundreds of notches in one read.
+      if (rows) this.queueScroll(rows);
       return true;
     }
     const page = Math.max(1, this.viewportRows() - 3);
@@ -3260,6 +3313,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.resizePaintTimer = undefined;
     this.stopScrollBatch?.();
     this.stopScrollBatch = undefined;
+    this.stopDrainBatch?.();
+    this.stopDrainBatch = undefined;
+    if (this.scrollDrainTimer) clearTimeout(this.scrollDrainTimer);
+    this.scrollDrainTimer = undefined;
+    this.pendingScroll = 0;
 
     process.off('SIGWINCH', this.onResize);
     process.off('SIGCONT', this.onContinue);
