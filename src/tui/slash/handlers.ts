@@ -30,7 +30,10 @@ import { conversationIdFor, requiresProviderHandoff, setSessionHarnessOption, VA
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey } from './registry.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import { aiHarnessSelect, aiSessionClose, aiSessionLeave, aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, newConversationSession, newProviderConversation } from '../../commands/ai.js';
+import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
+import { aiHarnessSelect } from '../../commands/ai/harness.js';
+import { aiSessionClose, aiSessionLeave, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy } from '../../commands/ai/sessions.js';
+import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
 import { capabilitiesText } from './capabilities-text.js';
 import { compactConversation } from './compact.js';
 import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from './context.js';

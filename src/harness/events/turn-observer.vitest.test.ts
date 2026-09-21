@@ -8,7 +8,7 @@
  * that, and it fails the moment a transport declares a callback of its own
  * again instead of implementing the shared one. */
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const srcRoot = new URL('../../', import.meta.url).pathname;
@@ -32,7 +32,12 @@ describe('the turn observer', () => {
   });
 
   it('carries one plan shape, not one per transport', () => {
-    for (const file of [...TRANSPORTS, 'tui/prompter.ts', 'commands/ai.ts']) {
+    // Every source file, not a hand-kept list: a list of filenames rots the
+    // moment one is renamed, and silently stops checking the file it named.
+    const sources = (dir: string): string[] => readdirSync(join(srcRoot, dir), { withFileTypes: true })
+      .flatMap((entry) => (entry.isDirectory() ? sources(join(dir, entry.name))
+        : entry.name.endsWith('.ts') && !entry.name.includes('.test.') ? [join(dir, entry.name)] : []));
+    for (const file of sources('.')) {
       const source = read(file);
       for (const stale of ['CodexPlanEntry', 'AcpPlanEntry', 'AcpAvailableCommand']) {
         expect(source, `${file} still refers to ${stale}`).not.toContain(stale);

@@ -9,7 +9,7 @@
 import Conf from 'conf';
 import { buildBaseProgram, runProgram, CLIKCODE_BANNER } from './cli/program.js';
 import { registerClikCodeCommands } from './cli/register.js';
-import { aiSessionOpenDefault } from './commands/ai-interactive.js';
+import { aiSessionOpenDefault } from './commands/ai/interactive.js';
 import { CLIKCODE_VERSION } from './version.js';
 
 const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });

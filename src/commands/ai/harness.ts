@@ -1,0 +1,147 @@
+/** `clikcode harness`: choosing which harness a session runs on. */
+
+import { randomUUID } from 'node:crypto';
+import chalk from 'chalk';
+import { ensureNativeHarness, inspectNativeHarness } from '../../harness/transport/native/inspect.js';
+import { loginNativeHarness } from '../../harness/transport/native/login.js';
+import type { AiHarnessAccount } from '../../harness/types.js';
+import { sessionProviderLabel } from '../../harness/protocol/labels.js';
+import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
+import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { readState } from '../../session/state/read.js';
+import { accountView } from '../../session/state/views.js';
+import { writeState } from '../../session/state/write.js';
+import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
+import { announceBareInteractiveLogin, harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../account.js';
+import { deriveAccountLabel } from '../../harness/accounts/labels.js';
+import { TERMINAL } from '../../tui/active-terminal.js';
+import { emitHarnessOutput } from '../../harness/output.js';
+import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
+import { requiresProviderHandoff } from '../../session/options.js';
+import { preferredAccountId } from './sessions.js';
+
+/** Select a provider while retaining ClikCode as the foreground UI. Installs
+ * it first if needed, and — only inside the interactive terminal session,
+ * where suspending the alt-screen for a vendor login prompt makes sense —
+ * signs in if the vendor CLI reports (or a fresh install implies) that it
+ * isn't authenticated yet. The goal: every harness either works immediately
+ * or ClikCode gets you to "working" itself, instead of erroring and telling
+ * you to go run something separately. */
+export async function aiHarnessSelect(harnessCommandName: string, sessionId: string): Promise<void> {
+  const harness = localHarnessForCommand(harnessCommandName);
+  if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
+  if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
+  if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} does not publish a non-interactive turn contract (CLI or ACP) required by the centralized ClikCode UI.`);
+  const freshInstall = !(await inspectNativeHarness(harness)).installed;
+  if (freshInstall) {
+    TERMINAL.active?.startWaiting(`installing ${harness.displayName}…`);
+    try { await ensureNativeHarness(harness); } finally { TERMINAL.active?.stopWaiting(); }
+  }
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) throw new Error(`AI session "${sessionId}" was not found`);
+  const sameHarness = session.nativeHarness === harness.command;
+  if (!sameHarness) {
+    if (requiresProviderHandoff(session, harness.command)) {
+      throw new Error(`Use /${harness.command} to hand off this ${sessionProviderLabel(session)} conversation. Native provider changes always create a new branch.`);
+    }
+    session.nativeSessionId = undefined;
+    session.nativeStartedAt = undefined;
+    session.model = null;
+  }
+  session.nativeHarness = harness.command;
+  session.provider = harness.provider;
+  session.route = 'local';
+  session.workspace ??= process.cwd();
+  const selected = session.accountId ? state.accounts.find((account) => account.id === session.accountId) : undefined;
+  // Tracks whether the account below is being minted right now, not found
+  // pre-existing -- needed because harnessNeedsLogin returns false
+  // unconditionally for any harness with no statusArgv (Gemini, Antigravity,
+  // Amp: nothing to scriptably ask "are you logged in?" at all), so a
+  // brand-new placeholder account for one of those would otherwise be
+  // marked 'ready' and never get a single chance at the login/suspend
+  // handoff -- the real mechanism behind "Antigravity CLI does not publish
+  // an isolated configuration-root contract" surfacing at /add-account
+  // time instead: the placeholder had already silently claimed the one
+  // available account slot for a harness with no profileEnv, with the user
+  // never having had a real opportunity to authenticate it in the first
+  // place.
+  let accountJustCreated = false;
+  if (!selected || selected.provider !== harness.provider || selected.status !== 'ready') {
+    const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli' && account.status === 'ready');
+    if (accounts.length) {
+      session.accountId = preferredAccountId(
+        state, harness.provider, session.accountId, (account) => account.authKind === 'vendor-cli',
+      );
+    } else {
+      accountJustCreated = true;
+      // Same derivation addAccountForHarness uses after an explicit login,
+      // applied here too so a session's very first auto-created account
+      // shows a real identity from the start instead of the generic "X
+      // default" placeholder this used unconditionally before -- which is
+      // exactly what was confusing about accounts named "Claude Code
+      // default"/"Codex default" etc. undefined profilePath is correct
+      // here: this is always the harness's one default, unisolated profile,
+      // never one under an isolated CLAUDE_CONFIG_DIR-style directory.
+      // Falls back to the harness's own name if derivation finds nothing
+      // (OpenCode, Hermes and Copilot keep no identity anywhere on disk --
+      // checked), AND if the derived label would collide with
+      // an account that already exists under a different provider (the
+      // same real person's email showing up on two harnesses is entirely
+      // possible and not a bug) -- labels must stay globally unique, and a
+      // bare harness name always is, by construction. It used to be
+      // "X default", which read as a placeholder row in /account rather than
+      // as the one account that harness actually has.
+      const derived = await deriveAccountLabel(harness, undefined);
+      const label = derived && !state.accounts.some((item) => item.label.toLowerCase() === derived.toLowerCase())
+        ? derived : harness.displayName;
+      const account: AiHarnessAccount = {
+        id: randomUUID(), provider: harness.provider, label, authKind: 'vendor-cli',
+        models: [], status: 'ready', credentialRef: `native:${harness.binary}:default`,
+      };
+      state.accounts.push(account);
+      session.accountId = account.id;
+    }
+  }
+  let account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  if (TERMINAL.active && harness.loginArgv) {
+    const environment = nativeProfileEnvironment(account?.nativeProfile);
+    if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
+      if (harness.loginCapturable) {
+        TERMINAL.active.startWaiting(`signing in to ${harness.displayName}…`);
+        try { await loginNativeHarness(harness, environment); } finally { TERMINAL.active.stopWaiting(); }
+      } else {
+        TERMINAL.active.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+        await TERMINAL.active.suspend();
+        try {
+          announceBareInteractiveLogin(harness);
+          await loginNativeHarness(harness, environment);
+        } finally {
+          TERMINAL.active.resume();
+        }
+      }
+      // Same identity check /account's "add another account" flow uses --
+      // a plain /provider login deserves the real dedup-by-identity logic,
+      // not a weaker "only rename if it still looks like a placeholder"
+      // check that misses re-authenticating as a genuinely different real
+      // account entirely.
+      if (account) {
+        account = await syncAccountIdentityAfterLogin(harness, account, state);
+        session.accountId = account.id;
+      }
+    }
+  }
+  if (!session.model) {
+    const catalog = await nativeModelCatalog(harness, account);
+    if (catalog.configured) session.model = catalog.configured;
+  }
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
+  const compatible = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
+  emitHarnessOutput({
+    panel: 'provider-selected', harness: harness.command, displayName: harness.displayName, provider: harness.provider,
+    account: state.accounts.find((account) => account.id === session.accountId)?.label ?? null,
+    model: session.model ?? 'provider default', centralized: true,
+    ...(session.accountId ? {} : { actionRequired: `Choose one with /accounts use <label>`, accounts: compatible.map(accountView) }),
+  });
+}

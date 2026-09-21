@@ -1,38 +1,20 @@
-/** Local ClikDeploy AI harness lifecycle, account aliases, and durable session settings. */
+/** `clikcode session`: creating, listing, showing, closing and leaving a
+ * session, and the policy each kind of session starts with. */
 
-import type Conf from 'conf';
 import { randomUUID } from 'node:crypto';
-import { open } from 'node:fs/promises';
-import chalk from 'chalk';
-import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
-import { emitJson } from '../cli/structured-output.js';
-import { ensureNativeHarness, inspectNativeHarness } from '../harness/transport/native/inspect.js';
-import { loginNativeHarness } from '../harness/transport/native/login.js';
-import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, HarnessDefaultSettings, HarnessSession, HarnessState } from '../harness/types.js';
-import { sessionProviderLabel } from '../harness/protocol/labels.js';
-import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
-import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
-import { harnessCommand } from '../session/state/paths.js';
-import { readState } from '../session/state/read.js';
-import { resolveDefaultSettings } from '../session/state/settings.js';
-import { accountView } from '../session/state/views.js';
-import { writeState } from '../session/state/write.js';
-import { nativeModelCatalog } from '../harness/accounts/model-catalog.js';
-import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList, aiAccountStatus, aiDoctor, announceBareInteractiveLogin, harnessNeedsLogin, syncAccountIdentityAfterLogin, setEmitHarnessOutput } from './account.js';
-import { deriveAccountLabel } from '../harness/accounts/labels.js';
-import { createHandoffBranch, synchronizeNativeTranscript } from '../turn/runtime.js';
-import { TERMINAL } from '../tui/active-terminal.js';
-import { emitHarnessOutput } from '../harness/output.js';
-import { harnessCanRunTurns } from '../runtime/lazy-bridge.js';
-import { markSessionLeftOpen } from '../session/claim.js';
-import { applyDefaultSetting, optionForHarness, parseHarnessOption, requiresProviderHandoff, VALID_PERMISSION_MODES } from '../session/options.js';
-import { consumeSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
-
-export {
-  aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList,
-  aiAccountStatus, aiDoctor,
-};
-
+import { emitJson } from '../../cli/structured-output.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, HarnessSession, HarnessState } from '../../harness/types.js';
+import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { readState } from '../../session/state/read.js';
+import { resolveDefaultSettings } from '../../session/state/settings.js';
+import { writeState } from '../../session/state/write.js';
+import { setEmitHarnessOutput } from '../account.js';
+import { emitHarnessOutput } from '../../harness/output.js';
+import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
+import { markSessionLeftOpen } from '../../session/claim.js';
+import { optionForHarness, parseHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
+import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
+import { newConversationSession } from './conversations.js';
 
 /** Gateway routing owns these fields as one policy unit. Keeping the mutation
  * centralized prevents route switches, slash settings, and headless setters
@@ -70,211 +52,6 @@ export function applyFreshLocalSessionPolicy(state: HarnessState, session: Harne
 }
 
 setEmitHarnessOutput(emitHarnessOutput);
-
-
-/** Select a provider while retaining ClikCode as the foreground UI. Installs
- * it first if needed, and — only inside the interactive terminal session,
- * where suspending the alt-screen for a vendor login prompt makes sense —
- * signs in if the vendor CLI reports (or a fresh install implies) that it
- * isn't authenticated yet. The goal: every harness either works immediately
- * or ClikCode gets you to "working" itself, instead of erroring and telling
- * you to go run something separately. */
-export async function aiHarnessSelect(harnessCommandName: string, sessionId: string): Promise<void> {
-  const harness = localHarnessForCommand(harnessCommandName);
-  if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
-  if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
-  if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} does not publish a non-interactive turn contract (CLI or ACP) required by the centralized ClikCode UI.`);
-  const freshInstall = !(await inspectNativeHarness(harness)).installed;
-  if (freshInstall) {
-    TERMINAL.active?.startWaiting(`installing ${harness.displayName}…`);
-    try { await ensureNativeHarness(harness); } finally { TERMINAL.active?.stopWaiting(); }
-  }
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === sessionId);
-  if (!session) throw new Error(`AI session "${sessionId}" was not found`);
-  const sameHarness = session.nativeHarness === harness.command;
-  if (!sameHarness) {
-    if (requiresProviderHandoff(session, harness.command)) {
-      throw new Error(`Use /${harness.command} to hand off this ${sessionProviderLabel(session)} conversation. Native provider changes always create a new branch.`);
-    }
-    session.nativeSessionId = undefined;
-    session.nativeStartedAt = undefined;
-    session.model = null;
-  }
-  session.nativeHarness = harness.command;
-  session.provider = harness.provider;
-  session.route = 'local';
-  session.workspace ??= process.cwd();
-  const selected = session.accountId ? state.accounts.find((account) => account.id === session.accountId) : undefined;
-  // Tracks whether the account below is being minted right now, not found
-  // pre-existing -- needed because harnessNeedsLogin returns false
-  // unconditionally for any harness with no statusArgv (Gemini, Antigravity,
-  // Amp: nothing to scriptably ask "are you logged in?" at all), so a
-  // brand-new placeholder account for one of those would otherwise be
-  // marked 'ready' and never get a single chance at the login/suspend
-  // handoff -- the real mechanism behind "Antigravity CLI does not publish
-  // an isolated configuration-root contract" surfacing at /add-account
-  // time instead: the placeholder had already silently claimed the one
-  // available account slot for a harness with no profileEnv, with the user
-  // never having had a real opportunity to authenticate it in the first
-  // place.
-  let accountJustCreated = false;
-  if (!selected || selected.provider !== harness.provider || selected.status !== 'ready') {
-    const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli' && account.status === 'ready');
-    if (accounts.length) {
-      session.accountId = preferredAccountId(
-        state, harness.provider, session.accountId, (account) => account.authKind === 'vendor-cli',
-      );
-    } else {
-      accountJustCreated = true;
-      // Same derivation addAccountForHarness uses after an explicit login,
-      // applied here too so a session's very first auto-created account
-      // shows a real identity from the start instead of the generic "X
-      // default" placeholder this used unconditionally before -- which is
-      // exactly what was confusing about accounts named "Claude Code
-      // default"/"Codex default" etc. undefined profilePath is correct
-      // here: this is always the harness's one default, unisolated profile,
-      // never one under an isolated CLAUDE_CONFIG_DIR-style directory.
-      // Falls back to the harness's own name if derivation finds nothing
-      // (OpenCode, Hermes and Copilot keep no identity anywhere on disk --
-      // checked), AND if the derived label would collide with
-      // an account that already exists under a different provider (the
-      // same real person's email showing up on two harnesses is entirely
-      // possible and not a bug) -- labels must stay globally unique, and a
-      // bare harness name always is, by construction. It used to be
-      // "X default", which read as a placeholder row in /account rather than
-      // as the one account that harness actually has.
-      const derived = await deriveAccountLabel(harness, undefined);
-      const label = derived && !state.accounts.some((item) => item.label.toLowerCase() === derived.toLowerCase())
-        ? derived : harness.displayName;
-      const account: AiHarnessAccount = {
-        id: randomUUID(), provider: harness.provider, label, authKind: 'vendor-cli',
-        models: [], status: 'ready', credentialRef: `native:${harness.binary}:default`,
-      };
-      state.accounts.push(account);
-      session.accountId = account.id;
-    }
-  }
-  let account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  if (TERMINAL.active && harness.loginArgv) {
-    const environment = nativeProfileEnvironment(account?.nativeProfile);
-    if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
-      if (harness.loginCapturable) {
-        TERMINAL.active.startWaiting(`signing in to ${harness.displayName}…`);
-        try { await loginNativeHarness(harness, environment); } finally { TERMINAL.active.stopWaiting(); }
-      } else {
-        TERMINAL.active.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-        await TERMINAL.active.suspend();
-        try {
-          announceBareInteractiveLogin(harness);
-          await loginNativeHarness(harness, environment);
-        } finally {
-          TERMINAL.active.resume();
-        }
-      }
-      // Same identity check /account's "add another account" flow uses --
-      // a plain /provider login deserves the real dedup-by-identity logic,
-      // not a weaker "only rename if it still looks like a placeholder"
-      // check that misses re-authenticating as a genuinely different real
-      // account entirely.
-      if (account) {
-        account = await syncAccountIdentityAfterLogin(harness, account, state);
-        session.accountId = account.id;
-      }
-    }
-  }
-  if (!session.model) {
-    const catalog = await nativeModelCatalog(harness, account);
-    if (catalog.configured) session.model = catalog.configured;
-  }
-  session.updatedAt = new Date().toISOString();
-  await writeState(state);
-  const compatible = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
-  emitHarnessOutput({
-    panel: 'provider-selected', harness: harness.command, displayName: harness.displayName, provider: harness.provider,
-    account: state.accounts.find((account) => account.id === session.accountId)?.label ?? null,
-    model: session.model ?? 'provider default', centralized: true,
-    ...(session.accountId ? {} : { actionRequired: `Choose one with /accounts use <label>`, accounts: compatible.map(accountView) }),
-  });
-}
-
-export async function aiModelsList(): Promise<void> {
-  const state = await readState();
-  emitJson({
-    models: state.accounts.flatMap((account) => account.models.map((model) => ({
-      accountId: account.id,
-      account: account.label,
-      provider: account.provider,
-      model,
-      status: account.status,
-    }))),
-  });
-}
-
-export async function aiUsage(): Promise<void> {
-  const state = await readState();
-  const totals = state.invocations.reduce(
-    (sum, invocation) => ({
-      calls: sum.calls + 1,
-      inputTokens: sum.inputTokens + (invocation.inputTokens ?? 0),
-      outputTokens: sum.outputTokens + (invocation.outputTokens ?? 0),
-      latencyMs: sum.latencyMs + invocation.latencyMs,
-    }),
-    { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 },
-  );
-  emitJson({ ...totals, avgLatencyMs: totals.calls ? Math.round(totals.latencyMs / totals.calls) : 0, invocations: state.invocations });
-}
-
-/** Reports the separate ClikDeploy OAuth/API-key gateway identity, never a BYO provider login. */
-export async function aiGatewayStatus(config: Conf): Promise<void> {
-  const apiUrl = getApiUrl(config);
-  emitJson({
-    route: 'gateway',
-    connected: Boolean(getApiKeyForUrl(config, apiUrl)),
-    apiUrl,
-    authentication: 'clikdeploy-oauth-or-api-key',
-    credentialBoundary: 'gateway-auth-only',
-    hint: `Run \`${harnessCommand()} gateway login\` to connect ClikDeploy Gateway, or use \`${harnessCommand()} accounts add\` for a provider login that stays local.`,
-  });
-}
-
-
-
-
-
-
-
-
-/** Read-only view of the defaults every new chat is built from. */
-/** Applies to every provider that doesn't have its own override. */
-export async function aiSettingsSetGlobal(key: string, value: string, emit = true): Promise<void> {
-  const state = await readState();
-  applyDefaultSetting(state.globalSettings, key, value);
-  await writeState(state);
-  if (emit) emitJson({ globalSettings: state.globalSettings });
-}
-
-/** Overrides the global default for one provider only; existing sessions are untouched. */
-export async function aiSettingsSetProvider(providerOrHarness: string, key: string, value: string, emit = true): Promise<void> {
-  const state = await readState();
-  const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
-  if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
-  const entry: Partial<HarnessDefaultSettings & { model: string }> = { ...state.providerSettings[harness.provider] };
-  applyDefaultSetting(entry, key, value, harness);
-  state.providerSettings[harness.provider] = entry;
-  await writeState(state);
-  if (emit) emitJson({ provider: harness.provider, settings: entry });
-}
-
-/** Removes every override for one provider, falling back to the global defaults. */
-export async function aiSettingsClearProvider(providerOrHarness: string, emit = true): Promise<void> {
-  const state = await readState();
-  const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
-  if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
-  delete state.providerSettings[harness.provider];
-  await writeState(state);
-  if (emit) emitJson({ provider: harness.provider, settings: {} });
-}
 
 /** Find an account by id, or by label within the provider being asked for.
  *
@@ -343,7 +120,6 @@ export async function aiSessionsList(): Promise<void> {
   emitJson({ sessions: state.sessions });
 }
 
-
 export function preferredAccountId(
   state: HarnessState, provider: string, current?: string | null,
   where: (account: AiHarnessAccount) => boolean = () => true,
@@ -355,69 +131,6 @@ export function preferredAccountId(
     .filter((session) => session.accountId && ready.some((account) => account.id === session.accountId))
     .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.accountId;
   return lastUsed ?? ready[0]!.id;
-}
-
-export function newConversationSession(
-  state: HarnessState, source: HarnessSession, now = new Date().toISOString(),
-): HarnessSession {
-  const id = randomUUID();
-  const defaults = resolveDefaultSettings(state, source.provider);
-  return {
-    id, conversationId: id, route: source.route,
-    accountId: source.route === 'gateway' ? null : source.accountId ?? null,
-    provider: source.provider, model: source.model ?? null,
-    effort: source.effort ?? defaults.effort,
-    ...(source.route === 'gateway' ? {} : { permissionMode: source.permissionMode ?? defaults.permissionMode }),
-    accountFailover: source.accountFailover ?? defaults.accountFailover,
-    workspace: source.workspace ?? process.cwd(),
-    ...(source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
-    createdAt: now, updatedAt: now, status: 'active',
-  };
-}
-
-/** Drop a queued turn that could not start, so a permanent failure cannot
- * replay forever at the head of the queue. */
-export async function releaseQueuedTurn(id: string, queuedTurnId: string): Promise<void> {
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  if (session && consumeSessionTurn(session, queuedTurnId)) await writeState(state);
-}
-
-/** Starting a clean conversation leaves the previous one intact and resumable;
- * the caller switches to the returned id. */
-export async function newConversation(currentId: string): Promise<string> {
-  const state = await readState();
-  const current = state.sessions.find((item) => item.id === currentId);
-  if (!current) throw new Error(`AI session "${currentId}" was not found`);
-  const created = newConversationSession(state, current);
-  state.sessions.push(created);
-  await writeState(state);
-  return created.id;
-}
-
-export async function newProviderConversation(currentId: string, harnessCommandName: string): Promise<string> {
-  const state = await readState();
-  const current = state.sessions.find((item) => item.id === currentId);
-  if (!current) throw new Error(`AI session "${currentId}" was not found`);
-  const harness = localHarnessForCommand(harnessCommandName);
-  if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
-  if (current.route === 'local' && current.nativeHarness === harness.command) return current.id;
-  // Refresh the source before freezing its portable ClikCode history into a
-  // child branch. The source native session remains untouched after this.
-  if (await synchronizeNativeTranscript(state, current)) await writeState(state);
-  const defaults = resolveDefaultSettings(state, harness.provider);
-  const now = new Date().toISOString();
-  const sourceDisplayName = current.nativeHarness
-    ? localHarnessForCommand(current.nativeHarness)?.displayName
-    : sessionProviderLabel(current);
-  const session = createHandoffBranch({
-    source: current, target: harness, accountId: preferredAccountId(state, harness.provider),
-    model: state.providerSettings[harness.provider]?.model ?? null, defaults, now, sourceDisplayName,
-  });
-  state.sessions.push(session);
-  await writeState(state);
-  await aiHarnessSelect(harnessCommandName, session.id);
-  return session.id;
 }
 
 /** The very first launch on a machine, with nothing to carry forward. */
@@ -508,8 +221,6 @@ export async function aiSessionLeave(id: string): Promise<void> {
   markSessionLeftOpen(session, new Date().toISOString());
   await writeState(state);
 }
-
-
 
 export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; permissions?: AiHarnessPermissionMode; accountFailover?: 'never' | 'on-quota-exhausted'; nativeSession?: string }): Promise<void> {
   if (options.route !== undefined && options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
