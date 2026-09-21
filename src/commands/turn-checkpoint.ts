@@ -2,6 +2,7 @@
  * has not reached a successful provider completion yet. */
 
 import type { HarnessActivityEvent, HarnessSession } from './types.js';
+import { normalizeImportedTranscript } from './failover-prompt-import.js';
 import type { LiveTurnSubmission } from './live-turn-input.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
@@ -107,7 +108,9 @@ export function remapSteerOffset(streamed: string, final: string, offset: number
  * rendering, history, and provider handoff so a process/provider failure never
  * makes submitted work disappear from the portable conversation. */
 export function sessionTranscriptMessages(session: HarnessSession): Message[] {
-  const messages = [...(session.messages ?? [])];
+  // Sessions written before rehydration prompts were normalized on import
+  // still hold one verbatim; nothing should ever render or replay it.
+  const messages = normalizeImportedTranscript(session.messages ?? []);
   const pending = session.pendingTurn;
   if (!pending) return messages;
   messages.push({ role: 'user', content: pending.prompt });

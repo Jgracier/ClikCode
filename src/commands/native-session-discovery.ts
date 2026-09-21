@@ -7,6 +7,7 @@
  * read-only listing/export command — no ClikCode state, no rendering. */
 
 import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { failoverPromptRequest, normalizeImportedTranscript } from './failover-prompt-import.js';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { captureNativeHarnessOutput, inspectNativeHarness } from './native-harness.js';
@@ -19,7 +20,10 @@ import type { AiLocalHarnessDefinition } from './types.js';
  * ai.ts can depend on this module without this module depending back on it —
  * a real circular import the other way around, not just a style preference. */
 export function conversationTitle(prompt: string): string {
-  const title = prompt.replace(/\s+/g, ' ').trim();
+  // A rehydration prompt is ClikCode talking to the vendor, not the user
+  // talking to ClikCode. Naming a session after one produced the literal
+  // title "Continue the same ClikCode conversation after an account or pro…".
+  const title = (failoverPromptRequest(prompt) ?? prompt).replace(/\s+/g, ' ').trim();
   return title.length > 64 ? `${title.slice(0, 63).trimEnd()}…` : title;
 }
 
@@ -53,6 +57,11 @@ export type NativeTranscriptMessage = { role: 'user' | 'assistant'; content: str
 export function mergeNativeTranscript(
   cached: readonly NativeTranscriptMessage[], source: readonly NativeTranscriptMessage[],
 ): NativeTranscriptMessage[] {
+  // Both sides go through the same normalization so the overlap search below
+  // still compares like with like, and so a rehydration prompt the vendor
+  // recorded never re-enters ClikCode's transcript.
+  cached = normalizeImportedTranscript(cached);
+  source = normalizeImportedTranscript(source);
   if (!cached.length) return [...source];
   if (!source.length) return [...cached];
   const equal = (left: NativeTranscriptMessage, right: NativeTranscriptMessage): boolean =>
