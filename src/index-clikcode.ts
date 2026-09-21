@@ -4,7 +4,7 @@
 import Conf from 'conf';
 import { buildBaseProgram, runProgram, CLIKCODE_BANNER } from './cli/program-base.js';
 import { registerClikCodeCommands } from './cli/register-clikcode.js';
-import { aiSessionOpenDefault } from './commands/ai.js';
+import { aiSessionOpenDefault } from './commands/ai-interactive.js';
 import { CLIKCODE_VERSION } from './version.js';
 
 const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
