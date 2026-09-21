@@ -42,6 +42,114 @@ demand by `clikcode accounts login <harness>` when they support it.
 Output is JSON by default so ClikCode can be scripted; pass `--human` for
 readable output and `--debug` for stack traces and HTTP detail on failure.
 
+## In-session commands
+
+Inside an open session, typing `/` opens a command palette. The six commands
+worth reaching without scrolling are pinned to the top, in the order they get
+used: pick a provider, pick an account on it, resume a conversation, change
+the model, then the two used mid-conversation more than anything else —
+starting over and changing what needs approval:
+
+| Command | What it does |
+| --- | --- |
+| `/provider` | choose a provider |
+| `/account [label]` | switch accounts |
+| `/resume` | resume another conversation |
+| `/model [name]` | choose or set a model |
+| `/new [first message]` | start a fresh conversation (the current one stays resumable) |
+| `/permissions [ask\|bypass\|auto]` | approval behavior |
+
+`/help` lists every command grouped by topic instead of by frequency, since a
+reference reads better that way. The remaining ~35 commands, grouped as
+`/help` groups them:
+
+**Conversation**
+
+| Command | What it does |
+| --- | --- |
+| `/new [first message]` (also `/clear`, `/reset`) | start a fresh conversation (the current one stays resumable) |
+| `/compact [focus]` | summarize the conversation and continue in a fresh native session |
+| `/history` | show this conversation |
+| `/copy` | copy the last answer |
+| `/export [path]` | write the transcript as markdown |
+| `/undo` | revert the last turn (only where the vendor exposes it) |
+| `/native <text>` (also `//text`) | send text to the harness verbatim |
+| `/redraw` | repaint the screen |
+| `/exit` (also `/quit`) | save and leave |
+
+**Workspace**
+
+| Command | What it does |
+| --- | --- |
+| `/review [focus]` | ask the provider to review uncommitted changes |
+| `/init` | create or improve the harness's agent instructions file |
+| `/memory [edit]` | show the harness's memory file; `edit` opens `$EDITOR` |
+| `/diff` | changes against HEAD, staged included, plus untracked files |
+| `/cwd [dir]` | show or change the working directory |
+| `/add-dir <dir>` | give the harness another writable directory |
+| `/mention [path]` | attach a file to the next request |
+| `/attachments [clear]` | queued files; `clear` empties them |
+
+**Provider**
+
+| Command | What it does |
+| --- | --- |
+| `/provider` (also `/switch`, `/engine`) | choose a provider |
+| `/account [label]` | switch accounts |
+| `/accounts [use\|login\|add\|remove\|failover …]` | list and manage accounts |
+| `/login` | sign in to the current provider |
+| `/logout` | sign the current account out |
+| `/gateway` | route this conversation through ClikDeploy Gateway |
+
+**Settings**
+
+| Command | What it does |
+| --- | --- |
+| `/model [name]` | choose or set a model |
+| `/models` | list models configured on local accounts |
+| `/effort [level]` | reasoning level |
+| `/permissions [ask\|bypass\|auto]` | approval behavior |
+| `/options` | provider-specific modes and controls |
+| `/capabilities` | what the selected provider supports |
+| `/settings [route\|account\|model\|effort\|permissions\|option\|global\|provider …]` | configure this workspace |
+
+**Sessions**
+
+| Command | What it does |
+| --- | --- |
+| `/sessions [list\|show\|open\|close <id>]` | manage conversations |
+| `/resume` | resume another conversation |
+| `/rename [name]` | name this conversation |
+| `/fork [name]` | branch this conversation |
+| `/archive` | archive this conversation |
+| `/delete [confirm]` | delete this conversation |
+
+**Info**
+
+| Command | What it does |
+| --- | --- |
+| `/status` | current configuration |
+| `/context` | context window and token usage reported by the harness |
+| `/cost` | tokens and cost for this conversation |
+| `/usage` | token usage for this account |
+| `/doctor` | check installed harnesses and accounts |
+| `/help` (also `/?`) | all commands |
+
+A command that doesn't apply right now — no provider chosen yet, or a
+Gateway-managed setting on the Gateway route — stays listed with a reason
+(`unavailable · …`) instead of disappearing, so the palette always explains
+itself.
+
+Two more surfaces are reachable by name but not listed above: `/<harness>`
+(for example `/claude`, `/codex`) hands the conversation off to another
+provider, optionally with a first request, and `//<text>` sends a line to the
+harness verbatim. If a harness contributes its own manager commands (`/mcp`,
+`/plugins`, …) or an ACP agent advertises commands mid-session, those run when
+typed and appear in `/help`, but stay out of the palette so they don't read as
+ClikCode's own. User-defined commands — `*.md` prompt templates under
+`.clikcode/commands/` (workspace) or `~/.clikcode/commands/` (home) — show up
+the same way.
+
 ## Where state lives
 
 Everything ClikCode owns is under `~/.clikcode` (directories `0700`, files
