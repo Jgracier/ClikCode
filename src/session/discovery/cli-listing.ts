@@ -2,6 +2,7 @@
  * prints -- a table for some, structured output for others. */
 
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
+import { listingKnownEmpty, rememberListing } from './cache.js';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { DiscoveredNativeSession } from './discovered-session.js';
@@ -116,17 +117,30 @@ function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-l
  * just contributes zero results instead of failing the whole picker. */
 export async function discoverNativeSessions(
   harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>, workspace: string | undefined,
+  /** The account profile this listing belongs to. Two accounts of the same
+   * provider have separate vendor stores, so an empty result for one says
+   * nothing about the other. */
+  profile?: string,
 ): Promise<DiscoveredNativeSession[]> {
   if (!harness.session?.discoverArgv) return [];
   const inspection = await inspectNativeHarness(harness, 800);
   if (!inspection.installed) return [];
+  // Each of these is a subprocess, and most of them find nothing: /resume
+  // spent 2.5s spawning six CLIs here, of which two took 2.16s between them
+  // to return zero. A harness that had nothing in this workspace a moment ago
+  // is not asked again until the memo expires.
+  if (await listingKnownEmpty(harness.command, workspace, profile)) return [];
   try {
     const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
     const format = harness.session.discoverFormat ?? 'json';
-    if (format === 'text') return parseDiscoveredSessionsText(raw);
-    return parseDiscoveredSessionsStructured(raw, format);
+    const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
+    await rememberListing(harness.command, workspace, profile, found.length);
+    return found;
   } catch {
-    // fail-open-ok: passive discovery must not break the picker when an optional vendor command fails.
+    // fail-open-ok: passive discovery must not break the picker when an
+    // optional vendor command fails. Deliberately NOT memoized: a failure is
+    // not evidence that there is nothing here, and remembering it would keep
+    // a harness dark long after whatever broke was fixed.
     return [];
   }
 }

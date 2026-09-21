@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { discoverNativeSessions } from '../../session/discovery/cli-listing.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../../session/discovery/registry.js';
+import { saveDiscoveryCache } from '../../session/discovery/cache.js';
 import { type DiscoveredNativeSession } from '../../session/discovery/discovered-session.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
@@ -59,14 +60,14 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
     return [...unique.values()];
   };
   const discoverable = allLocalHarnesses().filter((harness) => harness.session?.discoverArgv);
-  const shellDiscovered = (await Promise.all(discoverable.map(async (harness) => {
+  const shell = (async () => (await Promise.all(discoverable.map(async (harness) => {
     return (await Promise.all(discoveryProfiles(harness).map(async (account) => {
       const environment = nativeProfileEnvironment(account?.nativeProfile);
-      const found = await discoverNativeSessions(harness, environment, workspace);
+      const found = await discoverNativeSessions(harness, environment, workspace, account?.nativeProfile?.path);
       return found.map((item) => ({ harness, item, accountId: account?.id }));
     }))).flat();
-  }))).flat();
-  const fsDiscovered = (await Promise.all(Object.entries(FS_SESSION_DISCOVERY).map(async ([command, discover]) => {
+  }))).flat())();
+  const files = (async () => (await Promise.all(Object.entries(FS_SESSION_DISCOVERY).map(async ([command, discover]) => {
     const harness = localHarnessForCommand(command);
     if (!harness) return [];
     const inspection = await inspectNativeHarness(harness, 500);
@@ -75,7 +76,14 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
       const found = await discover(workspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => []);
       return found.map((item) => ({ harness, item, accountId: account?.id }));
     }))).flat();
-  }))).flat();
+  }))).flat())();
+  // The two halves are independent and were awaited one after the other, so
+  // the filesystem walk waited on six subprocesses that had nothing to do
+  // with it. They run together now, and the cache is flushed once when both
+  // are done rather than relying on whichever vendor discoverer happened to
+  // save it on the way past.
+  const [shellDiscovered, fsDiscovered] = await Promise.all([shell, files]);
+  await saveDiscoveryCache().catch(() => undefined);
   return [...shellDiscovered, ...fsDiscovered]
     .filter(({ harness, item, accountId }) => !state.sessions.some((session) => session.nativeHarness === harness.command
       && session.nativeSessionId === item.nativeId && (!accountId || session.accountId === accountId)));
