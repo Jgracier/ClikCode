@@ -101,8 +101,6 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
     return undefined;
   },
   qwen: (value, harness) => parsers.claude!(value, harness),
-  gemini: (value) => value.type === 'message' && value.role === 'assistant' && typeof value.content === 'string' && value.content
-    ? { text: value.content, mode: value.delta === false ? 'replace' : 'append' } : undefined,
   // Read from cursor-agent's own emitter: with --stream-partial-output every
   // text delta is an `assistant` record (always with timestamp_ms), and the
   // deltas accumulated so far are then RE-SENT as one full `assistant` record

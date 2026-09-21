@@ -32,7 +32,7 @@ export type AiHarnessTier = 'primary' | 'more' | 'experimental';
  * envelope (Qwen/Amp -> Claude stream-json, Kilo -> OpenCode) declare the same
  * family here instead of being name-mapped inside the CLI. */
 export type AiHarnessParser =
-  | 'claude-stream-json' | 'codex-items' | 'opencode-json' | 'gemini-stream-json'
+  | 'claude-stream-json' | 'codex-items' | 'opencode-json'
   | 'cursor-stream-json' | 'pi-json' | 'cline-json' | 'antigravity' | 'goose'
   | 'generic-json' | 'text';
 /** Project instruction file the vendor loads on its own; /init and /memory target it. */
@@ -234,7 +234,7 @@ export interface AiLocalHarnessDefinition {
     idKind?: 'uuid' | 'history-file';
     /** Machine-readable (or stable UUID-bearing) vendor session listing. */
     discoverArgv?: readonly string[];
-    discoverFormat?: 'json' | 'json-lines' | 'text' | 'numbered-list';
+    discoverFormat?: 'json' | 'json-lines' | 'text';
   };
 }
 
@@ -286,19 +286,6 @@ const { customCommandDirs: _openCodeCommandDirs, normalizedPermissionOptionIds: 
 export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'] }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'] } }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptInput: 'stdin', stdinArgv: [], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   { command: 'codex', provider: 'openai', displayName: 'Codex', surface: 'terminal', tier: 'primary', transport: 'codex-app-server', integration: 'native', parser: 'codex-items', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['~/.codex/prompts'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'codex', npmPackage: '@openai/codex', loginArgv: ['login'], statusArgv: ['login', 'status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cd'], effortArgvPrefix: ['--config'], effortConfigKey: 'model_reasoning_effort', permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'], placement: 'root' }, bypass: { argv: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'never'], placement: 'root' }, auto: { argv: ['--approve-for-me'], placement: 'root' } }, imageArgvPrefix: ['--image'], profileEnv: 'CODEX_HOME', turn: { startArgv: ['exec', '--json', '--skip-git-repo-check'], resumeArgv: ['exec', 'resume'], resumeIdSuffix: ['--json', '--skip-git-repo-check'], promptInput: 'stdin', output: 'json-lines', responseFields: ['text'], resumeSupportsWorkspaceSelector: false }, session: { resumeIdPrefix: ['resume'], continueArgv: ['resume', '--last'] } },
-  // No loginArgv value actually performs a login non-interactively -- Gemini
-  // CLI's real auth commands (/auth, /auth login, /auth logout) are slash
-  // commands typed inside its own interactive session, not CLI flags
-  // (verified: even the official CLI Reference docs only cover in-TUI
-  // commands, nothing for a scriptable `gemini auth login`). An empty argv
-  // still matters here, though: ClikCode's login flow gates entirely on
-  // `loginArgv` being present at all, and without it the suspend/resume
-  // handoff to a real interactive terminal never triggers for this harness.
-  // With it, a fresh install (or a future statusArgv-based check) drops the
-  // user into gemini's own interactive session where they can type
-  // `/auth login` themselves, instead of ClikCode silently assuming
-  // "logged in" and only surfacing the problem as a raw turn failure.
-  { command: 'gemini', provider: 'google', displayName: 'Gemini CLI', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'gemini-stream-json', memoryFile: 'GEMINI.md', nativeSlashPassthrough: false, customCommandDirs: ['.gemini/commands', '~/.gemini/commands'], acp: { argv: ['--experimental-acp'], experimental: true }, normalizedPermissionOptionIds: ['approval-mode'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'gemini', npmPackage: '@google/gemini-cli', loginArgv: [], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--approval-mode', 'default'] }, bypass: { argv: ['--approval-mode', 'yolo'] }, auto: { argv: ['--approval-mode', 'auto_edit'] } }, turn: { startArgv: ['--output-format', 'stream-json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json-lines', responseFields: ['response', 'result', 'text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--resume', 'latest'], discoverArgv: ['--list-sessions'], discoverFormat: 'numbered-list' } },
   { ...OPENCODE_FAMILY, command: 'opencode', provider: 'opencode', displayName: 'OpenCode', tier: 'primary', binary: 'opencode' },
   { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', surface: 'terminal', tier: 'primary', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp', '--stdio'], effortArgvPrefix: ['--effort'] }, retiredOptionIds: ['allow-all'], localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['-C'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--allow-all'] } }, imageArgvPrefix: ['--attachment'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], continueArgv: ['--continue'] } },
   { command: 'aider', provider: 'aider', displayName: 'Aider', surface: 'terminal', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'CONVENTIONS.md', nativeSlashPassthrough: false, localAuth: ['api-key', 'vendor-cli'], binary: 'aider', modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models', ''], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yes-always'] } }, imageArgvPrefix: ['--file'], turn: { startArgv: [], createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'], promptArgvPrefix: ['--message'], output: 'text' }, session: { idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'] } },
@@ -472,17 +459,6 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
     },
     features: ['skills', 'plugins', 'approval policies', 'feature flags', 'configuration profiles'],
-  },
-  gemini: {
-    options: [
-      value('approval-mode', 'Approval mode', 'Tool-call approval policy', 'permissions', ['--approval-mode'], 'enum', { values: ['default', 'auto_edit', 'yolo', 'plan'] }),
-      value('allowed-tools', 'Allowed tools', 'Tools that bypass confirmation', 'permissions', ['--allowed-tools'], 'string-list'),
-      value('allowed-mcp-servers', 'Allowed MCP servers', 'MCP servers enabled for this session', 'tools', ['--allowed-mcp-server-names'], 'string-list'),
-      value('include-directories', 'Additional directories', 'Additional directories included in context', 'context', ['--include-directories'], 'path-list'),
-      flag('safe-mode', 'Safe mode', 'Disable customizations and external extensions', 'safety', ['--safe-mode']),
-    ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, plugins: { label: 'Extensions', listArgv: ['extensions', 'list'], manageArgv: ['extensions'] } },
-    features: ['skills', 'agents', 'extensions', 'custom commands', 'memory'],
   },
   opencode: {
     options: [

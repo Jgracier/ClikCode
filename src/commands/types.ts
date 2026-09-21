@@ -15,7 +15,7 @@ export type AiHarnessIntegrationLevel = 'native' | 'structured' | 'compatibility
 export type AiHarnessTransport = 'codex-app-server' | 'acp' | 'structured-cli' | 'text-cli';
 export type AiHarnessTier = 'primary' | 'more' | 'experimental';
 export type AiHarnessParser =
-  | 'claude-stream-json' | 'codex-items' | 'opencode-json' | 'gemini-stream-json'
+  | 'claude-stream-json' | 'codex-items' | 'opencode-json'
   | 'cursor-stream-json' | 'pi-json' | 'cline-json' | 'antigravity' | 'goose'
   | 'generic-json' | 'text';
 export type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWEN.md' | 'CONVENTIONS.md';
@@ -180,7 +180,7 @@ export interface AiLocalHarnessDefinition {
     createSessionArgv?: readonly string[];
     idKind?: 'uuid' | 'history-file';
     discoverArgv?: readonly string[];
-    discoverFormat?: 'json' | 'json-lines' | 'text' | 'numbered-list';
+    discoverFormat?: 'json' | 'json-lines' | 'text';
   };
 }
 

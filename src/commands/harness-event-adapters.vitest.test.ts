@@ -16,8 +16,6 @@ describe('vendor response parsers', () => {
   it('keeps each declared vendor shape mapped to its own stream', () => {
     expect(update('claude', { type: 'stream_event', event: { type: 'content_block_delta', delta: { text: 'hi' } } }))
       .toEqual({ text: 'hi', mode: 'append' });
-    expect(update('gemini', { type: 'message', role: 'assistant', content: 'whole', delta: false }))
-      .toEqual({ text: 'whole', mode: 'replace' });
     expect(update('cline', { type: 'say', text: 'partial' })).toEqual({ text: 'partial', mode: 'replace' });
     expect(update('opencode', { type: 'text', part: { text: 'chunk' } })).toEqual({ text: 'chunk', mode: 'append' });
   });
@@ -94,7 +92,6 @@ describe('plain-text harness streaming', () => {
 const VENDOR_SAMPLES: Readonly<Record<string, unknown>> = {
   claude: { type: 'stream_event', event: { type: 'content_block_delta', delta: { text: 'hi' } } },
   qwen: { type: 'stream_event', event: { type: 'content_block_delta', delta: { text: 'hi' } } },
-  gemini: { type: 'message', role: 'assistant', content: 'hi' },
   cursor: { type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } },
   cline: { type: 'say', text: 'hi' },
   pi: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hi' } },

@@ -51,15 +51,6 @@ describe('native harness turn results', () => {
     expect(result).toMatchObject({ text: 'quota exhausted', isError: true });
   });
 
-  it('reassembles Gemini assistant deltas instead of returning only the last chunk', () => {
-    const gemini = { ...codex, command: 'gemini', displayName: 'Gemini', turn: { ...codex.turn, responseFields: ['content'] } };
-    const stdout = [
-      JSON.stringify({ type: 'message', role: 'assistant', content: 'Hello ', delta: true }),
-      JSON.stringify({ type: 'message', role: 'assistant', content: 'world.', delta: true }),
-      JSON.stringify({ type: 'result', status: 'success' }),
-    ].join('\n');
-    expect(nativeTurnResult(gemini, stdout).text).toBe('Hello world.');
-  });
 
   it('accepts Cline say snapshots as assistant output', () => {
     const cline = { ...codex, command: 'cline', displayName: 'Cline', turn: { ...codex.turn, responseFields: ['text'] } };
@@ -115,12 +106,10 @@ describe('native harness response streams', () => {
     expect([...nativeSessionIds(output, 'json-lines')][0]).toBe('thread-source');
   });
 
-  it('extracts Claude/Qwen stream events, Gemini chunks, Cursor deltas, and Cline snapshots', () => {
+  it('extracts Claude/Qwen stream events, Cursor deltas, and Cline snapshots', () => {
     const streamEvent = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'A' } } });
     expect(nativeResponseUpdate(harness('claude'), streamEvent)).toEqual({ text: 'A', mode: 'append' });
     expect(nativeResponseUpdate(harness('qwen'), streamEvent)).toEqual({ text: 'A', mode: 'append' });
-    expect(nativeResponseUpdate(harness('gemini'), JSON.stringify({ type: 'message', role: 'assistant', content: 'B', delta: true })))
-      .toEqual({ text: 'B', mode: 'append' });
     expect(nativeResponseUpdate(harness('cursor'), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'C' }] } })))
       .toEqual({ text: 'C', mode: 'append' });
     expect(nativeResponseUpdate(harness('cline'), JSON.stringify({ type: 'say', text: 'Current', partial: true })))

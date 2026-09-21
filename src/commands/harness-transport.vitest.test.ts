@@ -28,7 +28,7 @@ describe('harness turn transports', () => {
   });
 
   it('leaves experimental ACP declarations on their CLI path unless explicitly allowed', () => {
-    for (const command of ['gemini', 'goose', 'qwen', 'kiro']) {
+    for (const command of ['goose', 'qwen', 'kiro']) {
       expect(harnessTurnTransport(catalog(command)), command).toBe('structured-cli');
       expect(harnessTurnTransport(catalog(command), false, { allowExperimentalAcp: true }), command).toBe('acp');
     }
