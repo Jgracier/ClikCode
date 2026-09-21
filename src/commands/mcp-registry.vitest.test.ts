@@ -40,10 +40,34 @@ describe('spelling "add this MCP server"', () => {
     expect(argv('codex', local)).toBe('mcp add figma -- npx -y figma-mcp');
   });
 
+  it('puts a local command behind -- where the CLI insists on it', () => {
+    // Copilot, Amp and Cline take a URL positionally but need the separator
+    // before a command, or its arguments are read as their own.
+    expect(argv('copilot', local)).toBe('mcp add figma -- npx -y figma-mcp');
+    expect(argv('amp', local)).toBe('mcp add figma -- npx -y figma-mcp');
+    expect(argv('cline', local)).toBe('mcp add --yes figma -- npx -y figma-mcp');
+  });
+
+  it('passes a URL positionally for those same three, with a transport where wanted', () => {
+    expect(argv('copilot', remote)).toBe('mcp add --transport http sentry https://mcp.sentry.dev/mcp');
+    expect(argv('cline', remote)).toBe('mcp add --yes --transport http sentry https://mcp.sentry.dev/mcp');
+    // Amp auto-detects the transport from the URL and takes no flag.
+    expect(argv('amp', remote)).toBe('mcp add sentry https://mcp.sentry.dev/mcp');
+  });
+
+  it('spells the transport the way each CLI names it', () => {
+    // Antigravity calls it --type, Droid calls it --type, Claude --transport.
+    expect(argv('antigravity', remote)).toBe('mcp add --type http sentry https://mcp.sentry.dev/mcp');
+    expect(argv('droid', remote)).toBe('mcp add --type http sentry https://mcp.sentry.dev/mcp');
+  });
+
   it('offers nothing for a harness with no recorded grammar', () => {
     // Never guessed: a wrong argv writes a broken entry.
     expect(mcpAddArgv(grammarOf('opencode'), local)).toBeUndefined();
     expect(mcpAddArgv(grammarOf('aider'), local)).toBeUndefined();
+    // Kimi has no mcp subcommand at all; Hermes has one but it prompts.
+    expect(mcpAddArgv(grammarOf('kimi'), local)).toBeUndefined();
+    expect(mcpAddArgv(grammarOf('hermes'), local)).toBeUndefined();
   });
 
   it('knows a URL from an executable', () => {

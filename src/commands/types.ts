@@ -85,7 +85,7 @@ export interface AiHarnessCapabilityManifest {
     manageArgv?: readonly string[];
     /** How this harness spells "add an MCP server". Mirrors the catalog's own
      * definition so one ClikCode entry can be installed into every harness. */
-    add?: { argv: readonly string[]; shape: 'positional' | 'url-or-doubledash'; transportPrefix?: readonly string[] };
+    add?: { argv: readonly string[]; shape: 'positional' | 'url-or-doubledash' | 'doubledash-local'; transportPrefix?: readonly string[] };
   }>>>;
   features?: readonly string[];
 }
