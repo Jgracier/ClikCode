@@ -23,7 +23,8 @@ import { closePersistentTransport, discardInterruptedTurn, nativeAvailableComman
 import { aiGatewaySessionSend } from '../turn/drive.js';
 import { TERMINAL } from '../tui/active-terminal.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
-import { TerminalHarnessPrompter, terminalUiSupported } from '../tui/terminal-ui.js';
+import { TerminalHarnessPrompter } from '../tui/prompter.js';
+import { terminalUiSupported } from '../tui/capabilities.js';
 import { expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
 import { claimSession, releaseSession, SESSION_CLAIM_TTL_MS } from '../session/claim.js';
 import { existsSync } from 'node:fs';

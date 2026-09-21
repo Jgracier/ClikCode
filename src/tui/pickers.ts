@@ -27,7 +27,8 @@ import { aiAccountAdd, aiAccountLogin, aiAccountRemove, announceBareInteractiveL
 import { synchronizeNativeTranscript } from '../turn/runtime.js';
 import { TERMINAL } from './active-terminal.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
-import { TerminalHarnessPrompter, terminalUiSupported } from './terminal-ui.js';
+import { TerminalHarnessPrompter } from './prompter.js';
+import { terminalUiSupported } from './capabilities.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../runtime/lazy-bridge.js';
 import { claimSession, sessionClaimIsLive } from '../session/claim.js';
 import { accountPickerOptions, conversationIdFor, hasConversationContent, integrationLabel, optionForHarness, providerPickerOptions, requiresProviderHandoff, sessionPickerOptions, setSessionHarnessOption, VALID_EFFORTS, VALID_PERMISSION_MODES, type ProviderAccountChoice } from '../session/options.js';

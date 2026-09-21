@@ -23,7 +23,7 @@ import { aiAccountLogin, aiAccountLogout, aiAccountRemove, aiDoctor } from '../.
 import { closePersistentTransport, sessionNativeCommands, turnEnvironment } from '../../turn/runtime.js';
 import { aiSessionSend } from '../../turn/drive.js';
 import { emitHarnessOutput } from '../../harness/output.js';
-import { SELECTION_MODE, setSelectionMode } from '../terminal-ui.js';
+import { SELECTION_MODE, setSelectionMode } from '../modes.js';
 import { TERMINAL } from '../active-terminal.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../session/attachments.js';
