@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SESSION_TITLE_MAX, StreamingTitle, extractSessionTitle, normalizeSessionTitle, sessionTitleSource, withTitleRequest,
-} from './title';
+} from './title.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition';
 
 const harness = (command: string): AiLocalHarnessDefinition => ({ command } as AiLocalHarnessDefinition);
@@ -77,5 +77,50 @@ describe('a title arriving one delta at a time', () => {
     const long = `${OPEN}${'a'.repeat(200)}`;
     expect(stream.push(long, 'append')).toBe(long);
     expect(stream.title).toBeUndefined();
+  });
+});
+
+describe('a replace-mode stream never shows the title tag', () => {
+  const ANSWER = '<clikcode-title>Response Test</clikcode-title>\nBANANA';
+
+  /** Feed a stream and return what the user would have seen. */
+  const shown = (deltas: readonly string[], mode: 'append' | 'replace'): string => {
+    const stream = new StreamingTitle();
+    let visible = '';
+    for (const delta of deltas) {
+      const next = stream.push(delta, mode);
+      if (next !== undefined) visible = mode === 'replace' ? next : visible + next;
+    }
+    const tail = stream.flush();
+    return tail === undefined ? visible : visible + tail;
+  };
+
+  it('strips the tag from every replace, not just the one that settles it', () => {
+    // Some transports re-send the whole answer on each update. Once settled,
+    // push used to return that verbatim: the raw tag appeared on screen, and
+    // the displayed answer no longer matched the cleaned text that gets
+    // persisted -- which is what made the transcript emit the reply twice.
+    const cumulative: string[] = [];
+    for (let end = 1; end <= ANSWER.length; end += 9) cumulative.push(ANSWER.slice(0, end));
+    cumulative.push(ANSWER);
+    expect(shown(cumulative, 'replace')).toBe('BANANA');
+  });
+
+  it('agrees with what gets persisted, so the transcript sees no new text', () => {
+    const stream = new StreamingTitle();
+    stream.push(ANSWER, 'replace');
+    expect(stream.push(ANSWER, 'replace')).toBe(extractSessionTitle(ANSWER).text);
+  });
+
+  it('still passes appended deltas through untouched once settled', () => {
+    const stream = new StreamingTitle();
+    stream.push('<clikcode-title>T</clikcode-title>\nfirst', 'append');
+    expect(stream.push(' and more', 'append')).toBe(' and more');
+  });
+
+  it('shows the answer whole however the deltas are cut', () => {
+    expect(shown([ANSWER], 'append')).toBe('BANANA');
+    expect(shown(ANSWER.match(/.{1,7}/gs) ?? [], 'append')).toBe('BANANA');
+    expect(shown([...ANSWER], 'append').trim()).toBe('BANANA');
   });
 });
