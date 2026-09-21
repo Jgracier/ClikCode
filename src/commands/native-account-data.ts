@@ -281,84 +281,15 @@ function harnessBinary(command: string, fallback: string = command): string {
   }
 }
 
-export function formatTokenCount(total: number): string {
-  if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M`;
-  if (total >= 1_000) return `${Math.round(total / 1_000)}K`;
-  return String(total);
-}
-
-/** Parse just the `info` object out of `opencode export <id>` without waiting for (or
- * buffering) the full transcript, which can be arbitrarily large and isn't needed here. */
-export async function captureOpencodeSessionSummary(
-  sessionId: string, binary: string = harnessBinary('opencode'), environment: Readonly<Record<string, string>> = {},
-): Promise<{ cost: number; tokens: { input: number; output: number } } | undefined> {
-  return new Promise((resolveSummary) => {
-    const child = spawn(binary, ['export', sessionId], { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...environment } });
-    let buffer = '';
-    let settled = false;
-    const finish = (value?: { cost: number; tokens: { input: number; output: number } }): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      terminatePortable(child);
-      resolveSummary(value);
-    };
-    child.stdout!.setEncoding('utf8');
-    child.stdout!.on('data', (chunk: string) => {
-      buffer += chunk;
-      // `info` is written first, but a single `data` event can already carry far more
-      // than that object (a pipe delivers whatever the child buffered before its first
-      // flush) — search what's arrived before giving up, don't discard it unread.
-      const infoStart = buffer.indexOf('"info"');
-      if (infoStart === -1) return buffer.length > 16 * 1024 ? finish() : undefined;
-      const braceStart = buffer.indexOf('{', infoStart);
-      if (braceStart === -1) return;
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      for (let index = braceStart; index < buffer.length; index++) {
-        const character = buffer[index];
-        if (inString) {
-          if (escaped) escaped = false;
-          else if (character === '\\') escaped = true;
-          else if (character === '"') inString = false;
-          continue;
-        }
-        if (character === '"') { inString = true; continue; }
-        if (character === '{') depth++;
-        else if (character === '}') {
-          depth--;
-          if (depth === 0) {
-            try {
-              const info = JSON.parse(buffer.slice(braceStart, index + 1)) as { cost?: number; tokens?: { input?: number; output?: number } };
-              return finish({ cost: typeof info.cost === 'number' ? info.cost : 0, tokens: { input: info.tokens?.input ?? 0, output: info.tokens?.output ?? 0 } });
-            } catch {
-              // fail-open-ok: an incomplete stream fragment carries no usable response payload.
-              return finish();
-            }
-          }
-        }
-      }
-    });
-    child.once('error', () => finish());
-    child.once('exit', () => finish());
-    const timer = setTimeout(() => finish(), 8_000);
-    timer.unref();
-  });
-}
-
-export async function opencodeUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>> = {}): Promise<string | undefined> {
-  if (!session.nativeSessionId) return undefined;
-  // Kilo and other forks share this probe; the binary comes from the catalog.
-  const binary = harnessBinary(session.nativeHarness ?? 'opencode', 'opencode');
-  const summary = await captureOpencodeSessionSummary(session.nativeSessionId, binary, environment);
-  if (!summary) return undefined;
-  const total = summary.tokens.input + summary.tokens.output;
-  if (!total) return undefined;
-  const tokenLabel = `${formatTokenCount(total)} tok`;
-  return summary.cost > 0 ? `${tokenLabel} · $${summary.cost.toFixed(2)}` : tokenLabel;
-}
-
+/** Usage is a percentage of a quota window, or it is nothing.
+ *
+ * OpenCode's probe used to return a token count and a dollar figure here
+ * ("10K tok · $0.42"), which is a different quantity wearing the same label:
+ * it says how much a conversation cost, not how much of an allowance is left.
+ * Two harnesses reporting in two units cannot be compared in an account
+ * picker, and a number that never approaches a limit cannot drive failover.
+ * A harness that publishes no window publishes no usage.
+ */
 export async function codexUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
   return (await codexUsageReading(session, environment))?.label;
 }
@@ -663,7 +594,6 @@ export async function recordDerivedUsage(session: HarnessSession, usage: string 
 
 export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
   codex: codexUsageProbe,
-  opencode: opencodeUsageProbe,
   claude: claudeUsageProbe,
 };
 
