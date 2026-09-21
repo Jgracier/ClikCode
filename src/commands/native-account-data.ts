@@ -114,8 +114,7 @@ export async function nativeModelCatalogUncached(
   const profileRoot = account?.nativeProfile?.path
     ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined)
     ?? (harness.command === 'codex' ? join(homedir(), '.codex')
-      : harness.command === 'claude' ? join(homedir(), '.claude')
-        : harness.command === 'gemini' ? join(homedir(), '.gemini') : undefined);
+      : harness.command === 'claude' ? join(homedir(), '.claude') : undefined);
   let configured: string | undefined;
   if (profileRoot && harness.command === 'codex') {
     try {
@@ -134,27 +133,6 @@ export async function nativeModelCatalogUncached(
       if (typeof settings.model === 'string' && settings.model.trim()) configured = settings.model.trim();
     } catch { /* Claude will choose its own default when no setting exists. */ }
     ['fable', 'opus', 'sonnet', 'haiku'].forEach((model) => models.add(model));
-  } else if (profileRoot && harness.command === 'gemini') {
-    try {
-      const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown; selectedModel?: unknown };
-      const value = typeof settings.model === 'string' ? settings.model : settings.selectedModel;
-      if (typeof value === 'string' && value.trim()) configured = value.trim();
-    } catch { /* Gemini will choose its own default when no setting exists. */ }
-    // No injected model-name list here on purpose: unlike Claude's alias
-    // names just above (confirmed directly from `claude --help`'s own
-    // documented flag values, plus verified live against real turns),
-    // there is no equivalent verified source for Gemini's -- the previous
-    // ['auto','pro','flash','flash-lite'] list was never confirmed against
-    // Gemini CLI itself, and checking Antigravity CLI's real, live `models`
-    // output (a different tool that also routes to Gemini models) showed
-    // genuinely different, more specific names entirely
-    // (gemini-3.8-flash-high, etc.) -- meaning that list was already
-    // presenting stale/wrong data as if it were reliable. No Gemini CLI
-    // command or local file was found that actually lists its own models
-    // (confirmed: no `models` subcommand in --help, no cache file under
-    // ~/.gemini/). Better to show only what's genuinely known (`configured`
-    // from settings.json, or an account's own explicitly set models) than a
-    // guess that looks like real data.
   }
   // Copilot had the same problem, worse: a full hardcoded model list with
   // no discovery mechanism and no verification against Copilot CLI itself

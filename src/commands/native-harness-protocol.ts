@@ -85,7 +85,7 @@ const SESSION_KEY = /^(?:session_?id|thread_?id|chat_?id|conversation_?id|sessio
 /** The key each vendor documents for its own resumable identity. A harness
  * listed here never has another key's value preferred over this one. */
 const HARNESS_SESSION_KEYS: Readonly<Record<string, readonly string[]>> = {
-  claude: ['session_id'], qwen: ['session_id'], cursor: ['session_id'], gemini: ['session_id'],
+  claude: ['session_id'], qwen: ['session_id'], cursor: ['session_id'],
   droid: ['session_id'], pi: ['session_id', 'sessionId'], codex: ['thread_id'],
   antigravity: ['conversation_id'], opencode: ['sessionID'], kilo: ['sessionID'],
 };
@@ -362,15 +362,6 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     }
   };
   values.forEach((value) => visit(value));
-  // Gemini's stream-json terminal result contains statistics rather than a
-  // repeated final response. Its assistant `message` records are genuine
-  // incremental chunks, so reconstruct them in order instead of returning
-  // only the final chunk collected by the generic structured-output walk.
-  const geminiStreamText = harness.command === 'gemini'
-    ? values.flatMap((record) => record.type === 'message' && record.role === 'assistant' && typeof record.content === 'string'
-      ? [record.content]
-      : []).join('')
-    : '';
   const gooseStreamText = harness.command === 'goose'
     ? values.flatMap((record) => {
       const message = asRecord(record.message);
@@ -394,7 +385,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   // text -- a turn that produced actual output before failing partway
   // through should still show that output, not the failure reason instead
   // of it.
-  const text = claudeText || geminiStreamText.trim() || gooseStreamText.trim() || messages[messages.length - 1]?.trim() || errorMessage;
+  const text = claudeText || gooseStreamText.trim() || messages[messages.length - 1]?.trim() || errorMessage;
   const ids = nativeSessionIdsFromValues(values, harness.command);
   const usage = nativeTurnUsage(harness, values);
   const extras = {
@@ -510,7 +501,6 @@ export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>>
   codex: { stream: 'structured', note: 'command_execution is a run by the shape of its own envelope; mcp_tool_call classifies by the MCP tool name.' },
   opencode: { stream: 'structured', note: 'part.tool with part.state.input: the verb table reads the name, the input shape covers the rest.' },
   kilo: { stream: 'structured', note: 'an OpenCode fork emitting the same envelope.' },
-  gemini: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
   goose: { stream: 'structured', note: 'names are server-prefixed (developer__shell), which no verb table can match; the command in their input is what classifies them.' },
   cline: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
   droid: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },

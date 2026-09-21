@@ -679,7 +679,7 @@ function splitTableColumns(line: string): string[] {
 /** Covers exactly the display formats actually observed from an installed
  * vendor table (opencode: a bare "11:16 AM" clock time for today; Hermes:
  * "yesterday" or a plain "2026-08-21" date) — not a general relative-date
- * parser. Anything else (a weekday name, "3 days ago", Gemini's "N ago" style)
+ * parser. Anything else (a weekday name, "3 days ago", an "N ago" style)
  * returns undefined rather than a guessed value, since a wrong sort position
  * is worse than an honest "can't tell how recent this is". */
 function parseDiscoveredTimestamp(text: string | undefined): number | undefined {
@@ -776,47 +776,7 @@ function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-l
   return sessions;
 }
 
-/** Gemini CLI's `--list-sessions` has no JSON mode — real output is a numbered
- * list, one session per line: "N. Title (relative-time) [uuid-prefix]". The
- * bracketed id is only a shortened prefix; resolveGeminiSessionIds below turns
- * it into the full uuid when Gemini's own chat files identify it uniquely. */
-function parseDiscoveredSessionsNumberedList(raw: string): DiscoveredNativeSession[] {
-  const sessions: DiscoveredNativeSession[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    const match = /^\s*\d+\.\s+(.*?)\s+\(([^)]+)\)\s+\[([a-f0-9-]+)\]\s*$/i.exec(line);
-    if (!match) continue;
-    const [, title, relativeTime, idFragment] = match;
-    sessions.push({ nativeId: idFragment, title: title.trim() || undefined, updatedAt: relativeTime.trim() || undefined });
-  }
-  return sessions;
-}
 
-/** Gemini CLI stores each chat as `<home>/.gemini/tmp/<project>/chats/session-*.json`
- * with the full `sessionId` inside. A listed prefix is replaced only when exactly
- * one stored session starts with it; anything ambiguous or unreadable keeps the
- * value the CLI printed, which is what it was always using before. */
-export async function resolveGeminiSessionIds(
-  sessions: readonly DiscoveredNativeSession[], environment: NativeSessionEnvironment = {},
-): Promise<DiscoveredNativeSession[]> {
-  const fullUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!sessions.some((session) => !fullUuid.test(session.nativeId))) return [...sessions];
-  const home = environment.GEMINI_CLI_HOME?.trim() || environment.HOME?.trim() || homedir();
-  const root = join(home, '.gemini', 'tmp');
-  const ids = new Set<string>();
-  for (const project of await sortedSubdirectories(root)) {
-    const files = await newestFiles(await walkFilesRecursive(join(root, project, 'chats'), 0, '.json'), 100);
-    for (const file of files) {
-      const head = await readFilePrefix(file.path, 2_000).catch(() => '');
-      const id = /"sessionId"\s*:\s*"([0-9a-f-]{36})"/i.exec(head)?.[1];
-      if (id) ids.add(id.toLowerCase());
-    }
-  }
-  return sessions.map((session) => {
-    if (fullUuid.test(session.nativeId)) return session;
-    const candidates = [...ids].filter((id) => id.startsWith(session.nativeId.toLowerCase()));
-    return candidates.length === 1 ? { ...session, nativeId: candidates[0]! } : session;
-  });
-}
 
 /** Never installs anything for a passive scan (only harnesses already found on
  * PATH are queried), and never throws — a harness that isn't installed, has
@@ -832,7 +792,6 @@ export async function discoverNativeSessions(
     const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
     const format = harness.session.discoverFormat ?? 'json';
     if (format === 'text') return parseDiscoveredSessionsText(raw);
-    if (format === 'numbered-list') return await resolveGeminiSessionIds(parseDiscoveredSessionsNumberedList(raw), environment);
     return parseDiscoveredSessionsStructured(raw, format);
   } catch {
     // fail-open-ok: passive discovery must not break the picker when an optional vendor command fails.
