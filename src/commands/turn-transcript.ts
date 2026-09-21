@@ -131,6 +131,14 @@ export class TurnTranscript {
    * wraps independently of the ones after it. Without this an answer whose code
    * block is taller than the viewport could never retire its head rows. */
   private openCodeLines = 0;
+  /** Rendered rows of the open PROSE block already retired, and whether that
+   * block began its message. Word wrap only ever extends the last line, so a
+   * row that already has another row after it can never change -- which makes
+   * every row but the last one final the moment it exists. Without this the
+   * whole paragraph sat above the composer until a blank line closed it, then
+   * jumped into the transcript at once. */
+  private openProseRows = 0;
+  private openProseFirst = false;
   /** Whether anything at all has been written for this message, which is what
    * decides the leading marker -- not the block count, which is still zero
    * while the head of an open fence is being retired line by line. */
@@ -175,7 +183,18 @@ export class TurnTranscript {
       this.openCodeLines = 0;
     }
 
-    const finished = interleave(settled, settledTools, input.renderBlocks, !this.started);
+    // A prose block whose head rows were already retired while it streamed
+    // owes only its tail now that it has closed. Rendered rows rather than
+    // source lines, because how prose wraps is what was written.
+    const finished: string[] = [];
+    if (this.openProseRows > 0 && head && head.kind !== 'code') {
+      const tail = input.renderBlocks([head], this.openProseFirst).slice(this.openProseRows);
+      if (tail.length) { finished.push(...tail); this.started = true; }
+      settled = settled.slice(1);
+      this.openProseRows = 0;
+    }
+
+    finished.push(...interleave(settled, settledTools, input.renderBlocks, !this.started));
     if (finished.length) this.started = true;
     // Monotonic, for the same reason the message loop is: a row in scrollback
     // cannot be un-emitted. A turn that streams part of an answer, hits a
@@ -202,6 +221,18 @@ export class TurnTranscript {
         [{ ...open, lines: [open.lines[open.lines.length - 1]!], ...(this.openCodeLines ? { language: undefined } : {}) }],
         !this.started,
       );
+    } else if (open && open.kind !== 'code') {
+      // Everything but the row still being written is final.
+      if (this.openProseRows === 0) this.openProseFirst = !this.started;
+      const rows = input.renderBlocks([open], this.openProseFirst);
+      const keep = Math.max(this.openProseRows, rows.length - 1);
+      const newly = rows.slice(this.openProseRows, keep);
+      if (newly.length) {
+        finished.push(...newly);
+        this.started = true;
+        this.openProseRows = keep;
+      }
+      live = rows.slice(keep);
     } else if (answer.live.length) {
       live = renderLive(answer.live, !this.started);
     }
@@ -213,6 +244,8 @@ export class TurnTranscript {
     this.emittedBlocks = 0;
     this.emittedTools.clear();
     this.openCodeLines = 0;
+    this.openProseRows = 0;
+    this.openProseFirst = false;
     this.started = false;
   }
 }
