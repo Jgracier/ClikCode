@@ -3,8 +3,7 @@ import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
-import { LoginUrlWatcher } from './login-url.js';
-import { runTeedLogin } from './login-tee.js';
+import { runLoginSession } from './login-session.js';
 
 export interface NativeHarnessSpec {
   command: string;
@@ -210,16 +209,14 @@ export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: 
   }
   // Every harness gets the same treatment, because the vendors do not agree
   // on any of it: some auto-open and print nothing, some print a URL and no
-  // more, some print a URL the user cannot select on a phone. Teeing the
-  // login means ClikCode can do the missing half itself -- open the browser
-  // where there is one, and put the link on the phone's clipboard where
-  // there is not -- without changing what the vendor does or what the user
-  // sees. Where there is no script(1) (Windows), this falls back to the
-  // original hand-the-terminal-over path, which is exactly today's behaviour.
-  const watcher = new LoginUrlWatcher({ write: (chunk) => process.stdout.write(chunk) });
-  const teed = await runTeedLogin({
-    binary: spec.binary, args: spec.loginArgv ?? [], env: envOverrides,
-    onOutput: (chunk) => { watcher.push(chunk); },
+  // more, some bury it in a JSON dump. ClikCode watches the login, and once a
+  // sign-in URL appears it puts its own screen in front: the short link, the
+  // clipboard copy, and one field wired to the vendor's stdin. Where there is
+  // no script(1) (Windows), this falls back to the original
+  // hand-the-terminal-over path, which is exactly today's behaviour.
+  const teed = await runLoginSession({
+    binary: spec.binary, args: spec.loginArgv ?? [], env: envOverrides, displayName: spec.displayName,
+    io: { write: (chunk) => process.stdout.write(chunk), input: process.stdin },
   });
   if (!teed.teed) { await run(spec.binary, spec.loginArgv ?? [], envOverrides); return; }
   if (teed.exitCode !== 0 && teed.exitCode !== null) {

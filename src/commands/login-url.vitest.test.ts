@@ -135,7 +135,12 @@ describe('LoginUrlWatcher', () => {
 
 describe('scriptArgv', () => {
   it('uses the util-linux form on Linux, with live flushing', () => {
-    expect(scriptArgv('claude', ['login'], 'linux')).toEqual(['-q', '-f', '-c', "'claude' 'login'", '/dev/null']);
+    expect(scriptArgv('claude', ['login'], 'linux')).toEqual(['-q', '-e', '-f', '-c', "'claude' 'login'", '/dev/null']);
+  });
+
+  it('asks util-linux for the child exit status, which it does not report by default', () => {
+    // Without -e, script always exits 0 and a failed sign-in looks successful.
+    expect(scriptArgv('claude', ['login'], 'linux')).toContain('-e');
   });
 
   it('uses the BSD form on macOS, which takes argv rather than a shell string', () => {
@@ -152,7 +157,7 @@ describe('scriptArgv', () => {
   });
 
   it('passes Antigravity\'s real login argv through intact', () => {
-    expect(scriptArgv('agy', ['-p', 'hi', '--output-format', 'json'], 'linux')?.[3])
+    expect(scriptArgv('agy', ['-p', 'hi', '--output-format', 'json'], 'linux')?.[4])
       .toBe("'agy' '-p' 'hi' '--output-format' 'json'");
   });
 });

@@ -39,7 +39,10 @@ export function scriptArgv(
   if (platform === 'darwin') return ['-q', '/dev/null', binary, ...args];
   // -f flushes after every write; without it the parent sees the URL only
   // once the child has already exited, which is far too late to be useful.
-  return ['-q', '-f', '-c', shellQuote([binary, ...args]), '/dev/null'];
+  // -e returns the CHILD's exit status: without it util-linux script always
+  // exits 0, so a failed sign-in reported success. Verified both ways here,
+  // and that BSD script already does this by default (hence no -e above).
+  return ['-q', '-e', '-f', '-c', shellQuote([binary, ...args]), '/dev/null'];
 }
 
 export interface TeedLoginResult {
@@ -59,15 +62,26 @@ export async function runTeedLogin(input: {
   onOutput: (chunk: string) => void;
   write?: (chunk: string) => void;
   platform?: NodeJS.Platform;
+  /** Take the vendor's stdin rather than letting it read the terminal
+   * directly. Confirmed live: the child still sees a real TTY on BOTH stdin
+   * and stdout under script(1) even when script's own stdin is a pipe, and
+   * what is written here reaches the vendor. That is what lets ClikCode put
+   * its own field in front of a vendor's prompt. */
+  onStdin?: (write: (text: string) => void) => void;
 }): Promise<TeedLoginResult> {
   const argv = scriptArgv(input.binary, input.args, input.platform);
   if (!argv) return { teed: false, exitCode: null };
   const write = input.write ?? ((chunk: string) => { process.stdout.write(chunk); });
   return new Promise<TeedLoginResult>((resolve, reject) => {
     const child = spawn('script', [...argv], {
-      stdio: ['inherit', 'pipe', 'inherit'],
+      stdio: [input.onStdin ? 'pipe' : 'inherit', 'pipe', 'inherit'],
       env: { ...process.env, ...input.env },
     });
+    // Writing after the vendor has gone is not an error worth failing a login
+    // over: it simply finished (via a browser callback, say) before the user
+    // pasted anything.
+    child.stdin?.on('error', () => { /* fail-open-ok: vendor already exited */ });
+    input.onStdin?.((text: string) => { child.stdin?.write(text); });
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', (chunk: string) => {
       // The user sees the vendor's own output, unaltered and in real time.
