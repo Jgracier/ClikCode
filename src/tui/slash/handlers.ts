@@ -3,332 +3,47 @@
  *
  * Every command has a headless body here that returns text, so the same
  * `/cost` or `/export` works typed into the chat, piped through the control
- * API, or run from a script -- and so there is exactly one definition of what
- * each one means. Commands that genuinely cannot run without a screen say so
- * rather than growing a second implementation.
+ * API, or run as an argv subcommand. The implementations the longer ones
+ * need live beside this file, one concern each.
  */
+
 import { randomUUID } from 'node:crypto';
-import { open, readFile, stat, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
-import { stdin as input, stdout as output } from 'node:process';
-import { commonControlFor } from '../../harness/options.js';
-import { isJsonDefaultMode } from '../../cli/output-mode.js';
-import { captureNativeHarnessOutput } from '../../harness/transport/native.js';
-import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
-import { failoverPrompt } from '../../turn/failover.js';
-import type { AiLocalHarnessDefinition, HarnessSession, HarnessState } from '../../harness/types.js';
-import { compactPath, sessionProviderLabel } from '../../harness/protocol/labels.js';
-import { harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { open } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
+import { stdin as input } from 'node:process';
+import type { HarnessSession, HarnessState } from '../../harness/types.js';
+import { compactPath } from '../../harness/protocol/labels.js';
+import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
 import { aiAccountLogin, aiAccountLogout, aiAccountRemove, aiDoctor } from '../../commands/account.js';
-import { closePersistentTransport, sessionNativeCommands, turnEnvironment } from '../../turn/runtime.js';
 import { aiSessionSend } from '../../turn/drive.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { SELECTION_MODE, setSelectionMode } from '../modes.js';
 import { TERMINAL } from '../active-terminal.js';
-import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
+import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../session/attachments.js';
-import { conversationIdFor, hasConversationContent, optionForControl, requiresProviderHandoff, setSessionHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
-import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashExtras, type SlashHandlerKey, type SlashRouteContext } from './registry.js';
-import { customCommandPrompt, discoverCustomCommands, type CustomCommand } from '../../session/custom-commands.js';
+import { conversationIdFor, requiresProviderHandoff, setSessionHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
+import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey } from './registry.js';
+import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import {
-  aiHarnessSelect, aiSessionClose, aiSessionLeave, aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, newConversationSession, newProviderConversation,
-} from '../../commands/ai.js';
-
-
-/** Shared slash-command grammar for a future TTY client and the headless CLI. */
-export function sessionHarness(session: HarnessSession | undefined): AiLocalHarnessDefinition | undefined {
-  return session?.route !== 'gateway' && session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-}
-
-export function customCommandsFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): CustomCommand[] {
-  if (session.route === 'gateway') return [];
-  return discoverCustomCommands(harness, { workspace: session.workspace ?? process.cwd(), ...CUSTOM_COMMAND_ROOTS });
-}
-/** Test seam: redirect `~` and ClikCode's own command directories. */
-export const CUSTOM_COMMAND_ROOTS: { home?: string; clikcodeDirs?: readonly string[] } = {};
-
-export function slashExtrasFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): SlashExtras {
-  const managers = harness ? localHarnessCapabilityManifest(harness).managers ?? {} : {};
-  return {
-    managers: Object.entries(managers).map(([name, manager]) => ({ name, label: manager?.label ?? name })),
-    native: session.route === 'gateway' ? [] : sessionNativeCommands(session.id),
-    custom: customCommandsFor(session, harness),
-    harnesses: allLocalHarnesses().filter((item) => harnessCanRunTurns(item))
-      .map((item, index) => ({ item, index })).sort((a, b) => harnessTierRank(a.item) - harnessTierRank(b.item) || a.index - b.index)
-      .map(({ item }) => ({ command: item.command, displayName: item.displayName })),
-  };
-}
-
-export function slashRouteContextFor(
-  session: HarnessSession, harness: AiLocalHarnessDefinition | undefined, pathExists?: (path: string) => boolean,
-): SlashRouteContext {
-  const extras = slashExtrasFor(session, harness);
-  return {
-    ...(harness ? { harness } : {}),
-    harnessCommands: (extras.harnesses ?? []).map((item) => item.command),
-    managerNames: (extras.managers ?? []).map((item) => item.name),
-    nativeCommands: (extras.native ?? []).map((item) => item.name.replace(/^\//, '').toLowerCase()),
-    customCommands: (extras.custom ?? []).map((item) => item.name),
-    ...(pathExists ? { pathExists } : {}),
-  };
-}
-
-function captureProcess(command: string, args: readonly string[], cwd?: string, stdinText?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], { cwd, stdio: [stdinText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout!.setEncoding('utf8');
-    child.stderr!.setEncoding('utf8');
-    child.stdout!.on('data', (chunk: string) => { if (stdout.length < 1024 * 1024) stdout += chunk; });
-    child.stderr!.on('data', (chunk: string) => { if (stderr.length < 16 * 1024) stderr += chunk; });
-    if (stdinText !== undefined) child.stdin!.end(stdinText);
-    child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `${command} exited ${code ?? 1}`)));
-  });
-}
-
-/** Everything that differs from the last commit: staged and unstaged changes
- * against HEAD, plus files git does not track yet (which `git diff` never shows). */
-async function workspaceDiff(workspace: string): Promise<string> {
-  const git = (args: readonly string[]): Promise<string> => captureProcess('git', args, workspace);
-  const hasHead = await git(['rev-parse', '--verify', '--quiet', 'HEAD']).then(() => true, () => false);
-  // A repository with no commit yet has no HEAD: everything staged is the change.
-  const base = hasHead ? ['diff', '--no-ext-diff', 'HEAD'] : ['diff', '--no-ext-diff', '--cached'];
-  const [stat, details, untracked] = await Promise.all([
-    git([...base, '--stat', '--', '.']), git([...base, '--', '.']),
-    git(['ls-files', '--others', '--exclude-standard', '--', '.']).catch(() => ''),
-  ]);
-  const untrackedFiles = untracked.split(/\r?\n/).filter(Boolean);
-  const sections = [
-    stat.trim(), details.trim(),
-    untrackedFiles.length ? `Untracked files (${untrackedFiles.length}):\n${untrackedFiles.slice(0, 200).map((file) => `  ${file}`).join('\n')}${untrackedFiles.length > 200 ? `\n  … ${untrackedFiles.length - 200} more` : ''}` : '',
-  ].filter(Boolean);
-  return sections.join('\n\n').slice(0, 512 * 1024);
-}
-
-export function capabilitiesText(session: HarnessSession): string {
-  if (session.route === 'gateway') {
-    return [
-      'ClikDeploy Gateway capabilities',
-      'Inference routing: platform managed',
-      'Streaming: live SSE token deltas with bounded fallback chunking',
-      'Tools: ClikDeploy capability registry and MCP bridge',
-      'Permissions: authenticated server policy and confirmation gates',
-      'Sessions: durable ClikCode transcript replay',
-      'Models and effort: selected by Gateway routing policy',
-    ].join('\n');
-  }
-  const harness = sessionHarness(session);
-  if (!harness) throw new Error('Choose a provider first.');
-  const manifest = localHarnessCapabilityManifest(harness);
-  return [
-    `${harness.displayName} capabilities`,
-    ...manifest.options.map((option) => {
-      const control = commonControlFor(option.id);
-      return `${option.label}: ${option.description}${control ? ` (${control})` : ''}`;
-    }),
-    ...Object.entries(manifest.managers ?? {}).map(([name, manager]) => `${manager?.label ?? name}: available`),
-    ...(manifest.features ?? []).map((feature) => `${feature}: native`),
-  ].join('\n');
-}
-
-function memoryFileName(session: HarnessSession): string {
-  return sessionHarness(session)?.memoryFile ?? 'AGENTS.md';
-}
-
-export function initPrompt(session: HarnessSession): string {
-  const file = memoryFileName(session);
-  return `Inspect this repository and create or improve ${file} with concise, accurate build, test, architecture, and contribution instructions for coding agents. Verify every command you include.`;
-}
-
-export function reviewPrompt(extra: string): string {
-  return `Review the uncommitted changes in this workspace. Identify concrete bugs, regressions, security issues, and missing tests. Prioritize findings and cite file paths.${extra ? ` Additional focus: ${extra}` : ''}`;
-}
-
-export async function readMemoryFile(session: HarnessSession): Promise<{ path: string; content?: string }> {
-  const path = join(session.workspace ?? process.cwd(), memoryFileName(session));
-  try {
-    return { path, content: (await readFile(path, 'utf8')).slice(0, 256 * 1024) };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path };
-    throw error;
-  }
-}
+import { aiHarnessSelect, aiSessionClose, aiSessionLeave, aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, newConversationSession, newProviderConversation } from '../../commands/ai.js';
+import { capabilitiesText } from './capabilities-text.js';
+import { compactConversation } from './compact.js';
+import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from './context.js';
+import { contextUsageText, costReport } from './cost.js';
+import { exportTranscript } from './export-transcript.js';
+import { nativeManagerListing } from './native-manager.js';
+import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
+import { addSessionDirectory, changeSessionWorkspace, workspaceDiff } from './workspace.js';
 
 function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
   const who = session.route === 'gateway' ? 'ClikDeploy Gateway' : harness?.displayName ?? 'This provider';
   return `${who} does not expose an undo/rewind operation to ClikCode, so /undo is not available here. ClikCode will not fake it: use /diff to see what changed and git to revert it${harness?.nativeSlashPassthrough ? `, or send the vendor's own command with //rewind` : ''}.`;
-}
-
-function formatTokens(value: number | undefined): string {
-  return value === undefined ? '—' : value.toLocaleString('en-US');
-}
-
-function contextUsageText(session: HarnessSession): string {
-  const usage = session.lastUsage;
-  const who = session.route === 'gateway' ? 'ClikDeploy Gateway' : sessionHarness(session)?.displayName ?? 'The provider';
-  if (!usage) return `${who} has not reported token usage for this conversation yet. It appears here after a turn on a harness that publishes usage events.`;
-  const used = usage.totalTokens ?? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || undefined);
-  const window = usage.contextWindow;
-  return [
-    `Context usage (as of ${usage.at})`,
-    window && used !== undefined ? `  window     ${formatTokens(used)} / ${formatTokens(window)} tokens (${Math.min(100, Math.round((used / window) * 100))}%)` : `  window     not reported by ${who}`,
-    `  input      ${formatTokens(usage.inputTokens)}`,
-    `  cached     ${formatTokens(usage.cacheReadTokens)}`,
-    `  output     ${formatTokens(usage.outputTokens)}`,
-    `  total      ${formatTokens(used)}`,
-    `  messages   ${sessionTranscriptMessages(session).length}`,
-  ].join('\n');
-}
-
-function costReport(state: HarnessState, session: HarnessSession): { text: string; totals: { turns: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; costUsd: number; costKnown: boolean } } {
-  const invocations = state.invocations.filter((item) => item.sessionId === session.id);
-  const totals = invocations.reduce((sum, item) => ({
-    turns: sum.turns + 1, inputTokens: sum.inputTokens + (item.inputTokens ?? 0), outputTokens: sum.outputTokens + (item.outputTokens ?? 0),
-    cacheReadTokens: sum.cacheReadTokens + (item.cacheReadTokens ?? 0), costUsd: sum.costUsd + (item.costUsd ?? 0),
-    costKnown: sum.costKnown || item.costUsd !== undefined,
-  }), { turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, costKnown: false });
-  const text = invocations.length
-    ? [
-      'This conversation',
-      `  turns      ${totals.turns}`,
-      `  input      ${formatTokens(totals.inputTokens)} tokens`,
-      `  cached     ${formatTokens(totals.cacheReadTokens)} tokens`,
-      `  output     ${formatTokens(totals.outputTokens)} tokens`,
-      `  cost       ${totals.costKnown ? `$${totals.costUsd.toFixed(4)}` : 'not reported (subscription plans and most vendor CLIs do not publish a price)'}`,
-    ].join('\n')
-    : 'No metered turns recorded for this conversation yet.';
-  return { text, totals };
-}
-
-function transcriptMarkdown(session: HarnessSession): string {
-  const title = session.name ?? `ClikCode conversation ${session.id.slice(0, 8)}`;
-  const header = [
-    `# ${title}`, '',
-    `- Provider: ${sessionProviderLabel(session)}`,
-    `- Model: ${session.model ?? 'provider default'}`,
-    `- Workspace: ${session.workspace ?? process.cwd()}`,
-    `- Exported: ${new Date().toISOString()}`, '',
-  ];
-  const body = sessionTranscriptMessages(session).flatMap((message) => [`## ${message.role === 'assistant' ? 'Assistant' : 'You'}`, '', message.content.trim(), '']);
-  return `${[...header, ...body].join('\n').trimEnd()}\n`;
-}
-
-/** Never overwrites silently: `confirmOverwrite` decides (a prompt in the TUI,
- * `--force` headless). */
-export async function exportTranscript(session: HarnessSession, target: string, confirmOverwrite: (path: string) => Promise<boolean>): Promise<string> {
-  const workspace = session.workspace ?? process.cwd();
-  const requested = expandHomePath(decodeAttachmentPath(target.trim() || `clikcode-${session.id.slice(0, 8)}.md`));
-  const path = isAbsolute(requested) ? resolve(requested) : resolve(workspace, requested);
-  const existing = await stat(path).catch(() => undefined);
-  if (existing?.isDirectory()) throw new Error(`${compactPath(path)} is a directory; give a file name.`);
-  if (existing && !await confirmOverwrite(path)) throw new Error(`${compactPath(path)} already exists; not overwritten. Choose another path${isJsonDefaultMode() ? ' or pass --force' : ''}.`);
-  await writeFile(path, transcriptMarkdown(session), { encoding: 'utf8', mode: 0o600 });
-  return path;
-}
-
-async function resolveExistingDirectory(session: HarnessSession, raw: string): Promise<string> {
-  const expanded = expandHomePath(decodeAttachmentPath(raw));
-  const path = isAbsolute(expanded) ? resolve(expanded) : resolve(session.workspace ?? process.cwd(), expanded);
-  const info = await stat(path).catch(() => undefined);
-  if (!info) throw new Error(`${compactPath(path)} does not exist.`);
-  if (!info.isDirectory()) throw new Error(`${compactPath(path)} is not a directory.`);
-  return path;
-}
-
-/** A native session belongs to the directory it was started in, so moving the
- * conversation drops it (the transcript is replayed into the next one) and
- * closes any live transport child, whose cwd is fixed at spawn. */
-async function changeSessionWorkspace(state: HarnessState, session: HarnessSession, raw: string): Promise<string> {
-  const path = await resolveExistingDirectory(session, raw);
-  if (path === (session.workspace ?? process.cwd())) return `Already working in ${compactPath(path)}.`;
-  const droppedNative = Boolean(session.nativeSessionId);
-  session.workspace = path;
-  session.nativeSessionId = undefined;
-  session.nativeStartedAt = undefined;
-  delete session.nativeSessionPreallocated;
-  session.updatedAt = new Date().toISOString();
-  await writeState(state);
-  await closePersistentTransport(session.id);
-  return `Working directory is now ${compactPath(path)}.${droppedNative ? ' The native session belonged to the previous directory, so the next turn starts a fresh one with this conversation replayed.' : ''}`;
-}
-
-/** Stored as the harness's own declared `add-dir` option, so every transport
- * renders it the way the catalog says. No declaration, no pretending. */
-async function addSessionDirectory(state: HarnessState, session: HarnessSession, raw: string): Promise<string> {
-  if (!raw.trim()) throw new Error('usage: /add-dir <dir>');
-  const harness = sessionHarness(session);
-  if (!harness) throw new Error('Choose a provider before adding directories.');
-  const option = optionForControl(harness, '/add-dir');
-  if (!option) throw new Error(`${harness.displayName} does not declare an additional-directory option; start ClikCode from a common parent directory or use /cwd instead.`);
-  const path = await resolveExistingDirectory(session, raw);
-  const current = session.harnessOptions?.[option.id];
-  const existing = Array.isArray(current) ? current.map(String) : typeof current === 'string' && current ? [current] : [];
-  if (existing.includes(path)) return `${compactPath(path)} is already available to ${harness.displayName}.`;
-  session.harnessOptions = { ...session.harnessOptions, [option.id]: option.kind === 'path-list' || option.kind === 'string-list' ? [...existing, path] : path };
-  session.updatedAt = new Date().toISOString();
-  await writeState(state);
-  // A live ACP child took its option argv at spawn.
-  await closePersistentTransport(session.id);
-  return `${harness.displayName} can now also work in ${compactPath(path)}.`;
-}
-
-const COMPACT_PROMPT = 'Summarize this conversation so far for a fresh session that will continue the work. Include: the goal, decisions made and why, files created or changed (with paths), commands that matter, the current state, and the concrete next steps. Be complete but concise. Output only the summary.';
-
-/** `/compact`. A harness that runs slash commands itself compacts natively.
- * Otherwise ClikCode does it: one turn produces the summary, then a fresh
- * branch of the same conversation is seeded with only that summary -- with no
- * native session id, so its first turn replays the summary into a brand-new
- * vendor session. The full transcript stays on the original, resumable. */
-export async function compactConversation(
-  id: string, session: HarnessSession, focus: string, send: (id: string, prompt: string) => Promise<void>,
-): Promise<string | void> {
-  if (session.route === 'gateway') throw new Error('ClikDeploy Gateway manages its own context; /compact applies only to local harnesses.');
-  if (!hasConversationContent(session)) throw new Error('There is nothing to compact yet.');
-  const harness = sessionHarness(session);
-  if (harness?.nativeSlashPassthrough && session.nativeSessionId) {
-    await send(id, `/compact${focus ? ` ${focus}` : ''}`);
-    return;
-  }
-  await send(id, `${COMPACT_PROMPT}${focus ? `\nPay particular attention to: ${focus}` : ''}`);
-  const state = await readState();
-  const source = state.sessions.find((item) => item.id === id);
-  if (!source) throw new Error(`AI session "${id}" was not found`);
-  const summary = [...sessionTranscriptMessages(source)].reverse().find((message) => message.role === 'assistant')?.content.trim();
-  if (!summary) throw new Error('The provider returned no summary; the conversation was left as it was.');
-  const compacted: HarnessSession = {
-    ...newConversationSession(state, source),
-    conversationId: conversationIdFor(source), parentSessionId: source.id,
-    ...(source.name ? { name: source.name } : {}),
-    ...(source.harnessOptions ? { harnessOptions: { ...source.harnessOptions } } : {}),
-    messages: [
-      { role: 'user', content: 'Summary of the conversation so far (compacted by ClikCode):' },
-      { role: 'assistant', content: summary },
-    ],
-  };
-  state.sessions.push(compacted);
-  await writeState(state);
-  await closePersistentTransport(id);
-  return compacted.id;
-}
-
-export async function nativeManagerListing(state: HarnessState, session: HarnessSession, name: string): Promise<{ label: string; text: string }> {
-  const harness = sessionHarness(session);
-  if (!harness) throw new Error('Choose a provider first.');
-  const manager = (localHarnessCapabilityManifest(harness).managers as Record<string, { label: string; listArgv?: readonly string[] } | undefined> | undefined)?.[name];
-  if (!manager) throw new Error(`${harness.displayName} does not publish a ${name} manager.`);
-  if (!manager.listArgv) throw new Error(`${harness.displayName} manages ${manager.label} only in its own interactive UI; open it from the interactive ClikCode session.`);
-  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  const text = await captureNativeHarnessOutput(harness, manager.listArgv, turnEnvironment(harness, account), 15_000, session.workspace);
-  return { label: manager.label, text: text.trim() || 'No entries.' };
 }
 
 /** What one slash command did, for a caller that must follow it. */
@@ -337,6 +52,7 @@ interface HeadlessSlashContext {
   /** Canonical registry name (aliases already resolved). */
   head: string; args: string; words: string[];
 }
+
 /** Resolves with the resulting session id when the command moved the
  * conversation to another session (`/new`, a handoff), otherwise nothing. */
 type HeadlessSlashHandler = (context: HeadlessSlashContext) => Promise<string | void>;
@@ -347,6 +63,7 @@ const INTERACTIVE_ONLY = (name: string): HeadlessSlashHandler => async () => {
 
 /** Indirection so the interactive loop and tests can observe/replace the turn. */
 export const SLASH_TURN = { send: (id: string, prompt: string): Promise<void> => aiSessionSend(id, prompt) };
+
 const sendSessionTurn = (id: string, prompt: string): Promise<void> => SLASH_TURN.send(id, prompt);
 
 /** Headless half of the slash registry. Typed by SlashHandlerKey, so a
