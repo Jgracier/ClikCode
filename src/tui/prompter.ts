@@ -22,7 +22,7 @@ import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, MessageBlock, PickerOption, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
-import { ActivityEntry, TOOL_CATEGORY_STYLE, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
+import { ActivityEntry, TOOL_CATEGORY_STYLE, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
@@ -734,7 +734,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // is the standard, the colour is what kind of work is running.
     const spinner = waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
     const tinted = this.waitingCategory ? TOOL_CATEGORY_STYLE[this.waitingCategory].paint(spinner) : chalk.cyanBright(spinner);
-    return `${tinted}  ${label.slice(0, split)}${chalk.dim(label.slice(split))}`;
+    // The same glyph the settled row will carry, so a tool looks like itself
+    // before and after it finishes rather than changing shape on completion.
+    const mark = this.waitingCategory
+      ? ` ${TOOL_CATEGORY_STYLE[this.waitingCategory].paint(TOOL_CATEGORY_STYLE[this.waitingCategory].glyph)}`
+      : '';
+    return `${tinted}${mark}  ${label.slice(0, split)}${chalk.dim(label.slice(split))}`;
   }
 
   private updateWaiting(): void {
@@ -921,7 +926,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
      * thing an append-only transcript can do with it. */
     const standaloneActivity = (anchor: number): string[] => {
       const rows: string[] = [];
-      for (const entry of this.activityEntries) {
+      // Folded first: six reads in a row become one row, and the answer they
+      // were serving stays on screen.
+      for (const entry of collapseToolRuns(this.activityEntries)) {
         if (entry.anchor !== anchor || entry.responseOffset !== undefined) continue;
         const id = entry.sequence;
         if (id === undefined || this.emittedActivity.has(id)) continue;

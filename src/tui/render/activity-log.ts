@@ -97,13 +97,31 @@ export function rebaseActivityOffsets(
  * tool's. Nothing is spelled out in front of a label -- the label already
  * says `Read(...)` or `Bash(...)`, so colour is an aid here, not the only
  * carrier, and a NO_COLOR terminal loses nothing it needs. */
-export const TOOL_CATEGORY_STYLE: Record<ToolCategory, { paint: (text: string) => string; verb: string }> = {
-  read: { paint: (text) => chalk.blue(text), verb: 'reading' },
-  edit: { paint: (text) => chalk.magenta(text), verb: 'editing' },
-  run: { paint: (text) => chalk.yellow(text), verb: 'running' },
-  search: { paint: (text) => chalk.cyan(text), verb: 'searching' },
-  fetch: { paint: (text) => chalk.green(text), verb: 'fetching' },
+/** How each kind of work reads: its colour, the verb used while it runs, and
+ * the glyph that marks its settled row.
+ *
+ * The glyphs are all single-width and drawn from the same geometric block, so
+ * a column of them lines up and none of them is an emoji -- a terminal that
+ * renders one at double width breaks every row beneath it, and a phone is
+ * exactly where that happens. Colour alone carried the type before, which is
+ * nothing at all on a NO_COLOR or piped transcript. */
+export const TOOL_CATEGORY_STYLE: Record<ToolCategory, {
+  paint: (text: string) => string; verb: string; glyph: string;
+  /** How a folded run of these reads once it has settled. */
+  folded: (count: number) => string;
+}> = {
+  read: { paint: (text) => chalk.blue(text), verb: 'reading', glyph: '◇', folded: (n) => `read ${n} files` },
+  edit: { paint: (text) => chalk.magenta(text), verb: 'editing', glyph: '◆', folded: (n) => `edited ${n} files` },
+  run: { paint: (text) => chalk.yellow(text), verb: 'running', glyph: '▸', folded: (n) => `ran ${n} commands` },
+  search: { paint: (text) => chalk.cyan(text), verb: 'searching', glyph: '◈', folded: (n) => `searched ${n} times` },
+  fetch: { paint: (text) => chalk.green(text), verb: 'fetching', glyph: '↓', folded: (n) => `fetched ${n} pages` },
 };
+
+/** The marker a settled tool row opens with. An uncategorised tool keeps the
+ * neutral dot the transcript already used, so nothing regresses to a blank. */
+export function toolGlyph(category?: ToolCategory): string {
+  return category ? TOOL_CATEGORY_STYLE[category].glyph : '·';
+}
 
 export function activityLifecyclePhase(
   activeTools: ReadonlyMap<string, { label: string; category?: ToolCategory }>, event: HarnessActivityEvent,
@@ -127,6 +145,47 @@ export function activityLifecyclePhase(
     activeTools: next, phase: `${verb} ${current.label}`,
     ...(current.category ? { category: current.category } : {}),
   };
+}
+
+/** Fold a run of same-kind tool rows that have nothing to show into one.
+ *
+ * A turn that reads six files spent up to seventy rows saying so, and the
+ * answer those reads were serving fell off the bottom of the screen. Reads
+ * carry no preview (their row already names the file), so six of them in a
+ * row are six near-identical lines -- one line that says "read 6 files" is
+ * the same information in a twelfth of the space.
+ *
+ * Only rows with no output, no diff and no failure are folded: anything with
+ * something to show, or that went wrong, stays on its own row where it can be
+ * read. Fewer than two in a row is left exactly as it was -- a summary that
+ * says "1 file" is worse than the filename.
+ */
+export function collapseToolRuns(entries: readonly ActivityEntry[]): ActivityEntry[] {
+  // Foldable is about what the row SHOWS, not what the event carried: a read
+  // whose output is budgeted away renders as one line, and one line is what
+  // can be folded. Judging by the event instead kept rows apart that were
+  // already identical on screen.
+  const foldable = (entry: ActivityEntry): boolean => Boolean(
+    entry.event?.kind === 'tool-done' && entry.event.category && entry.lines.length <= 1,
+  );
+  const result: ActivityEntry[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    if (!foldable(entry)) { result.push(entry); continue; }
+    const category = entry.event!.category!;
+    let end = index;
+    while (end + 1 < entries.length) {
+      const next = entries[end + 1]!;
+      if (!foldable(next) || next.event!.category !== category || next.anchor !== entry.anchor) break;
+      end += 1;
+    }
+    const count = end - index + 1;
+    if (count < 2) { result.push(entry); continue; }
+    const { paint, glyph, folded } = TOOL_CATEGORY_STYLE[category];
+    result.push({ ...entry, lines: [`  ${paint(glyph)} ${chalk.dim(folded(count))}`] });
+    index = end;
+  }
+  return result;
 }
 
 export function transientAssistantRequired(
