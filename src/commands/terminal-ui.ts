@@ -106,21 +106,17 @@ export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
  * Presses and drags are still decoded and dropped rather than acted on. What
  * they cost is the client's own selection gesture, which is why Claude Code
  * prints "Hold Shift while selecting to use your terminal's native copy". */
-/** Button events and SGR encoding. Not drag, and emphatically not motion.
+/** All four, exactly as Claude Code asks for them on this user's phone.
  *
- * The wheel is reported as a button (64 up, 65 down) under `?1000h`, so that
- * plus SGR is everything this UI reads. `?1002h` adds reports while a button
- * is held and `?1003h` adds a report for EVERY pointer movement -- and on a
- * touchscreen every movement is a finger crossing the glass, so one swipe
- * became hundreds of motion reports travelling up a phone link to be thrown
- * away on arrival: `wheelScrollRows` returns zero for them and the handler
- * drops them. Asking for them flooded the very uplink the wheel had to share,
- * at the one moment it mattered.
+ * This was cut back to `?1000h ?1006h` on the reasoning that motion and drag
+ * reports are read by nothing here -- which is true, and was the wrong call.
+ * The capture is ground truth and it shows Claude Code asking for all four and
+ * receiving the keyboard-hidden swipe. A client may well require the tracking
+ * level it was asked for before it routes a gesture to the application, and
+ * guessing against a recording is how most of an evening was spent.
  *
- * Claude Code carries exactly this distinction in its own settings -- mouse
- * tracking is "off", "scroll" or "full", with a CLAUDE_CODE_DISABLE_MOUSE_CLICKS
- * that selects "scroll". This asked for full and used none of it. */
-export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1006h';
+ * `?1006h` is the SGR encoding; the wheel arrives as button 64 and 65. */
+export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
 export const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l';
 /** SGR: `CSI < button ; column ; row M|m`. Wheel up is 64, wheel down 65. */
 const MOUSE_EVENT = /^\u001b\[<(\d+);\d+;\d+[Mm]$/;
@@ -1575,6 +1571,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // hundred milliseconds apart. A client that never dropped them sets
       // what is already set.
       logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${this.alternateScreen}`);
+      // Asked for again, immediately, before anything is drawn -- which is
+      // what Claude Code does on this user's phone. Captured after every one
+      // of its resizes:
+      //
+      //     [[resize 63x70]] ?1000h ?1002h ?1003h ?1006h  ?25l ESC[2J ESC[H
+      //
+      // This had been removed on the strength of reading its handleResize,
+      // which only re-renders; the modes go out anyway, from elsewhere in its
+      // mode handling. The recording is the ground truth and the source was
+      // the wrong place to look.
+      if (this.alternateScreen) output.write(ENABLE_MOUSE_TRACKING);
       // No height probe here either: it jumps the cursor to the bottom-right
       // corner and asks, which is another thing done at exactly the moment a
       // swipe is being recognised, and another thing Claude Code never does.
@@ -1741,7 +1748,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // state for a client to hold about a session that is already failing to
       // forward the one gesture that matters. The filters that drop them stay,
       // for a terminal that volunteers them unasked.
-      output.write(`${ENABLE_BRACKETED_PASTE}\u001b[?1000h\u001b[?1006l\u001b[?1006h`);
+      output.write(`${ENABLE_BRACKETED_PASTE}\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h`);
       terminalModes.bracketedPaste = true;
       terminalModes.wheelReporting = true;
     }
@@ -2716,7 +2723,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // below depends on whether the frame shows it.
     const park = `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
     if (!updates.length && !park) return;
-    let frame = `\u001b[?25l${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
+    // A frame that redraws everything clears first, and homes, which is what
+    // Claude Code does after a resize on this user's phone:
+    //
+    //     ?1000h ?1002h ?1003h ?1006h  ?25l ESC[2J ESC[H  ...redraw...
+    //
+    // Addressed rows would overwrite every cell anyway; the clear costs seven
+    // bytes and leaves nothing of the old size behind on a screen that just
+    // changed shape.
+    const clear = full ? '\u001b[2J\u001b[H' : '';
+    let frame = `\u001b[?25l${clear}${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
     // Level 1: no styling on the wire. Colour is most of a frame's bytes.
     if (stripLevel() >= 1) frame = frame.replace(/\u001b\[[0-9;]*m/g, '');
     // Level 3: straight out, no completion callback, no coalescing.
