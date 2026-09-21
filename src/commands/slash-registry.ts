@@ -7,10 +7,24 @@
 import type { AiLocalHarnessDefinition, HarnessSession } from './types.js';
 
 export type SlashGroup =
-  | 'Conversation' | 'Workspace' | 'Provider' | 'Settings' | 'Sessions' | 'Info' | 'Tools' | 'Custom' | 'Switch harness';
+  | 'Common' | 'Conversation' | 'Workspace' | 'Provider' | 'Settings' | 'Sessions' | 'Info' | 'Tools' | 'Custom' | 'Switch harness';
 
 export const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
-  'Conversation', 'Workspace', 'Provider', 'Settings', 'Sessions', 'Info', 'Tools', 'Custom', 'Switch harness',
+  'Common', 'Conversation', 'Workspace', 'Provider', 'Settings', 'Sessions', 'Info', 'Tools', 'Custom', 'Switch harness',
+];
+
+/** The handful of commands worth reaching without scrolling, in the order
+ * they are reached for: pick a provider, pick an account on it, resume a
+ * conversation, change the model. Then the two that get used mid-conversation
+ * more than anything else -- starting over, and changing what needs approval.
+ *
+ * Palette only. `/help` keeps its own grouping, because a reference reads
+ * better by topic than by frequency. The palette draws a header whenever the
+ * group changes, so these carry one shared group rather than their real one:
+ * otherwise the top of the list flips between four headers and prints
+ * "Settings" twice. */
+export const SLASH_PALETTE_PINNED: readonly string[] = [
+  'provider', 'account', 'resume', 'model', 'new', 'permissions',
 ];
 
 /** Every handler a dispatcher must implement. `as const` so both handler
@@ -213,7 +227,15 @@ export function slashPalette(
   // terminal CLI, so the palette read as the terminal's own command list
   // pasted underneath ClikCode's. They still run when typed, and /help still
   // documents them as `/<harness> [request]`.
-  return slashRows(session, harness, extras, false).filter((row) => row.group !== 'Switch harness');
+  const rows = slashRows(session, harness, extras, false).filter((row) => row.group !== 'Switch harness');
+  // A pinned command that is unavailable on this route or harness was already
+  // dropped above; pinning never resurrects one.
+  const pinned = SLASH_PALETTE_PINNED
+    .map((name) => rows.find((row) => row.value === `/${name}`))
+    .filter((row): row is SlashPaletteEntry => row !== undefined)
+    .map((row) => ({ ...row, group: 'Common' as const }));
+  const pinnedValues = new Set(pinned.map((row) => row.value));
+  return [...pinned, ...rows.filter((row) => !pinnedValues.has(row.value))];
 }
 
 /** `[usage, description]` rows per group, for the human /help panel. */
