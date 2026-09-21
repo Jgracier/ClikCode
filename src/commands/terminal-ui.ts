@@ -2081,10 +2081,28 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // copies of them are the ones to drop.
     const materializedPendingTurn = firstUnwritten >= persistedMessages.length
       && this.emittedMessages > persistedMessages.length;
+    // Where the live answer actually landed, which is not always where it was
+    // expected to.
+    //
+    // While the answer streams, its index is recorded as the length of the
+    // list at that moment. By the time the turn is persisted the user's own
+    // message may have been materialized into that same list -- it is not
+    // always echoed into the pre-turn render -- which shifts the assistant
+    // down by one. The recorded index then points at the USER message, the
+    // role check below fails, and the answer is emitted a second time
+    // underneath the copy already on screen: the transcript jumps a screen and
+    // the same response is sitting there again.
+    //
+    // A turn ends with its assistant message, so the first assistant at or
+    // after the recorded index is the one that was streamed.
+    let liveAssistant = this.liveAssistantIndex;
+    while (liveAssistant !== undefined && liveAssistant < persistedMessages.length
+      && persistedMessages[liveAssistant]!.role !== 'assistant') liveAssistant += 1;
+
     emit(standaloneActivity(firstUnwritten));
     for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
       const message = persistedMessages[index]!;
-      if (index === this.liveAssistantIndex && message.role === 'assistant') {
+      if (index === liveAssistant && message.role === 'assistant') {
         // The answer that just streamed. Its rows are already in scrollback and
         // the transcript knows exactly which blocks it still owes, so a
         // persisted copy that runs longer than what streamed -- a re-derived
@@ -2097,8 +2115,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         emit(messageRows(message.content, message.role === 'assistant' ? '·' : userMarker));
         if (message.role === 'user') this.retiredThisSession.add(message.content);
       }
-      if (index === this.liveAssistantIndex) {
+      if (index === liveAssistant) {
         this.liveAssistantIndex = undefined;
+        liveAssistant = undefined;
         this.turnTranscript.reset();
       }
       this.lastEmittedMessage = messageKey(message);
