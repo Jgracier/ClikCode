@@ -93,27 +93,19 @@ export const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
 export const ENABLE_THEME_NOTIFICATIONS = '\u001b[?2031h';
 export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
 /** Mouse tracking: normal (1000), button-event (1002), any-event (1003), SGR
- * encoding (1006). Exactly the set Claude Code turns on, captured from it in
- * this user's own terminal -- and the reason a swipe scrolls it.
+ * encoding (1006). All four, and a swipe does not scroll without all four.
  *
- * Only 1000 and 1006 were sent before, which is click tracking: a client has
- * no reason to report a drag or a wheel notch under it, and Termius reported
- * none, which is how "the client sends nothing at all for a swipe" was
- * concluded and the alternate screen abandoned over it. A phone has no page
- * keys; the wheel is the only way a conversation is read back, and these are
- * the modes that make the client send one.
+ * Only motion and wheel reports are acted on, so 1002 and 1003 look
+ * redundant. They are not: a client may require the tracking level it was
+ * asked for before it routes a gesture to the application at all. Asking for
+ * only 1000 and 1006 is click tracking, and a phone sends nothing for a swipe
+ * under it -- with no page keys, that leaves no way to read a conversation
+ * back. Verified against a capture of a working client on the target device,
+ * which is the only thing that settles this; reading the tracking levels and
+ * reasoning about which ones are needed gives the wrong answer.
  *
- * Presses and drags are still decoded and dropped rather than acted on. What
- * they cost is the client's own selection gesture, which is why Claude Code
- * prints "Hold Shift while selecting to use your terminal's native copy". */
-/** All four, exactly as Claude Code asks for them on this user's phone.
- *
- * This was cut back to `?1000h ?1006h` on the reasoning that motion and drag
- * reports are read by nothing here -- which is true, and was the wrong call.
- * The capture is ground truth and it shows Claude Code asking for all four and
- * receiving the keyboard-hidden swipe. A client may well require the tracking
- * level it was asked for before it routes a gesture to the application, and
- * guessing against a recording is how most of an evening was spent.
+ * Presses and drags are decoded and dropped. What they cost is the client's
+ * own selection gesture, hence the usual "hold Shift while selecting" advice.
  *
  * `?1006h` is the SGR encoding; the wheel arrives as button 64 and 65. */
 export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
@@ -185,10 +177,9 @@ const SWIPE_ROWS = 3;
  *
  * It used to be dropped at the end of every prompt, picker and palette and
  * taken again at the start of the next: seven tcsetattr cycles a session on
- * the pty, in the exact path where the bytes go missing. The diagnostic UI
- * which receives the keyboard-hidden swipe on this user's phone sets raw mode
- * once and never touches it again, and so does Claude Code. That churn is the
- * clearest remaining difference between the two on the input side. */
+ * the pty, each one a window in which the terminal is briefly cooked. That is
+ * what let a DSR answer get echoed into the composer, above. Holding it for
+ * the session closes the window, and matches what other terminal UIs do. */
 export function setTerminalRawMode(on: boolean): void {
   if (input.isTTY) input.setRawMode(on);
   terminalModes.rawMode = on;
@@ -1329,34 +1320,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // have this same limit, for this same reason.
       this.lastColumns = output.columns || 0;
       this.forgetScreenPosition();
-      // The modes are asked for again, because a resize is where they get
-      // lost: a phone hiding its keyboard resizes the pty, and the client
-      // reapplies its own terminal defaults across that, which turns mouse
-      // reporting off. Asking once, here, loses to it -- SIGWINCH arrives
-      // before the client has finished, so the reset lands last and the
-      // reporting stays off. Measured: with an extra pty hop delaying this
-      // write, the same build receives 42 wheel events on the taller screen
-      // where it otherwise receives none.
-      //
-      // So it is asked for again after the client has settled, twice, a few
-      // hundred milliseconds apart. A client that never dropped them sets
-      // what is already set.
       logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${this.alternateScreen}`);
-      // Asked for again, immediately, before anything is drawn -- which is
-      // what Claude Code does on this user's phone. Captured after every one
-      // of its resizes:
+      // Re-asked here, immediately, before anything is drawn. This is the
+      // whole fix for "a swipe scrolls with the keyboard up but not with it
+      // hidden": hiding the keyboard resizes the pty, the client reapplies
+      // its own defaults across that resize and drops mouse reporting, and
+      // nothing turns it back on. A working client's own byte stream shows
+      // the same four modes going out after every single resize:
       //
       //     [[resize 63x70]] ?1000h ?1002h ?1003h ?1006h  ?25l ESC[2J ESC[H
       //
-      // This had been removed on the strength of reading its handleResize,
-      // which only re-renders; the modes go out anyway, from elsewhere in its
-      // mode handling. The recording is the ground truth and the source was
-      // the wrong place to look.
+      // Idempotent, so a client that never dropped them just sets what is
+      // already set.
       if (this.alternateScreen) output.write(ENABLE_MOUSE_TRACKING);
-      // No height probe here either: it jumps the cursor to the bottom-right
-      // corner and asks, which is another thing done at exactly the moment a
-      // swipe is being recognised, and another thing Claude Code never does.
-      // The size the terminal announces is what the layout uses.
+      // No height probe here: it jumps the cursor to the bottom-right corner
+      // and asks, at exactly the moment a swipe is being recognised. The size
+      // the terminal announces is what the layout uses.
       this.repaintAfterResize();
     }
   };
@@ -1368,7 +1347,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * announced size is the ceiling -- a terminal that answers with more rows
    * than it announced is not offering rows we may use. */
   private viewportRows(): number {
-    const announced = output.rows || 30;
     return Math.max(5, output.rows || 30);
   }
 
