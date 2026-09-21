@@ -123,7 +123,7 @@ describe('a live submission is queued or it is not', () => {
     const previous = process.env.CLIKCODE_HOME;
     process.env.CLIKCODE_HOME = home;
     try {
-      const { DurableTurnCheckpoint } = await import('./ai.js');
+      const { DurableTurnCheckpoint } = await import('./turn-runtime.js');
       const session = {
         id: randomUUID(), conversationId: randomUUID(), route: 'local', status: 'active',
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messages: [],
