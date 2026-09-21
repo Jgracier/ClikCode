@@ -34,8 +34,11 @@ import { accountPickerOptions, conversationIdFor, hasConversationContent, integr
 import { type SlashHandlerKey } from './slash-registry.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import {
-  aiHarnessSelect, aiSessionCommand, aiSettingsSetGlobal, aiSettingsSetProvider, applyGatewaySessionPolicy, newProviderConversation,
+  aiHarnessSelect, aiSettingsSetGlobal, aiSettingsSetProvider, applyGatewaySessionPolicy, newProviderConversation,
 } from './ai.js';
+import {
+  aiSessionCommand,
+} from './slash-handlers.js';
 
 
 /** Edit the active conversation's approval behavior from the top-level
@@ -435,6 +438,9 @@ export async function addAccountForHarness(rl: HarnessPrompter, harness: AiLocal
   return label;
 }
 
+/** Maintenance actions are deliberately narrow label/value pairs rather than
+ * nested PickerOptions. Non-destructive actions open with Tab; destructive
+ * deleteAction values open only from Delete and are confirmed by select(). */
 export async function manageAccountAction(rl: HarnessPrompter, accountId: string, action: string): Promise<void> {
   const state = await readState();
   const account = state.accounts.find((item) => item.id === accountId);
