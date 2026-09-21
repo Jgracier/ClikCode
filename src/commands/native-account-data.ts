@@ -217,7 +217,7 @@ export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now
   // status line and the failure agree about when quota comes back -- and the
   // date appears whenever the reset is not today, which the time alone
   // misrepresents for a weekly window.
-  return `resets ${quotaResetPhrase(new Date(next.resetsAt), now)}`;
+  return `Resets ${quotaResetPhrase(new Date(next.resetsAt), now)}`;
 }
 
 function usageReading(windows: Array<UsageWindow | undefined>): UsageReading | undefined {
