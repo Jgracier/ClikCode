@@ -1,7 +1,7 @@
 {
   "name": "clikcode",
   "version": "1.0.0",
-  "description": "ClikCode — a local-first AI coding runtime",
+  "description": "Drive 24 coding-agent CLIs from one terminal: many accounts per vendor, chats that resume across harnesses, and automatic account switching when a usage limit hits.",
   "type": "module",
   "bin": {
     "clikcode": "./dist/index.js"
