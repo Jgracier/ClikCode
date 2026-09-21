@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ADOPTED_TRANSCRIPT_READERS, mergeNativeTranscript, type NativeTranscriptMessage } from './discovery.js';
-import type { AiLocalHarnessDefinition } from '../harness/types.js';
+import { ADOPTED_TRANSCRIPT_READERS } from './registry.js';
+import { mergeNativeTranscript, type NativeTranscriptMessage } from './transcript.js';
+import type { AiLocalHarnessDefinition } from '../../harness/types.js';
 
 const message = (role: NativeTranscriptMessage['role'], content: string): NativeTranscriptMessage => ({ role, content });
 

@@ -22,7 +22,7 @@ import { captureNativeHarness, captureNativeHarnessTurn, createTurnIdleControlle
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, StreamingTitle, withTitleRequest } from '../session/title.js';
-import { nativeGeneratedTitle } from '../session/discovery.js';
+import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessActivityEvent } from '../harness/types.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { nativeTurnResult, type NativeTurnResult } from '../harness/protocol/turn-result.js';

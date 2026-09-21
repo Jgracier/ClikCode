@@ -19,7 +19,7 @@ import {
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
 import { localHarnessForCommand, localHarnessForProvider, localRouter } from '../runtime/lazy-bridge.js';
 import { homeRedirectEnvironment } from '../runtime/lazy-bridge.js';
-import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery.js';
+import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
 import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
 import { readState } from '../session/state/read.js';
 import { accountView } from '../session/state/views.js';
