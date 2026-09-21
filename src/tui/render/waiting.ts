@@ -53,22 +53,40 @@ export function usageRemainingPercent(label?: string): number | undefined {
   return used.length ? 100 - Math.max(...used) : undefined;
 }
 
-/** The rule above the composer, with the usage label on its right edge.
+/** A rule with its label painted and the dashes left as structure.
  *
- * The rule is structure and stays dim. The label is information, so it reads
- * by state: running low should be visible without reading the number, and
- * exhausted should be unmissable. Everything around the composer being one
- * flat grey meant the one figure that changes looked like the furniture. */
-export function paintUsageRule(width: number, label?: string): string {
+ * The rules themselves are always dim: they are furniture and should recede.
+ * Only the label at the right edge carries colour, and only because it says
+ * something -- how much allowance is left, which conversation this is. */
+export function paintLabeledRule(
+  width: number, label: string | undefined, paint: (text: string) => string,
+): string {
   const rule = rightLabeledRule(width, label);
   if (!label) return chalk.dim(rule);
   const at = rule.lastIndexOf(label);
   if (at < 0) return chalk.dim(rule);
-  const remaining = usageRemainingPercent(label);
-  const exhausted = /exhausted/i.test(label);
-  const paint = exhausted || (remaining !== undefined && remaining <= 0) ? chalk.red
-    : remaining !== undefined && remaining <= 15 ? chalk.yellow
-      : remaining !== undefined ? chalk.green
-        : chalk.dim;
   return `${chalk.dim(rule.slice(0, at))}${paint(label)}`;
+}
+
+/** The two rule labels -- usage above the composer, the chat title below --
+ * share one colour, because they are the same kind of thing: a standing fact
+ * about this session, pinned to the edge of its rule. Magenta rather than
+ * cyan, which belongs to ClikCode's own chrome (the caret, the status line),
+ * and rather than yellow, which reads muddy on a dark terminal and fights
+ * whatever theme the user chose. */
+const RULE_LABEL = (text: string): string => chalk.magenta(text);
+
+/** Usage reads by state, but only one state is worth shouting about. Running
+ * out is red; everything else is the same calm label colour as the title.
+ * Green-for-healthy was noise: nothing is wrong, so nothing needs saying. */
+export function paintUsageRule(width: number, label?: string): string {
+  const remaining = usageRemainingPercent(label);
+  const spent = label !== undefined
+    && (/exhausted/i.test(label) || (remaining !== undefined && remaining <= 0));
+  return paintLabeledRule(width, label, spent ? chalk.red : RULE_LABEL);
+}
+
+/** The chat's own name, on the rule below the composer. */
+export function paintTitleRule(width: number, label?: string): string {
+  return paintLabeledRule(width, label, RULE_LABEL);
 }
