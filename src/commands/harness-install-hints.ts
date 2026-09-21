@@ -38,12 +38,35 @@ export const HARNESS_INSTALL_HINTS: Readonly<Record<string, HarnessInstallHint>>
     docs: 'https://aider.chat/docs/install.html',
     source: 'https://github.com/Aider-AI/aider README',
   },
-  goose: { docs: 'https://github.com/block/goose' },
+  goose: {
+    // block/goose now redirects to aaif-goose/goose: the project was moved,
+    // not forked (same 54k-star repository, homepage goose-docs.ai), which is
+    // why the release URL names an org the docs do not.
+    command: 'curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash',
+    docs: 'https://goose-docs.ai/',
+    source: 'https://github.com/aaif-goose/goose README',
+  },
+  openhands: {
+    command: 'uv tool install openhands --python 3.12',
+    docs: 'https://docs.openhands.dev/usage/local-setup',
+    source: 'https://docs.openhands.dev/usage/local-setup',
+  },
+  vibe: {
+    command: 'curl -LsSf https://mistral.ai/vibe/install.sh | bash',
+    docs: 'https://docs.mistral.ai/vibe/code/cli/install-setup',
+    source: 'https://docs.mistral.ai/vibe/code/cli/install-setup',
+  },
+  hermes: {
+    command: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
+    docs: 'https://hermes-agent.nousresearch.com/docs/getting-started/installation',
+    source: 'https://hermes-agent.nousresearch.com/docs/getting-started/installation',
+  },
+  // Kiro publishes downloads, not a scriptable installer: its own install page
+  // lists supported platforms and links a downloads page, with no command to
+  // quote. Antigravity's CLI ships with the Antigravity editor rather than
+  // separately. Neither gets an invented command.
+  kiro: { docs: 'https://kiro.dev/docs/getting-started/installation/' },
   antigravity: { docs: 'https://antigravity.google' },
-  kiro: { docs: 'https://kiro.dev' },
-  hermes: { docs: 'https://github.com/NousResearch' },
-  openhands: { docs: 'https://github.com/All-Hands-AI/OpenHands' },
-  vibe: { docs: 'https://github.com/vibe-acp' },
 };
 
 /** The message shown when a harness has no npm package to install. */

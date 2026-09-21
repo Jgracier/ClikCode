@@ -55,9 +55,17 @@ describe('installInstructions', () => {
   });
 
   it('points at the docs where no command was verified', () => {
-    const text = installInstructions('Goose', 'goose', 'goose');
-    expect(text).toContain('https://github.com/block/goose');
+    // Kiro publishes downloads rather than a scriptable installer, so there
+    // is no command to quote and none is invented.
+    const text = installInstructions('Kiro CLI', 'kiro', 'kiro-cli');
+    expect(text).toContain('https://kiro.dev');
     expect(text).not.toContain('curl');
+  });
+
+  it('quotes the vendor command where one was verified', () => {
+    const text = installInstructions('Goose', 'goose', 'goose');
+    expect(text).toContain('download_cli.sh');
+    expect(text).toContain('Then retry /goose.');
   });
 
   it('still says something useful for a harness with no hint at all', () => {
