@@ -21,7 +21,7 @@ import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, listenForTerminalKeys, onKeyBatchEnd, waitingInputAction } from './input-decoder.js';
-import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
+import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { formatTurnUsage } from './render/usage-line.js';
 import { liveConversationLines, rightLabeledRule, waitingSpinnerGlyph } from './render/waiting.js';
@@ -395,7 +395,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // state for a client to hold about a session that is already failing to
       // forward the one gesture that matters. The filters that drop them stay,
       // for a terminal that volunteers them unasked.
-      output.write(`${ENABLE_BRACKETED_PASTE}\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h`);
+      // Selection mode means the user asked for the mouse back; taking the
+      // screen must not quietly take it again.
+      output.write(`${ENABLE_BRACKETED_PASTE}${SELECTION_MODE.active ? '' : OPENING_MOUSE_TRACKING}`);
       terminalModes.bracketedPaste = true;
       terminalModes.wheelReporting = true;
     }
@@ -782,8 +784,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // to the in-flight assistant message. Render an empty temporary assistant
     // anchor immediately; otherwise the tools remain invisible and then all
     // appear at once when the first sentence arrives.
+    const settledMessage = pending ? undefined : persistedMessages[persistedMessages.length - 1];
     const hasTransientAssistant = transientAssistantRequired(
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
+      settledMessage?.role === 'assistant' ? settledMessage.content : undefined,
     ) || Boolean(pending?.steers?.length);
     const storedQueued = session.queuedTurns ?? [];
     // A queued message has two sources and they overlap. It is drawn live the
