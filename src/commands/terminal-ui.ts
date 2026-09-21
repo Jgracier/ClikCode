@@ -1860,9 +1860,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
     ) || Boolean(pending?.steers?.length);
     const storedQueued = session.queuedTurns ?? [];
+    // A queued message has two sources and they overlap. It is drawn live the
+    // moment it is typed (waitingSubmissions), and the loop then writes it
+    // into the session (queuedTurns) -- so between the write landing and the
+    // turn consuming it, both hold the same message and it was drawn twice.
+    // The stored copy wins, being the one that survives this process. Steers
+    // are deduplicated against their durable copy the same way, just below.
+    const storedQueuedTexts = new Set(storedQueued.map((item) => item.text));
     const queuedMessages = [
       ...storedQueued.map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
-      ...this.waitingSubmissions.filter((item) => item.state !== 'steered')
+      ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedQueuedTexts.has(item.text))
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
     ];
     // The final status row is written without a trailing newline, so using
