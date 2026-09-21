@@ -5,14 +5,8 @@ import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import { previewLinesFor } from './activity-events.js';
-import { TOOL_CATEGORY_STYLE, toolGlyph } from '../../tui/render/activity-log.js';
+import { TOOL_CATEGORY_STYLE } from '../../tui/render/activity-log.js';
 import { CLAUDE_SHAPED, OPENCODE_SHAPED, asRecord } from './json-lines.js';
-
-/** The glyph in its category's colour; uncoloured when there is no category,
- * so an unclassified tool still gets a marker. */
-function paintGlyph(category: HarnessActivityEvent['category'], mark: string): string {
-  return category ? TOOL_CATEGORY_STYLE[category].paint(mark) : chalk.dim(mark);
-}
 
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
   if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
@@ -26,10 +20,14 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   // NO_COLOR transcript would read a failed call as a successful one.
   // A glyph for the kind of work, so the type reads without being spelled out
   // and a column of tool rows scans as a list rather than a wall.
-  const mark = toolGlyph(event.category);
+  // Only where the category is actually known: an unclassified tool stays
+  // bare, exactly as it was.
+  const style = event.category ? TOOL_CATEGORY_STYLE[event.category] : undefined;
+  const mark = style ? `${style.paint(style.glyph)} ` : '';
+  const plainMark = style ? `${style.glyph} ` : '';
   const summary = `  ${event.kind === 'tool-error'
-    ? `${chalk.red(`${mark} ${event.label}`)} ${chalk.red('failed')}`
-    : `${paintGlyph(event.category, mark)} ${chalk.dim(event.label)}`}`;
+    ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
+    : `${mark}${chalk.dim(event.label)}`}`;
   if (!event.diff) {
     const output = event.output ?? [];
     // Budgeted by kind: a read's row already names the file, so repeating its

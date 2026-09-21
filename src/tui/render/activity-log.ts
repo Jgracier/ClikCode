@@ -117,10 +117,12 @@ export const TOOL_CATEGORY_STYLE: Record<ToolCategory, {
   fetch: { paint: (text) => chalk.green(text), verb: 'fetching', glyph: '↓', folded: (n) => `fetched ${n} pages` },
 };
 
-/** The marker a settled tool row opens with. An uncategorised tool keeps the
- * neutral dot the transcript already used, so nothing regresses to a blank. */
+/** The marker a settled tool row opens with, or '' where the kind of work is
+ * unknown. A marker on every row was tried and removed -- it read as a column
+ * of dots down a real transcript -- so a glyph appears only when it carries
+ * type information and earns its column. */
 export function toolGlyph(category?: ToolCategory): string {
-  return category ? TOOL_CATEGORY_STYLE[category].glyph : '·';
+  return category ? TOOL_CATEGORY_STYLE[category].glyph : '';
 }
 
 export function activityLifecyclePhase(
