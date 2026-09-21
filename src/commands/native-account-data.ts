@@ -255,11 +255,6 @@ export function accountIsExhausted(account: AiHarnessAccount, now: number = Date
  * open terminal and is what rate-limited the account out of reading its own
  * usage. The poll interval below divides this, so a tick actually probes
  * instead of landing inside the previous window. */
-const NATIVE_USAGE_CACHE_TTL_MS = 30_000;
-/** A probe that failed is not the answer "this account has no usage". Retry
- * well before the success window so a blip recovers quickly, but not so fast
- * that a rate-limited endpoint keeps being hammered by the retry itself. */
-const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
 
 /** The Claude probe runs a real (tiny) turn, so it waits on the model, not on
  * a local file: measured at ~1.7s to the rate_limit_event, with room for a
@@ -280,6 +275,12 @@ function harnessBinary(command: string, fallback: string = command): string {
     return fallback;
   }
 }
+
+/** A probe that failed produced no value, so there is nothing here to go
+ * stale -- this is a backoff on a failing call, not a cached reading. Without
+ * it an offline or broken probe is re-run on every repaint, and for a harness
+ * whose probe is a real turn that is expensive as well as useless. */
+const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
 
 /** Usage is a percentage of a quota window, or it is nothing.
  *
@@ -632,23 +633,32 @@ export async function nativeUsageReading(
   // Whichever is newer: another terminal may have published since this
   // process last cached.
   const entry = cached && sharedEntry ? (sharedEntry.at > cached.at ? sharedEntry : cached) : cached ?? sharedEntry;
-  // A harness that reports quota on its own turn stream is the authority on
-  // A usage figure is only worth showing while it is still true, and these
-  // numbers move: another terminal spends quota, a window rolls over, a turn
-  // runs somewhere else. So nothing here is served past its own age.
+  // Usage is not cached. These numbers move while nobody is looking -- a turn
+  // runs on the same account somewhere else, a window rolls over -- so there
+  // is no time-based memo here deciding that a figure is still good enough.
   //
-  // Two things used to keep a reading alive forever. A harness that reports
-  // on its own stream got an INFINITE ttl, on the reasoning that its last
-  // word is the only true thing anyone knows -- and separately, any cached
-  // label at all was carried indefinitely for such a harness rather than
-  // re-derived. Between them a wrong value could never expire: it sat in the
-  // status line for the life of the process, and no refresh, reset or
-  // explicit ask would replace it. Both are gone. Every reading now ages out
-  // and is asked of the harness again.
-  const ttl = entry?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;
-  if (entry && Number.isFinite(entry.at) && Date.now() - entry.at < ttl && usageReadingIsCurrent(entry)) {
-    nativeUsageCache.set(cacheKey, entry);
-    return { windows: entry.windows ?? [], ...(entry.label === undefined ? {} : { label: entry.label }) };
+  // What IS reused is the harness's own last report, and only for exactly as
+  // long as that report says it is true: a reading carries the resetsAt of
+  // every window it describes, and is dropped the moment the soonest one
+  // passes. That is the value's own stated validity, not an interval this
+  // code invented. A reading with no window cannot make that claim, so it is
+  // never reused at all -- which is what let "usage rate limited", a label
+  // with nothing in it to expire, sit in the status line for the life of the
+  // process.
+  //
+  // An explicit ask (`/usage`, the account picker) always goes to the
+  // harness, because the point of asking is to find out now.
+  // A failed probe is held off briefly -- see NATIVE_USAGE_FAILURE_TTL_MS.
+  // That is not a cached figure; there is no figure.
+  if (entry?.failed && Number.isFinite(entry.at) && Date.now() - entry.at < NATIVE_USAGE_FAILURE_TTL_MS && !options.network) {
+    return entry.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
+  }
+  const reusable = entry && !entry.failed && (entry.windows?.length ?? 0) > 0 && usageReadingIsCurrent(entry)
+    ? entry
+    : undefined;
+  if (reusable && !options.network) {
+    nativeUsageCache.set(cacheKey, reusable);
+    return { windows: reusable.windows ?? [], ...(reusable.label === undefined ? {} : { label: reusable.label }) };
   }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const structured = session.nativeHarness ? NATIVE_USAGE_READING_PROBES[session.nativeHarness] : undefined;
@@ -715,14 +725,18 @@ export async function accountUsageReading(
   return nativeUsageReading(accountPseudoSession(account, state, harness.command), state, options);
 }
 
-/** Return only already-known usage. Account pickers render from this and warm
- * a live refresh separately, so an account switch never waits on the network. */
+/** What the harness last reported for this account, if it is still true.
+ *
+ * The picker renders from this immediately and asks the harness in the
+ * background, so opening it never waits. Same rule as the read above: a
+ * reading stands until the soonest window it describes resets, and a reading
+ * with no window is not shown at all rather than shown forever. */
 export function cachedAccountUsageLabel(account: AiHarnessAccount, state: HarnessState): string | undefined {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
   if (!harness || !harnessReportsUsage(harness.command)) return undefined;
   void state;
-  const cached = nativeUsageCache.get(usageCacheKey(harness.command, account.id));
-  const ttl = cached?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;
-  return cached && Date.now() - cached.at < ttl && usageReadingIsCurrent(cached) ? cached.label : undefined;
+  const reported = nativeUsageCache.get(usageCacheKey(harness.command, account.id));
+  if (!reported || reported.failed || !(reported.windows?.length ?? 0)) return undefined;
+  return usageReadingIsCurrent(reported) ? reported.label : undefined;
 }
