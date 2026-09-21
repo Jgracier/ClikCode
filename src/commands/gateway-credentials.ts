@@ -1,28 +1,29 @@
 /**
- * ClikDeploy Gateway URL + credential resolution, free of the deployment tree.
+ * Gateway URL + credential resolution — the adapter half of the optional
+ * gateway (see constants.ts for the switch and the URL).
  *
- * This is the single source of truth for "which platform URL" and "which API
- * key for that URL". `ApiClient.getApiUrl` / `ApiClient.getApiKeyForUrl` (and
- * the `getApiKeyForUrl` export of api/client.ts) delegate here. ClikCode
- * imports this module directly so its bundle never pulls in api/client.ts
- * (axios, axios-retry, the deploy/server API surface).
- *
- * Keep the import list tiny: constants + the canonical auth file reader only.
+ * Single source of truth for "which gateway URL" and "which API key for that
+ * URL". Keep the import list tiny: constants + the canonical auth file reader
+ * only, so nothing here can reach back into a platform SDK.
  */
 import type Conf from 'conf';
 import {
-  CLI_API_URL_OVERRIDE_ENV,
   CONFIG_KEYS,
-  DEFAULT_API_URL,
+  DEFAULT_GATEWAY_URL,
+  GATEWAY_URL_ENV,
+  GATEWAY_URL_OVERRIDE_ENV,
+  LEGACY_GATEWAY_URL_ENV,
   normalizeApiUrl,
   type AuthByUrl,
 } from '../constants.js';
 import { readCanonicalAuth, writeCanonicalAuth } from '../utils/local-auth.js';
 
-/** Resolve the platform base URL: env override, then a saved non-local URL, then the default. */
+/** Resolve the gateway base URL: env override, then a saved non-local URL, then the default. */
 export function getApiUrl(config: Conf): string {
   const explicitOverride =
-    process.env[CLI_API_URL_OVERRIDE_ENV] || process.env.CLIKDEPLOY_API_URL;
+    process.env[GATEWAY_URL_OVERRIDE_ENV] ||
+    process.env[GATEWAY_URL_ENV] ||
+    process.env[LEGACY_GATEWAY_URL_ENV];
   if (explicitOverride) {
     return normalizeApiUrl(explicitOverride);
   }
@@ -34,9 +35,9 @@ export function getApiUrl(config: Conf): string {
     savedUrl.startsWith('http://localhost:') ||
     savedUrl.startsWith('http://127.0.0.1:');
 
-  // Main platform URL is the default baseline; localhost must be explicit per command/session.
+  // The default gateway is the baseline; localhost must be explicit per command/session.
   if (!savedUrl || isLocalSaved) {
-    return normalizeApiUrl(DEFAULT_API_URL);
+    return normalizeApiUrl(DEFAULT_GATEWAY_URL);
   }
 
   return savedUrl;

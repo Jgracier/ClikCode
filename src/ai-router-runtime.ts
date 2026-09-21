@@ -3,7 +3,7 @@
  * provider SDK may carry optional native modules; the public CLI itself stays
  * normal native ESM and loads this only for local model work.
  */
-export { streamAiChatTurn } from '@clikdeploy/clikrouter/ai-provider-models';
+export { streamAiChatTurn } from '@clikcode/router/ai-provider-models';
 export {
   AI_LOCAL_HARNESS_ADAPTER_VERSION,
   AI_LOCAL_HARNESSES,
@@ -28,4 +28,4 @@ export {
   localHarnessForProvider,
   nativeHarnessLaunchArgv,
   nativeHarnessTurnArgv,
-} from '@clikdeploy/clikrouter/ai-local-harness';
+} from '@clikcode/router/ai-local-harness';

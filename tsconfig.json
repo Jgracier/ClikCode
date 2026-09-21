@@ -13,6 +13,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "../cli/src/types/**/*.d.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*"],
+  "//exclude": "Test files are checked by vitest, not by this program — the same split the CLI this was extracted from used. Widening it to tests is a worthwhile follow-up, not a same-change one.",
+  "exclude": ["node_modules", "dist", "src/**/*.vitest.test.ts", "src/**/*.test.ts"]
 }

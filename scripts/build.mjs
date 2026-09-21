@@ -10,18 +10,16 @@
  * Flags:
  *   --analyze   Print a metafile report: top inputs by bytes, runtime externals,
  *               and any deployment-CLI sources that landed in index.js.
- *   --no-strict Downgrade the deployment-CLI source check to a warning. By
- *               default (and with the legacy --strict spelling) the build FAILS
- *               when a deployment-CLI source (basename server-*, deploy*,
- *               docker*, admin-*) is in index.js: commands/ai.ts no longer
- *               imports api/client.js or commands/auth.js, so any such file is
- *               a regression that drags axios/inquirer/ora back in.
+ *   --no-strict Downgrade the deployment-source check to a warning. By default
+ *               (and with the legacy --strict spelling) the build FAILS when a
+ *               source named like the deployment CLI's (server-*, deploy*,
+ *               docker*, admin-*) is in index.js — those dragged in axios,
+ *               inquirer and ora before the split and must not come back.
  *
  * Always enforced (cheap, and each one is a broken publish if it regresses):
  *   - every package index.js imports at runtime is in package.json `dependencies`
  *   - harness-catalog.cjs contains no node_modules code at all
- *   - utils/lifecycle-lock is not in index.js
- */
+ * */
 import { chmod, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { builtinModules } from 'node:module';
 import { dirname, join, relative } from 'node:path';
@@ -52,6 +50,11 @@ const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 const INLINE_PACKAGES = new Set(['chalk', 'commander', 'conf', 'cross-spawn', 'marked']);
 /** Never inline, even transitively. */
 const FORCE_EXTERNAL = new Set(['@basetenlabs/performance-client']);
+/**
+ * The ClikDeploy CLI this repo was split out of named its deployment-only
+ * modules with these prefixes. Nothing matching one should ever exist here
+ * again; the guard stays as a tripwire against re-importing that tree.
+ */
 const FORBIDDEN_SOURCE = /^(server-|deploy|docker|admin-)/;
 const builtins = new Set(builtinModules);
 
@@ -76,22 +79,6 @@ const selectiveExternals = {
   },
 };
 
-/**
- * program-base.ts loads utils/lifecycle-lock with a dynamic import, only when
- * the lock is enabled. esbuild inlines dynamic imports when not code-splitting,
- * and ClikCode always passes `lifecycleLock: false`, so swap in a stub.
- */
-const stubLifecycleLock = {
-  name: 'clikcode-stub-lifecycle-lock',
-  setup(b) {
-    b.onResolve({ filter: /[\\/]utils[\\/]lifecycle-lock(\.js|\.ts)?$/ }, () => ({ path: 'lifecycle-lock', namespace: 'clikcode-stub' }));
-    b.onLoad({ filter: /.*/, namespace: 'clikcode-stub' }, () => ({
-      contents: `export function acquireLifecycleLock() { throw new Error('The lifecycle lock is not part of ClikCode.'); }`,
-      loader: 'js',
-    }));
-  },
-};
-
 const common = {
   bundle: true,
   platform: 'node',
@@ -105,7 +92,7 @@ const index = await build({
   ...common,
   entryPoints: ['src/index.ts'],
   format: 'esm',
-  plugins: [stubLifecycleLock, selectiveExternals],
+  plugins: [selectiveExternals],
   // Inlined CommonJS packages (commander, cross-spawn, conf's ajv, …) call
   // require() for node builtins; native ESM has no `require`, so provide one.
   banner: {
@@ -120,14 +107,14 @@ const index = await build({
 
 const catalog = await build({
   ...common,
-  entryPoints: ['../cli/src/harness-catalog-runtime.ts'],
+  entryPoints: ['src/harness-catalog-runtime.ts'],
   format: 'cjs',
   outfile: 'dist/harness-catalog.cjs',
 });
 
 const router = await build({
   ...common,
-  entryPoints: ['../cli/src/ai-router-runtime.ts'],
+  entryPoints: ['src/ai-router-runtime.ts'],
   format: 'cjs',
   external: [...FORCE_EXTERNAL],
   outfile: 'dist/ai-router-runtime.cjs',
@@ -139,7 +126,7 @@ if (process.platform !== 'win32') await chmod('dist/index.js', 0o755);
 
 const failures = [];
 const warnings = [];
-const display = (path) => relative(join(root, '..', '..'), join(root, path)).split('\\').join('/');
+const display = (path) => relative(root, join(root, path)).split('\\').join('/');
 
 function runtimeExternals(metafile, outfile) {
   const names = new Set();
@@ -176,7 +163,6 @@ if (runtimeExternals(catalog.metafile, 'dist/harness-catalog.cjs').length) failu
 }
 
 const indexInputs = Object.entries(index.metafile.outputs['dist/index.js'].inputs);
-if (indexInputs.some(([path]) => /utils\/lifecycle-lock\.ts$/.test(path))) failures.push('utils/lifecycle-lock.ts was inlined into index.js');
 
 const forbidden = indexInputs
   .filter(([path]) => !path.includes('node_modules/') && FORBIDDEN_SOURCE.test(path.split('/').pop() ?? ''))

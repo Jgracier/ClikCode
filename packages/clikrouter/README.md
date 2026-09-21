@@ -1,4 +1,4 @@
-# @clikdeploy/clikrouter
+# @clikcode/router
 
 Provider-agnostic AI request normalization and router-selection logic: one
 dialect layer across 68 providers (registry, request building, response
@@ -54,7 +54,7 @@ If this package's identity changes (a different name, eventually
 publishing it standalone), the only places that need to change are:
 1. `name` in `package.json`
 2. The `packages/clikrouter` directory name
-3. Every tsconfig.json's `@clikdeploy/clikrouter` / `@clikdeploy/clikrouter/*`
+3. Every tsconfig.json's `@clikcode/router` / `@clikcode/router/*`
    path-alias entries (grep the repo for `clikrouter` to find them all)
 
 Nothing inside `src/` hardcodes the package name — imports within this

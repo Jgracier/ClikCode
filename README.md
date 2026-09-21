@@ -9,15 +9,21 @@ leaving authentication and each vendor's interactive managers in the vendor's
 own CLI. Provider credentials never leave your machine and are never read by
 ClikCode: it stores an opaque *reference* to a login, not a token.
 
-**ClikDeploy Gateway** is the optional second route. There, ClikDeploy provides
+A **hosted gateway** is the optional second route. There, the gateway provides
 the intelligence (model selection and inference) and ClikCode itself is the
-harness, rather than brokering a vendor CLI. Nothing requires it; without a
-Gateway sign-in ClikCode works entirely against your local accounts.
+harness, rather than brokering a vendor CLI. Nothing requires it: without a
+gateway sign-in ClikCode works entirely against your local accounts, and
+`CLIKCODE_GATEWAY=off` removes the surface altogether. The default endpoint is
+ClikDeploy Gateway (`https://clikdeploy.com`) because that is the one that
+exists today; `CLIKCODE_GATEWAY_URL` points it anywhere else. Everything the
+gateway touches lives in two files — `src/constants.ts` (the switch and the
+URL) and `src/commands/gateway-credentials.ts` (the credential) — so replacing
+it is a local change, not a refactor.
 
 ## Install
 
 ```sh
-npm install -g @clikdeploy/clikcode
+npm install -g clikcode
 clikcode            # open the default session
 clikcode --help
 ```
@@ -37,7 +43,7 @@ demand by `clikcode accounts login <harness>` when they support it.
 | `clikcode models`, `clikcode usage` | Models and usage across local accounts |
 | `clikcode sessions list` / `create` / `open` / `resume` / `set` / `close` | Persistent sessions, including resuming the vendor's native chat |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
-| `clikcode gateway login [--github]` / `gateway status` | Optional ClikDeploy Gateway sign-in (Google by default) |
+| `clikcode gateway login [--github]` / `gateway status` | Optional gateway sign-in (Google by default); absent when `CLIKCODE_GATEWAY=off` |
 
 Output is JSON by default so ClikCode can be scripted; pass `--human` for
 readable output and `--debug` for stack traces and HTTP detail on failure.
@@ -99,7 +105,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/accounts [use\|login\|add\|remove\|failover …]` | list and manage accounts |
 | `/login` | sign in to the current provider |
 | `/logout` | sign the current account out |
-| `/gateway` | route this conversation through ClikDeploy Gateway |
+| `/gateway` | route this conversation through the optional gateway |
 
 **Settings**
 
@@ -162,10 +168,11 @@ Everything ClikCode owns is under `~/.clikcode` (directories `0700`, files
 - `runtime.json`, `runtime.lock` — present only while the control API is running
 - `crash.log` — uncaught errors
 
-Set `CLIKCODE_HOME` to relocate all of it (tests, portable installs). A
-ClikDeploy Gateway credential, if you sign in, is stored separately in the
-ClikDeploy location (`~/.config/clikdeploy/auth.json`, `~/.clikdeploy/api-key`)
-so it is shared with the ClikDeploy CLI.
+Set `CLIKCODE_HOME` to relocate all of it (tests, portable installs). A gateway
+credential, if you sign in, is stored separately in `~/.config/clikcode/auth.json`
+and `~/.clikcode/api-key`. A credential left behind by the ClikDeploy CLI
+(`~/.config/clikdeploy/auth.json`, `~/.clikdeploy/api-key`) is still read, so an
+existing sign-in keeps working; the next write moves it.
 
 ## Account isolation
 
@@ -208,29 +215,44 @@ if the session opted in (`--account-failover on-quota-exhausted`).
 | `NO_MOTION` | Same as `CLIKCODE_REDUCED_MOTION`, used when that is unset |
 | `CLIKCODE_SCREEN_READER` | Any value other than empty, `0` or `false` switches to the append-only, line-oriented renderer so output is announced once, in order |
 | `FORCE_COLOR` | `0` disables color; `1`–`3` force a color level |
-| `CLIKDEPLOY_API_URL` | ClikDeploy platform URL used by `gateway login` and the Gateway route (default `https://clikdeploy.com`) |
+| `CLIKCODE_GATEWAY` | `off`, `0`, `false` or `no` removes the optional gateway command surface entirely |
+| `CLIKCODE_GATEWAY_URL` | Gateway endpoint used by `gateway login` and the gateway route (default `https://clikdeploy.com`). `CLIKDEPLOY_API_URL` is still honoured |
 
 ## Development
 
 ```sh
-pnpm --filter @clikdeploy/clikcode build          # dist/index.js, dist/harness-catalog.cjs, dist/ai-router-runtime.cjs
-pnpm --filter @clikdeploy/clikcode build:analyze  # + bundle report: top inputs by bytes, runtime packages
-pnpm --filter @clikdeploy/clikcode build:strict   # + fail if deployment-CLI sources are in dist/index.js
-pnpm --filter @clikdeploy/clikcode type-check     # tsc over src/ and everything it imports
-pnpm --filter @clikdeploy/clikcode test           # build, then --help and doctor
-pnpm --filter @clikdeploy/clikcode test:pack      # assert tarball contents, install it in a temp dir, run it
+pnpm install
+pnpm build          # dist/index.js, dist/harness-catalog.cjs, dist/ai-router-runtime.cjs
+pnpm build:analyze  # + bundle report: top inputs by bytes, runtime packages
+pnpm build:strict   # + fail if a deployment-shaped source lands in dist/index.js
+pnpm type-check     # tsc over src/ and over packages/clikrouter
+pnpm test           # the ClikCode suite
+pnpm test:router    # the router package's suite
+pnpm test:smoke     # build, then --help and doctor against the built binary
+pnpm test:pack      # assert tarball contents, install it in a temp dir, run it
 ```
 
-The implementation is shared with `apps/cli/src` during extraction; esbuild
-bundles it, so the published package has no dependency on `clikdeploy-cli`.
-`dist/index.js` inlines the small pure-JS dependencies (chalk, commander, conf,
-cross-spawn, marked) so startup is a single file read. The version reported by
-`--version` is injected at build time from this package's `package.json`.
+Two packages, one lockfile:
 
-`build:strict` is opt-in for now: `apps/cli/src/commands/ai.ts` still imports
-the deployment API client and login command, which drag the self-host server
-tree into the bundle. Once it imports `commands/gateway-credentials.ts` and
-`commands/gateway-login.ts` instead, make `--strict` part of `build`.
+- `src/` — the CLI: the command surface (`src/cli/`), the harness broker and
+  built-in agent harness (`src/commands/`), and a handful of shared utilities.
+- `packages/clikrouter` (`@clikcode/router`) — provider-agnostic request
+  normalization and router selection across ~40 providers, consumed as source
+  and bundled into `dist/*.cjs`.
+
+`dist/index.js` inlines the small pure-JS dependencies (chalk, commander, conf,
+cross-spawn, marked) so startup is a single file read, which is why the
+published package declares **no runtime dependencies at all** — a property the
+build asserts rather than assumes. The version reported by `--version` is
+injected at build time from `package.json`.
+
+### Provenance
+
+This repository was split out of the ClikDeploy monorepo with
+`git filter-repo`, so `git log` on any file predates the split. `build:strict`
+still fails on a source named the way that monorepo named its deployment-only
+modules (`server-*`, `deploy*`, `docker*`, `admin-*`); nothing matching one
+exists here, and the check stays as a tripwire.
 
 ## License
 

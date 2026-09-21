@@ -1,3 +1,10 @@
+/**
+ * The on-disk gateway credential, under ClikCode's own config home.
+ *
+ * Writes only ever land in ~/.config/clikcode (and ~/.clikcode/api-key). Reads
+ * fall back to the pre-split ClikDeploy locations so an existing login keeps
+ * working; the first write after that migrates it.
+ */
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -23,14 +30,24 @@ function ensureDir(dir: string): void {
 }
 
 export function getCanonicalAuthPaths(): { authJsonPath: string; apiKeyPath: string } {
-  const authJsonPath = path.join(resolveConfigHome(), 'clikdeploy', 'auth.json');
-  const apiKeyPath = path.join(os.homedir(), '.clikdeploy', 'api-key');
+  const authJsonPath = path.join(resolveConfigHome(), 'clikcode', 'auth.json');
+  const apiKeyPath = path.join(os.homedir(), '.clikcode', 'api-key');
   return { authJsonPath, apiKeyPath };
 }
 
-export function readCanonicalAuth(): CanonicalAuthRecord | null {
-  const { authJsonPath, apiKeyPath } = getCanonicalAuthPaths();
+/** Read-only migration source: where the ClikDeploy CLI kept the same credential. */
+function getLegacyAuthPaths(): { authJsonPath: string; apiKeyPath: string } {
+  return {
+    authJsonPath: path.join(resolveConfigHome(), 'clikdeploy', 'auth.json'),
+    apiKeyPath: path.join(os.homedir(), '.clikdeploy', 'api-key'),
+  };
+}
 
+export function readCanonicalAuth(): CanonicalAuthRecord | null {
+  return readAuthFrom(getCanonicalAuthPaths()) ?? readAuthFrom(getLegacyAuthPaths());
+}
+
+function readAuthFrom({ authJsonPath, apiKeyPath }: { authJsonPath: string; apiKeyPath: string }): CanonicalAuthRecord | null {
   try {
     if (fs.existsSync(authJsonPath)) {
       const parsed = JSON.parse(fs.readFileSync(authJsonPath, 'utf8')) as Partial<CanonicalAuthRecord>;

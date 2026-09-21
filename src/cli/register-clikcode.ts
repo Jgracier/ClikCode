@@ -1,4 +1,9 @@
-/** The public ClikCode command surface. It intentionally does not expose deployment commands. */
+/**
+ * The public ClikCode command surface.
+ *
+ * The `gateway` group is the only part that talks to a remote platform, and it
+ * is registered only when the optional gateway is enabled — see constants.ts.
+ */
 import type { Command } from 'commander';
 import { mcpAdd, mcpTargets } from '../commands/mcp-command.js';
 import type Conf from 'conf';
@@ -9,6 +14,7 @@ import { aiSessionCommand } from '../commands/slash-handlers.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, aiGatewayStatus, aiModelsList, aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList, aiUsage } from '../commands/ai.js';
 import { aiStart, aiStatus, aiStop } from '../commands/ai-daemon.js';
 import { gatewayLogin } from '../commands/gateway-login.js';
+import { isGatewayEnabled } from '../constants.js';
 
 export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('start').description('Start the optional loopback-only control API')
@@ -48,11 +54,13 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   mcp.command('targets')
     .description('Show which harnesses would receive it, and how each spells the request')
     .action(mcpTargets);
-  const gateway = program.command('gateway').description('Optionally connect ClikDeploy Gateway');
-  gateway.command('status').description('Show the ClikDeploy Gateway connection state').action(() => aiGatewayStatus(config));
-  gateway.command('login').description('Sign in to ClikDeploy for optional Gateway model access')
-    .option('--github', 'Use GitHub OAuth instead of Google OAuth')
-    .action(async (options) => { await gatewayLogin(config, { google: !options.github, github: Boolean(options.github) }); });
+  if (isGatewayEnabled()) {
+    const gateway = program.command('gateway').description('Optionally connect a hosted gateway for remote models');
+    gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));
+    gateway.command('login').description('Sign in to the configured gateway for optional remote model access')
+      .option('--github', 'Use GitHub OAuth instead of Google OAuth')
+      .action(async (options) => { await gatewayLogin(config, { google: !options.github, github: Boolean(options.github) }); });
+  }
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(aiSessionsList);
   sessions.command('show <id>').description('Show a saved session').action(aiSessionShow);

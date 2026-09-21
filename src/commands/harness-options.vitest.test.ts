@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allLocalHarnesses, localHarnessCapabilityManifest } from '../../../../packages/clikrouter/src/ai-local-harness';
+import { allLocalHarnesses, localHarnessCapabilityManifest } from '@clikcode/router/ai-local-harness';
 import { commonControlFor, OPTION_NORMALIZATION, optionIdsForControl, vendorFacingOptions } from './harness-options';
 
 type Opt = { id: string; category?: string; description?: string };

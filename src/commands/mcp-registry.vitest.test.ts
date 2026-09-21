@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { mcpAddArgv, isRemoteTarget } from './mcp-registry';
-import { allLocalHarnesses, localHarnessCapabilityManifest } from '../../../../packages/clikrouter/src/ai-local-harness';
+import { allLocalHarnesses, localHarnessCapabilityManifest } from '@clikcode/router/ai-local-harness';
 
 const grammarOf = (command: string) => {
   const harness = allLocalHarnesses().find((item) => item.command === command)!;

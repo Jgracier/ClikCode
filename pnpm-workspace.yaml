@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+
+# esbuild ships a platform binary via a postinstall script; without this the
+# bundle step fails with "You installed esbuild for another platform".
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true
