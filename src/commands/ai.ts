@@ -53,6 +53,7 @@ import {
   setEmitHarnessOutput,
 } from './account-management.js';
 import { TerminalHarnessPrompter, terminalUiSupported } from './terminal-ui.js';
+import { minimalUiRequested, runMinimalUi } from './terminal-minimal-ui.js';
 import { createCodexSession, runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from './codex-app-server.js';
 import { createAcpSession, runAcpTurn, type AcpAvailableCommand, type AcpSession, type AcpTurnInput } from './acp-client.js';
 import { harnessTurnTransport, type HarnessTurnTransport } from './harness-transport.js';
@@ -3293,6 +3294,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // common time either is actually needed — has somewhere to show its
   // "installing…" spinner and a real terminal to suspend into for a vendor
   // login prompt, instead of running headless before the UI exists.
+  // Diagnostic: the same binary and the same startup, a different screen.
+  // See terminal-minimal-ui.ts. Never reached in normal use.
+  if (minimalUiRequested()) { runMinimalUi(); return; }
   const rl: HarnessPrompter = terminalUiSupported()
     ? new TerminalHarnessPrompter()
     : createInterface({

@@ -665,10 +665,34 @@ export class TerminalInputDecoder {
   }
 }
 
+/** A read from the terminal is one batch of keys, and the end of it is
+ * announced so a listener can draw once for the whole chunk.
+ *
+ * Momentum scrolling on a phone does not deliver notches one at a time: a
+ * flick arrives as a single read carrying hundreds, over a thousand measured
+ * here. Drawing per notch asked the link to carry a full-screen repaint for
+ * each -- about 4KB in a long conversation, so one flick is a megabyte, and
+ * the client stops forwarding the gesture rather than fall behind. Every notch
+ * still moves the offset; they share one frame. */
+let keyBatchDepth = 0;
+const keyBatchEndListeners = new Set<() => void>();
+export function onKeyBatchEnd(listener: () => void): () => void {
+  keyBatchEndListeners.add(listener);
+  return () => { keyBatchEndListeners.delete(listener); };
+}
+export function inKeyBatch(): boolean { return keyBatchDepth > 0; }
+
 function listenForTerminalKeys(onKey: (key: string) => void): () => void {
   const decoder = new TerminalInputDecoder();
   let flushTimer: NodeJS.Timeout | undefined;
   const deliver = (keys: readonly string[]): void => {
+    keyBatchDepth += 1;
+    try { deliverKeys(keys); } finally {
+      keyBatchDepth -= 1;
+      if (keyBatchDepth === 0) for (const listener of [...keyBatchEndListeners]) listener();
+    }
+  };
+  const deliverKeys = (keys: readonly string[]): void => {
     for (const key of keys) {
       // Escape sequences only -- never typed text, which is the user's message.
       // What a client sends for a swipe cannot be read from this end any other
@@ -2653,9 +2677,43 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     logCursorEvent(`scroll by=${rows} from=${this.alternateScrollback} to=${next} furthest=${furthest} rows=${this.alternateTranscript.length} above=${this.alternateAbove}`);
     if (next === this.alternateScrollback) return false;
     this.alternateScrollback = next;
-    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    this.scheduleScrollPaint();
     return true;
   }
+
+  /** One repaint per burst of wheel notches, not one per notch.
+   *
+   * A flick on a phone is not a few notches, it is momentum: the client
+   * delivers them in bursts of three hundred and more, measured here in single
+   * reads of over a thousand. Painting per notch asked the link to carry a
+   * full-screen repaint for each -- in a long conversation that is about 4KB a
+   * frame, so one flick is upwards of a megabyte, and the client stops
+   * forwarding the gesture rather than fall further behind.
+   *
+   * That is the whole bug, and it is why it depended on the conversation:
+   * measured on the device, a fresh chat (246 transcript rows, small frames)
+   * took 221 wheel reports with the keyboard hidden, and this conversation
+   * (2000 rows, full-width styled frames) took none. The same shape showed up
+   * in a bare script -- plain rows 46,048 reports, styled 4KB rows 3,751.
+   *
+   * The offset is still updated per notch, so nothing is lost and the view
+   * lands exactly where the finger left it; only the drawing is coalesced. */
+  private scrollPaintQueued = false;
+  private stopScrollBatch?: () => void;
+  private scheduleScrollPaint(): void {
+    const draw = (): void => {
+      this.scrollPaintQueued = false;
+      if (this.closed || this.suspended) return;
+      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    };
+    // Inside a batch the frame waits for the end of the chunk; outside one --
+    // a page key, an arrow, a test pressing a single key -- it draws at once.
+    if (!inKeyBatch()) { draw(); return; }
+    this.scrollPaintQueued = true;
+    this.stopScrollBatch ??= onKeyBatchEnd(() => { if (this.scrollPaintQueued) draw(); });
+  }
+
+
 
   /** True while the reader is looking at something other than the live end. */
   get scrolledBack(): boolean { return this.alternateScrollback > 0; }
@@ -3200,6 +3258,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.clearTransientNotice();
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
     this.resizePaintTimer = undefined;
+    this.stopScrollBatch?.();
+    this.stopScrollBatch = undefined;
+
     process.off('SIGWINCH', this.onResize);
     process.off('SIGCONT', this.onContinue);
     process.off('exit', restoreTerminal);
