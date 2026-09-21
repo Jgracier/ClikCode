@@ -7,6 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import type Conf from 'conf';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -516,7 +517,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             if (interruptedSubmission.restoreOnEscape) TERMINAL.active.restoreDraft(interruptedSubmission.text);
           }
           notice = outputStarted ? 'Stopped' : interruptedSubmission.restoreOnEscape ? 'Stopped · draft restored' : 'Stopped';
-        } else if (rl.render) notice = cancelled ? 'Stopped' : `Error: ${message}`;
+        // Running out of quota is an outcome, not a fault: ClikCode's own
+        // "Usage Exhausted · Resets …" is a finished sentence and reads wrong
+        // behind an "Error:" that suggests something broke.
+        } else if (rl.render) {
+          notice = cancelled ? 'Stopped' : isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
+        }
         else emitHarnessOutput({ panel: 'error', message });
       }
     }

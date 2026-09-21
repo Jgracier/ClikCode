@@ -1,6 +1,6 @@
 /** One sentence for running out, whatever the harness called it. */
 import { describe, expect, it } from 'vitest';
-import { usageExhaustedMessage, quotaResetPhrase, nextQuotaReset } from './usage-exhausted';
+import { usageExhaustedMessage, quotaResetPhrase, nextQuotaReset, isUsageExhaustedMessage } from './usage-exhausted';
 import type { AiHarnessAccount } from '../harness/types.js';
 
 const NOW = Date.parse('2026-09-21T14:00:00');
@@ -69,5 +69,21 @@ describe('a vendor error that says it in its own words', () => {
     expect(classifyAccountFailure(new Error('connection reset by peer'), { isResultError: true })).not.toBe('quota-exhausted');
     // 404 is embedded the same way a 402 is, and is not a quota problem.
     expect(classifyAccountFailure(new Error('API error (status 404 Not Found)'), { isResultError: true })).not.toBe('quota-exhausted');
+  });
+});
+
+describe('isUsageExhaustedMessage', () => {
+  it('recognises both forms ClikCode composes', () => {
+    expect(isUsageExhaustedMessage('Credits Exhausted')).toBe(true);
+    expect(isUsageExhaustedMessage('Usage Exhausted · Resets 5:34PM')).toBe(true);
+  });
+
+  it('does not claim a vendor error or a crash', () => {
+    expect(isUsageExhaustedMessage('Grok Build returned no assistant text')).toBe(false);
+    expect(isUsageExhaustedMessage('ENOENT: no such file or directory')).toBe(false);
+  });
+
+  it('matches whatever usageExhaustedMessage actually produces', () => {
+    expect(isUsageExhaustedMessage(usageExhaustedMessage([]))).toBe(true);
   });
 });
