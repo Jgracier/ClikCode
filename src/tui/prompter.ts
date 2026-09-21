@@ -958,7 +958,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // One row on each side, matching every other message: a steer is a
       // message the user wrote mid-answer.
       const steerRows = (text: string): string[] => [
-        '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '',
+        '', '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '',
       ];
       // A steer is drawn live, and sessionTranscriptMessages() also
       // materializes it as a real user message; only one of the two may reach
@@ -1104,7 +1104,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       emit(step.finished);
       liveConversation.push(...step.live);
     }
-    for (const message of queuedMessages) {
+    for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user
       // message the moment it is sent, and would then be written a second time.
       const status = message.queueState === 'steered' ? 'steered into active turn'
@@ -1112,7 +1112,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           : message.queueState === 'error' ? 'not sent · restored for editing' : 'queued for next turn';
       // One row, the same separator the transcript gives every other message:
       // a message submitted mid-turn is still a message the user wrote.
-      liveConversation.push('', ...messageRows(message.content, userMarker), `  ${chalk.dim(`↳ ${status}`)}`);
+      // The speaker changes once, where the queue begins: two rows there, the
+      // same break a settled prompt gets. Between queued messages it is one --
+      // they are a list of things the same person wrote, not a new speaker
+      // each time.
+      liveConversation.push(...(queueIndex === 0 ? ['', ''] : ['']),
+        ...messageRows(message.content, userMarker), `  ${chalk.dim(`↳ ${status}`)}`);
     }
     const conversationLines = liveConversationLines(liveConversation, true);
     const meta = this.statusText();
