@@ -177,7 +177,13 @@ export class TurnTranscript {
 
     const finished = interleave(settled, settledTools, input.renderBlocks, !this.started);
     if (finished.length) this.started = true;
-    this.emittedBlocks = answer.emitted;
+    // Monotonic, for the same reason the message loop is: a row in scrollback
+    // cannot be un-emitted. A turn that streams part of an answer, hits a
+    // quota wall and fails over resets its live response to '' -- and that
+    // empty paint used to carry `emitted: 0` back here, so when the retry
+    // streamed the same answer again every block looked new and the whole
+    // thing was written a second time under the copy already on screen.
+    this.emittedBlocks = Math.max(this.emittedBlocks, answer.emitted);
     for (const tool of settledTools) this.emittedTools.add(tool.id);
 
     // An open fence retires every source line but the one still being typed.
