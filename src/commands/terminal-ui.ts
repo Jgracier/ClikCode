@@ -16,7 +16,6 @@ import { join } from 'node:path';
 import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalPrepare, terminalTeardown } from './terminal-restore.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
-import { parkCursor, TranscriptStream } from './transcript-stream.js';
 import { TurnTranscript, type SettlingTool } from './turn-transcript.js';
 import { nativeModelLabel } from './native-account-data.js';
 import type { LiveTurnInputResult } from './live-turn-input.js';
@@ -157,31 +156,8 @@ const SCROLL_DRAIN_MIN = 4;
 /** One frame, roughly: the gap between drains of an outstanding scroll. */
 const SCROLL_DRAIN_MS = 16;
 
-/** The alternate screen, which is what delivers both halves of reading back.
- *
- * Measured on the device, one session, keyboard hidden: 33 wheel reports at
- * 70x63 and 82 scrolls, with the composer staying put -- because this renderer
- * draws the whole screen, so the composer is drawn, not scrolled. That is the
- * behaviour Claude Code has, and it is on the alternate screen too: its own
- * capture from this phone contains `?1049h`, and its settings call that
- * renderer "fullscreen".
- *
- * The main screen (`CLIKCODE_MAIN_SCREEN=1`) is the fallback, and it is a real
- * one: there the conversation IS the client's scrollback, so a swipe pans it
- * with no bytes sent and scrolling cannot fail -- but the composer scrolls
- * away with the history, because the pan is the client's own view and nothing
- * here is told it happened. Pinning it there would need a scroll region, and
- * lines scrolled out of a partial region are discarded by this client, which
- * is the scrollback the pan depends on.
- *
- * So: alternate screen for both behaviours, main screen when scrolling matters
- * more than the composer staying put. */
-export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
-/** Home, erase the screen, erase the saved lines. Written once at startup, so
- * the scrollback a swipe reads holds the conversation and not the shell. */
-const CLEAR_SCREEN_AND_SCROLLBACK = '\u001b[H\u001b[2J\u001b[3J';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
@@ -232,7 +208,7 @@ function enterInputModes(): string {
   // The flags were already tracked here. They were simply never read.
   let sequence = '';
   if (!terminalModes.bracketedPaste) { sequence += ENABLE_BRACKETED_PASTE; terminalModes.bracketedPaste = true; }
-  if (!classicScreen() && !terminalModes.wheelReporting) {
+  if (!terminalModes.wheelReporting) {
     sequence += ENABLE_MOUSE_TRACKING;
     terminalModes.wheelReporting = true;
   }
@@ -353,159 +329,6 @@ function normalizeTerminalKey(key: string): string {
   return key;
 }
 
-/** `ESC [ row ; column R` is the terminal answering DSR, never a keystroke. */
-export function cursorPositionReport(key: string): { row: number; column: number } | undefined {
-  const match = /^\u001b\[(\d+);(\d+)R$/.exec(key);
-  return match ? { row: Number(match[1]), column: Number(match[2]) } : undefined;
-}
-
-const cursorReportWaiters = new Set<(report: { row: number; column: number }) => void>();
-
-/** A short, bounded record of what the terminal actually did with the cursor,
- * written to ~/.clikcode/cursor.log. Placing the cursor depends on how a
- * client answers (or ignores) DSR, which cannot be seen from a screenshot and
- * differs per terminal; this is how a report becomes a diagnosis. Sixty lines
- * per process, so a long session cannot grow it without bound. */
-let cursorLogLines = 0;
-let inputLogLines = 0;
-/** Frames are noisy and a session opens with a burst of them; what a client
- * sends is rare and is the thing a report turns on. One budget each, so a
- * startup cannot spend the budget that would have recorded the swipe. */
-const FRAME_LOG_LINES = 60;
-const INPUT_LOG_LINES = 2_000;
-export function logCursorEvent(line: string): void {
-  // VITEST: the suite drives a stubbed terminal against the real home
-  // directory, and these lines per test process are noise that buries the one
-  // session anybody wants to read.
-  if (process.env.VITEST) return;
-  // Resizes belong to the input budget: they are the event the scrolling
-  // reports turn on, and the frame budget is spent within a second of startup.
-  const isInput = line.startsWith('input ') || line.startsWith('scroll ') || line.startsWith('resize ');
-  if (isInput) {
-    if (inputLogLines >= INPUT_LOG_LINES) return;
-    inputLogLines += 1;
-  } else {
-    if (cursorLogLines >= FRAME_LOG_LINES) return;
-    cursorLogLines += 1;
-  }
-  try {
-    const dir = join(homedir(), '.clikcode');
-    mkdirSync(dir, { recursive: true });
-    appendFileSync(join(dir, 'cursor.log'), `[${new Date().toISOString()}] pid ${process.pid} ${line}\n`, { encoding: 'utf8', mode: 0o600 });
-  } catch { /* fail-open-ok: diagnostics must never break the UI */ }
-}
-
-/** Claim the one outstanding question, for a DSR the caller is about to send
- * itself (inside a frame). False when another question is already waiting:
- * two answers in flight cannot be told apart, and mixing them up moves the
- * live region to a row it was never on. */
-export function beginCursorQuestion(): boolean {
-  if (!output.isTTY || !input.isTTY || !terminalModes.rawMode || cursorQueryInFlight) return false;
-  if (awaitingLateAnswer()) return false;
-  cursorQueryInFlight = true;
-  return true;
-}
-
-/** Wait for the next cursor report, for a DSR that has already gone out
- * inside a frame. Releases the claim beginCursorQuestion took. */
-export function awaitCursorReport(timeoutMs = 400): Promise<CursorQuery> {
-  if (!output.isTTY || !input.isTTY) { cursorQueryInFlight = false; return Promise.resolve({ status: 'timeout' }); }
-  return new Promise<CursorQuery>((resolve) => {
-    const waiter = (report: { row: number; column: number }): void => finish({ status: 'ok', ...report });
-    const timer = setTimeout(() => { quarantineLateAnswer(); finish({ status: 'timeout' }); }, timeoutMs);
-    timer.unref();
-    function finish(answer: CursorQuery): void {
-      clearTimeout(timer);
-      cursorReportWaiters.delete(waiter);
-      input.off('data', onData);
-      cursorQueryInFlight = false;
-      resolve(answer);
-    }
-    const onData = (chunk: Buffer | string): void => {
-      const report = cursorPositionReport(String(chunk));
-      if (report) finish({ status: 'ok', ...report });
-    };
-    cursorReportWaiters.add(waiter);
-    input.on('data', onData);
-  });
-}
-
-/** One question at a time: two DSR queries in flight cannot tell their
- * answers apart. A second caller is told `busy` rather than queued -- every
- * measurement here is opportunistic, and a queue behind a terminal that never
- * answers would make them all arrive too late to mean anything. */
-let cursorQueryInFlight = false;
-
-/** A question that timed out is not over. The terminal may still answer, and
- * a late answer is indistinguishable from the next question's -- so the next
- * question reads it, and is told the cursor is somewhere it has not been for
- * several frames. The session log has exactly that: a height probe gives up,
- * a frame probe goes out four milliseconds later, and the answer that comes
- * back belongs to the first. An anchor ten rows off then draws the live block
- * where it does not belong and parks the cursor below the composer.
- *
- * So a timeout quarantines the terminal instead of releasing it: nothing is
- * asked during the grace period, and a stray answer arriving inside it finds
- * no waiter at all (a report nobody is waiting for is dropped where keys are
- * read). Long enough to cover a slow link's answer, short enough that a
- * terminal which simply never answers is not asked again for a whole second. */
-const STALE_ANSWER_GRACE_MS = 750;
-let quarantinedUntil = 0;
-function quarantineLateAnswer(): void { quarantinedUntil = Date.now() + STALE_ANSWER_GRACE_MS; }
-function awaitingLateAnswer(): boolean { return Date.now() < quarantinedUntil; }
-
-/** A prompter that is going away takes any unanswered question with it. */
-export function resetCursorQueries(): void { cursorQueryInFlight = false; quarantinedUntil = 0; }
-
-export type CursorQuery =
-  | { status: 'ok'; row: number; column: number }
-  | { status: 'timeout' }
-  | { status: 'busy' };
-
-/** Where the terminal says its cursor is, in absolute screen coordinates,
- * after `prefix` (a motion the caller wants measured from); `suffix` goes out
- * in the same write, so nothing can land in between. */
-export async function queryCursorPosition(prefix = '', timeoutMs = 250, suffix = ''): Promise<CursorQuery> {
-  if (!output.isTTY || !input.isTTY) return { status: 'timeout' };
-  // Only ever ask while the terminal is in raw mode. With echo on, the line
-  // discipline prints the terminal's answer on screen as text -- `^[[4;44R`
-  // sitting in the status line -- and hands it to whatever reads stdin next.
-  // Not raw yet is not "unsupported": ask again once a prompt is open.
-  if (!terminalModes.rawMode) return { status: 'busy' };
-  if (cursorQueryInFlight || awaitingLateAnswer()) return { status: 'busy' };
-  cursorQueryInFlight = true;
-  try {
-    const position = await askCursorPosition(prefix, timeoutMs, suffix);
-    if (!position) quarantineLateAnswer();
-    return position ? { status: 'ok', ...position } : { status: 'timeout' };
-  } finally {
-    cursorQueryInFlight = false;
-  }
-}
-
-function askCursorPosition(
-  prefix: string, timeoutMs: number, suffix: string,
-): Promise<{ row: number; column: number } | undefined> {
-  return new Promise((resolve) => {
-    const waiter = (report: { row: number; column: number }): void => finish(report);
-    const timer = setTimeout(() => finish(undefined), timeoutMs);
-    timer.unref();
-    function finish(report: { row: number; column: number } | undefined): void {
-      clearTimeout(timer);
-      cursorReportWaiters.delete(waiter);
-      input.off('data', onData);
-      resolve(report);
-    }
-    const onData = (chunk: Buffer | string): void => {
-      const report = cursorPositionReport(String(chunk));
-      if (report) finish(report);
-    };
-    cursorReportWaiters.add(waiter);
-    input.on('data', onData);
-    output.write(`${prefix}\u001b[6n${suffix}`);
-  });
-}
-
 /** Stateful decoder for mobile/remote terminals, where one key's escape
  * sequence and even one UTF-8 character may be split across data chunks. */
 export class TerminalInputDecoder {
@@ -624,6 +447,46 @@ export class TerminalInputDecoder {
   }
 }
 
+/** `ESC [ row ; column R` is the terminal answering DSR, never a keystroke. */
+const CURSOR_POSITION_REPORT = /^\u001b\[\d+;\d+R$/;
+
+const cursorReportWaiters = new Set<(report: { row: number; column: number }) => void>();
+
+/** A short, bounded record of what the terminal actually did with the cursor,
+ * written to ~/.clikcode/cursor.log. Placing the cursor depends on how a
+ * client answers (or ignores) DSR, which cannot be seen from a screenshot and
+ * differs per terminal; this is how a report becomes a diagnosis. Sixty lines
+ * per process, so a long session cannot grow it without bound. */
+let cursorLogLines = 0;
+let inputLogLines = 0;
+/** Frames are noisy and a session opens with a burst of them; what a client
+ * sends is rare and is the thing a report turns on. One budget each, so a
+ * startup cannot spend the budget that would have recorded the swipe. */
+const FRAME_LOG_LINES = 60;
+const INPUT_LOG_LINES = 2_000;
+export function logCursorEvent(line: string): void {
+  // VITEST: the suite drives a stubbed terminal against the real home
+  // directory, and these lines per test process are noise that buries the one
+  // session anybody wants to read.
+  if (process.env.VITEST) return;
+  // Resizes belong to the input budget: they are the event the scrolling
+  // reports turn on, and the frame budget is spent within a second of startup.
+  const isInput = line.startsWith('input ') || line.startsWith('scroll ') || line.startsWith('resize ');
+  if (isInput) {
+    if (inputLogLines >= INPUT_LOG_LINES) return;
+    inputLogLines += 1;
+  } else {
+    if (cursorLogLines >= FRAME_LOG_LINES) return;
+    cursorLogLines += 1;
+  }
+  try {
+    const dir = join(homedir(), '.clikcode');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, 'cursor.log'), `[${new Date().toISOString()}] pid ${process.pid} ${line}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch { /* fail-open-ok: diagnostics must never break the UI */ }
+}
+
+
 /** A read from the terminal is one batch of keys, and the end of it is
  * announced so a listener can draw once for the whole chunk.
  *
@@ -666,11 +529,9 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
         logCursorEvent(`input ${JSON.stringify(key)} screen=${output.columns ?? '?'}x${output.rows ?? '?'}`);
       }
       // A DSR reply is the terminal talking back, not the user typing.
-      const report = cursorPositionReport(key);
-      if (report) {
-        for (const waiter of [...cursorReportWaiters]) waiter(report);
-        continue;
-      }
+      // Nothing here asks for one any more, but a terminal may volunteer it
+      // and it must never be typed into the draft.
+      if (CURSOR_POSITION_REPORT.test(key)) continue;
       // Focus in/out and OSC replies (theme notifications), likewise:
       // enabled for what they announce, not to be read.
       if (FOCUS_EVENT.test(key) || key.startsWith('\u001b]')) continue;
@@ -1305,8 +1166,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private activityAnchor = 0;
   /** Everything this UI writes goes through one append-only stream: finished
    * rows into native scrollback, one small live region below them. */
-  private frameBuffer = '';
-  private readonly stream = new TranscriptStream((data) => { this.frameBuffer += data; });
   private pendingFinished: string[] = [];
   private pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean };
   /** The last row retired, so a blank separator is never doubled across the
@@ -1341,13 +1200,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * first frame of a newly opened session. */
   private reseedTranscript: false | 'first' | 'scroll-away' = 'first';
   private lastColumns = output.columns || 0;
-  /** The live block the last frame drew, for the absolute park below it. */
-  private frameGeometry?: { rows: number; cursorRow: number; cursorColumn: number };
-  /** Where that block starts on screen, learned from the terminal's own
-   * answer, so the next frame can redraw in place instead of walking. */
-  private blockTopRow?: number;
-  /** Set once a terminal declines to answer DSR; it is then never asked again. */
-  private cursorParkUnsupported = false;
   private usageLabel?: string;
   private usageResetLabel?: string;
   private selecting = false;
@@ -1505,34 +1357,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
   };
 
-  /** Take the alternate screen while an overlay is up, and give it back after.
-   * The main screen keeps its transcript untouched underneath, so closing one
-   * restores the conversation exactly, with nothing to redraw and nothing
-   * lost. */
-  private syncOverlayScreen(wanted: boolean): void {
-    if (classicScreen() === false) return; // pinned to the alternate screen
-    if (wanted === this.overlayActive) return;
-    this.overlayActive = wanted;
-    if (wanted) {
-      // The wheel comes with the screen: there is no scrollback behind an
-      // alternate screen for the client to scroll, so this program does the
-      // scrolling and needs the events to do it with.
-      output.write(`${this.eraseLiveRegion()}${ENTER_ALTERNATE_SCREEN}${ENABLE_MOUSE_TRACKING}`);
-      terminalModes.alternateScreen = true;
-      this.alternateScreen = true;
-      this.alternatePrevious = [];
-      this.alternateScrollback = 0;
-    } else {
-      // And the wheel goes back to the client with it, so a swipe scrolls the
-      // conversation the terminal is holding.
-      output.write(`${DISABLE_MOUSE_TRACKING}${LEAVE_ALTERNATE_SCREEN}`);
-      terminalModes.alternateScreen = false;
-      this.alternateScreen = false;
-      this.alternatePrevious = [];
-      // The main screen came back as it was, with this UI's own block on it,
-      // so the frame that follows continues from what the stream remembers.
-    }
-  }
 
   /** Never taller than the screen actually is: a live region that overflows
    * makes the walk back up to the composer clamp at the top edge, which is
@@ -1609,11 +1433,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * conversation fifty rows away. On the alternate screen it costs nothing:
    * the main screen, transcript and all, is exactly as it was when it closes.
    *
-   * `CLIKCODE_MAIN_SCREEN=1` puts the conversation back on the main screen,
-   * where the client's own scrollback is the transcript -- see classicScreen(). */
-  private alternateScreen = !classicScreen() && output.isTTY;
-  /** True while a palette or picker owns the screen. */
-  private overlayActive = false;
+   * On the alternate screen it costs nothing: the screen underneath, the
+   * conversation and all, is exactly as it was when the overlay closes. */
+  /** Always true in practice: this prompter is only built when stdin and
+   * stdout are both TTYs. Kept as a field because close() and suspend() read
+   * it to decide whether the screen must be handed back. */
+  private readonly alternateScreen = Boolean(output.isTTY);
   /** The title last given to the terminal, so a repaint does not resend it. */
 
   constructor() {
@@ -1666,23 +1491,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       terminalModes.bracketedPaste = true;
       terminalModes.wheelReporting = true;
     }
-    // The screen and its saved lines are cleared once, and the first frame
-    // starts on the LAST row.
-    //
-    // The clear leaves the shell's own history -- a login banner, a prompt,
-    // the command that started this -- out of the scrollback a swipe reads,
-    // which is where this UI keeps the conversation. Starting on the bottom
-    // row is what puts the composer on the bottom edge and keeps it there: the
-    // transcript is appended directly above it and the screen scrolls up to
-    // make room, so a block that opened on the edge is still on it a thousand
-    // rows later.
-    //
-    // Exactly once, and only here: a frame that cleared mid-conversation would
-    // take the transcript with it.
-    else {
-      output.write(CLEAR_SCREEN_AND_SCROLLBACK);
-      output.write(`\u001b[${Math.max(1, output.rows || 24)};1H`);
-    }
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
@@ -1690,7 +1498,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // hidden cursor and bracketed paste on.
     process.on('exit', restoreTerminal);
     installTerminalRestoreSignals();
-    terminalModes.leaveLiveRegion = () => this.eraseLiveRegion();
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {
@@ -2092,7 +1899,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     optionalRows -= noticeRows;
     const availablePaletteRows = Math.min(requestedPaletteCapacity, optionalRows);
     const paletteCapacity = availablePaletteRows >= 3 ? availablePaletteRows : 0;
-    this.syncOverlayScreen(Boolean(paletteCapacity) || this.selecting);
     const paletteRows = paletteCapacity;
     const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
     // The software keyboard can make a mobile SSH viewport dramatically
@@ -2442,86 +2248,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.secondLastFinishedRow = finished.length > 1 ? finished[finished.length - 2] : this.lastFinishedRow;
       this.lastFinishedRow = finished[finished.length - 1];
     }
-    if (this.alternateScreen) { this.flushAlternateFrame(finished, pending); return; }
-    this.frameBuffer = '';
-    // A frame's motions are relative, which is what keeps the transcript
-    // append-only. They are right until the terminal disagrees about how many
-    // rows something took (a row it wrapped, a resize it reflowed, a mode it
-    // ignored): the walk back up to the composer then lands low, and stays
-    // low, because the next frame walks from the same wrong place. So a frame
-    // ends on the block's LAST row -- the one position whose absolute screen
-    // row can be asked for without trusting any earlier motion -- and the
-    // cursor is parked with an absolute jump, from a row the terminal either
-    // told us (the DSR this frame carries) or that nothing can have moved.
-    const height = this.viewportRows();
-    // Anchored only where nothing is retired: no rows written above the block
-    // means the terminal cannot have scrolled, so the row it starts on is the
-    // row it started on. A frame that DOES retire rows scrolls the screen by
-    // an amount that can only be computed from the height the terminal reports
-    // -- and a client that reports one height while showing fewer rows (a
-    // phone with its keyboard up) makes that computation drift downward a row
-    // at a time, which draws the next frame over the last one. Such a frame
-    // steps instead, and asks where it landed.
-    const anchorRow = !finished.length && this.blockTopRow && this.blockTopRow + pending.live.length - 1 <= height
-      ? this.blockTopRow
-      : undefined;
-    const measuring = this.absoluteParkAvailable() && !pending.hideCursor;
-    const probe = measuring && !anchorRow && beginCursorQuestion() ? '\u001b[6n' : '';
-    this.stream.render(
-      finished, pending.live, pending.cursorRow, Math.max(0, pending.cursorColumn - 1),
-      { ...(anchorRow ? { anchorRow } : {}), ...(probe ? { probe } : {}) },
-    );
-    const body = this.frameBuffer;
-    this.frameBuffer = '';
-    // Synchronized output (DEC 2026): the terminal presents the whole frame at
-    // once instead of tearing mid-repaint. Terminals without it ignore the pair.
-    // No autowrap toggle and no synchronized-update pair around a frame.
-    //
-    // Both were belt-and-braces: DECAWM-off in case a row reached the last
-    // column (every row is already clipped a column short, which is what
-    // actually prevents it), and DEC 2026 so a frame is presented whole. They
-    // also fire dozens of times a second, and they are the only thing this UI
-    // does per frame that Claude Code -- which scrolls on this client with the
-    // keyboard hidden, where this did not -- never does at all. A client
-    // recognising a swipe across several frames has its state reset by every
-    // one of them.
-    const frame = `\u001b[?25l${body}${pending.hideCursor ? '' : '\u001b[?25h'}`;
-    this.frameInFlight = true;
-    terminalModes.painted = true;
-    const geometry = { rows: pending.live.length, cursorRow: pending.cursorRow, cursorColumn: pending.cursorColumn };
-    this.frameGeometry = geometry;
-    // The block's absolute position survives a frame only when that frame
-    // either knew it (anchorRow) or is about to be told it (probe). A frame
-    // drawn relatively -- the DSR slot was busy, the cursor was hidden, the
-    // terminal declined -- moved the block by a row count the terminal may
-    // not agree with, so where it used to start is no longer a fact about the
-    // screen. Keeping it is how a stale anchor draws the next frame rows above
-    // where it belongs and leaves the cursor below the composer.
-    // Nothing was retired above it, so the block is where it was.
-    const nextTop = anchorRow;
-    // A frame that could neither address its rows nor ask where they landed
-    // moved the block by a count the terminal may not agree with; the row it
-    // started on has stopped being a fact about the screen.
-    if (!anchorRow && !probe) this.blockTopRow = undefined;
-    // Listen before writing: a terminal can answer inside the same tick the
-    // frame goes out, and an answer nobody is waiting for is simply lost.
-    const report = probe ? awaitCursorReport() : undefined;
-    output.write(frame, () => {
-      this.frameInFlight = false;
-      // An anchored frame drew from a known row, so the composer's row is
-      // arithmetic: park there too, since the relative park the frame carries
-      // is exactly what cannot be trusted on a terminal that miscounts rows.
-      if (anchorRow && nextTop !== undefined) {
-        this.blockTopRow = nextTop;
-        this.parkCursorAt(nextTop + geometry.cursorRow, geometry.cursorColumn, pending.hideCursor);
-        this.stream.markParked(geometry.cursorRow);
-        logCursorEvent(`frame anchored: top=${anchorRow}->${nextTop} rows=${geometry.rows} finished=${finished.length} composer=${(nextTop ?? 1) + geometry.cursorRow} col=${geometry.cursorColumn}`);
-      } else if (report) void this.readBlockPosition(geometry, report);
-      else {
-        logCursorEvent(`frame relative: rows=${geometry.rows} cursorRow=${geometry.cursorRow} measuring=${measuring} raw=${terminalModes.rawMode} declined=${this.cursorParkUnsupported} waiting=${Boolean(this.waitingLabel)}`);
-      }
-      if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
-    });
+    this.flushAlternateFrame(finished, pending);
   }
 
   /** One screen, every row at an address.
@@ -2691,36 +2418,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return source >= 0 && source < this.alternatePrevious.length ? this.alternatePrevious[source] : undefined;
   }
 
-  /** Asking is only safe once the terminal is in raw mode (otherwise its
-   * answer is echoed on screen and fed to whatever reads stdin), is skipped
-   * while a turn streams -- the resting cursor is what matters -- and is
-   * never repeated on a terminal that has already declined to answer. */
-  private absoluteParkAvailable(): boolean {
-    return !this.cursorParkUnsupported && !this.waitingLabel
-      && terminalModes.rawMode && input.isTTY && output.isTTY;
-  }
 
-  /** Take the answer to the DSR this frame carried, and with it the block's
-   * position on screen. The relative park has already happened, so this only
-   * corrects it -- and only while the block it measured is still the one on
-   * screen. */
-  private async readBlockPosition(
-    geometry: { rows: number; cursorRow: number; cursorColumn: number }, report: Promise<CursorQuery>,
-  ): Promise<void> {
-    const answer = await report;
-    logCursorEvent(`frame probe: ${answer.status}${answer.status === 'ok' ? ` row=${answer.row} col=${answer.column}` : ''} rows=${geometry.rows} cursorRow=${geometry.cursorRow}`);
-    if (this.closed || this.suspended || answer.status !== 'ok') {
-      // A terminal that never answers is asked once and then left alone with
-      // the relative park it always had.
-      if (answer.status === 'timeout') this.cursorParkUnsupported = true;
-      return;
-    }
-    if (this.frameGeometry !== geometry) return; // a newer frame owns the screen
-    this.blockTopRow = Math.max(1, answer.row - (geometry.rows - 1));
-    logCursorEvent(`frame measured: top=${this.blockTopRow} composer=${this.blockTopRow + geometry.cursorRow} col=${geometry.cursorColumn}`);
-    this.parkCursorAt(this.blockTopRow + geometry.cursorRow, geometry.cursorColumn);
-    this.stream.markParked(geometry.cursorRow);
-  }
 
   /** `hidden` keeps the cursor invisible -- it does not mean the cursor may be
    * left anywhere. A terminal always has one, and a client that draws its own
@@ -2896,8 +2594,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * shell, a vendor CLI, a resize) decides that now. */
   private forgetScreenPosition(): void {
     this.alternatePrevious = [];
-    this.blockTopRow = undefined;
-    resetCursorQueries();
   }
 
   private showTransientNotice(text: string, durationMs: number, redraw: () => void): void {
@@ -2929,7 +2625,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.pendingLive = undefined;
     setTerminalRawMode(false);
     output.write(
-      `${this.eraseLiveRegion()}${popReadModes()}`
+      `${popReadModes()}`
       // Whoever takes the terminal takes the main screen with it: a vendor
       // login prompt drawn on our alternate screen would vanish with it.
       + terminalTeardown(this.alternateScreen),
@@ -2955,17 +2651,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     else this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
   };
 
-  /** Cursor-relative erase of everything the last frame painted. The cursor is
-   * left at column one of the region's first row, which is where the next
-   * writer -- a vendor CLI, the shell, or this UI's next frame -- continues. */
-  private eraseLiveRegion(): string {
-    this.frameBuffer = '';
-    this.pendingLive = undefined;
-    this.stream.close();
-    const data = this.frameBuffer;
-    this.frameBuffer = '';
-    return data;
-  }
 
   /** Remove a completed palette/picker as one frame. Painting an empty
    * composer here left its borders/status rows alive while the selected slash
@@ -3360,9 +3045,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.pendingLive = undefined;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
-    this.frameGeometry = undefined;
-    this.blockTopRow = undefined;
-    resetCursorQueries();
     this.stopWaiting(false);
     this.clearTransientNotice();
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
@@ -3387,7 +3069,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the shell's own screen returns untouched. The conversation is on disk
     // either way -- `/resume` reopens it.
     output.write(
-      `${this.alternateScreen ? '' : this.eraseLiveRegion()}${popReadModes()}`
+      `${popReadModes()}`
       + terminalTeardown(terminalModes.alternateScreen),
     );
     terminalModes.alternateScreen = false;
@@ -3409,7 +3091,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Remove the composer and footer before handing over, so the vendor's
     // output continues directly under the conversation instead of being typed
     // across this UI's status rows.
-    output.write(`${this.eraseLiveRegion()}${popReadModes()}${terminalTeardown(false)}`);
+    output.write(`${popReadModes()}${terminalTeardown(false)}`);
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
@@ -3434,7 +3116,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.forgetScreenPosition();
     // Whatever the vendor printed stays in scrollback and the live region
-    // simply starts again below it: eraseLiveRegion() left nothing of this
+    // simply starts again below it: leaving the alternate screen left nothing
     // UI's own on screen, so the next frame begins wherever the cursor is.
     this.lastColumns = output.columns || 0;
     if (input.isTTY) input.resume();
