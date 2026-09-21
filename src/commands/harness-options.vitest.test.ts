@@ -49,16 +49,17 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
   });
 
   it('folds the duplicates and keeps everything else', () => {
-    // 207 rows, of which 60 restated a control the user already had. What is
-    // left is 147 genuinely vendor-specific rows across 18 harnesses. Kimi and
-    // Auggie publish nothing BUT a model selector, so their vendor surface is
-    // now correctly empty rather than a lone duplicate of /model.
+    // Of the registry's rows, 66 restate a control the user already had. What
+    // is left is the genuinely vendor-specific surface. Grok, Kimi, Auggie
+    // and Continue publish nothing a ClikCode control does not already own --
+    // a model selector, a permission mode -- so their vendor surface is
+    // correctly empty rather than a list of duplicates.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(60);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(66);
     expect(kept.length).toBe(147);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
-    expect(emptied.map((h) => h.command)).toEqual(['kimi', 'auggie']);
+    expect(emptied.map((h) => h.command)).toEqual(['grok', 'kimi', 'auggie', 'cn']);
   });
 
   it('routes both spellings of extra directories to the same command', () => {
