@@ -293,6 +293,19 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // window (its errors are balance-based: "usage balance exhausted", HTTP
   // 402), so it reports no usage, which is the honest answer.
   { command: 'grok', provider: 'xai', displayName: 'Grok Build', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['low', 'medium', 'high'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'grok', npmPackage: '@xai-official/grok', loginArgv: ['login'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'default'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions'] }, auto: { argv: ['--permission-mode', 'auto'] } }, turn: { startArgv: ['--output-format', 'streaming-messages-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  // Restored and re-checked against gemini 0.60.0 on a real install, not the
+  // entry this replaces. What changed: --acp is the flag now (the old
+  // --experimental-acp is deprecated), -r/--resume takes "latest" or an index
+  // rather than an id, --session-id starts a NEW session with a given uuid,
+  // and -o/--output-format offers text|json|stream-json (confirmed by the
+  // rejection of anything else). Its approval modes are default / auto_edit /
+  // yolo / plan.
+  //
+  // No loginArgv: Gemini's auth lives behind /auth inside its own interactive
+  // session, with nothing scriptable. An empty argv is still meaningful --
+  // ClikCode's login flow gates on the field being present at all, and
+  // without it a fresh install never gets handed a real terminal to sign in.
+  { command: 'gemini', provider: 'google', displayName: 'Gemini CLI', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'GEMINI.md', nativeSlashPassthrough: false, customCommandDirs: ['.gemini/commands', '~/.gemini/commands'], acp: { argv: ['--acp'] }, normalizedPermissionOptionIds: ['approval-mode'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'gemini', npmPackage: '@google/gemini-cli', loginArgv: [], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--include-directories'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--approval-mode', 'default'] }, bypass: { argv: ['--approval-mode', 'yolo'] }, auto: { argv: ['--approval-mode', 'auto_edit'] } }, profileEnv: 'GEMINI_CLI_HOME', turn: { startArgv: ['--output-format', 'stream-json'], createIdPrefix: ['--session-id'], promptArgvPrefix: ['--prompt'], output: 'json-lines', responseFields: ['response', 'result', 'text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--resume', 'latest'] } },
   { command: 'codex', provider: 'openai', displayName: 'Codex', surface: 'terminal', tier: 'primary', transport: 'codex-app-server', integration: 'native', parser: 'codex-items', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['~/.codex/prompts'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'codex', npmPackage: '@openai/codex', loginArgv: ['login'], statusArgv: ['login', 'status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cd'], effortArgvPrefix: ['--config'], effortConfigKey: 'model_reasoning_effort', permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'], placement: 'root' }, bypass: { argv: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'never'], placement: 'root' }, auto: { argv: ['--approve-for-me'], placement: 'root' } }, imageArgvPrefix: ['--image'], profileEnv: 'CODEX_HOME', turn: { startArgv: ['exec', '--json', '--skip-git-repo-check'], resumeArgv: ['exec', 'resume'], resumeIdSuffix: ['--json', '--skip-git-repo-check'], promptInput: 'stdin', output: 'json-lines', responseFields: ['text'], resumeSupportsWorkspaceSelector: false }, session: { resumeIdPrefix: ['resume'], continueArgv: ['resume', '--last'] } },
   { ...OPENCODE_FAMILY, command: 'opencode', provider: 'opencode', displayName: 'OpenCode', tier: 'primary', binary: 'opencode' },
   { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', surface: 'terminal', tier: 'primary', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp', '--stdio'], effortArgvPrefix: ['--effort'] }, retiredOptionIds: ['allow-all'], localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['-C'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--allow-all'] } }, imageArgvPrefix: ['--attachment'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], continueArgv: ['--continue'] } },
@@ -657,6 +670,23 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     ],
     managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] } },
     features: ['skills', 'custom agents', 'hooks', 'steering', 'powers', 'plan mode'],
+  },
+  // Every flag here read from `gemini --help` on a real install. --safe-mode
+  // was in the entry this replaces and no longer exists in 0.60.0; --policy
+  // and --extensions are new and did not. --allowed-tools is documented as
+  // deprecated in favour of the policy engine but still accepted, so it stays
+  // until it actually stops working.
+  gemini: {
+    options: [
+      value('approval-mode', 'Approval mode', 'Tool-call approval policy', 'permissions', ['--approval-mode'], 'enum', { values: ['default', 'auto_edit', 'yolo', 'plan'] }),
+      value('allowed-tools', 'Allowed tools', 'Tools that bypass confirmation', 'permissions', ['--allowed-tools'], 'string-list'),
+      value('policy', 'Policy files', 'Additional policy files or directories to load', 'permissions', ['--policy'], 'path-list'),
+      value('allowed-mcp-servers', 'Allowed MCP servers', 'MCP servers enabled for this session', 'tools', ['--allowed-mcp-server-names'], 'string-list'),
+      value('include-directories', 'Additional directories', 'Additional directories included in context', 'context', ['--include-directories'], 'path-list'),
+      value('extensions', 'Extensions', 'Extensions to load; all are used when unset', 'tools', ['--extensions'], 'string-list'),
+    ],
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, plugins: { label: 'Extensions', listArgv: ['extensions', 'list'], manageArgv: ['extensions'] } },
+    features: ['skills', 'agents', 'extensions', 'custom commands', 'memory'],
   },
   qwen: {
     options: [

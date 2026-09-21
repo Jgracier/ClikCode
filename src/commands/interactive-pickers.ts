@@ -689,7 +689,14 @@ export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: s
     model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
     createdAt: now, updatedAt: now, status: 'active',
     nativeHarness: match.harness.command, nativeSessionId: nativeId, nativeStartedAt: now,
-    workspace, name: match.item.title, ...(messages.length ? { messages } : {}),
+    // Named only from a title the harness itself wrote. The resume list also
+    // shows the opening of the first message when there is no real title, and
+    // writing THAT into `name` is what used to leave every adopted chat called
+    // "we need to have scrolling but we need to not have terminal / co…" --
+    // a preview that looks like a name forever, because nameSession returns
+    // early on any name at all and can never replace it.
+    workspace, ...(match.item.titleIsGenerated && match.item.title ? { name: match.item.title, nameSource: 'provider' as const } : {}),
+    ...(messages.length ? { messages } : {}),
   };
   state.sessions.push(adopted);
   await writeState(state);
