@@ -176,24 +176,6 @@ const SCROLL_DRAIN_MS = 16;
  *
  * So: alternate screen for both behaviours, main screen when scrolling matters
  * more than the composer staying put. */
-/** Progressive stripping of this UI, for finding what costs the gesture.
- *
- * CLIKCODE_STRIP=N removes everything up to level N. Each level is cumulative,
- * so the smallest N that makes a keyboard-hidden swipe work puts the cause in
- * the step between N-1 and N. Things break at the higher levels; that is the
- * point, and it is why this is behind an environment variable.
- *
- *   1  frames carry no styling at all -- every SGR sequence stripped on the
- *      way out, so a frame is text and cursor moves and nothing else
- *   2  + no repaint on resize, at all
- *   3  + no write gating: every frame goes straight out, with no completion
- *      callback and no coalescing behind one in flight
- */
-export function stripLevel(): number {
-  const raw = Number(process.env.CLIKCODE_STRIP);
-  return Number.isFinite(raw) && raw > 0 ? raw : 0;
-}
-
 export function classicScreen(): boolean { return process.env.CLIKCODE_MAIN_SCREEN === '1'; }
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
@@ -391,78 +373,11 @@ let inputLogLines = 0;
  * startup cannot spend the budget that would have recorded the swipe. */
 const FRAME_LOG_LINES = 60;
 const INPUT_LOG_LINES = 2_000;
-/** Every byte in and out of the terminal, timestamped, when CLIKCODE_TRACE=1.
- * Off by default; written to ~/.clikcode/terminal-trace.log at exit.
- *
- * It lives inside the program because no recorder can capture this one: a pty
- * between here and the client changes the behaviour under investigation --
- * recorded through one, a keyboard-hidden swipe reaches this program; run
- * directly, it does not. */
-let traceInstalled = false;
-const traceBuffer: string[] = [];
-const TRACE_MAX_ENTRIES = 40_000;
-const TRACE_FLUSH_MS = 3_000;
-/** Both directions of the terminal conversation, buffered in memory and
- * written out once at exit. CLIKCODE_TRACE=1.
- *
- * Buffered, not appended per event, and that is the whole point. The first
- * version of this wrote each chunk to disk as it happened -- and the bug under
- * investigation stopped reproducing while it was on, because a synchronous
- * file write before every terminal write is itself a change to the timing
- * being measured. A trace that alters the thing it measures is not evidence.
- *
- * It records reads as well as writes, to settle the one question the cursor
- * log cannot: whether the client sends nothing during a keyboard-hidden swipe,
- * or sends and this program never reads it. The cursor log only shows keys
- * that reached the dispatcher, so silence there means either. */
-function traceEvent(direction: 'out' | 'in', chunk: string): void {
-  if (!traceInstalled || traceBuffer.length >= TRACE_MAX_ENTRIES) return;
-  traceBuffer.push(`${Date.now() / 1000} ${direction} ${JSON.stringify(chunk)}`);
-}
-
-export function flushTerminalTrace(): void {
-  if (!traceInstalled || !traceBuffer.length) return;
-  try {
-    const path = join(homedir(), '.clikcode', 'terminal-trace.log');
-    mkdirSync(join(homedir(), '.clikcode'), { recursive: true });
-    appendFileSync(path, `${traceBuffer.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
-  } catch { /* fail-open-ok: diagnostics must never break the UI */ }
-  traceBuffer.length = 0;
-}
-
-function installOutputTrace(): void {
-  if (traceInstalled || process.env.CLIKCODE_TRACE !== '1' || process.env.VITEST) return;
-  traceInstalled = true;
-  const original = output.write.bind(output);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a faithful passthrough of stream.write's overloads
-  (output as any).write = (chunk: any, ...rest: any[]): boolean => {
-    traceEvent('out', String(chunk));
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any
-    return (original as any)(chunk, ...rest);
-  };
-  // Earliest possible point on the read side: before any decoding, filtering
-  // or dispatch, so "nothing arrived" cannot be confused with "we dropped it".
-  input.on('data', (chunk: Buffer | string) => traceEvent('in', String(chunk)));
-  // Flushed on a timer as well as at exit, because the session being traced is
-  // usually the one the user is reading this in: it does not exit, so an
-  // exit-only flush writes nothing at all. One write every few seconds is far
-  // from one per terminal write, which is what perturbed the measurement
-  // before -- and it means a kill or a dropped connection still leaves the
-  // trace on disk.
-  const timer = setInterval(flushTerminalTrace, TRACE_FLUSH_MS);
-  timer.unref();
-  process.on('exit', flushTerminalTrace);
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-    process.on(signal, () => { flushTerminalTrace(); });
-  }
-}
-
 export function logCursorEvent(line: string): void {
   // VITEST: the suite drives a stubbed terminal against the real home
   // directory, and these lines per test process are noise that buries the one
   // session anybody wants to read.
   if (process.env.VITEST) return;
-  installOutputTrace();
   // Resizes belong to the input budget: they are the event the scrolling
   // reports turn on, and the frame budget is spent within a second of startup.
   const isInput = line.startsWith('input ') || line.startsWith('scroll ') || line.startsWith('resize ');
@@ -1650,7 +1565,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * land after the client has finished. */
   private resizePaintTimer?: NodeJS.Timeout;
   private repaintAfterResize(): void {
-    if (stripLevel() >= 2) return;   // level 2: the screen is left as it is
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
     this.resizePaintTimer = setTimeout(() => {
       this.resizePaintTimer = undefined;
@@ -2732,15 +2646,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // bytes and leaves nothing of the old size behind on a screen that just
     // changed shape.
     const clear = full ? '\u001b[2J\u001b[H' : '';
-    let frame = `\u001b[?25l${clear}${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
-    // Level 1: no styling on the wire. Colour is most of a frame's bytes.
-    if (stripLevel() >= 1) frame = frame.replace(/\u001b\[[0-9;]*m/g, '');
-    // Level 3: straight out, no completion callback, no coalescing.
-    if (stripLevel() >= 3) {
-      terminalModes.painted = true;
-      output.write(frame);
-      return;
-    }
+    const frame = `\u001b[?25l${clear}${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
     this.frameInFlight = true;
     terminalModes.painted = true;
     logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
@@ -2959,26 +2865,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (key === '\u001b[6~') { this.scrollTranscript(-page); return true; }
     // Ctrl+B and Ctrl+F, a page at a time, as less and vi have always read.
     //
-    // They exist because everything else here depends on the client: the one
-    // in the reports sends no mouse report in any encoding, has no page keys
-    // on its keyboard, and -- per its own input log -- sends nothing at all
-    // for a screen swipe. A phone key bar does have ctrl, so these two are
-    // reachable by hand on a terminal where nothing else is.
+    // A phone keyboard has no page keys, but its key bar has ctrl, so these
+    // two are reachable by hand where PageUp and PageDown are not.
     if (key === '\u0002') { this.scrollTranscript(page); return true; }
     if (key === '\u0006') { if (!this.scrollTranscript(-page)) this.noteReadingDirection(); return true; }
-    // Arrows, while a turn runs and the draft is empty. Recorded from a real
-    // client: it sends no mouse report for a swipe in any encoding, however
-    // the mode is requested -- it sends an arrow key. A phone keyboard has no
-    // page keys either, so without this there is no way to read back at all
-    // on that client. An empty draft is what makes it unambiguous: with text
-    // in it, the arrows still move the cursor through it.
-    if (this.waitingLabel && !this.waitingDraft) {
-      if (key === '\u001b[A') { this.scrollTranscript(SWIPE_ROWS); return true; }
-      if (key === '\u001b[B') {
-        if (!this.scrollTranscript(-SWIPE_ROWS)) this.noteReadingDirection();
-        return true;
-      }
-    }
     return false;
   }
 
