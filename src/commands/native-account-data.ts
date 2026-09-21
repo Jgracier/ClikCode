@@ -633,25 +633,22 @@ export async function nativeUsageReading(
   // process last cached.
   const entry = cached && sharedEntry ? (sharedEntry.at > cached.at ? sharedEntry : cached) : cached ?? sharedEntry;
   // A harness that reports quota on its own turn stream is the authority on
-  // its own quota: it answers for free every time it works, so nothing here
-  // asks the vendor's endpoint for it. Its reading stands until the window it
-  // describes resets, and a terminal that has never run a turn shows nothing
-  // rather than spending a per-account endpoint budget that every open
-  // terminal shares -- which is what rate-limited the account out of reading
-  // its own usage. `network` is for an explicit request (`/usage`), where
-  // waiting for a number is the point.
-  const streams = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
-  const ttl = entry?.failed
-    ? NATIVE_USAGE_FAILURE_TTL_MS
-    : streams && entry?.windows?.length ? Number.POSITIVE_INFINITY : NATIVE_USAGE_CACHE_TTL_MS;
+  // A usage figure is only worth showing while it is still true, and these
+  // numbers move: another terminal spends quota, a window rolls over, a turn
+  // runs somewhere else. So nothing here is served past its own age.
+  //
+  // Two things used to keep a reading alive forever. A harness that reports
+  // on its own stream got an INFINITE ttl, on the reasoning that its last
+  // word is the only true thing anyone knows -- and separately, any cached
+  // label at all was carried indefinitely for such a harness rather than
+  // re-derived. Between them a wrong value could never expire: it sat in the
+  // status line for the life of the process, and no refresh, reset or
+  // explicit ask would replace it. Both are gone. Every reading now ages out
+  // and is asked of the harness again.
+  const ttl = entry?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;
   if (entry && Number.isFinite(entry.at) && Date.now() - entry.at < ttl && usageReadingIsCurrent(entry)) {
     nativeUsageCache.set(cacheKey, entry);
     return { windows: entry.windows ?? [], ...(entry.label === undefined ? {} : { label: entry.label }) };
-  }
-  if (streams && !options.network) {
-    // Carry the last figure the harness gave, however old: it is still the
-    // only true thing anyone knows, and the next turn replaces it.
-    return entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const structured = session.nativeHarness ? NATIVE_USAGE_READING_PROBES[session.nativeHarness] : undefined;
