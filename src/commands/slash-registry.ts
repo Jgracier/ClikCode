@@ -31,7 +31,7 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
  * tables are typed `Record<SlashHandlerKey, …>` and a missing or extra handler
  * is a compile error as well as a parity-test failure. */
 export const SLASH_HANDLER_KEYS = [
-  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'cost', 'export', 'history', 'copy', 'undo',
+  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'cost', 'export', 'history', 'copy', 'select', 'undo',
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention', 'attachments',
   'provider', 'account', 'accounts', 'login', 'logout', 'gateway',
   'model', 'models', 'effort', 'permissions', 'options', 'capabilities', 'settings',
@@ -94,6 +94,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
   entry('undo', 'Conversation', 'revert the last turn (only where the vendor exposes it)'),
   entry('native', 'Conversation', 'send text to the harness verbatim (also: //text)', { argHint: '<text>', availability: needsHarness('sending native commands') }),
+  entry('select', 'Conversation', 'release the mouse so you can select and copy text'),
   entry('redraw', 'Conversation', 'repaint the screen'),
   entry('exit', 'Conversation', 'save and leave', { aliases: ['quit'] }),
 

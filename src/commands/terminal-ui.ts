@@ -105,6 +105,20 @@ export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
  * `?1006h` is the SGR encoding; the wheel arrives as button 64 and 65. */
 export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
 export const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l';
+
+/** Selection mode: the mouse handed back to the terminal.
+ *
+ * Any-event tracking (?1003h) is what makes a swipe scroll the transcript --
+ * and it is also what stops the terminal performing its own text selection,
+ * because every drag is delivered here instead. There is no setting that
+ * gives both. So this releases all four modes on request: swipe-scroll stops
+ * working, and selecting and copying chat text starts.
+ *
+ * Read by the resize handler as well as by setup. Re-asserting the modes
+ * after a resize is what makes swipe-scroll survive the phone keyboard
+ * appearing; without this flag it would also silently cancel selection mode
+ * the moment the keyboard moved. */
+export const SELECTION_MODE = { active: false };
 /** SGR: `CSI < button ; column ; row M|m`. Wheel up is 64, wheel down 65. */
 const MOUSE_EVENT = /^\u001b\[<(\d+);\d+;\d+[Mm]$/;
 /** X10: `CSI M` then button and two coordinates, each offset by 32. A client
@@ -193,7 +207,7 @@ function enterInputModes(): string {
   // The flags were already tracked here. They were simply never read.
   let sequence = '';
   if (!terminalModes.bracketedPaste) { sequence += ENABLE_BRACKETED_PASTE; terminalModes.bracketedPaste = true; }
-  if (!terminalModes.wheelReporting) {
+  if (!terminalModes.wheelReporting && !SELECTION_MODE.active) {
     sequence += ENABLE_MOUSE_TRACKING;
     terminalModes.wheelReporting = true;
   }
@@ -1086,7 +1100,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       //
       // Idempotent, so a client that never dropped them just sets what is
       // already set.
-      if (this.alternateScreen) output.write(ENABLE_MOUSE_TRACKING);
+      if (this.alternateScreen && !SELECTION_MODE.active) output.write(ENABLE_MOUSE_TRACKING);
       // No height probe here: it jumps the cursor to the bottom-right corner
       // and asks, at exactly the moment a swipe is being recognised. The size
       // the terminal announces is what the layout uses.
@@ -2892,4 +2906,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (input.isTTY) input.resume();
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
+}
+
+
+/** Turn selection mode on or off, returning what the user should be told.
+ * Idempotent per direction: setting it to what it already is still writes the
+ * modes, because a client may have dropped them on its own. */
+export function setSelectionMode(active: boolean): string {
+  SELECTION_MODE.active = active;
+  if (active) {
+    output.write(DISABLE_MOUSE_TRACKING);
+    terminalModes.wheelReporting = false;
+    return 'Selection mode on — select and copy with your terminal as usual. Swipe-scrolling is off until you run /select again.';
+  }
+  output.write(ENABLE_MOUSE_TRACKING);
+  terminalModes.wheelReporting = true;
+  return 'Selection mode off — swipe-scrolling is back.';
 }

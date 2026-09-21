@@ -92,6 +92,53 @@ export async function aiDoctor(): Promise<void> {
  * every harness without a confirmed credential shape to read, which is
  * every other one right now; the numbered placeholder below covers those.
  */
+/** Whether a label is one ClikCode invented because it could not read a real
+ * identity -- the harness's own name, with or without the old " default"
+ * suffix. A real label is an email or something the user typed. */
+export function isPlaceholderAccountLabel(label: string, harness: AiLocalHarnessDefinition): boolean {
+  const name = harness.displayName.toLowerCase();
+  const text = label.trim().toLowerCase();
+  return text === name || text === `${name} default`;
+}
+
+/** Give placeholder-labelled accounts their real names, where the harness can
+ * now say what they are. Identity derivation has grown to cover harnesses
+ * that had none when their account record was first written, and nothing
+ * re-reads it: an account created before its harness was supported keeps the
+ * invented name forever otherwise. Returns true when anything changed.
+ *
+ * Bounded to accounts that still carry a placeholder, so this costs nothing
+ * for a state where every account already shows a real identity. */
+export async function refreshPlaceholderAccountLabels(state: HarnessState): Promise<boolean> {
+  const candidates = state.accounts
+    .map((account) => ({ account, harness: localHarnessForProvider(account.provider) }))
+    .filter((item): item is { account: AiHarnessAccount; harness: AiLocalHarnessDefinition } =>
+      Boolean(item.harness) && isPlaceholderAccountLabel(item.account.label, item.harness!));
+  if (!candidates.length) return false;
+  const derived = await Promise.all(candidates.map(({ account, harness }) =>
+    deriveAccountLabel(harness, account.nativeProfile?.path).catch(() => undefined)));
+  let changed = false;
+  for (const [index, { account, harness }] of candidates.entries()) {
+    const label = derived[index];
+    // Never rename onto a label another account of the SAME provider holds:
+    // that would be two records for one identity. Across providers the same
+    // email is expected -- one person signs in to Claude and Codex with it --
+    // and syncAccountIdentityAfterLogin scopes its own check the same way.
+    if (!label || state.accounts.some((item) =>
+      item.id !== account.id && item.provider === account.provider && item.label.toLowerCase() === label.toLowerCase())) {
+      // Nothing derivable (OpenCode, Copilot, Hermes, Pi, Droid and Amp keep
+      // no identity anywhere ClikCode can read). Drop the old " default"
+      // suffix anyway: this IS that harness's account, and the suffix made a
+      // real connected account read as a placeholder row.
+      if (account.label !== harness.displayName) { account.label = harness.displayName; changed = true; }
+      continue;
+    }
+    account.label = label;
+    changed = true;
+  }
+  return changed;
+}
+
 export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
   if (harness.command === 'claude') {
     try {
@@ -148,6 +195,27 @@ export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, prof
       const parsed = JSON.parse(await readFile(join(homedir(), '.cursor', 'cli-config.json'), 'utf8')) as { authInfo?: { email?: string } };
       const email = parsed.authInfo?.email;
       return typeof email === 'string' && email ? email : undefined;
+    } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
+  }
+  if (harness.command === 'gemini') {
+    // ~/.gemini/google_accounts.json names the signed-in Google account
+    // directly in `active`. Verified against this machine's own file.
+    // Gemini CLI has no profileEnv, so there is one identity at a time --
+    // this just makes that one show as itself instead of "Gemini CLI default".
+    try {
+      const parsed = JSON.parse(await readFile(join(profilePath ?? join(homedir(), '.gemini'), 'google_accounts.json'), 'utf8')) as { active?: unknown };
+      return typeof parsed.active === 'string' && parsed.active ? parsed.active : undefined;
+    } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
+  }
+  if (harness.command === 'grok') {
+    // ~/.grok/auth.json is keyed by issuer::uuid, and each entry carries a
+    // plain `email` alongside the token. Verified against this machine's own
+    // file. Read the entry rather than the key: the key is a user id.
+    try {
+      const parsed = JSON.parse(await readFile(join(profilePath ?? join(homedir(), '.grok'), 'auth.json'), 'utf8')) as Record<string, { email?: unknown }>;
+      for (const entry of Object.values(parsed ?? {})) {
+        if (entry && typeof entry.email === 'string' && entry.email) return entry.email;
+      }
     } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
   }
   if (harness.command === 'antigravity') {

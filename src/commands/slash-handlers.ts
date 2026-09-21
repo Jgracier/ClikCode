@@ -23,6 +23,8 @@ import { aiAccountLogin, aiAccountLogout, aiAccountRemove, aiDoctor } from './ac
 import { closePersistentTransport, sessionNativeCommands, turnEnvironment } from './turn-runtime.js';
 import { aiSessionSend } from './ai-turn.js';
 import { emitHarnessOutput } from './harness-output.js';
+import { SELECTION_MODE, setSelectionMode } from './terminal-ui.js';
+import { TERMINAL } from './active-terminal.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from './harness-runtime.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from './session-attachments.js';
 import { conversationIdFor, hasConversationContent, optionForControl, requiresProviderHandoff, setSessionHarnessOption, VALID_PERMISSION_MODES } from './session-options.js';
@@ -391,6 +393,17 @@ export const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandl
     if (!last) throw new Error('There is no assistant response to copy yet.');
     const via = await copyToClipboard(last.content);
     return emitHarnessOutput({ panel: 'copied', text: via === 'osc52' ? 'Last response sent to your terminal clipboard (OSC 52).' : 'Last response copied to the clipboard.' });
+  },
+  select: async ({ words }) => {
+    // Mouse tracking is what makes a swipe scroll; it is also what stops the
+    // terminal selecting text, because the drag is delivered to ClikCode
+    // instead. No setting gives both, so this hands the mouse back on demand.
+    const asked = words.join(' ').trim().toLowerCase();
+    const active = asked === 'on' ? true : asked === 'off' ? false : !SELECTION_MODE.active;
+    if (!TERMINAL.active) {
+      throw new Error('Selection mode needs the interactive terminal; there is no mouse to release here.');
+    }
+    return emitHarnessOutput({ panel: 'select', text: setSelectionMode(active) });
   },
   mention: async ({ state, session, words }) => {
     const action = words.join(' ').trim();
