@@ -81,7 +81,14 @@ export class StreamingTitle {
 
   /** What the caller may show, or undefined while the head is still in doubt. */
   push(text: string, mode: 'append' | 'replace'): string | undefined {
-    if (this.settled) return text;
+    // A 'replace' carries the WHOLE answer again, title line included, so the
+    // tag has to be stripped from every one of them -- not just the delta that
+    // happened to settle this. Returning it verbatim put the raw
+    // <clikcode-title> tag on screen, and left the displayed answer different
+    // from the cleaned one that gets persisted; the transcript then treated
+    // the saved copy as new text and emitted the whole reply a second time.
+    // That is the duplicated response.
+    if (this.settled) return mode === 'replace' ? extractSessionTitle(text).text : text;
     this.buffer = mode === 'replace' ? text : this.buffer + text;
     const extracted = extractSessionTitle(this.buffer);
     if (extracted.title !== undefined || !this.couldStillOpen()) {
