@@ -4,6 +4,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { saveVersionMemo } from '../harness/transport/native/version-memo.js';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { stdout as output } from 'node:process';
@@ -48,6 +49,9 @@ export async function aiAccountProviders(): Promise<void> {
 
 /** Read-only compatibility report for every catalog entry. */
 export async function aiDoctor(): Promise<void> {
+  // One write for the whole sweep: every harness inspected here contributes a
+  // version memo, and flushing per harness would be 24 writes for one answer.
+  const flush = async (): Promise<void> => { await saveVersionMemo().catch(() => undefined); };
   const harnesses = await Promise.all(localRouter().AI_LOCAL_HARNESSES.map(async (harness) => {
     const inspection = await inspectNativeHarness(harness);
     return {
@@ -82,6 +86,7 @@ export async function aiDoctor(): Promise<void> {
       },
     };
   }));
+  await flush();
   emitJson({ adapterVersion: localRouter().AI_LOCAL_HARNESS_ADAPTER_VERSION, harnesses });
 }
 
