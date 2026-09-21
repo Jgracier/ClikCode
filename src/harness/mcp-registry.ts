@@ -15,11 +15,11 @@
  * Claude, Gemini and Grok), while Codex requires `--url <url>` for a remote
  * server or `-- <command> [args...]` for a local one.
  */
-import { captureNativeHarnessOutput } from './transport/native.js';
+import { captureNativeHarnessOutput } from './transport/native/command.js';
 import { nativeProfileEnvironment } from './transport/profile-environment.js';
 import { localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
-import { inspectNativeHarness } from './transport/native.js';
+import { inspectNativeHarness } from './transport/native/inspect.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './types.js';
 
 /** What a user asked ClikCode to make available, in the one shape both

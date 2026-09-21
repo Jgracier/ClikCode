@@ -2,7 +2,7 @@
  * outside ClikCode and that can be adopted. */
 
 import { randomUUID } from 'node:crypto';
-import { inspectNativeHarness } from '../../harness/transport/native.js';
+import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { discoverNativeSessions } from '../../session/discovery/cli-listing.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../../session/discovery/registry.js';
 import { type DiscoveredNativeSession } from '../../session/discovery/types.js';

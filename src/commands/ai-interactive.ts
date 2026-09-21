@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import chalk from 'chalk';
-import { runNativeHarnessCommand } from '../harness/transport/native.js';
+import { runNativeHarnessCommand } from '../harness/transport/native/command.js';
 import { spawnPortable as spawn } from '../harness/transport/spawn.js';
 import type { HarnessPrompter, HarnessSession, HarnessState, PickerOption } from '../harness/types.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';

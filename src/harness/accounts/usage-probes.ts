@@ -3,7 +3,7 @@
 
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { auggieUsageLabel } from '../auggie-usage.js';
-import { captureNativeHarnessOutput } from '../transport/native.js';
+import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLI_VERSION } from '../../cli/program.js';
 import type { HarnessSession, NativeUsageProbe } from '../types.js';

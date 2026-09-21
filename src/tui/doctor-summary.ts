@@ -1,7 +1,7 @@
 /** What `doctor` prints: the state of every harness, account and session in
  * one screen. */
 
-import { inspectNativeHarnessForPicker } from '../harness/transport/native.js';
+import { inspectNativeHarnessForPicker } from '../harness/transport/native/inspect.js';
 import type { HarnessState } from '../harness/types.js';
 import { compactPath } from '../harness/protocol/labels.js';
 import { harnessStatePath } from '../session/state/paths.js';
