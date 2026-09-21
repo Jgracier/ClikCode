@@ -24,6 +24,14 @@ describe('the composer has room to breathe', () => {
     expect(firstPush, 'the footer must open with a blank row').toContain("footer.push('')");
   });
 
+  it('gives a change of speaker a bigger break than a change of paragraph', async () => {
+    // Every gap was one row -- between messages and between the paragraphs
+    // inside them alike -- so a new question read as one more paragraph of
+    // the answer above it. Reported four times as "no buffer".
+    const source = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
+    expect(source).toContain("if (message.role === 'user' && index > 0) emit([''])");
+  });
+
   it('does not add that row while a turn is generating', async () => {
     // The generating band already carries a blank, budgeted into the height.
     // A second one there doubles the gap and pushes an answer row off screen.
