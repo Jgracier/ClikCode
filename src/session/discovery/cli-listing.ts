@@ -1,7 +1,8 @@
 /** Asking a vendor's own CLI to list its sessions, and parsing whatever it
  * prints -- a table for some, structured output for others. */
 
-import { captureNativeHarnessOutput, inspectNativeHarness } from '../../harness/transport/native.js';
+import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
+import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import type { AiLocalHarnessDefinition } from '../../harness/types.js';
 import { DiscoveredNativeSession } from './types.js';
 

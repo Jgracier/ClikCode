@@ -2,7 +2,7 @@
 
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
-import { inspectNativeHarness, inspectNativeHarnessForPicker } from '../../harness/transport/native.js';
+import { inspectNativeHarness, inspectNativeHarnessForPicker } from '../../harness/transport/native/inspect.js';
 import type { AiLocalHarnessDefinition, HarnessPrompter } from '../../harness/types.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';

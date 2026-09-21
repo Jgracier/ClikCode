@@ -1,7 +1,7 @@
 /** The vendor's own session manager, listed for `/sessions`. */
 
 import { open } from 'node:fs/promises';
-import { captureNativeHarnessOutput } from '../../harness/transport/native.js';
+import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
 import type { HarnessSession, HarnessState } from '../../harness/types.js';
 import { localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
 import { turnEnvironment } from '../../turn/runtime.js';

@@ -5,7 +5,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { captureNativeHarnessOutput } from '../transport/native.js';
+import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } from '../types.js';
 

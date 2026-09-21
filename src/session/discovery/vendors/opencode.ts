@@ -1,6 +1,6 @@
 /** OpenCode's stored conversations. */
 
-import { captureNativeHarnessOutput } from '../../../harness/transport/native.js';
+import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
 import type { AiLocalHarnessDefinition } from '../../../harness/types.js';
 import { ADOPTED_TRANSCRIPT_LIMIT } from '../transcript.js';
 

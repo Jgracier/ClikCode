@@ -5,7 +5,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { captureNativeHarnessOutput, inspectNativeHarness } from '../transport/native.js';
+import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { inspectNativeHarness } from '../transport/native/inspect.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, HarnessState } from '../types.js';
