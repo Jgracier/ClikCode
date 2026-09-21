@@ -23,13 +23,20 @@ describe('the activity log', () => {
   });
 
   it('keeps the spinner on a remaining parallel tool until all tools finish', () => {
-    let state = activityLifecyclePhase(new Map(), { kind: 'tool-start', id: 'one', label: 'read files' });
-    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-start', id: 'two', label: 'run tests' });
-    expect(state.phase).toBe('running run tests');
+    // The band says what KIND of work is running, not which file: the tool's
+    // own row is drawn in the conversation now, so repeating its label here
+    // said the same thing twice a line apart. Which tool it is still decides
+    // the verb and the colour, which is what this checks.
+    let state = activityLifecyclePhase(new Map(), { kind: 'tool-start', id: 'one', label: 'read files', category: 'read' });
+    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-start', id: 'two', label: 'run tests', category: 'run' });
+    expect(state.phase).toBe('running');
+    expect(state.category).toBe('run');
     state = activityLifecyclePhase(state.activeTools, { kind: 'thinking', label: 'reviewed output' });
-    expect(state.phase).toBe('running run tests');
-    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-done', id: 'two', label: 'run tests' });
-    expect(state.phase).toBe('running read files');
+    expect(state.phase).toBe('running');
+    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-done', id: 'two', label: 'run tests', category: 'run' });
+    // Falls back to the one still running, which is a read.
+    expect(state.phase).toBe('reading');
+    expect(state.category).toBe('read');
     state = activityLifecyclePhase(state.activeTools, { kind: 'tool-error', id: 'one', label: 'read files' });
     expect(state.phase).toBe('thinking');
   });
