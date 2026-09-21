@@ -84,7 +84,10 @@ function pathRuleMatches(specifier: string, resolved: ResolvedPath, scope: PathS
 }
 
 function hostOf(url: unknown): string | undefined {
-  try { return new URL(String(url)).hostname.toLowerCase(); } catch { return undefined; }
+  try { return new URL(String(url)).hostname.toLowerCase(); } catch {
+    // fail-open-ok: undefined is conservative here; a network allow rule cannot match an unparseable host
+    return undefined;
+  }
 }
 
 export interface PermissionRequest {

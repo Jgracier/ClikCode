@@ -166,6 +166,7 @@ function parseLockOwner(raw: string): LockOwner | undefined {
     return typeof parsed.pid === 'number' && typeof parsed.nonce === 'string' && typeof parsed.host === 'string'
       ? parsed as LockOwner : undefined;
   } catch {
+    // fail-open-ok: malformed lock metadata cannot identify a live owner; age still governs stale-lock handling
     return undefined;
   }
 }

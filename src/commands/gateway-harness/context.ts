@@ -83,7 +83,10 @@ async function readCapped(file: string, remaining: number): Promise<string | und
     const text = await fs.readFile(file, 'utf8');
     if (!text.trim()) return undefined;
     return Buffer.byteLength(text) > remaining ? `${Buffer.from(text).subarray(0, remaining).toString('utf8')}\n… [truncated]` : text;
-  } catch { return undefined; }
+  } catch {
+    // fail-open-ok: project instruction files are optional context, not required runtime state
+    return undefined;
+  }
 }
 
 /** User AGENTS.md, then AGENTS.md (or, failing that, CLAUDE.md) for each

@@ -65,7 +65,10 @@ function parseJsonDocument(text: string): JsonRecord[] {
       const parsed: unknown = JSON.parse(candidate);
       const records = recordsOf(parsed);
       return records.length ? records : undefined;
-    } catch { return undefined; } // fail-open-ok: caller falls through to the next strategy
+    } catch {
+      // fail-open-ok: malformed vendor output is not a JSON document; the caller tries framed JSON and JSONL next
+      return undefined;
+    }
   };
   const whole = attempt(text.trim());
   if (whole) return whole;
