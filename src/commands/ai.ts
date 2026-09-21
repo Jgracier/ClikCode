@@ -62,6 +62,13 @@ import {
   nativeHarnessTurnArgv, promptExceedsArgvLimit,
 } from './harness-runtime.js';
 import { reportStructuredLine } from './harness-structured-events.js';
+import {
+  copyToClipboard, decodeAttachmentPath, expandHomePath, osc52Sequence,
+  prepareAttachments, queueAttachment, resolveStandaloneAttachment,
+} from './session-attachments.js';
+import {
+  claimSession, markSessionLeftOpen, releaseSession, sessionClaimIsLive, SESSION_CLAIM_TTL_MS,
+} from './session-claim.js';
 import { appServerThreadOverrides, declaredOptionArgv, normalizeTurnUsage, type NormalizedTurnUsage } from './transport-options.js';
 import { existsSync } from 'node:fs';
 import {
@@ -205,63 +212,6 @@ export function requiresProviderHandoff(session: HarnessSession, targetHarness: 
   return hasConversationContent(session) && (session.route !== 'local' || session.nativeHarness !== targetHarness);
 }
 
-/** How long a claim survives without a heartbeat. Generous enough that a busy
- * turn never looks abandoned, short enough that a killed terminal frees its
- * conversation quickly. */
-export const SESSION_CLAIM_TTL_MS = 90_000;
-
-/** Is another terminal driving this conversation right now?
- *
- * A pid is only meaningful on the machine that recorded it, so a claim from a
- * different host is judged on its heartbeat alone. On this host a dead pid
- * releases the claim immediately, which is what makes a crashed terminal's
- * conversation available again without waiting out the TTL. */
-export function sessionClaimIsLive(
-  session: HarnessSession,
-  now = Date.now(),
-  host = hostname(),
-  pidAlive: (pid: number) => boolean = livePid,
-): boolean {
-  const claim = session.claim;
-  if (!claim) return false;
-  if (now - Date.parse(claim.heartbeatAt) > SESSION_CLAIM_TTL_MS) return false;
-  if (claim.host !== host) return true;
-  if (claim.pid === process.pid) return false;
-  return pidAlive(claim.pid);
-}
-
-function livePid(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means the process exists but belongs to another user.
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-export function claimSession(session: HarnessSession, now = new Date().toISOString()): void {
-  session.claim = {
-    pid: process.pid, host: hostname(),
-    startedAt: session.claim?.pid === process.pid ? session.claim.startedAt : now,
-    heartbeatAt: now,
-  };
-}
-
-/** Only the owner releases a claim, so a crash-recovered stale claim is never
- * cleared by a terminal that does not own the conversation. */
-export function releaseSession(session: HarnessSession): void {
-  if (session.claim?.pid === process.pid && session.claim.host === hostname()) delete session.claim;
-}
-
-/** Leaving the foreground application is not the same operation as closing a
- * conversation. Touch the current branch so it remains the default branch on
- * the next launch, without changing its provider-owned session identity. */
-export function markSessionLeftOpen(session: HarnessSession, now: string): void {
-  session.status = 'active';
-  delete session.closedAt;
-  session.updatedAt = now;
-}
 
 /** Create a portable child branch. The source keeps its provider-owned
  * identity; the child carries the ClikCode-owned transcript into its target. */
@@ -565,109 +515,6 @@ function captureProcess(command: string, args: readonly string[], cwd?: string, 
   });
 }
 
-/** OSC 52 asks the TERMINAL to set the clipboard, so it works over SSH where
- * no clipboard binary can reach the user's machine. tmux/screen need the
- * sequence wrapped in their passthrough envelope. */
-export function osc52Sequence(text: string, environment: NodeJS.ProcessEnv = process.env): string {
-  const payload = `\u001b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\u0007`;
-  if (environment.TMUX) return `\u001bPtmux;${payload.replace(/\u001b/g, '\u001b\u001b')}\u001b\\`;
-  if (/^screen/.test(environment.TERM ?? '')) return `\u001bP${payload}\u001b\\`;
-  return payload;
-}
-const OSC52_MAX_BYTES = 74_000; // common terminal limit is ~100 kB of base64
-
-async function copyToClipboard(text: string): Promise<'binary' | 'osc52'> {
-  const candidates: Array<[string, string[]]> = process.platform === 'darwin'
-    ? [['pbcopy', []]]
-    : process.platform === 'win32'
-      ? [['clip', []]]
-      : [['wl-copy', []], ['xclip', ['-selection', 'clipboard']], ['xsel', ['--clipboard', '--input']]];
-  // Over SSH a local clipboard binary would fill the REMOTE machine's clipboard.
-  const remote = Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY);
-  let lastError: unknown;
-  if (!remote) {
-    for (const [command, args] of candidates) {
-      try { await captureProcess(command, args, undefined, text); return 'binary'; } catch (error) { lastError = error; }
-    }
-  }
-  if (output.isTTY && Buffer.byteLength(text, 'utf8') <= OSC52_MAX_BYTES) {
-    output.write(osc52Sequence(text));
-    return 'osc52';
-  }
-  throw new Error(`No supported clipboard command is available${output.isTTY ? ' and the response is too large for the terminal clipboard (OSC 52)' : ''}${lastError instanceof Error && lastError.message ? `: ${lastError.message}` : '.'}`);
-}
-
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
-
-/** Decode a path as entered or dragged into a terminal without invoking a
- * shell. Drag-and-drop commonly adds quotes or backslashes before spaces. */
-export function decodeAttachmentPath(input: string): string {
-  let value = input.trim();
-  const quoted = value.match(/^(?:"([\s\S]*)"|'([\s\S]*)')$/);
-  if (quoted) value = quoted[1] ?? quoted[2] ?? '';
-  if (value.startsWith('file://')) {
-    try { return fileURLToPath(value); } catch { return value; }
-  }
-  // Backslashes are path separators on Windows, but terminal escape
-  // characters on the Unix platforms where drag-and-drop produces them.
-  return process.platform === 'win32' ? value : value.replace(/\\(.)/g, '$1');
-}
-
-export function expandHomePath(value: string, home = homedir()): string {
-  return value === '~' ? home : /^~[\\/]/.test(value) ? join(home, value.slice(2)) : value;
-}
-
-/** Resolve a standalone input only when it clearly looks like a file
- * reference and names an existing regular file. This preserves slash
- * commands while allowing absolute image paths such as /home/me/photo.png. */
-export async function resolveStandaloneAttachment(
-  input: string,
-  workspace: string,
-): Promise<string | undefined> {
-  const raw = input.trim();
-  const decoded = decodeAttachmentPath(raw);
-  const explicitlyQuoted = /^(?:"[\s\S]*"|'[\s\S]*')$/.test(raw);
-  const looksLikePath = raw.startsWith('file://')
-    || isAbsolute(decoded)
-    || decoded.startsWith('./')
-    || decoded.startsWith('../')
-    || decoded.startsWith('~/')
-    || explicitlyQuoted
-    || IMAGE_EXTENSIONS.has(extname(decoded).toLowerCase());
-  if (!looksLikePath) return undefined;
-  const expanded = expandHomePath(decoded);
-  const path = isAbsolute(expanded) ? resolve(expanded) : resolve(workspace, expanded);
-  try {
-    return (await stat(path)).isFile() ? path : undefined;
-  } catch {
-    // fail-open-ok: this decides whether typed text names an attachable file.
-    // A path that cannot be stat'd is simply not one, and the text is then
-    // treated as an ordinary prompt -- there is no failure to report.
-    return undefined;
-  }
-}
-
-async function queueAttachment(session: HarnessSession, path: string): Promise<void> {
-  const info = await stat(path);
-  if (!info.isFile()) throw new Error('Attachments must be files.');
-  if (info.size > 1024 * 1024) throw new Error('Attachments are limited to 1 MiB each.');
-  session.attachments = [...new Set([...(session.attachments ?? []), path])].slice(-10);
-}
-
-async function prepareAttachments(paths: readonly string[]): Promise<{ textContext: string; images: string[] }> {
-  const blocks: string[] = [];
-  const images: string[] = [];
-  let total = 0;
-  for (const path of paths) {
-    if (IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) { images.push(path); continue; }
-    const info = await stat(path);
-    if (info.size > 256 * 1024 || total + info.size > 512 * 1024) throw new Error('Text attachments are limited to 256 KiB each and 512 KiB per request.');
-    const content = await readFile(path, 'utf8');
-    total += Buffer.byteLength(content);
-    blocks.push(`\n<clikcode_attachment path="${path.replace(/"/g, '&quot;')}">\n${content}\n</clikcode_attachment>`);
-  }
-  return { textContext: blocks.join('\n'), images };
-}
 
 function renderSessionCard(session: HarnessSession, account?: string): string {
   const modelLabel = nativeModelLabel(session.nativeHarness, session.model);
