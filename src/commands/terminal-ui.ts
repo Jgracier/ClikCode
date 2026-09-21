@@ -193,6 +193,15 @@ const SWIPE_ROWS = 3;
  *
  * Every entry and exit goes through here now, so the flag cannot disagree with
  * the terminal about what mode it is in. */
+/** Raw mode is HELD for the session, and dropped only when the terminal is
+ * handed to something else -- close, suspend, suspend-to-shell.
+ *
+ * It used to be dropped at the end of every prompt, picker and palette and
+ * taken again at the start of the next: seven tcsetattr cycles a session on
+ * the pty, in the exact path where the bytes go missing. The diagnostic UI
+ * which receives the keyboard-hidden swipe on this user's phone sets raw mode
+ * once and never touches it again, and so does Claude Code. That churn is the
+ * clearest remaining difference between the two on the input side. */
 export function setTerminalRawMode(on: boolean): void {
   if (input.isTTY) input.setRawMode(on);
   terminalModes.rawMode = on;
@@ -1887,7 +1896,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaitingInput?.();
     this.stopWaitingInput = undefined;
     if (this.waitingLabel) this.resumeInput = undefined;
-    setTerminalRawMode(false);
     this.cancelWaiting = undefined;
     this.waitingSubmit = undefined;
     this.waitingCancelled = false;
@@ -3057,7 +3065,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         finished = true;
         this.paletteActive = false;
         stopInput();
-        setTerminalRawMode(false);
         output.write(`${popReadModes()}\u001b[?25h`);
         this.resumeInput = undefined;
         this.clearTransientNotice();
@@ -3079,7 +3086,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         finished = true;
         this.paletteActive = false;
         stopInput();
-        setTerminalRawMode(false);
         output.write(`${popReadModes()}\u001b[?25h`);
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
@@ -3285,7 +3291,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         finished = true;
         this.selecting = false;
         stopInput();
-        setTerminalRawMode(false);
         this.clearInteractiveFrame();
         resolveSelection(value);
       };
