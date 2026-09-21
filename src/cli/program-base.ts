@@ -1,15 +1,11 @@
 /**
- * The parts of the CLI that both entrypoints — src/index.ts (public, → dist/)
- * and src/index-admin.ts (internal operator build, → dist-admin/) — must share.
+ * The process-level pieces of the ClikCode program: the root command, the
+ * global flags, the first-run banner, crash capture and the error renderer.
  *
- * They previously carried 418 identical lines each, and had already drifted in a
- * way that mattered: index-admin's handleCommandError had lost the JSON-mode
- * branch and the --debug detail dump, so piping an admin command's failure
- * produced un-parseable prose while the public build produced JSON. Two copies
- * of a thing means one of them is wrong and nobody finds out; there is now one.
- *
- * This module deliberately contains NO admin imports, so it is safe on both
- * sides of the admin-wall documented in tsconfig.json.
+ * Extracted from the ClikDeploy CLI, where this file was shared with the
+ * deployment entrypoints. Nothing platform-specific survives that move: the
+ * lifecycle lock, the `--local` platform-URL shorthand and the ClikDeploy
+ * banner were all deployment-only and were dropped here.
  */
 
 import { createRequire } from 'node:module';
@@ -19,13 +15,11 @@ import { join } from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import type Conf from 'conf';
-import { CLI_API_URL_OVERRIDE_ENV, CONFIG_KEYS, normalizeApiUrl } from '../constants.js';
 import { toCliErrorMessage, toCliErrorDebugDetails, toCliErrorJson } from '../utils/error-message.js';
 import { isDebugMode } from '../utils/debug-mode.js';
 import { isJsonDefaultMode } from '../utils/output-mode.js';
 import { bindGlobalFlags } from '../utils/global-flags.js';
 import { emitJson } from '../utils/structured-output.js';
-import type { LifecycleLock } from '../utils/lifecycle-lock.js';
 import { restoreTerminal } from '../commands/terminal-restore.js';
 
 export const CLI_VERSION: string = (() => {
@@ -58,11 +52,6 @@ ${chalk.cyan(`╚${'═'.repeat(inner)}╝`)}
 `;
 }
 
-export const BANNER = bannerBox('⚡ ClikDeploy CLI', 'Deploy First, Configure Later');
-
-/** ClikCode is a free-standing product bundled in the same package for
- * distribution only; its first-run banner must say so, not show ClikDeploy's
- * deployment-platform branding. */
 export const CLIKCODE_BANNER = bannerBox('⚡ ClikCode', 'Local-first AI coding runtime');
 
 /**
@@ -98,37 +87,14 @@ export function handleCommandError(error: unknown): void {
   process.exitCode = 1;
 }
 
-function getCommandPath(command: Command): string {
-  const names: string[] = [];
-  let current: Command | null = command;
-  while (current) {
-    const n = current.name?.();
-    if (n) names.unshift(n);
-    current = current.parent ?? null;
-  }
-  return names.join(' ');
-}
-
-function isMutatingLifecycleCommand(commandPath: string): boolean {
-  const normalized = commandPath.toLowerCase();
-  return (
-    normalized.includes(' delete') ||
-    normalized.includes(' restart') ||
-    normalized.includes(' start') ||
-    normalized.includes(' stop') ||
-    normalized.includes(' reconnect')
-  );
-}
 
 /**
- * Build the root program: name/description/version, the four global options,
- * the banner + --local resolution preAction, the lifecycle-lock hooks, and the
- * process-level error safety net.
+ * Build the root program: name/description/version, the three global options,
+ * the first-run banner, and the process-level error safety net.
  */
-export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolean; banner?: string; standaloneClikCode?: boolean; version?: string } = {}): Command {
+export function buildBaseProgram(config: Conf, options: { banner?: string; version?: string } = {}): Command {
   const program = new Command();
-  const banner = options.banner ?? BANNER;
-  let activeLifecycleLock: LifecycleLock | null = null;
+  const banner = options.banner ?? CLIKCODE_BANNER;
 
   // Restore the terminal FIRST. The ClikCode UI runs in raw mode with the
   // cursor hidden, autowrap off and bracketed paste on; an error printed into
@@ -148,14 +114,14 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
   });
 
   program
-    .name('clikdeploy')
-    .description('Deploy apps with one command - autonomous by default, simple by design')
+    .name('clikcode')
+    .description('A local-first AI coding runtime')
     .version(options.version ?? CLI_VERSION)
     .option('--json', 'Render structured JSON output (default behavior; accepted for compatibility)')
     .option('--human', 'Render human-readable output (default is JSON)')
     .option(
       '--debug',
-      `On failure, also print the stack, HTTP status and response body${options.standaloneClikCode ? '' : ' (or set CLIKDEPLOY_DEBUG=1)'}`
+      'On failure, also print the stack, HTTP status and response body'
     )
     .hook('preAction', () => {
       // Hand commander's parse of --json/--human/--debug to the modules that
@@ -168,49 +134,7 @@ export function buildBaseProgram(config: Conf, options: { lifecycleLock?: boolea
         console.log(banner);
         config.set('seenBanner', true);
       }
-
-      // One-off URL override is `CLIKDEPLOY_API_URL` (see #495). `--local` is
-      // the localhost shorthand. `--api-url` is not a registered global flag.
-      if (!options.standaloneClikCode && opts.local) {
-        const localFromEnv = String(process.env.CLIKDEPLOY_LOCAL_API_URL || '').trim();
-        const localFromConfig = String(config.get(CONFIG_KEYS.LOCAL_API_URL) || '').trim();
-        process.env[CLI_API_URL_OVERRIDE_ENV] = normalizeApiUrl(
-          localFromEnv || localFromConfig || 'http://localhost:3000'
-        );
-      } else {
-        delete process.env[CLI_API_URL_OVERRIDE_ENV];
-      }
     });
-
-  if (!options.standaloneClikCode) {
-    program.option(
-      '--local',
-      'Use local platform URL for this command only (defaults to http://localhost:3000; override with CLIKDEPLOY_LOCAL_API_URL or `clikdeploy config localApiUrl <url>`)'
-    );
-  }
-
-  program.hook('preAction', async (_thisCommand, actionCommand) => {
-    if (options.lifecycleLock === false) return;
-    if (!isMutatingLifecycleCommand(getCommandPath(actionCommand))) return;
-    if (activeLifecycleLock) return;
-    // Loaded on demand: entrypoints that opt out (ClikCode) never evaluate the
-    // module, and apps/clikcode/scripts/build.mjs stubs it out of that bundle.
-    // Commander chains a promise-returning hook ahead of the action.
-    const { acquireLifecycleLock } = await import('../utils/lifecycle-lock.js');
-    activeLifecycleLock = acquireLifecycleLock('lifecycle');
-  });
-
-  program.hook('postAction', () => {
-    if (options.lifecycleLock === false) return;
-    if (!activeLifecycleLock) return;
-    activeLifecycleLock.release();
-    activeLifecycleLock = null;
-  });
-
-  process.on('exit', () => {
-    if (options.lifecycleLock === false) return;
-    if (activeLifecycleLock) activeLifecycleLock.release();
-  });
 
   return program;
 }
@@ -239,7 +163,7 @@ export function runProgram(program: Command, options: { showHelpWhenBare?: boole
   });
 
   if (!process.argv.slice(2).length && options.showHelpWhenBare !== false) {
-    console.log(options.banner ?? BANNER);
+    console.log(options.banner ?? CLIKCODE_BANNER);
     program.outputHelp();
   }
 

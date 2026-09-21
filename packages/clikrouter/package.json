@@ -1,23 +1,15 @@
 {
-  "name": "@clikdeploy/clikrouter",
+  "name": "@clikcode/router",
   "version": "0.1.0",
   "private": true,
   "description": "Provider-agnostic AI request normalization and router-selection logic: one dialect layer across ~40 providers (registry, request building, response extraction) plus the candidate-ranking algorithm. No storage, no credentials, no platform-specific business logic — those stay in the app that wires this up (see @clikdeploy/platform-domains's connectors for ClikDeploy's own Redis/Postgres-backed wiring: live latency/cost EWMAs, cooldowns, credential resolution, billing attribution).",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "//exports": [
-    "This package is consumed AS SOURCE (no build step), so `main` alone left every",
-    "SUBPATH unresolvable by Node: `@clikdeploy/clikrouter/ai-provider-registry` — which the",
-    "four platform-domains connectors shims re-export from — resolved to a bare directory",
-    "entry that does not exist. tsconfig `paths` hid that from tsc and from the Next build,",
-    "so the only place it surfaced was vitest, as a COLLECTION failure: every suite whose",
-    "import graph reached the AI-router surface was dropped without running. That was",
-    "patched three times, once per consuming vitest.config.ts, and the two configs nobody",
-    "thought of (packages/ai-assistant, packages/domain-core) silently lost 49 tests.",
-    "An `exports` map fixes it once, where the defect is, and needs no alias anywhere.",
-    "`./*` maps to `./src/*.ts` to mirror the tsconfig `paths` entry every consumer already",
-    "declares (`@clikdeploy/clikrouter/*` -> `../clikrouter/src/*`), so the two resolvers",
-    "agree by construction instead of by everyone remembering to update both."
+    "Consumed AS SOURCE (no build step). `main` alone left SUBPATHS unresolvable by Node",
+    "(`@clikcode/router/ai-provider-registry`), which surfaced only in vitest, as a silent",
+    "COLLECTION failure. `./*` -> `./src/*.ts` mirrors the tsconfig `paths` entry so the",
+    "two resolvers agree by construction."
   ],
   "exports": {
     ".": "./src/index.ts",
@@ -57,9 +49,9 @@
     "ai": "^7.0.48"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "26.1.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
   },
   "engines": {
     "node": ">=18.0.0"

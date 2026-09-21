@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_LOCAL_HARNESSES } from '@clikdeploy/clikrouter/ai-local-harness';
+import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 import { nativeResponseUpdate } from './harness-event-adapters.js';
 import { harnessTurnTransport } from './harness-transport.js';
 import type { AiLocalHarnessDefinition } from './types.js';

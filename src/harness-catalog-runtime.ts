@@ -20,7 +20,7 @@ import type { AiRouterRuntime } from './commands/types.js';
 // construction, so the two entries cannot drift apart. It also matters that ALL
 // catalog calls go through one bundle: registerCustomHarnesses() keeps module
 // state, and a second copy inside ai-router-runtime.cjs would not see it.
-export * from '@clikdeploy/clikrouter/ai-local-harness';
+export * from '@clikcode/router/ai-local-harness';
 
 /** What dist/harness-catalog.cjs provides: everything except model streaming. */
 export type HarnessCatalogRuntime = Omit<AiRouterRuntime, 'streamAiChatTurn'>;

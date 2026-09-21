@@ -1,7 +1,7 @@
 {
-  "name": "@clikdeploy/clikcode",
+  "name": "clikcode",
   "version": "1.0.0",
-  "description": "ClikCode local-first coding-agent harness",
+  "description": "ClikCode — a local-first AI coding runtime",
   "type": "module",
   "bin": {
     "clikcode": "./dist/index.js"
@@ -16,32 +16,38 @@
     "build:analyze": "node scripts/build.mjs --analyze",
     "build:strict": "node scripts/build.mjs --analyze --strict",
     "build:no-strict": "node scripts/build.mjs --analyze --no-strict",
-    "type-check": "tsc --noEmit -p tsconfig.json",
-    "test": "pnpm run build && node dist/index.js --help && node dist/index.js --human doctor",
+    "type-check": "tsc --noEmit -p tsconfig.json && pnpm --filter @clikcode/router type-check",
+    "test": "vitest run",
+    "test:router": "pnpm --filter @clikcode/router test",
+    "test:all": "pnpm run test && pnpm run test:router",
+    "test:smoke": "pnpm run build && node dist/index.js --help && node dist/index.js --human doctor",
     "test:pack": "node scripts/test-pack.mjs",
     "prepack": "node scripts/build.mjs"
   },
   "//dependencies": [
-    "Only packages dist/ imports at RUNTIME belong in `dependencies`; scripts/build.mjs fails",
-    "the build if one is missing and warns about extras. chalk, commander, conf, cross-spawn",
-    "and marked are inlined into dist/index.js, and @clikdeploy/clikrouter (a private, source-",
-    "only workspace package) is bundled into dist/*.cjs, so all of those are devDependencies.",
-    "The build is --strict by default: a deployment-CLI source (and with it axios, inquirer,",
-    "ora) landing in dist/index.js fails the build. Pass --no-strict to investigate one."
+    "EMPTY ON PURPOSE, and verified by the build: `dependencies` holds only what dist/",
+    "imports at RUNTIME, and scripts/build.mjs fails if one is missing and warns about",
+    "extras. chalk, commander, conf, cross-spawn and marked are inlined into dist/index.js,",
+    "and @clikcode/router (a private, source-only workspace package) is bundled into",
+    "dist/*.cjs, so all of those are devDependencies. @basetenlabs/performance-client is a",
+    "native addon that must never be bundled (FORCE_EXTERNAL in the build); @ai-sdk/baseten",
+    "no longer imports it, so it is a devDependency pinned for the day it comes back — at",
+    "which point build:strict fails until it is moved here."
   ],
-  "dependencies": {
-    "@basetenlabs/performance-client": "0.0.10"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "@clikdeploy/clikrouter": "file:../../packages/clikrouter",
-    "@types/node": "catalog:",
+    "@basetenlabs/performance-client": "0.0.10",
+    "@clikcode/router": "workspace:*",
+    "@types/cross-spawn": "6.0.6",
+    "@types/node": "26.1.2",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
     "conf": "^15.1.0",
     "cross-spawn": "7.0.6",
     "esbuild": "0.28.1",
     "marked": "15.0.12",
-    "typescript": "catalog:"
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
   },
   "engines": {
     "node": ">=22.12.0"
