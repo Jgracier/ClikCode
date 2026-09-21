@@ -16,7 +16,8 @@
  * server or `-- <command> [args...]` for a local one.
  */
 import { captureNativeHarnessOutput } from './transport/native.js';
-import { localHarnessCapabilityManifest, nativeProfileEnvironment } from './transport/native-protocol.js';
+import { nativeProfileEnvironment } from './transport/profile-environment.js';
+import { localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
 import { inspectNativeHarness } from './transport/native.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './types.js';

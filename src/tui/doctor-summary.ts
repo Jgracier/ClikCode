@@ -3,7 +3,7 @@
 
 import { inspectNativeHarnessForPicker } from '../harness/transport/native.js';
 import type { HarnessState } from '../harness/types.js';
-import { compactPath } from '../harness/transport/native-protocol.js';
+import { compactPath } from '../harness/protocol/labels.js';
 import { harnessStatePath } from '../session/state/paths.js';
 import { allLocalHarnesses, harnessCanRunTurns } from '../runtime/lazy-bridge.js';
 import { integrationLabel } from '../session/options.js';

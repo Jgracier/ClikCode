@@ -18,7 +18,7 @@ import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
 import { readState } from '../session/state/read.js';
 import { accountView, deviceManifest } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
-import { streamLocalAiTurn } from '../harness/transport/native-protocol.js';
+import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/types.js';
 
 async function acquireRuntimeLock(lockPath: string, runtimePath: string): Promise<FileHandle> {

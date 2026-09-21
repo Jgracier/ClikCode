@@ -1,10 +1,10 @@
 /** Provider event envelopes terminate here. The orchestrator and terminal UI
  * consume only normalized response updates, never vendor JSON shapes. */
 import type { AiLocalHarnessDefinition } from '../types.js';
-import {
-  nativeActivityPhaseFromValue, nativeSessionIdsFromValues, nativeUsageFromValue, parseNativeActivityEventsFromValue,
-  type NativeActivityEvent, type NativeTurnUsage,
-} from '../transport/native-protocol.js';
+import { parseNativeActivityEventsFromValue, type NativeActivityEvent } from '../protocol/activity-events.js';
+import { nativeActivityPhaseFromValue } from '../protocol/activity-line.js';
+import { nativeSessionIdsFromValues } from '../protocol/session-ids.js';
+import { nativeUsageFromValue, type NativeTurnUsage } from '../protocol/turn-usage.js';
 
 export interface NativeResponseUpdate { text: string; mode: 'append' | 'replace' }
 type Json = Record<string, unknown>;

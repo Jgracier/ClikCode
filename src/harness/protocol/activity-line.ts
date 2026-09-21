@@ -1,0 +1,77 @@
+/** One activity line as it appears on screen, and the phase label the
+ * spinner shows beside it. */
+
+import chalk from 'chalk';
+import type { AiLocalHarnessDefinition, HarnessActivityEvent } from '../types.js';
+import { ACTIVITY_PREVIEW_LINES } from './activity-events.js';
+import { CLAUDE_SHAPED, OPENCODE_SHAPED, asRecord } from './json-lines.js';
+
+export function renderActivityLine(event: HarnessActivityEvent): string[] {
+  if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
+  // The tool's own label, with nothing prepended to it. A status word in front
+  // of every row ("done", "edit", "tool") restated what the row already said by
+  // existing -- a finished tool is reported when it finishes -- and pushed the
+  // call itself two words to the right on every line. Failure is the one state
+  // a label cannot carry on its own, so that, and only that, reads differently.
+  // Failure is the exception, and it is a suffix rather than a prefix: colour
+  // alone would carry it only on a terminal that has colour, and a piped or
+  // NO_COLOR transcript would read a failed call as a successful one.
+  const summary = `  ${event.kind === 'tool-error'
+    ? `${chalk.red(event.label)} ${chalk.red('failed')}`
+    : chalk.dim(event.label)}`;
+  if (!event.diff) {
+    const output = event.output ?? [];
+    const visible = output.slice(0, ACTIVITY_PREVIEW_LINES);
+    const hidden = output.length - visible.length;
+    return [summary, ...visible.map((line) => `    ${chalk.dim(line)}`),
+      ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : [])];
+  }
+  // Budget both halves of an edit rather than filling it from the top: a large
+  // deletion would otherwise consume the whole preview and hide every added
+  // line, which is the half that says what the edit actually did.
+  const { removed, added } = event.diff;
+  const removedShown = Math.min(removed.length, Math.max(
+    Math.floor(ACTIVITY_PREVIEW_LINES / 2), ACTIVITY_PREVIEW_LINES - added.length,
+  ));
+  const addedShown = Math.min(added.length, ACTIVITY_PREVIEW_LINES - removedShown);
+  const hidden = (removed.length - removedShown) + (added.length - addedShown);
+  return [
+    summary,
+    ...removed.slice(0, removedShown).map((line) => `    ${chalk.red(`- ${line}`)}`),
+    ...added.slice(0, addedShown).map((line) => `    ${chalk.green(`+ ${line}`)}`),
+    ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : []),
+  ];
+}
+
+export function nativeActivityPhaseFromValue(harness: AiLocalHarnessDefinition, parsed: unknown): 'generating response' | undefined {
+  const value = asRecord(parsed);
+  if (!value) return undefined;
+  const type = String(value.type ?? '');
+  const itemType = String(asRecord(value.item)?.type ?? '');
+  if (harness.command === 'antigravity' && value.event === 'step_update') {
+    const step = asRecord(value.step_update);
+    if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string') return 'generating response';
+  }
+  if (/assistant|agent_message/.test(itemType) && /started|delta|completed/.test(type)) return 'generating response';
+  if (type === 'assistant') {
+    // A Claude-shaped assistant record that only carries tool calls (or belongs
+    // to a subagent) is not the reply being written.
+    if (!CLAUDE_SHAPED.has(harness.command)) return 'generating response';
+    if (typeof value.parent_tool_use_id === 'string' && value.parent_tool_use_id) return undefined;
+    const content = asRecord(value.message)?.content;
+    return !Array.isArray(content) || content.some((part) => asRecord(part)?.type === 'text') ? 'generating response' : undefined;
+  }
+  if (OPENCODE_SHAPED.has(harness.command) && type === 'text') return 'generating response';
+  return undefined;
+}
+
+export function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText: string): 'generating response' | undefined {
+  const candidate = lineText.trim();
+  if (candidate[0] !== '{') return undefined;
+  try {
+    return nativeActivityPhaseFromValue(harness, JSON.parse(candidate));
+  } catch {
+    // fail-open-ok: non-JSON output is ordinary assistant text, not a structured result envelope.
+    return undefined;
+  }
+}

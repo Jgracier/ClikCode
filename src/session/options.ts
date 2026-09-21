@@ -14,10 +14,8 @@ import chalk from 'chalk';
 import { commonControlFor, optionIdsForControl } from '../harness/options.js';
 import { harnessTierRank } from '../runtime/lazy-bridge.js';
 import { nativeModelLabel } from '../harness/account-data.js';
-import {
-  harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsPermissionMode,
-  localHarnessCapabilityManifest, sessionProviderLabel,
-} from '../harness/transport/native-protocol.js';
+import { sessionProviderLabel } from '../harness/protocol/labels.js';
+import { harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import type {
   AiHarnessAccount, AiHarnessOptionDefinition, AiHarnessPermissionMode,
   AiLocalHarnessDefinition, HarnessDefaultSettings, HarnessSession, PickerOption,

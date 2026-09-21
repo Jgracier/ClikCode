@@ -9,7 +9,7 @@
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
 import { TERMINAL } from '../tui/active-terminal.js';
-import { compactPath, sessionProviderLabel } from './transport/native-protocol.js';
+import { compactPath, sessionProviderLabel } from './protocol/labels.js';
 import { nativeModelLabel } from './account-data.js';
 import type { HarnessSession } from './types.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';

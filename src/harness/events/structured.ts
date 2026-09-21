@@ -18,7 +18,7 @@
  * performed, because they belong to the turn loop and not to a line parser.
  */
 import { parseHarnessLine } from './adapters.js';
-import { nativeSelfReportFromLine, type NativeSelfReport } from '../transport/native-protocol.js';
+import { nativeSelfReportFromLine, type NativeSelfReport } from '../protocol/turn-usage.js';
 import type { HarnessTurnObserver } from './turn-observer.js';
 import type { AiLocalHarnessDefinition } from '../types.js';
 import type { HarnessLineError } from './adapters.js';
