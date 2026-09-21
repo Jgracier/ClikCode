@@ -115,8 +115,15 @@ export async function refreshPlaceholderAccountLabels(state: HarnessState): Prom
     .filter((item): item is { account: AiHarnessAccount; harness: AiLocalHarnessDefinition } =>
       Boolean(item.harness) && isPlaceholderAccountLabel(item.account.label, item.harness!));
   if (!candidates.length) return false;
-  const derived = await Promise.all(candidates.map(({ account, harness }) =>
-    deriveAccountLabel(harness, account.nativeProfile?.path).catch(() => undefined)));
+  // Never install anything to answer a naming question. deriveAccountLabel
+  // asks some harnesses (Claude) by running them, and captureNativeHarnessOutput
+  // installs a missing binary on the way -- so without this, opening /account
+  // could npm-install a harness the user has an old account record for but
+  // has not chosen. Installing is for choosing a provider, nothing else.
+  const installed = await Promise.all(candidates.map(({ harness }) =>
+    inspectNativeHarness(harness, 800).then((item) => item.installed).catch(() => false)));
+  const derived = await Promise.all(candidates.map(({ account, harness }, index) =>
+    installed[index] ? deriveAccountLabel(harness, account.nativeProfile?.path).catch(() => undefined) : undefined));
   let changed = false;
   for (const [index, { account, harness }] of candidates.entries()) {
     const label = derived[index];

@@ -130,7 +130,21 @@ export function activityLifecyclePhase(
 
 export function transientAssistantRequired(
   liveResponse: string, waiting: boolean, transcriptLength: number, entries: readonly ActivityEntry[],
+  /** The last persisted message, when it is an assistant reply and no turn is
+   * in flight. The finished answer, in other words. */
+  settledAssistant?: string,
 ): boolean {
+  // The live slot and the transcript hold the same answer for a moment at the
+  // end of a turn: checkpoint.complete() folds the response into
+  // session.messages, but liveResponse is only cleared by the next
+  // authoritative render(). Any paint in between -- stopWaiting() does one --
+  // drew the reply twice, once from the transcript and once from the stream.
+  // Drawing a live copy of an answer that is already saved is never right.
+  if (liveResponse && !waiting && settledAssistant !== undefined) {
+    const live = liveResponse.trim();
+    const settled = settledAssistant.trim();
+    if (live && (settled === live || settled.endsWith(live))) return false;
+  }
   return Boolean(liveResponse || (waiting && entries.some((entry) =>
     entry.anchor === transcriptLength && entry.responseOffset !== undefined)));
 }

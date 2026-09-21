@@ -44,6 +44,17 @@ export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u0
 
 export const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l';
 
+/** The opening form, used once when the program takes the screen. The `?1006l`
+ * before `?1006h` is deliberate and comes from the bare script that receives
+ * the gesture on this user's phone when ClikCode does not: it makes SGR
+ * reporting a transition rather than a no-op, so a client deciding how to
+ * route touches has something to notice.
+ *
+ * It exists as a named constant so that every enable site is greppable through
+ * one name. Spelled out inline, this one escaped the first pass at gating the
+ * modes behind SELECTION_MODE, and /select did nothing as a result. */
+export const OPENING_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
+
 /** Selection mode: the mouse handed back to the terminal.
  *
  * Any-event tracking (?1003h) is what makes a swipe scroll the transcript --
