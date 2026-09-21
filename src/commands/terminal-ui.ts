@@ -1989,8 +1989,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           id: entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`,
           done: true, responseOffset: entry.responseOffset, lines: activityRows(entry.lines, entry.event?.category),
         }));
+      // Two rows on each side, the same buffer the transcript gives every
+      // other message -- a steer is a message the user wrote mid-answer, and
+      // with one row it read as part of the paragraph above it.
       const steerRows = (text: string): string[] => [
-        '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '',
+        '', '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '', '',
       ];
       // A steer is drawn live, and sessionTranscriptMessages() also
       // materializes it as a real user message; only one of the two may reach
@@ -2134,7 +2137,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const status = message.queueState === 'steered' ? 'steered into active turn'
         : message.queueState === 'sending' ? 'submitting…'
           : message.queueState === 'error' ? 'not sent · restored for editing' : 'queued for next turn';
-      liveConversation.push('', ...messageRows(message.content, userMarker), `  ${chalk.dim(`↳ ${status}`)}`);
+      // Same two-row buffer the transcript gives every other message. A
+      // message submitted mid-turn is still a message the user wrote, and
+      // with a single leading row it read as pasted onto the end of the
+      // answer above it.
+      liveConversation.push('', '', ...messageRows(message.content, userMarker), `  ${chalk.dim(`↳ ${status}`)}`);
     }
     const conversationLines = liveConversationLines(liveConversation, true);
     const meta = this.statusText();
