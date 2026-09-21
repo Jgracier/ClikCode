@@ -283,6 +283,11 @@ const NATIVE_USAGE_CACHE_TTL_MS = 30_000;
  * that a rate-limited endpoint keeps being hammered by the retry itself. */
 const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
 
+/** The Claude probe runs a real (tiny) turn, so it waits on the model, not on
+ * a local file: measured at ~1.7s to the rate_limit_event, with room for a
+ * slow link. The other probes read locally and use a tighter 8s. */
+const NATIVE_USAGE_PROBE_TIMEOUT_MS = 20_000;
+
 /** Per-harness live usage probe. Each vendor CLI exposes quota/cost through a different
  * surface (or none at all); adding a harness here is the only step needed to light up
  * its usage footer, everything else (caching, dispatch, rendering) is shared. */
@@ -431,73 +436,61 @@ export async function codexUsageReading(_session: HarnessSession, environment: R
   return codexRateLimitsReading(response?.rateLimits);
 }
 
-/** Claude Code has no public CLI flag or subcommand for this (confirmed:
- * `--help` and `doctor` both show nothing), but the same data Claude Code's
- * own interactive UI displays is one authenticated call away: its own OAuth
- * token — already sitting in ~/.claude/.credentials.json, refreshed by
- * Claude Code's own background daemon — is accepted by
- * `/api/oauth/usage`, the private endpoint its UI calls internally.
- * Verified live: real five_hour/seven_day utilization percentages, matching
- * what the interactive session shows. This reads an already-authenticated
- * user's own token to display their own account's own usage, the same data
- * the vendor's own client already shows them — not a new grant of access. */
+/** Claude Code's quota, asked of Claude Code, for one specific account.
+ *
+ * The CLI exposes no usage flag or subcommand (checked: `claude --help` lists
+ * agents/attach/auth/auto-mode/doctor/gateway/import/install/logs/mcp/plugin
+ * and nothing for usage). What it does do is report both windows on the turn
+ * stream, so the probe is the smallest possible turn -- and because it runs
+ * under this account's own CLAUDE_CONFIG_DIR, the figure is that account's,
+ * not whichever one happens to own ~/.claude.
+ *
+ * Measured against the live CLI: `system` at +0.6s, `assistant` and
+ * `rate_limit_event` together at +1.7s. The event lands after the model has
+ * already answered, so stopping early saves nothing -- the child is killed
+ * once the figure is in hand purely to avoid waiting on teardown.
+ *
+ * This costs a token round-trip to measure a token budget, which is why only
+ * an explicit request runs it: opening the account picker, or `/usage`. Every
+ * ordinary paint reads what the last real turn already reported.
+ */
 export async function claudeUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
   return (await claudeUsageReading(session, environment))?.label;
 }
 
 export async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
-  // Real bug, not a hypothetical: this ignored both its parameters entirely
-  // and always read the default ~/.claude path, so every Claude Code
-  // account -- including genuinely isolated ones under their own
-  // CLAUDE_CONFIG_DIR (see the profileEnv on its catalog entry) -- reported
-  // the same, first account's usage. The caller (nativeUsageLabel) already
-  // computes the right environment per account; this just wasn't using it.
-  let token: string | undefined;
-  try {
-    const configDir = environment.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-    const raw = await readFile(join(configDir, '.credentials.json'), 'utf8');
-    const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
-    token = typeof parsed.claudeAiOauth?.accessToken === 'string' ? parsed.claudeAiOauth.accessToken : undefined;
-  } catch {
-    // fail-open-ok: this probes for an optional vendor credential file. Absent
-    // or unreadable means this account publishes no usage window, which is a
-    // real answer -- usage is decoration, never a gate on sending a turn.
-    return undefined;
-  }
-  if (!token) return undefined;
-  try {
-    const response = await fetch('https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1', {
-      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+  const binary = harnessBinary('claude');
+  return new Promise<UsageReading | undefined>((resolveUsage) => {
+    const child = spawn(binary, ['-p', 'hi', '--verbose', '--output-format', 'stream-json'], {
+      stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...environment },
     });
-    // The profile holds its own copy of the OAuth token; Claude Code refreshes
-    // it whenever it runs. A 401 here therefore does NOT mean the user must
-    // sign in again -- the very next turn refreshes the token and reports usage
-    // on its own stream. Saying "needs re-auth" sent people to log in to an
-    // account that was working.
-    if (response.status === 401 || response.status === 403) return { windows: [], label: 'usage refreshes on next turn' };
-    // The account is briefly over its own quota-endpoint budget. That is a
-    // fact about this probe, not about the account's usage, and publishing it
-    // as a reading put "usage rate limited" on the shared account record --
-    // where every open terminal read it, for the whole cache window, while
-    // the harness's own stream was reporting the real figure for free on
-    // every turn. A probe that could not read reports that it could not read:
-    // the caller carries the last good figure through it.
-    if (response.status === 429) return undefined;
-    if (!response.ok) return undefined;
-    const body = await response.json() as {
-      five_hour?: { utilization?: number; resets_at?: unknown; resetsAt?: unknown };
-      seven_day?: { utilization?: number; resets_at?: unknown; resetsAt?: unknown };
+    let buffer = '';
+    let settled = false;
+    const finish = (value?: UsageReading): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      terminatePortable(child);
+      resolveUsage(value);
     };
-    return usageReading([
-      usageWindow('5h', body.five_hour?.utilization, body.five_hour?.resets_at ?? body.five_hour?.resetsAt),
-      usageWindow('weekly', body.seven_day?.utilization, body.seven_day?.resets_at ?? body.seven_day?.resetsAt),
-    ]);
-  } catch {
-    // fail-open-ok: an optional quota lookup over the network. Offline, rate
-    // limited, or a changed vendor shape all mean the same thing to the caller
-    // -- no usage label to show -- and must never block or fail a turn.
-    return undefined;
-  }
+    const timer = setTimeout(() => finish(), NATIVE_USAGE_PROBE_TIMEOUT_MS);
+    child.stdout!.setEncoding('utf8');
+    child.stdout!.on('data', (chunk: string) => {
+      buffer += chunk;
+      let newline = buffer.indexOf('\n');
+      while (newline !== -1) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        const reading = claudeStreamReading(line);
+        if (reading?.label) { finish(reading); return; }
+        newline = buffer.indexOf('\n');
+      }
+    });
+    // fail-open-ok: a probe that cannot run reports no figure. Usage is
+    // decoration and must never block or fail a turn.
+    child.once('error', () => finish());
+    child.once('exit', () => finish());
+  });
 }
 
 /** Claude Code reports both quota windows on its own stream-json output, on
@@ -507,11 +500,12 @@ export async function claudeUsageReading(_session: HarnessSession, environment: 
  *     "unifiedWindows":{"five_hour":{"utilization":0.25,"resetsAt":...},
  *                       "seven_day":{"utilization":0.04,"resetsAt":...}}}}
  *
- * That is the same figure claudeUsageProbe pays an HTTP request for, arriving
- * free on a stream already being parsed. It matters because the OAuth usage
- * endpoint is a per-ACCOUNT budget: several open chats polling it exhausted it
- * between them, which is what produced "usage rate limited" in the status bar.
- * Utilization here is a 0..1 fraction, unlike the endpoint's 0..100. */
+ * This is the only source for Claude Code's quota. It used to be a faster
+ * second path beside an authenticated call to the vendor's own usage
+ * endpoint; that call is gone, and not only on principle -- the endpoint is a
+ * per-ACCOUNT budget, and several open chats polling it exhausted it between
+ * them, which is what put "usage rate limited" in the status bar.
+ * Utilization here is a 0..1 fraction, where the endpoint used 0..100. */
 function claudeStreamReading(lineText: string): UsageReading | undefined {
   if (!lineText.includes('rate_limit_event')) return undefined;
   let parsed: unknown;
@@ -709,7 +703,12 @@ export async function nativeUsageReading(
   session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
 ): Promise<UsageReading | undefined> {
   const probe = session.nativeHarness ? NATIVE_USAGE_PROBES[session.nativeHarness] : undefined;
-  if (!probe) return undefined;
+  // A harness that reports on its own turn stream has a usage source even with
+  // no probe behind it, and its readings are already in the cache below. This
+  // gate used to be `if (!probe) return undefined`, which meant removing a
+  // probe also made every reading that harness had already given unreadable.
+  const reportsOnStream = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
+  if (!probe && !reportsOnStream) return undefined;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const cacheKey = usageCacheKey(session.nativeHarness, account?.id, session.nativeSessionId);
   const cached = nativeUsageCache.get(cacheKey);
@@ -748,9 +747,11 @@ export async function nativeUsageReading(
   }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const structured = session.nativeHarness ? NATIVE_USAGE_READING_PROBES[session.nativeHarness] : undefined;
-  const reading: UsageReading | undefined = structured && structured.label === probe
-    ? await structured.reading(session, environment).catch(() => undefined)
-    : await probe(session, environment).then((label) => (label === undefined ? undefined : { windows: [], label })).catch(() => undefined);
+  const reading: UsageReading | undefined = !probe
+    ? undefined
+    : structured && structured.label === probe
+      ? await structured.reading(session, environment).catch(() => undefined)
+      : await probe(session, environment).then((label) => (label === undefined ? undefined : { windows: [], label })).catch(() => undefined);
   // Carry the last known figure through a failure rather than blanking it --
   // but never past its own reset, when it stops describing anything.
   const carried = entry && usageReadingIsCurrent(entry) ? entry : undefined;
@@ -787,6 +788,13 @@ function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, ha
  * any, or a bare stand-in otherwise — codexUsageProbe ignores the session
  * argument entirely, and a stand-in with no nativeSessionId simply yields no
  * OpenCode label rather than a wrong one. */
+/** Whether anything can ever produce a usage figure for this harness: a probe
+ * we can run, or a turn stream it reports on itself. The account picker and
+ * the status line both ask this before showing a usage column at all. */
+export function harnessReportsUsage(command: string): boolean {
+  return NATIVE_USAGE_PROBES[command] !== undefined || NATIVE_STREAM_USAGE_READINGS[command] !== undefined;
+}
+
 export async function accountUsageLabel(
   account: AiHarnessAccount, state: HarnessState, options: { network?: boolean } = {},
 ): Promise<string | undefined> {
@@ -798,7 +806,7 @@ export async function accountUsageReading(
 ): Promise<UsageReading | undefined> {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
-  if (!harness || !NATIVE_USAGE_PROBES[harness.command]) return undefined;
+  if (!harness || !harnessReportsUsage(harness.command)) return undefined;
   return nativeUsageReading(accountPseudoSession(account, state, harness.command), state, options);
 }
 
@@ -807,7 +815,7 @@ export async function accountUsageReading(
 export function cachedAccountUsageLabel(account: AiHarnessAccount, state: HarnessState): string | undefined {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
-  if (!harness || !NATIVE_USAGE_PROBES[harness.command]) return undefined;
+  if (!harness || !harnessReportsUsage(harness.command)) return undefined;
   void state;
   const cached = nativeUsageCache.get(usageCacheKey(harness.command, account.id));
   const ttl = cached?.failed ? NATIVE_USAGE_FAILURE_TTL_MS : NATIVE_USAGE_CACHE_TTL_MS;

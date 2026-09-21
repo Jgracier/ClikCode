@@ -95,29 +95,22 @@ export async function aiDoctor(): Promise<void> {
 export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
   if (harness.command === 'claude') {
     try {
-      const path = join(profilePath ?? join(homedir(), '.claude'), '.credentials.json');
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as { claudeAiOauth?: { accessToken?: string } };
-      const token = parsed.claudeAiOauth?.accessToken;
-      if (!token) return undefined;
-      // subscriptionType duplicated the provider's own display name right
-      // next to itself ("Claude Code (pro)" sitting beside "Claude Code" in
-      // the status line and picker) without actually distinguishing one
-      // account from another with the same plan. /api/oauth/profile is a
-      // real endpoint (verified directly: returns this exact token's own
-      // account.email) -- and since the token itself is already confirmed
-      // profile-scoped (it comes from this account's own, possibly
-      // CLAUDE_CONFIG_DIR-isolated, credentials file), the email it returns
-      // is guaranteed specific to *this* account, not shared across every
-      // Claude Code account the way a file outside that isolated directory
-      // (~/.claude.json, sibling to the redirectable ~/.claude/ folder --
-      // checked, and its own OAuth path isn't confirmed to move with
-      // CLAUDE_CONFIG_DIR) would have been.
-      const response = await fetch('https://api.anthropic.com/api/oauth/profile', {
-        headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
-      });
-      if (!response.ok) return undefined;
-      const body = await response.json() as { account?: { email?: string } };
-      return typeof body.account?.email === 'string' && body.account.email ? body.account.email : undefined;
+      // Asked of the harness, about the account it is running as.
+      // `claude auth status` prints JSON carrying this profile's own email
+      // (verified live: loggedIn, authMethod, configDirectory, email,
+      // orgName, subscriptionType). The catalog already declares this argv as
+      // statusArgv, and running it under the account's CLAUDE_CONFIG_DIR is
+      // what makes the answer that account's rather than whichever one owns
+      // ~/.claude.
+      //
+      // Earlier versions of this read a credential file directly and then
+      // called the vendor's /api/oauth/profile endpoint. The harness answers
+      // the same question itself, so neither is needed.
+      const status = await captureNativeHarnessOutput(
+        harness, ['auth', 'status'], nativeProfileEnvironment(profilePath ? { env: 'CLAUDE_CONFIG_DIR', path: profilePath } : undefined), 15_000,
+      );
+      const parsed = JSON.parse(status) as { email?: unknown };
+      return typeof parsed.email === 'string' && parsed.email ? parsed.email : undefined;
     } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
   }
   if (harness.command === 'codex') {
