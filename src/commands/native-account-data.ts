@@ -123,36 +123,53 @@ export async function nativeModelCatalog(
   return result;
 }
 
+/** Model identifiers in whatever a vendor's `models` command printed.
+ *
+ * JSON first (any `id`/`model`/`modelId`/`slug` at any depth), then a line
+ * reading, because several CLIs print a human list and nothing else. */
+export function discoveredModelsFrom(raw: string): string[] {
+  const models = new Set<string>();
+  const add = (value: unknown): void => {
+    if (typeof value !== 'string') return;
+    const model = value.trim();
+    if (/^[a-z0-9][a-z0-9._:/-]{1,127}$/i.test(model)) models.add(model);
+  };
+  try {
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) return value.forEach(visit);
+      if (!value || typeof value !== 'object') return;
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        if (/^(?:id|model|modelId|slug)$/i.test(key)) add(child);
+        else visit(child);
+      }
+    };
+    visit(JSON.parse(raw));
+  } catch {
+    for (const line of raw.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/)) {
+      const clean = line.trim().replace(/^[•*✓✔❯>\-]+\s*/, '');
+      if (!clean) continue;
+      // "Claude Fable 5.1 [fable-5.1]" -- the display name leads and the real
+      // slug is bracketed (Augment Auggie prints exactly this). Taking the
+      // first token alone found "Claude" and threw the slug away. Status words
+      // get bracketed too, so only a slug-shaped one counts.
+      const bracketed = /\[([a-z0-9][a-z0-9._:/-]*)\]\s*$/i.exec(clean)?.[1];
+      if (bracketed && !/^(?:default|current|active|selected|recommended|beta|new|free)$/i.test(bracketed)) {
+        add(bracketed);
+        continue;
+      }
+      const token = clean.split(/\s+/, 1)[0]?.replace(/^['"`]|['"`,:]$/g, '');
+      if (token && (clean === token || /[\/.\d:_-]/.test(token))) add(token);
+    }
+  }
+  return [...models];
+}
+
 export async function nativeModelCatalogUncached(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
 ): Promise<ModelCatalogResult> {
   const models = new Set(account?.models ?? []);
-  const addDiscoveredModels = (raw: string): void => {
-    const add = (value: unknown): void => {
-      if (typeof value !== 'string') return;
-      const model = value.trim();
-      if (/^[a-z0-9][a-z0-9._:/-]{1,127}$/i.test(model)) models.add(model);
-    };
-    try {
-      const visit = (value: unknown): void => {
-        if (Array.isArray(value)) return value.forEach(visit);
-        if (!value || typeof value !== 'object') return;
-        for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-          if (/^(?:id|model|modelId|slug)$/i.test(key)) add(child);
-          else visit(child);
-        }
-      };
-      visit(JSON.parse(raw));
-    } catch {
-      for (const line of raw.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/)) {
-        const clean = line.trim().replace(/^[•*✓✔❯>\-]+\s*/, '');
-        if (!clean) continue;
-        const token = clean.split(/\s+/, 1)[0]?.replace(/^['"`]|['"`,:]$/g, '');
-        if (token && (clean === token || /[\/.\d:_-]/.test(token))) add(token);
-      }
-    }
-  };
+  const addDiscoveredModels = (raw: string): void => { for (const model of discoveredModelsFrom(raw)) models.add(model); };
   const profileRoot = account?.nativeProfile?.path
     ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined)
     ?? (harness.command === 'codex' ? join(homedir(), '.codex')
