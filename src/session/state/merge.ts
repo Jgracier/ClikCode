@@ -4,7 +4,8 @@
 
 import { randomUUID } from 'node:crypto';
 import type { AiHarnessAccount, HarnessDefaultSettings, HarnessSession, HarnessState } from '../../harness/types.js';
-import { cloneData, sameData, transcriptOf, type SessionTranscript } from '../store.js';
+import { cloneData, sameData } from '../store/data.js';
+import { transcriptOf, type SessionTranscript } from '../store/transcripts.js';
 import { StateIndex } from './index-file.js';
 import { Invocation, invocationRollups } from './invocations.js';
 import { HARNESS_STATE_VERSION } from './paths.js';

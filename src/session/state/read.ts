@@ -2,7 +2,9 @@
  * per-session transcripts. */
 
 import type { HarnessSession, HarnessState } from '../../harness/types.js';
-import { cloneData, readSessionTranscript, sameData, withStateLock } from '../store.js';
+import { cloneData, sameData } from '../store/data.js';
+import { withStateLock } from '../store/locks.js';
+import { readSessionTranscript } from '../store/transcripts.js';
 import { readSessionClaims, type SessionClaim } from '../claims.js';
 import { StateIndex, loadIndex } from './index-file.js';
 import { InvocationRollup, STATE_ROLLUPS } from './invocations.js';

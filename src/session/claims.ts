@@ -13,7 +13,9 @@ import { randomBytes } from 'node:crypto';
 import { link, open, readFile, readdir, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { atomicWriteFile, ensurePrivateDirectory, pidIsAlive, safeRecordFileName, stateDirectory, withFileLock } from './store.js';
+import { atomicWriteFile, ensurePrivateDirectory } from './store/files.js';
+import { pidIsAlive, withFileLock } from './store/locks.js';
+import { safeRecordFileName, stateDirectory } from './store/paths.js';
 
 /** Matches ai.ts's SESSION_CLAIM_TTL_MS; the heartbeat runs at a third of it. */
 export const SESSION_CLAIM_TTL_MS = 90_000;

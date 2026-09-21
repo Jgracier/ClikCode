@@ -3,7 +3,7 @@
 
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { stateDirectory } from '../store.js';
+import { stateDirectory } from '../store/paths.js';
 
 /** On-disk layout version. 1 = single harness-state.json, 2 = split layout. */
 export const HARNESS_STATE_VERSION = 2;

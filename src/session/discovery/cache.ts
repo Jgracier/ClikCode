@@ -3,7 +3,8 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { atomicWriteFile, stateDirectory } from '../store.js';
+import { atomicWriteFile } from '../store/files.js';
+import { stateDirectory } from '../store/paths.js';
 
 /** What discovery learned about one vendor file. Everything here comes from
  * the head of an append-only transcript, so it stays true for as long as the
