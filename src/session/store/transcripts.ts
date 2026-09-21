@@ -6,7 +6,7 @@ import { cloneData, sameData } from './data.js';
 import { withSessionLock, withStateLock } from './locks.js';
 import { SessionFile, listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile } from './records.js';
 
-export type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
+type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
 
 /** The unbounded part of a conversation, as callers see it (always materialized). */
 export interface SessionTranscript {
@@ -18,7 +18,7 @@ export interface SessionTranscript {
  * of storing a second copy of it. */
 export interface TranscriptRef { sessionId: string; uptoIndex: number }
 
-export function transcriptIsEmpty(transcript: SessionTranscript): boolean {
+function transcriptIsEmpty(transcript: SessionTranscript): boolean {
   return transcript.messages === undefined && transcript.pendingTurn === undefined;
 }
 
@@ -74,7 +74,7 @@ function keepsHistory(before: readonly TranscriptMessage[] | undefined, after: r
  * before the parent's existing history is rewritten or removed, so a child can
  * never silently change or lose messages. Requires the state lock: that is what
  * guarantees no new reference is being created while this scans. */
-export async function materializeChildrenOf(parentId: string): Promise<string[]> {
+async function materializeChildrenOf(parentId: string): Promise<string[]> {
   const rewritten: string[] = [];
   for (const id of await listStoredSessionIds()) {
     if (id === parentId) continue;
@@ -96,7 +96,7 @@ export async function materializeChildrenOf(parentId: string): Promise<string[]>
   return rewritten;
 }
 
-export interface TranscriptWriteOptions {
+interface TranscriptWriteOptions {
   /** Session whose history this one may share (its fork/handoff parent). */
   parentSessionId?: string;
 }
@@ -155,7 +155,7 @@ export async function deleteSessionTranscript(id: string): Promise<void> {
  * returns a replacement. Appending and updating the pending turn stay on the
  * fast path; rewriting existing history escalates to the state lock so children
  * referencing it can be given their own copy first. */
-export async function writeSessionCheckpoint(
+async function writeSessionCheckpoint(
   sessionId: string,
   mutate: (transcript: SessionTranscript) => SessionTranscript | void,
 ): Promise<SessionTranscript> {
@@ -199,7 +199,7 @@ const FORKED_FROM = Symbol('clikcode.forkedFrom');
  * of it. In memory the child holds ordinary materialized messages, so nothing
  * that reads it changes; on disk it records `transcriptRef` and only its own
  * messages. Returns the child for chaining. */
-export function forkTranscript(parent: HarnessSession, child: HarnessSession, messages?: TranscriptMessage[]): HarnessSession {
+function forkTranscript(parent: HarnessSession, child: HarnessSession, messages?: TranscriptMessage[]): HarnessSession {
   const inherited = messages ?? parent.messages;
   if (inherited?.length) child.messages = inherited.map((message) => ({ ...message }));
   else delete child.messages;

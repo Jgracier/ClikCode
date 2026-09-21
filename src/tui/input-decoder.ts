@@ -10,7 +10,7 @@ import { nextCharacterIndex } from './render/width.js';
 import { logCursorEvent } from './cursor-log.js';
 import { LEGACY_MOUSE_PREFIX } from './modes.js';
 
-export type WaitingInputAction = 'cancel-edit' | 'cancel-stop';
+type WaitingInputAction = 'cancel-edit' | 'cancel-stop';
 
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
 

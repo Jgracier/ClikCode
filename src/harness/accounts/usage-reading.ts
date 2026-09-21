@@ -48,7 +48,7 @@ export function usageWindow(name: string, usedPct: unknown, resetsAt?: unknown):
 }
 
 /** The single wording for a set of windows, whichever path produced them. */
-export function usageReadingLabel(windows: readonly UsageWindow[]): string | undefined {
+function usageReadingLabel(windows: readonly UsageWindow[]): string | undefined {
   const parts = windows.map((window) => `${window.name} ${Math.max(0, Math.min(100, Math.round(100 - window.usedPct)))}% left`);
   return parts.length ? parts.join(' · ') : undefined;
 }
@@ -89,7 +89,7 @@ export function usageReadingIsCurrent(reading: { windows?: readonly UsageWindow[
  * exhausted window's `resetsAt` has passed, so an account is not left parked
  * after its quota came back. A failover-recorded `quotaState: 'exhausted'`
  * holds when no structured reading exists to say otherwise. */
-export function accountIsExhausted(account: AiHarnessAccount, now: number = Date.now()): boolean {
+function accountIsExhausted(account: AiHarnessAccount, now: number = Date.now()): boolean {
   const windows = (account.usage as AccountUsageReading | undefined)?.windows ?? [];
   const spent = windows.filter((window) => window.usedPct >= 100);
   const stillSpent = spent.filter((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > now);

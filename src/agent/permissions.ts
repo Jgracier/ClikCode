@@ -10,15 +10,15 @@ import {
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
-export type PermissionVerdict = 'allow' | 'ask' | 'deny';
-export interface PermissionDecision { decision: PermissionVerdict; reason: string }
+type PermissionVerdict = 'allow' | 'ask' | 'deny';
+interface PermissionDecision { decision: PermissionVerdict; reason: string }
 
-export interface PermissionRule { tool: string; specifier?: string; raw: string }
+interface PermissionRule { tool: string; specifier?: string; raw: string }
 export interface PermissionRules { allow: readonly PermissionRule[] }
 
 export const NO_RULES: PermissionRules = { allow: [] };
-export const EXIT_PLAN_MODE_TOOL = 'exit_plan_mode';
-export const BASH_TOOL = 'bash';
+const EXIT_PLAN_MODE_TOOL = 'exit_plan_mode';
+const BASH_TOOL = 'bash';
 
 /** `Bash(git status:*)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, or a
  * bare tool name. Returns undefined for anything malformed. */
@@ -91,7 +91,7 @@ function hostOf(url: unknown): string | undefined {
   }
 }
 
-export interface PermissionRequest {
+interface PermissionRequest {
   tool: ToolDefinition;
   args: Record<string, unknown>;
   mode: AiHarnessPermissionMode;
@@ -180,7 +180,7 @@ export function visibleTools(tools: readonly ToolDefinition[], planMode: boolean
 
 // ── approval text ────────────────────────────────────────────────────────────
 
-export interface ApprovalPrompt { title: string; detail: string }
+interface ApprovalPrompt { title: string; detail: string }
 
 /** What the human approves must be exactly what runs: the FULL command is
  * never shortened, and a file change shows its path plus a diff preview. */
@@ -208,7 +208,7 @@ export async function buildApprovalPrompt(
 
 // ── persisted rules ──────────────────────────────────────────────────────────
 
-export function permissionSettingsPath(cwd: string): string {
+function permissionSettingsPath(cwd: string): string {
   return path.join(cwd, '.clikcode', 'settings.local.json');
 }
 

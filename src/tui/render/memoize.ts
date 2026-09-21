@@ -6,7 +6,7 @@
 /** Least-recently-USED, not least-recently-added: a Map iterates in insertion
  * order, so re-inserting on every hit keeps the entries a repaint actually
  * touches (the forty messages on screen) and evicts the ones it does not. */
-export class LruCache<K, V> {
+class LruCache<K, V> {
   private readonly entries = new Map<K, V>();
   constructor(private readonly limit: number) {}
 

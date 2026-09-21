@@ -86,7 +86,7 @@ export async function nativeUsageReading(
   return { windows: next.windows ?? [], ...(next.label === undefined ? {} : { label: next.label }) };
 }
 
-export async function nativeUsageLabel(
+async function nativeUsageLabel(
   session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
 ): Promise<string | undefined> {
   return (await nativeUsageReading(session, state, options))?.label;
@@ -109,7 +109,7 @@ function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, ha
 /** Whether anything can ever produce a usage figure for this harness: a probe
  * we can run, or a turn stream it reports on itself. The account picker and
  * the status line both ask this before showing a usage column at all. */
-export function harnessReportsUsage(command: string): boolean {
+function harnessReportsUsage(command: string): boolean {
   return NATIVE_USAGE_PROBES[command] !== undefined || NATIVE_STREAM_USAGE_READINGS[command] !== undefined;
 }
 
@@ -119,7 +119,7 @@ export async function accountUsageLabel(
   return (await accountUsageReading(account, state, options))?.label;
 }
 
-export async function accountUsageReading(
+async function accountUsageReading(
   account: AiHarnessAccount, state: HarnessState, options: { network?: boolean } = {},
 ): Promise<UsageReading | undefined> {
   if (account.authKind !== 'vendor-cli') return undefined;

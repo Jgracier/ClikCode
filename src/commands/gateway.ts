@@ -19,16 +19,16 @@ import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import { getApiUrl, saveGatewayAuth } from '../gateway/credentials.js';
 
-export type GatewayLoginProvider = 'google' | 'github';
+type GatewayLoginProvider = 'google' | 'github';
 
-export interface GatewayLoginOptions {
+interface GatewayLoginOptions {
   google?: boolean;
   github?: boolean;
   /** Return to an owning TUI instead of terminating the process. */
   embedded?: boolean;
 }
 
-export interface GatewayLoginDeps {
+interface GatewayLoginDeps {
   fetch?: typeof fetch;
   openBrowser?: (url: string) => void;
   sleep?: (ms: number) => Promise<void>;

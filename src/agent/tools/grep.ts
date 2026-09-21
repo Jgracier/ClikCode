@@ -8,7 +8,7 @@ import { capHeadTail } from '../security.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, looksBinary, resolveForRead, throwIfAborted, walkFiles } from './fs-helpers.js';
 
-export interface GrepArgs {
+interface GrepArgs {
   pattern: string;
   path?: string;
   glob?: string;
@@ -22,7 +22,7 @@ const DEFAULT_HEAD_LIMIT = 200;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 let ripgrepAvailable: Promise<boolean> | undefined;
 
-export function hasRipgrep(): Promise<boolean> {
+function hasRipgrep(): Promise<boolean> {
   ripgrepAvailable ??= new Promise((resolve) => {
     try {
       const probe = spawnPortable('rg', ['--version'], { stdio: 'ignore' });
@@ -39,7 +39,7 @@ function limitLines(lines: string[], limit: number): string {
   return [...shown, ...(lines.length > shown.length ? [`… ${lines.length - shown.length} more lines; narrow the search or raise head_limit.`] : [])].join('\n');
 }
 
-export async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolContext, 'signal' | 'cwd'>): Promise<{ output: string; isError?: boolean }> {
+async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolContext, 'signal' | 'cwd'>): Promise<{ output: string; isError?: boolean }> {
   const mode = args.output_mode ?? 'content';
   // --no-require-git: honor .gitignore even outside a git checkout, matching
   // the Node fallback. Hidden files are searched, VCS internals and
@@ -79,7 +79,7 @@ export async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<To
   });
 }
 
-export async function grepWithNode(args: GrepArgs, root: string, ctx: Pick<ToolContext, 'signal' | 'cwd'>): Promise<{ output: string; isError?: boolean }> {
+async function grepWithNode(args: GrepArgs, root: string, ctx: Pick<ToolContext, 'signal' | 'cwd'>): Promise<{ output: string; isError?: boolean }> {
   let regex: RegExp;
   try { regex = new RegExp(args.pattern, args.case_insensitive ? 'i' : ''); } catch (error) {
     return { output: `Invalid regular expression: ${error instanceof Error ? error.message : String(error)}`, isError: true };

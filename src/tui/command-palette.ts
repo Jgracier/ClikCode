@@ -13,7 +13,7 @@ import type { PickerOption } from '../harness/prompter.js';
  * typed), `group` (rendered under a header, after every ungrouped command) and
  * `aliases` (matched like the command itself). */
 export type PaletteEntry = PickerOption<string> & { argHint?: string; group?: string; aliases?: readonly string[] };
-export const SWITCH_HARNESS_GROUP = 'Switch harness';
+const SWITCH_HARNESS_GROUP = 'Switch harness';
 
 const paletteGroup = (entry: PaletteEntry): string | undefined =>
   // One `/<harness>` command per installed harness would otherwise crowd every

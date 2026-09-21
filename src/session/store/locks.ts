@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { ensurePrivateDirectory } from './files.js';
 import { safeRecordFileName, sessionsDirectory, stateDirectory } from './paths.js';
 
-export class StateLockTimeoutError extends Error {
+class StateLockTimeoutError extends Error {
   constructor(lockPath: string, holder: string | undefined, waitedMs: number) {
     super(`ClikCode could not lock its local state after ${Math.round(waitedMs / 1000)}s (${lockPath}${holder ? `, held by ${holder}` : ''}). `
       + 'Nothing was written. If no other ClikCode process is running, delete that lock file and retry.');
@@ -29,7 +29,7 @@ export function pidIsAlive(pid: number): boolean {
 
 interface LockOwner { pid: number; host: string; nonce: string; at: string }
 
-export const LOCK_TUNING = {
+const LOCK_TUNING = {
   /** A holder on another machine (shared home) can only be judged by age. */
   staleMs: 30_000,
   /** A live local pid is trusted this long before pid reuse is suspected. */
@@ -133,7 +133,7 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise
 
 /** Same path the single-file layout used, so an older build still running in
  * another terminal keeps excluding with this one during an upgrade. */
-export function stateLockPath(): string {
+function stateLockPath(): string {
   return join(stateDirectory(), 'harness-state.json.lock');
 }
 

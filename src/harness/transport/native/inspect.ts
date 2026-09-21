@@ -6,7 +6,7 @@ import { installFailureTail, runCaptured, startSpinner } from '../../install-pro
 import { installInstructions } from '../../install-hints.js';
 import { NativeHarnessSpec, binaryOnPath } from './binary.js';
 
-export interface NativeHarnessInspection {
+interface NativeHarnessInspection {
   installed: boolean;
   version?: string;
   error?: string;
@@ -47,7 +47,7 @@ export async function inspectNativeHarnessForPicker(spec: NativeHarnessSpec): Pr
 }
 
 /** Forget cached availability, e.g. right after installing a harness. */
-export function clearNativeHarnessInspectionCache(command?: string): void {
+function clearNativeHarnessInspectionCache(command?: string): void {
   if (command === undefined) {
     inspectionCache.clear();
     pickerInspectionCache.clear();

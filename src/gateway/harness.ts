@@ -36,7 +36,7 @@ export function gatewayHarnessUnavailable(error: unknown): boolean {
   return error.statusCode === 404 || error.code === 'CLIKCODE_DISABLED';
 }
 
-export interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
+interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   session: HarnessSession;
   prompt: string;
   baseUrl: string;

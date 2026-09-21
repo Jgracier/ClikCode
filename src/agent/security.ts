@@ -27,7 +27,7 @@ export class ConfinementError extends Error {
   readonly code = 'ERR_PATH_NOT_CONFINED';
 }
 
-export function expandHome(input: string, homeDir: string): string {
+function expandHome(input: string, homeDir: string): string {
   if (input === '~') return homeDir;
   if (input.startsWith('~/') || input.startsWith('~\\')) return path.join(homeDir, input.slice(2));
   return input;
@@ -37,7 +37,7 @@ export function expandHome(input: string, homeDir: string): string {
  * re-attached. This is what makes a symlinked directory inside the workspace
  * that points outside it resolve to its true, outside location even when the
  * final file does not exist yet. */
-export function realpathNearest(absolute: string): string {
+function realpathNearest(absolute: string): string {
   let current = absolute;
   const tail: string[] = [];
   for (;;) {
@@ -61,12 +61,12 @@ export function realpathNearest(absolute: string): string {
   }
 }
 
-export function isInside(candidate: string, root: string): boolean {
+function isInside(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-export function workspaceRoots(scope: Pick<PathScope, 'cwd' | 'addDirs'>): string[] {
+function workspaceRoots(scope: Pick<PathScope, 'cwd' | 'addDirs'>): string[] {
   return [scope.cwd, ...scope.addDirs].map((dir) => realpathNearest(path.resolve(dir)));
 }
 
@@ -141,8 +141,8 @@ function isToolOutputSpill(candidate: string, realStateDir: string): boolean {
 
 // ── shell command tiers ──────────────────────────────────────────────────────
 
-export type CommandTier = 'deny' | 'ask' | 'safe';
-export interface CommandClassification { tier: CommandTier; reason: string }
+type CommandTier = 'deny' | 'ask' | 'safe';
+interface CommandClassification { tier: CommandTier; reason: string }
 
 const ROOTISH = String.raw`(?:/|/\*|~|~/|~/\*|\$HOME|\$\{HOME\}|\$HOME/|\$HOME/\*|/(?:bin|boot|dev|etc|home|lib|lib64|opt|proc|root|sbin|sys|usr|var)/?\*?)`;
 const RM_FLAGS = String.raw`(?:\s+(?:-[a-zA-Z]+|--[a-z-]+))*`;
@@ -278,7 +278,7 @@ export function classifyCommand(command: string, scope?: PathScope): CommandClas
 
 // ── environment scrubbing ────────────────────────────────────────────────────
 
-export const SCRUBBED_ENV_PATTERN = /(_KEY|_TOKEN|_SECRET|PASSWORD|CLIKDEPLOY_)/i;
+const SCRUBBED_ENV_PATTERN = /(_KEY|_TOKEN|_SECRET|PASSWORD|CLIKDEPLOY_)/i;
 
 export function scrubEnvironment(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
   const out: Record<string, string> = {};

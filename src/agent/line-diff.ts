@@ -1,15 +1,15 @@
 /** Small line diff (LCS, capped) for approval previews and activity events. */
 
-export interface LineDiff { removed: string[]; added: string[] }
+interface LineDiff { removed: string[]; added: string[] }
 
 const LCS_CELL_CAP = 4_000_000;
 
-export function splitLines(text: string): string[] {
+function splitLines(text: string): string[] {
   if (!text) return [];
   return text.replace(/\r?\n$/, '').split(/\r?\n/);
 }
 
-export type DiffOp = { kind: 'same' | 'removed' | 'added'; line: string };
+type DiffOp = { kind: 'same' | 'removed' | 'added'; line: string };
 
 export function diffLines(before: string, after: string): DiffOp[] {
   const a = splitLines(before);
@@ -54,7 +54,7 @@ function capped(lines: string[], cap: number): string[] {
   return lines.length > cap ? [...lines.slice(0, cap), `… ${lines.length - cap} more line${lines.length - cap === 1 ? '' : 's'}`] : lines;
 }
 
-export const EVENT_DIFF_LINE_CAP = 12;
+const EVENT_DIFF_LINE_CAP = 12;
 
 /** The `{removed, added}` shape HarnessActivityEvent carries, each side capped
  * with an honest truncation note (see the comment on HarnessActivityEvent.diff). */

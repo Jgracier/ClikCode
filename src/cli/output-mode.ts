@@ -5,7 +5,7 @@ export function isHumanOutputRequested(): boolean {
   return globalFlag('human') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'human';
 }
 
-export function isJsonOutputRequested(): boolean {
+function isJsonOutputRequested(): boolean {
   return globalFlag('json') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'json';
 }
 

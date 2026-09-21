@@ -58,10 +58,10 @@ export function sessionNativeCommands(sessionId: string): readonly HarnessAvaila
   return nativeAvailableCommands.get(sessionId) ?? [];
 }
 
-export interface PersistentTransport { key: string; transport: HarnessTurnTransport; session: CodexSession | AcpSession }
+interface PersistentTransport { key: string; transport: HarnessTurnTransport; session: CodexSession | AcpSession }
 export const persistentTransports = new Map<string, PersistentTransport>();
 /** Test seam: the transport session factories. */
-export const TRANSPORT_SESSIONS = { codex: createCodexSession, acp: createAcpSession };
+const TRANSPORT_SESSIONS = { codex: createCodexSession, acp: createAcpSession };
 
 /** One live child per open ClikCode session, keyed by everything that makes a
  * child reusable (harness, account, profile env, cwd). A different key closes
@@ -176,7 +176,7 @@ export function createHandoffBranch(input: {
 }
 
 
-export function interruptedTurnMessages(
+function interruptedTurnMessages(
   messages: NonNullable<HarnessSession['messages']>, prompt: string, partialResponse: string, outputStarted: boolean,
 ): NonNullable<HarnessSession['messages']> {
   if (!outputStarted) return messages;

@@ -45,11 +45,11 @@ export const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
  * picker, and a number that never approaches a limit cannot drive failover.
  * A harness that publishes no window publishes no usage.
  */
-export async function codexUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+async function codexUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
   return (await codexUsageReading(session, environment))?.label;
 }
 
-export async function codexUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
+async function codexUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   const binary = harnessBinary('codex');
   const response = await new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
     const child = spawn(binary, ['app-server', '--listen', 'stdio://'], {
@@ -118,11 +118,11 @@ export async function codexUsageReading(_session: HarnessSession, environment: R
  * an explicit request runs it: opening the account picker, or `/usage`. Every
  * ordinary paint reads what the last real turn already reported.
  */
-export async function claudeUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+async function claudeUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
   return (await claudeUsageReading(session, environment))?.label;
 }
 
-export async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
+async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   const binary = harnessBinary('claude');
   return new Promise<UsageReading | undefined>((resolveUsage) => {
     const child = spawn(binary, ['-p', 'hi', '--verbose', '--output-format', 'stream-json'], {
@@ -215,7 +215,7 @@ export function codexRateLimitsReading(rateLimits: unknown): UsageReading | unde
  * `usedPct`/`resetsAt` too; passing codexRateLimitsReading() directly is better. */
 export const recentReadingByLabel = new Map<string, UsageReading>();
 
-export function codexRateLimitsLabel(rateLimits: unknown): string | undefined {
+function codexRateLimitsLabel(rateLimits: unknown): string | undefined {
   const reading = codexRateLimitsReading(rateLimits);
   if (reading?.label) {
     recentReadingByLabel.delete(reading.label);
@@ -228,7 +228,7 @@ export function codexRateLimitsLabel(rateLimits: unknown): string | undefined {
 /** Auggie publishes an account balance; ClikCode reads it from the harness
  * rather than from Augment's API, the same rule every other usage source
  * follows here. */
-export async function auggieUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+async function auggieUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
   const harness = localHarnessForCommand('auggie');
   if (!harness) return undefined;
   try {
@@ -242,7 +242,7 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsagePro
   auggie: auggieUsageProbe,
 };
 
-export type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
+type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
 
 /** Structured probes for the harnesses whose label probe above is the built-in
  * one. A probe registered only in NATIVE_USAGE_PROBES still works; it simply

@@ -27,8 +27,8 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
   setupTimeoutMs?: number;
 }
 
-export type CodexErrorKind = 'quota' | 'auth' | 'other';
-export type CodexSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
+type CodexErrorKind = 'quota' | 'auth' | 'other';
+type CodexSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
 export interface CodexSession {
   runTurn(input: CodexAppServerTurnInput): Promise<CodexAppServerTurnResult>;
@@ -39,9 +39,9 @@ export interface CodexSession {
   close(): Promise<void>;
 }
 
-export interface CodexSessionOptions { spawn?: CodexSpawn }
+interface CodexSessionOptions { spawn?: CodexSpawn }
 
-export interface CodexAppServerTurnResult {
+interface CodexAppServerTurnResult {
   text: string;
   nativeSessionId: string;
   isError?: boolean;
@@ -115,7 +115,7 @@ export function codexPermissionSettings(mode: AiHarnessPermissionMode): {
 /** Classify a Codex failure from its structured error (`codexErrorInfo`,
  * JSON-RPC data) and message. Tolerant by design: the info member is a string
  * in some versions and a tagged object carrying an HTTP status in others. */
-export function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; statusCode?: number } {
+function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; statusCode?: number } {
   const source = error && typeof error === 'object' ? error as JsonObject : { message: String(error ?? '') };
   const info = source.codexErrorInfo ?? source.codex_error_info ?? source.data ?? '';
   const text = `${typeof info === 'string' ? info : JSON.stringify(info ?? '')} ${String(source.message ?? '')}`;
@@ -127,7 +127,7 @@ export function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; sta
 }
 
 /** What the user is approving: the command and where it runs, or the files. */
-export function codexApprovalDetail(params: JsonObject, item?: JsonObject): string {
+function codexApprovalDetail(params: JsonObject, item?: JsonObject): string {
   const lines: string[] = [];
   const command = codexCommandText(params.command) ?? codexCommandText(item?.command);
   if (command) lines.push(`$ ${command}`);
@@ -143,7 +143,7 @@ export function codexApprovalDetail(params: JsonObject, item?: JsonObject): stri
   return lines.join('\n') || 'Codex requested additional permission';
 }
 
-export function codexPlanEntries(params: JsonObject): HarnessPlanEntry[] {
+function codexPlanEntries(params: JsonObject): HarnessPlanEntry[] {
   return Array.isArray(params.plan)
     ? params.plan.flatMap((entry) => {
       const step = (entry as JsonObject)?.step ?? (entry as JsonObject)?.content;

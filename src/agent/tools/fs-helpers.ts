@@ -47,7 +47,7 @@ export function looksBinary(sample: Uint8Array): boolean {
 }
 
 export const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tiff', '.heic', '.avif']);
-export const ALWAYS_SKIPPED_DIRS = new Set(['.git', 'node_modules', '.hg', '.svn']);
+const ALWAYS_SKIPPED_DIRS = new Set(['.git', 'node_modules', '.hg', '.svn']);
 
 export function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
@@ -57,7 +57,7 @@ export function throwIfAborted(signal?: AbortSignal): void {
 
 interface IgnoreRule { pattern: string; negated: boolean; dirOnly: boolean; anchored: boolean; base: string }
 
-export function parseGitignore(content: string, base: string): IgnoreRule[] {
+function parseGitignore(content: string, base: string): IgnoreRule[] {
   const rules: IgnoreRule[] = [];
   for (const raw of content.split(/\r?\n/)) {
     let line = raw.replace(/(?<!\\)\s+$/, '');
@@ -74,7 +74,7 @@ export function parseGitignore(content: string, base: string): IgnoreRule[] {
 }
 
 /** `relative` is `/`-separated and relative to the walk root. Last match wins. */
-export function isIgnored(rules: readonly IgnoreRule[], relative: string, isDirectory: boolean): boolean {
+function isIgnored(rules: readonly IgnoreRule[], relative: string, isDirectory: boolean): boolean {
   let ignored = false;
   for (const rule of rules) {
     if (rule.dirOnly && !isDirectory) continue;
@@ -90,14 +90,14 @@ export function isIgnored(rules: readonly IgnoreRule[], relative: string, isDire
   return ignored;
 }
 
-export interface WalkOptions {
+interface WalkOptions {
   signal?: AbortSignal;
   honorGitignore?: boolean;
   includeHidden?: boolean;
   maxEntries?: number;
 }
 
-export interface WalkedFile { absolute: string; relative: string }
+interface WalkedFile { absolute: string; relative: string }
 
 /** Depth-first file walk. Never follows directory symlinks (a link out of the
  * workspace would otherwise defeat confinement), always skips VCS internals

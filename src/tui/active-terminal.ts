@@ -19,7 +19,7 @@ export const TERMINAL: {
 } = { panelsShown: 0 };
 
 /** Prompter methods the terminal UI is gaining; feature-detected, never assumed. */
-export interface OptionalTerminalMethods {
+interface OptionalTerminalMethods {
   setPlan?(entries: readonly HarnessPlanEntry[]): void;
   setTurnUsage?(usage: NormalizedTurnUsage): void;
 }

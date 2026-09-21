@@ -25,7 +25,7 @@ export function installFailureTail(output: string, limit = FAILURE_TAIL_LINES): 
   return lines.slice(-limit).join('\n');
 }
 
-export interface Spinner { stop: (finalLine?: string) => void }
+interface Spinner { stop: (finalLine?: string) => void }
 
 /** One self-clearing line. Silent where stdout is not a terminal, so piped
  * and CI output stays clean rather than filling with frames. */
@@ -50,7 +50,7 @@ export function startSpinner(label: string, write: (text: string) => void = (tex
   };
 }
 
-export interface CapturedRun { code: number | null; output: string }
+interface CapturedRun { code: number | null; output: string }
 
 /** Run a command with its output captured rather than inherited. */
 export function runCaptured(command: string, args: readonly string[]): Promise<CapturedRun> {

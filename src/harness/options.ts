@@ -18,7 +18,7 @@
  * Every option id published by two or more harnesses appears here; a test
  * fails if one does not, so a new harness cannot quietly widen the surface.
  */
-export type OptionNormalization =
+type OptionNormalization =
   | { kind: 'common'; control: string; note: string }
   | { kind: 'shared'; note: string }
   | { kind: 'vendor'; note: string };

@@ -23,7 +23,7 @@ import type { HarnessTurnObserver } from './turn-observer.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessLineError } from './adapters.js';
 
-export interface StructuredLineOutcome {
+interface StructuredLineOutcome {
   /** The line carried something a harness only sends once it is really running,
    * which is what confirms a session id that was minted optimistically. */
   live: boolean;

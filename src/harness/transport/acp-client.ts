@@ -21,7 +21,7 @@ const OUTPUT_LINE_CAP = 20;
 const DETAIL_LINE_CAP = 12;
 const CANCEL_SETTLE_MS = 2000;
 
-export type AcpSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
+type AcpSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
 export interface AcpTurnInput extends HarnessTurnObserver {
   binary: string;
@@ -56,7 +56,7 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   signal?: AbortSignal;
 }
 
-export interface AcpTurnResult { text: string; nativeSessionId: string }
+interface AcpTurnResult { text: string; nativeSessionId: string }
 
 export interface AcpSession {
   runTurn(input: AcpTurnInput): Promise<AcpTurnResult>;
@@ -66,14 +66,14 @@ export interface AcpSession {
   close(): Promise<void>;
 }
 
-export interface AcpSessionOptions { spawn?: AcpSpawn }
+interface AcpSessionOptions { spawn?: AcpSpawn }
 
 export function acpResponseDelta(update: Json): string | undefined {
   return update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && typeof update.content.text === 'string'
     ? update.content.text : undefined;
 }
 
-export function acpThoughtDelta(update: Json): string | undefined {
+function acpThoughtDelta(update: Json): string | undefined {
   return update.sessionUpdate === 'agent_thought_chunk' && update.content?.type === 'text' && typeof update.content.text === 'string'
     ? update.content.text : undefined;
 }
@@ -108,14 +108,14 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   };
 }
 
-export function acpPlanEntries(update: Json): HarnessPlanEntry[] | undefined {
+function acpPlanEntries(update: Json): HarnessPlanEntry[] | undefined {
   if (update.sessionUpdate !== 'plan' || !Array.isArray(update.entries)) return undefined;
   return update.entries.flatMap((entry: Json) => typeof entry?.content === 'string'
     ? [{ content: entry.content, status: String(entry.status ?? 'pending'), ...(typeof entry.priority === 'string' ? { priority: entry.priority } : {}) }]
     : []);
 }
 
-export function acpAvailableCommands(update: Json): HarnessAvailableCommand[] | undefined {
+function acpAvailableCommands(update: Json): HarnessAvailableCommand[] | undefined {
   if (update.sessionUpdate !== 'available_commands_update' || !Array.isArray(update.availableCommands)) return undefined;
   return update.availableCommands.flatMap((entry: Json) => typeof entry?.name === 'string'
     ? [{
@@ -154,7 +154,7 @@ export function acpApprovalDetail(toolCall: Json | undefined): string | undefine
   return lines.length > DETAIL_LINE_CAP ? [...lines.slice(0, DETAIL_LINE_CAP), '...'].join('\n') : lines.join('\n');
 }
 
-export interface AcpPermissionPlan {
+interface AcpPermissionPlan {
   /** `allow` answers without the user; `ask` must go through onApproval. */
   action: 'allow' | 'ask';
   /** Option selected when allowed/approved. */
@@ -168,7 +168,7 @@ export interface AcpPermissionPlan {
 
 /** Pure permission policy. `bypass` allows, `ask` asks, and `auto` allows
  * only read-like tools. No mode ever selects `allow_always` by itself. */
-export function acpPermissionPlan(mode: AiHarnessPermissionMode, params: Json): AcpPermissionPlan {
+function acpPermissionPlan(mode: AiHarnessPermissionMode, params: Json): AcpPermissionPlan {
   const options: Json[] = Array.isArray(params.options) ? params.options : [];
   const kindOf = (option: Json): string => String(option?.kind ?? '');
   const once = options.find((option) => kindOf(option) === 'allow_once')
@@ -211,7 +211,7 @@ const IMAGE_MIME: Readonly<Record<string, string>> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
 };
 
-export async function acpImageBlock(path: string): Promise<Json> {
+async function acpImageBlock(path: string): Promise<Json> {
   const data = await readFile(path);
   return { type: 'image', mimeType: IMAGE_MIME[extname(path).toLowerCase()] ?? 'image/png', data: data.toString('base64') };
 }

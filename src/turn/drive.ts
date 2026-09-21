@@ -698,7 +698,7 @@ export async function aiSessionSend(
 }
 
 /** What the Gateway's final `result` event says that the text did not. */
-export function gatewayResultNotice(data: unknown): string | undefined {
+function gatewayResultNotice(data: unknown): string | undefined {
   if (!data || typeof data !== 'object') return undefined;
   const result = data as { requiresConfirmation?: unknown; pendingToolCalls?: unknown };
   const pending = Array.isArray(result.pendingToolCalls) ? result.pendingToolCalls : [];

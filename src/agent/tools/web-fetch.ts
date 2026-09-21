@@ -58,7 +58,7 @@ function expandIpv6(address: string): number[] | undefined {
 /** True for loopback, private, link-local, CGNAT, multicast, documentation,
  * unspecified and any IPv6 form that embeds such an IPv4 address. Anything
  * unparseable is treated as private: fail closed. */
-export function isPrivateAddress(address: string): boolean {
+function isPrivateAddress(address: string): boolean {
   const v4 = parseIpv4(address);
   if (v4) return ipv4IsPrivate(v4);
   const groups = expandIpv6(address);
@@ -105,7 +105,7 @@ function defaultRequest(url: URL, pinned: ResolvedAddress, options: { signal?: A
   });
 }
 
-export async function vetUrl(raw: string, seams: NetworkSeams = {}): Promise<{ url: URL; pinned: ResolvedAddress }> {
+async function vetUrl(raw: string, seams: NetworkSeams = {}): Promise<{ url: URL; pinned: ResolvedAddress }> {
   let url: URL;
   try { url = new URL(raw); } catch { throw new Error(`Not a valid URL: ${raw}`); }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`Only http and https URLs can be fetched (got ${url.protocol})`);
@@ -126,7 +126,7 @@ export async function vetUrl(raw: string, seams: NetworkSeams = {}): Promise<{ u
 
 const ENTITIES: Readonly<Record<string, string>> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–', hellip: '…', copy: '©', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”' };
 
-export function htmlToText(html: string): string {
+function htmlToText(html: string): string {
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.trim();
   let text = html
     .replace(/<!--[\s\S]*?-->/g, '')

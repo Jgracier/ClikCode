@@ -6,7 +6,7 @@ import { StateIndex } from './index-file.js';
 import { hidden } from './merge.js';
 
 /** Individual invocation records kept; older ones fold into per-day totals. */
-export const INVOCATION_KEEP = 1000;
+const INVOCATION_KEEP = 1000;
 
 export type Invocation = HarnessState['invocations'][number];
 
@@ -56,11 +56,11 @@ export function invocationRollups(state: HarnessState): InvocationRollup[] {
   return Object.values((state as HarnessState & { [STATE_ROLLUPS]?: Record<string, InvocationRollup> })[STATE_ROLLUPS] ?? {});
 }
 
-export interface InvocationTotals { calls: number; inputTokens: number; outputTokens: number; latencyMs: number }
+interface InvocationTotals { calls: number; inputTokens: number; outputTokens: number; latencyMs: number }
 
 /** All-time totals: the retained records plus everything rolled up. `match`
  * narrows by account/provider/model (the dimensions a rollup preserves). */
-export function invocationTotals(
+function invocationTotals(
   state: HarnessState,
   match: (entry: { accountId: string; provider: string; model: string }) => boolean = () => true,
 ): InvocationTotals {

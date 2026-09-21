@@ -10,7 +10,7 @@
 import { extractLoginUrl, hasLocalDisplay, loginUrlNotice, openLoginUrl } from './url.js';
 import { runTeedLogin, type TeedLoginResult } from './tee.js';
 
-export interface LoginSessionIo {
+interface LoginSessionIo {
   write: (text: string) => void;
   environment?: NodeJS.ProcessEnv;
   open?: (url: string) => void;

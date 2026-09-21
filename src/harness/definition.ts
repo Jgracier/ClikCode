@@ -16,16 +16,16 @@ export type AiHarnessIntegrationLevel = 'native' | 'structured' | 'compatibility
  * ai-local-harness.ts). The CLI reads these instead of checking harness names. */
 export type AiHarnessTransport = 'codex-app-server' | 'acp' | 'structured-cli' | 'text-cli';
 
-export type AiHarnessTier = 'primary' | 'more' | 'experimental';
+type AiHarnessTier = 'primary' | 'more' | 'experimental';
 
-export type AiHarnessParser =
+type AiHarnessParser =
   | 'claude-stream-json' | 'codex-items' | 'opencode-json'
   | 'cursor-stream-json' | 'pi-json' | 'cline-json' | 'antigravity' | 'goose'
   | 'generic-json' | 'text';
 
-export type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWEN.md' | 'CONVENTIONS.md';
+type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWEN.md' | 'CONVENTIONS.md';
 
-export interface AiHarnessAcpDefinition {
+interface AiHarnessAcpDefinition {
   argv: readonly string[];
   binary?: string;
   optionPlacement?: 'before' | 'after';
@@ -52,7 +52,7 @@ export interface AiCustomAcpHarnessInput {
   memoryFile?: AiHarnessMemoryFile;
 }
 
-export interface AiHarnessTurnDefinition {
+interface AiHarnessTurnDefinition {
   startArgv: readonly string[];
   resumeArgv?: readonly string[];
   resumeIdPrefix?: readonly string[];
@@ -68,7 +68,7 @@ export interface AiHarnessTurnDefinition {
   resumeSupportsWorkspaceSelector?: boolean;
 }
 
-export type AiHarnessOptionKind = 'boolean' | 'string' | 'enum' | 'string-list' | 'path' | 'path-list' | 'number';
+type AiHarnessOptionKind = 'boolean' | 'string' | 'enum' | 'string-list' | 'path' | 'path-list' | 'number';
 
 export interface AiHarnessOptionDefinition {
   id: string; label: string; description: string; category: string; kind: AiHarnessOptionKind;

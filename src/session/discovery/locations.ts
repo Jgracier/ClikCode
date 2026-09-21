@@ -31,7 +31,7 @@ export function nativeDataRoot(environment: NativeSessionEnvironment, variable: 
  * `root` is the directory the per-session path is relative to, so a caller can
  * rebuild the same relative path under another profile without knowing
  * anything about how a vendor lays its files out. */
-export type NativeSessionFile = { path: string; root: string };
+type NativeSessionFile = { path: string; root: string };
 
 export function nativeSessionRoot(
   harness: AiLocalHarnessDefinition, environment: NativeSessionEnvironment = {},

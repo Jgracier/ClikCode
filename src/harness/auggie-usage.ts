@@ -17,7 +17,7 @@
  * to report, so the label says what the vendor actually measures.
  */
 
-export interface AuggieAccountStatus {
+interface AuggieAccountStatus {
   planName?: unknown;
   usageUnit?: unknown;
   amountRemaining?: unknown;

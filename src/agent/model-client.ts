@@ -59,11 +59,11 @@ export type HarnessErrorKind = 'quota' | 'auth' | 'other';
 
 export type PlanEntry = { content: string; status: 'pending' | 'in_progress' | 'completed' };
 
-export type UsageReport = TokenUsage & { contextTokens?: number; contextWindow?: number; servedModel?: string };
+type UsageReport = TokenUsage & { contextTokens?: number; contextWindow?: number; servedModel?: string };
 
 /** Optional pre/post tool interception. A pre hook may only veto (it can
  * never widen permissions); a post hook may only rewrite what the model sees. */
-export interface HarnessHooks {
+interface HarnessHooks {
   preToolUse?(call: ModelToolCall, info: { sessionId: string; cwd: string }): Promise<{ deny?: string } | void> | { deny?: string } | void;
   postToolUse?(call: ModelToolCall, result: ToolRunResult, info: { sessionId: string; cwd: string }): Promise<{ output?: string } | void> | { output?: string } | void;
 }

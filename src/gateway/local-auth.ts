@@ -9,7 +9,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-export interface CanonicalAuthRecord {
+interface CanonicalAuthRecord {
   apiUrl: string;
   apiKey: string;
   updatedAt: string;
@@ -29,7 +29,7 @@ function ensureDir(dir: string): void {
   }
 }
 
-export function getCanonicalAuthPaths(): { authJsonPath: string; apiKeyPath: string } {
+function getCanonicalAuthPaths(): { authJsonPath: string; apiKeyPath: string } {
   const authJsonPath = path.join(resolveConfigHome(), 'clikcode', 'auth.json');
   const apiKeyPath = path.join(os.homedir(), '.clikcode', 'api-key');
   return { authJsonPath, apiKeyPath };
@@ -109,7 +109,7 @@ export function writeCanonicalAuth(record: CanonicalAuthRecord): void {
   fs.writeFileSync(apiKeyPath, record.apiKey, { mode: 0o600 });
 }
 
-export function clearCanonicalAuth(): void {
+function clearCanonicalAuth(): void {
   const { authJsonPath, apiKeyPath } = getCanonicalAuthPaths();
   for (const p of [authJsonPath, apiKeyPath]) {
     try {

@@ -20,7 +20,7 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } f
  * Anthropic ships a new tier — same manual-maintenance shape as the Copilot
  * model list a few lines below.
  */
-export const CLAUDE_ALIAS_LABELS: Readonly<Record<string, string>> = {
+const CLAUDE_ALIAS_LABELS: Readonly<Record<string, string>> = {
   fable: 'Fable 5.1', opus: 'Opus 5', sonnet: 'Sonnet 5', haiku: 'Haiku 4.5',
 };
 
@@ -42,9 +42,9 @@ export function nativeModelLabel(
 // exactly the "options are still slow" report, in a second picker beyond
 // /provider.
 
-export const modelCatalogCache = new Map<string, { at: number; result: ModelCatalogResult }>();
+const modelCatalogCache = new Map<string, { at: number; result: ModelCatalogResult }>();
 
-export const MODEL_CATALOG_CACHE_TTL_MS = 300_000;
+const MODEL_CATALOG_CACHE_TTL_MS = 300_000;
 
 /** How long the model picker will wait for a vendor's own model list before
  * opening with whatever it already has. Measured on the installed harnesses:
@@ -53,7 +53,7 @@ export const MODEL_CATALOG_CACHE_TTL_MS = 300_000;
  * that hangs, not a typical cost, and waiting that long is what the
  * fire-and-forget path below was avoiding. Three seconds clears every
  * measured harness with room to spare and still bounds a bad one. */
-export const MODEL_CATALOG_PICKER_WAIT_MS = 3_000;
+const MODEL_CATALOG_PICKER_WAIT_MS = 3_000;
 
 /** The model list for a picker that is about to open.
  *
@@ -89,7 +89,7 @@ export async function nativeModelCatalogForPicker(
 
 /** Synchronous variant for callers that genuinely cannot await: returns only
  * what is already cached or known locally, and refreshes in the background. */
-export function nativeModelCatalogCached(
+function nativeModelCatalogCached(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
 ): ModelCatalogResult {
@@ -116,7 +116,7 @@ export async function nativeModelCatalog(
  *
  * JSON first (any `id`/`model`/`modelId`/`slug` at any depth), then a line
  * reading, because several CLIs print a human list and nothing else. */
-export function discoveredModelsFrom(raw: string): string[] {
+function discoveredModelsFrom(raw: string): string[] {
   const models = new Set<string>();
   const add = (value: unknown): void => {
     if (typeof value !== 'string') return;
@@ -153,7 +153,7 @@ export function discoveredModelsFrom(raw: string): string[] {
   return [...models];
 }
 
-export async function nativeModelCatalogUncached(
+async function nativeModelCatalogUncached(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
 ): Promise<ModelCatalogResult> {

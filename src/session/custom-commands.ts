@@ -22,7 +22,7 @@ export interface CustomCommand {
   source: 'harness' | 'clikcode';
 }
 
-export interface CustomCommandRoots {
+interface CustomCommandRoots {
   workspace: string;
   home?: string;
   /** Replaces the ClikCode directories (tests). */

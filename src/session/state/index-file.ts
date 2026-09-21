@@ -34,7 +34,7 @@ export class HarnessStateVersionError extends Error {
   }
 }
 
-export const HARNESS_STATE_STATS = { indexWrites: 0 };
+const HARNESS_STATE_STATS = { indexWrites: 0 };
 
 /** Parsed index keyed by the exact bytes it came from. Comparing bytes rather
  * than mtime means a merge base can never be stale, and an unchanged index

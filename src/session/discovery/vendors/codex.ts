@@ -31,7 +31,7 @@ const CODEX_MAX_DAY_DIRECTORIES = 180;
  * is longer than the scanned prefix it cannot be parsed as JSON, so the fields
  * are then matched textually and the id falls back to the uuid every rollout
  * filename ends in. */
-export function parseCodexSessionHead(prefix: string, fileName: string): CachedSessionFacts {
+function parseCodexSessionHead(prefix: string, fileName: string): CachedSessionFacts {
   const facts: CachedSessionFacts = {};
   for (const line of prefix.split('\n')) {
     if (!line.trim()) continue;

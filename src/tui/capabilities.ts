@@ -15,7 +15,7 @@ function environmentFlag(...values: (string | undefined)[]): boolean {
  * feel immediate, and it is also exactly what a screen reader re-announces on
  * every frame. This mode routes to the existing line-oriented renderer, which
  * is append-only and therefore reads once, in order. */
-export function screenReaderMode(environment: NodeJS.ProcessEnv = process.env): boolean {
+function screenReaderMode(environment: NodeJS.ProcessEnv = process.env): boolean {
   return environmentFlag(environment.CLIKCODE_SCREEN_READER);
 }
 

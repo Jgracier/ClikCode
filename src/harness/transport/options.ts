@@ -48,7 +48,7 @@ export function declaredOptionArgv(
   return argv;
 }
 
-export interface AppServerThreadOverrides {
+interface AppServerThreadOverrides {
   configOverrides?: Record<string, unknown>;
   extraThreadParams?: Record<string, unknown>;
   /** Stored options with no app-server equivalent, for an honest notice. */

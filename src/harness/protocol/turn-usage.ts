@@ -37,7 +37,7 @@ export interface NativeSelfReport {
 
 const OPENING_RECORD = /(?:^|[._-])(?:init|initialized|configured|started|ready|system|session)(?:$|[._-])/i;
 
-export function nativeSelfReportFromValue(value: unknown): NativeSelfReport | undefined {
+function nativeSelfReportFromValue(value: unknown): NativeSelfReport | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
   const type = String(record.type ?? record.method ?? '');

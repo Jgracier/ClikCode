@@ -19,7 +19,7 @@ const DIFF_CAPTURE_LINES = 8;
  * edit or command at a glance without the trail crowding out the answer. */
 export const ACTIVITY_PREVIEW_LINES = 8;
 
-export function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
+function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
   const all = text.split(/\r?\n/);
   return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
 }
@@ -102,7 +102,7 @@ export function parseNativeActivityEventsFromValue(harness: AiLocalHarnessDefini
   return single ? [single] : [];
 }
 
-export function parseNativeActivityEvents(harness: AiLocalHarnessDefinition, lineText: string): NativeActivityEvent[] {
+function parseNativeActivityEvents(harness: AiLocalHarnessDefinition, lineText: string): NativeActivityEvent[] {
   const candidate = lineText.trim();
   if (candidate[0] !== '{') return [];
   try {

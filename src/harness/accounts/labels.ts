@@ -25,7 +25,7 @@ import type { HarnessState } from '../../session/model.js';
 /** Whether a label is one ClikCode invented because it could not read a real
  * identity -- the harness's own name, with or without the old " default"
  * suffix. A real label is an email or something the user typed. */
-export function isPlaceholderAccountLabel(label: string, harness: AiLocalHarnessDefinition): boolean {
+function isPlaceholderAccountLabel(label: string, harness: AiLocalHarnessDefinition): boolean {
   const name = harness.displayName.toLowerCase();
   const text = label.trim().toLowerCase();
   return text === name || text === `${name} default`;

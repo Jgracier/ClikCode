@@ -12,7 +12,7 @@ import { logCursorEvent } from './cursor-log.js';
  * fences the payload and the whole thing arrives as one key. */
 export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 
-export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
+const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
 
 /** Focus reporting and theme notifications are turned OFF on the way out and
  * never on. Both doc comments here used to argue the opposite -- that each was
@@ -20,9 +20,9 @@ export const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
  * but the enable constants had no caller, so the claim described an intention
  * rather than the code. Clearing them on teardown still earns its place: a
  * program that ran before this one may have left either set. */
-export const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
+const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
 
-export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
+const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
 
 /** Mouse tracking: normal (1000), button-event (1002), any-event (1003), SGR
  * encoding (1006). All four, and a swipe does not scroll without all four.
@@ -42,7 +42,7 @@ export const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
  * `?1006h` is the SGR encoding; the wheel arrives as button 64 and 65. */
 export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
 
-export const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l';
+const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l';
 
 /** The opening form, used once when the program takes the screen. The `?1006l`
  * before `?1006h` is deliberate and comes from the bare script that receives

@@ -7,7 +7,7 @@ import { type SlashHandlerKey } from './registry.js';
 /** Commands the interactive loop handles itself (pickers, prompts, turns with
  * the waiting UI). Every other registry command falls through to
  * HEADLESS_SLASH_HANDLERS with its output shown in a panel. */
-export const INTERACTIVE_SLASH_HANDLER_KEYS = [
+const INTERACTIVE_SLASH_HANDLER_KEYS = [
   'exit', 'new', 'redraw', 'provider', 'account', 'accounts', 'model', 'effort', 'permissions', 'options', 'capabilities',
   'settings', 'sessions', 'resume', 'rename', 'archive', 'delete', 'mention', 'review', 'init', 'native', 'compact',
   'export', 'memory', 'doctor', 'login', 'logout',

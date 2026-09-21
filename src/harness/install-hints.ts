@@ -18,7 +18,7 @@
  * command to run.
  */
 
-export interface HarnessInstallHint {
+interface HarnessInstallHint {
   /** Verbatim from the vendor's own docs, with `source` naming where. */
   command?: string;
   /** Where to read the vendor's install instructions. */
