@@ -20,7 +20,9 @@ import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { nativeModelCatalog, nativeUsageReading, usageResetLabel } from '../harness/account-data.js';
+import { nativeUsageReading } from '../harness/accounts/account-usage.js';
+import { nativeModelCatalog } from '../harness/accounts/model-catalog.js';
+import { usageResetLabel } from '../harness/accounts/usage-reading.js';
 import { closePersistentTransport, discardInterruptedTurn, nativeAvailableCommands, persistentTransports, preserveInterruptedTurn, synchronizeNativeTranscript, turnEnvironment } from '../turn/runtime.js';
 import { aiGatewaySessionSend } from '../turn/drive.js';
 import { TERMINAL } from '../tui/active-terminal.js';

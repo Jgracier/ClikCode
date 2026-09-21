@@ -22,7 +22,7 @@ import { nativeProfileEnvironment } from '../harness/transport/profile-environme
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { accountUsageLabel } from '../harness/account-data.js';
+import { accountUsageLabel } from '../harness/accounts/account-usage.js';
 import { createCodexSession } from '../harness/transport/codex-app-server.js';
 import { createAcpSession } from '../harness/transport/acp-client.js';
 import { homeRedirectEnvironment } from '../runtime/lazy-bridge.js';

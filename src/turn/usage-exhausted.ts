@@ -21,7 +21,7 @@
  * the wording says so instead.
  */
 import type { AiHarnessAccount } from '../harness/types.js';
-import type { AccountUsageReading, UsageWindow } from '../harness/account-data.js';
+import type { AccountUsageReading, UsageWindow } from '../harness/accounts/usage-reading.js';
 
 /** The soonest a spent window comes back, across every account that was
  * tried. Undefined when nothing on offer has a reset -- a spent balance, or a

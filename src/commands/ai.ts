@@ -16,7 +16,7 @@ import { readState } from '../session/state/read.js';
 import { resolveDefaultSettings } from '../session/state/settings.js';
 import { accountView } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
-import { nativeModelCatalog } from '../harness/account-data.js';
+import { nativeModelCatalog } from '../harness/accounts/model-catalog.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountsList, aiAccountStatus, aiDoctor, announceBareInteractiveLogin, deriveAccountLabel, harnessNeedsLogin, syncAccountIdentityAfterLogin, setEmitHarnessOutput } from './account.js';
 import { createHandoffBranch, synchronizeNativeTranscript } from '../turn/runtime.js';
 import { TERMINAL } from '../tui/active-terminal.js';

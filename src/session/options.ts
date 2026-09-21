@@ -13,7 +13,7 @@
 import chalk from 'chalk';
 import { commonControlFor, optionIdsForControl } from '../harness/options.js';
 import { harnessTierRank } from '../runtime/lazy-bridge.js';
-import { nativeModelLabel } from '../harness/account-data.js';
+import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { sessionProviderLabel } from '../harness/protocol/labels.js';
 import { harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import type {
