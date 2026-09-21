@@ -13,7 +13,7 @@ import {
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { installTerminalRestoreSignals, restoreTerminal, terminalModes } from './terminal-restore.js';
+import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalTeardown } from './terminal-restore.js';
 import { compactPath, harnessSupportsEffort, localHarnessForCommand, renderActivityLine, sessionProviderLabel } from './native-harness-protocol.js';
 import { sessionTranscriptMessages } from './turn-checkpoint.js';
 import { parkCursor, TranscriptStream } from './transcript-stream.js';
@@ -2755,10 +2755,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.pendingLive = undefined;
     setTerminalRawMode(false);
     output.write(
-      `${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`
+      `${this.eraseLiveRegion()}${popReadModes()}`
       // Whoever takes the terminal takes the main screen with it: a vendor
       // login prompt drawn on our alternate screen would vanish with it.
-      + (this.alternateScreen ? LEAVE_ALTERNATE_SCREEN : ''),
+      + terminalTeardown(this.alternateScreen),
     );
     if (this.alternateScreen) terminalModes.alternateScreen = false;
     process.once('SIGCONT', this.onContinue);
@@ -3207,8 +3207,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the shell's own screen returns untouched. The conversation is on disk
     // either way -- `/resume` reopens it.
     output.write(
-      `${this.alternateScreen ? '' : this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`
-      + (terminalModes.alternateScreen ? LEAVE_ALTERNATE_SCREEN : ''),
+      `${this.alternateScreen ? '' : this.eraseLiveRegion()}${popReadModes()}`
+      + terminalTeardown(terminalModes.alternateScreen),
     );
     terminalModes.alternateScreen = false;
     terminalModes.painted = false;
@@ -3229,7 +3229,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Remove the composer and footer before handing over, so the vendor's
     // output continues directly under the conversation instead of being typed
     // across this UI's status rows.
-    output.write(`${this.eraseLiveRegion()}${leaveInputModes()}\u001b[?7h\u001b[?25h`);
+    output.write(`${this.eraseLiveRegion()}${popReadModes()}${terminalTeardown(false)}`);
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,

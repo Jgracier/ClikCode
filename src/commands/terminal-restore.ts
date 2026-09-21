@@ -32,6 +32,24 @@ export const terminalModes: {
   leaveLiveRegion?: () => string;
 } = { bracketedPaste: false, kittyKeyboard: false, focusReporting: false, wheelReporting: false, themeNotifications: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false };
 
+/** Everything a client may hold, cleared on BOTH screens.
+ *
+ * Transcribed from Claude Code's exit, and the order is the point: it clears
+ * the mouse modes on the alternate screen, leaves it, then clears them again
+ * on the main screen. Emulators commonly keep DEC private modes per screen
+ * buffer, so clearing only the alternate screen leaves the main screen dirty --
+ * and the next session's `?1049h` inherits it.
+ *
+ * `?1016` and modifyOtherKeys are cleared although this never sets them, for
+ * the same reason Claude Code does: whatever ran before may have. */
+export function terminalTeardown(leavingAlternateScreen: boolean): string {
+  const mouseOff = '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l';
+  const readsOff = '\x1b[?2004l\x1b[?2031l\x1b[?1004l';
+  const latchedOff = '\x1b[>4m\x1b(B\x0f\x1b7\x1b[r\x1b8';
+  return `${mouseOff}${readsOff}${leavingAlternateScreen ? '\x1b[?1049l' : ''}`
+    + `${mouseOff}${readsOff}${latchedOff}\x1b[?7h\x1b[?25h`;
+}
+
 /** Leave the terminal the way a shell expects it: synchronized update closed,
  * kitty keyboard flags popped, bracketed paste off, autowrap on, cursor shown,
  * cooked mode. Idempotent, and never throws -- it runs inside crash handlers. */
@@ -63,14 +81,21 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // of the four mouse modes, twice over. That is what a program does when it
     // knows a client latches state, and it is why running Claude Code once
     // makes the next program work -- measured here three times.
-    sequence += '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l';
-    sequence += '\x1b[?2004l\x1b[?2031l\x1b[?1004l';
-    sequence += '\x1b[>4m';          // modifyOtherKeys back to the default
-    sequence += '\x1b(B\x0f';        // US-ASCII into G0, shift in
-    sequence += '\x1b7\x1b[r\x1b8';   // release any scroll region, moving nothing
-    sequence += '\x1b[?7h\x1b[?25h';
-    // Last, so everything above lands on the screen it was meant for.
-    if (terminalModes.alternateScreen) sequence += '\x1b[?1049l';
+    // Order transcribed from Claude Code's exit, captured from this user's
+    // phone, and the order is the point.
+    //
+    // It clears the mouse modes on the ALTERNATE screen, then leaves it, then
+    // clears them AGAIN on the main screen -- twice. This cleared them once,
+    // on the alternate screen, and left `?1049l` for last, so the main screen's
+    // mouse state was never touched at all.
+    //
+    // Emulators commonly keep DEC private modes per screen buffer. Leaving the
+    // main screen dirty means the next session's `?1049h` inherits it, which is
+    // the self-perpetuating failure actually observed: ClikCode stops scrolling
+    // with the keyboard hidden and stays broken across restarts, and running
+    // Claude Code once -- which does clean the main screen -- fixes the next
+    // ClikCode.
+    sequence += terminalTeardown(terminalModes.alternateScreen);
     const wasRaw = terminalModes.rawMode;
     terminalModes.uiStarted = false;
     terminalModes.painted = false;
