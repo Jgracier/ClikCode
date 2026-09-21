@@ -3,6 +3,8 @@ import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from './spawn-portable.js';
+import { installFailureTail, runCaptured, startSpinner } from './install-progress.js';
+import { installInstructions } from './harness-install-hints.js';
 import { runLoginSession } from './login-session.js';
 
 export interface NativeHarnessSpec {
@@ -180,10 +182,20 @@ export async function ensureNativeHarness(spec: NativeHarnessSpec): Promise<void
     throw new Error(`${spec.displayName} is an editor extension, not a standalone terminal harness; ClikCode cannot broker it as a native TUI.`);
   }
   if (await binaryOnPath(spec.binary)) return;
-  if (!spec.npmPackage) {
-    throw new Error(`${spec.displayName} does not publish an npm package ClikCode can install automatically. Install ${spec.displayName}'s official CLI yourself (it must put a \`${spec.binary}\` binary on PATH), then retry /${spec.command}.`);
+  if (!spec.npmPackage) throw new Error(installInstructions(spec.displayName, spec.command, spec.binary));
+  // Captured, not inherited: npm's progress bars, deprecation warnings and
+  // audit footer used to land in the middle of the UI, several screens of it
+  // on a phone, for a decision the user has already made.
+  const spinner = startSpinner(`Installing ${spec.displayName}…`);
+  let result;
+  try { result = await runCaptured('npm', ['install', '--global', spec.npmPackage]); }
+  catch (error) { spinner.stop(); throw error; }
+  if (result.code !== 0) {
+    spinner.stop();
+    const tail = installFailureTail(result.output);
+    throw new Error(`Could not install ${spec.displayName} (npm exited ${result.code ?? 'abnormally'}).${tail ? `\n${tail}` : ''}`);
   }
-  await run('npm', ['install', '--global', spec.npmPackage]);
+  spinner.stop(`Installed ${spec.displayName}.`);
   clearNativeHarnessInspectionCache(spec.command);
   if (!await binaryOnPath(spec.binary)) throw new Error(`${spec.displayName} installed but its binary is not on PATH; open a new terminal and retry.`);
 }
