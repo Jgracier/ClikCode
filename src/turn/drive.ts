@@ -250,8 +250,19 @@ export async function aiSessionSend(
               onResponseDelta: (text, mode) => {
                 cliOutputStarted = true;
                 idle.noteActivity();
-                checkpoint.response(text, mode);
-                TERMINAL.active?.response(text, mode);
+                // Through the title filter, like every other transport. This
+                // path was the one that skipped it, so the first turn of an
+                // unnamed chat streamed the raw <clikcode-title> tag onto the
+                // screen -- and, worse, left what was displayed different from
+                // the cleaned text that gets persisted. The transcript then
+                // read the saved answer as new content and emitted the whole
+                // reply a second time underneath the copy already there. That
+                // is the duplicated response.
+                const delta = mode ?? 'append';
+                const visible = titleStream ? titleStream.push(text, delta) : text;
+                if (visible === undefined) return;
+                checkpoint.response(visible, delta);
+                TERMINAL.active?.response(visible, delta);
               },
               onActivity: (event) => {
                 cliOutputStarted = true;
@@ -346,8 +357,12 @@ export async function aiSessionSend(
                 cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
                 environment, signal, images, onSessionId,
                 onResponseDelta: (delta) => {
-                  checkpoint.response(delta, 'append');
-                  TERMINAL.active?.response(delta, 'append');
+                  // Same filter as every other transport: ACP harnesses were
+                  // streaming the raw title tag too.
+                  const visible = titleStream ? titleStream.push(delta, 'append') : delta;
+                  if (visible === undefined) return;
+                  checkpoint.response(visible, 'append');
+                  TERMINAL.active?.response(visible, 'append');
                 },
                 onActivity, onThought, onUsage: noteUsage,
                 onPlan: (entries) => optionalTerminal()?.setPlan?.(entries),
