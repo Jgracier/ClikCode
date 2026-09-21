@@ -49,22 +49,22 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
   });
 
   it('folds the duplicates and keeps everything else', () => {
-    // Of the registry's rows, 73 restate a control the user already had. What
+    // Of the registry's rows, 77 restate a control the user already had. What
     // is left is the genuinely vendor-specific surface. Six harnesses publish
     // nothing a ClikCode control does not already own -- a model selector, a
     // permission mode -- so their vendor surface is correctly empty rather
     // than a list of duplicates.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(73);
-    expect(kept.length).toBe(147);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(77);
+    expect(kept.length).toBe(151);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     expect(emptied.map((h) => h.command)).toEqual(['grok', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']);
   });
 
   it('routes both spellings of extra directories to the same command', () => {
-    // Qwen publishes --include-directories; others publish --add-dir.
-    // One concept, one control.
+    // Gemini and Qwen publish --include-directories; others publish
+    // --add-dir. One concept, one control.
     expect(commonControlFor('add-dir')).toBe('/add-dir');
     expect(commonControlFor('include-directories')).toBe('/add-dir');
   });
@@ -122,7 +122,7 @@ describe('every option is reachable, by exactly one route', () => {
     const byAddDir = harnesses.filter((h) => optionsOf(h).some((o) => o.id === 'add-dir'));
     const byInclude = harnesses.filter((h) => optionsOf(h).some((o) => o.id === 'include-directories'));
     expect(byAddDir.length).toBeGreaterThan(0);
-    expect(byInclude.map((h) => h.command)).toEqual(['qwen']);
+    expect(byInclude.map((h) => h.command)).toEqual(['gemini', 'qwen']);
     for (const harness of [...byAddDir, ...byInclude]) {
       expect(optionsOf(harness).some((o) => ids.includes(o.id)), `${harness.command} is unreachable from /add-dir`).toBe(true);
     }
@@ -178,8 +178,8 @@ describe('asking for a control by any of its spellings finds the right option', 
     }
   });
 
-  it('reaches Qwen through the id the others use', () => {
-    for (const command of ['qwen']) {
+  it('reaches Gemini and Qwen through the id the others use', () => {
+    for (const command of ['gemini', 'qwen']) {
       const harness = harnesses.find((h) => h.command === command)!;
       expect(resolve(harness, 'add-dir')?.id).toBe('include-directories');
     }

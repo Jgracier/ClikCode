@@ -25,7 +25,15 @@ export function conversationTitle(prompt: string): string {
 
 export interface DiscoveredNativeSession {
   nativeId: string;
+  /** What to show in the resume list. May be a real title the harness wrote,
+   * or -- failing that -- the opening of the first message, which is a
+   * preview and not a name. `titleIsGenerated` says which. */
   title?: string;
+  /** True only when `title` is a title the HARNESS generated, rather than the
+   * first message truncated. Adoption names a session from this and nothing
+   * else: a preview written into `name` looks like a title forever after, and
+   * stops nameSession from ever replacing it with a real one. */
+  titleIsGenerated?: boolean;
   updatedAt?: string;
   /** Real epoch millis when known (every filesystem-based discoverer has the
    * file's own mtime). Shell-table discoverers only have whatever display
@@ -74,6 +82,25 @@ async function readFilePrefix(path: string, maxBytes: number): Promise<string> {
   }
 }
 
+/** The last `maxBytes` of a file, from the first newline inside that window so
+ * the caller never sees half a record. Bounded work whatever the file's size,
+ * which matters here: these transcripts reach tens of megabytes. */
+async function readFileSuffix(path: string, maxBytes: number): Promise<string> {
+  const handle = await open(path, 'r');
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(maxBytes, size);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, Math.max(0, size - length));
+    const text = buffer.toString('utf8', 0, bytesRead);
+    if (length >= size) return text;
+    const newline = text.indexOf('\n');
+    return newline === -1 ? '' : text.slice(newline + 1);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function walkFilesRecursive(dir: string, maxDepth: number, suffix: string): Promise<string[]> {
   let entries;
   try { entries = await readdir(dir, { withFileTypes: true }); } catch {
@@ -105,7 +132,7 @@ async function newestFiles(paths: readonly string[], limit: number): Promise<Arr
 /** What discovery learned about one vendor file. Everything here comes from
  * the head of an append-only transcript, so it stays true for as long as the
  * file exists; only a missing title is ever looked up again. */
-interface CachedSessionFacts { id?: string; cwd?: string; title?: string; mtimeMs?: number; size?: number }
+interface CachedSessionFacts { id?: string; cwd?: string; title?: string; generated?: boolean; mtimeMs?: number; size?: number }
 /** One vendor directory's listing, valid while the directory's own mtime is
  * unchanged (a directory's mtime moves when entries are added or removed). */
 interface CachedDirectory { mtimeMs: number; files: Record<string, CachedSessionFacts> }
@@ -245,14 +272,28 @@ function claudeProjectDirectories(workspace: string, environment: NativeSessionE
   return claudeProjectDirectoryNames(workspace).map((name) => join(root, name));
 }
 
-async function claudeSessionTitle(path: string): Promise<string | undefined> {
+/** The chat's name for the resume list, and whether it is a real one.
+ *
+ * Reads the tail as well as the head: Claude writes its ai-title record a turn
+ * or two in, which on real transcripts sat as far as 66KB from the start --
+ * past this prefix -- while the newest copy is always near the end. */
+async function claudeSessionTitle(path: string): Promise<{ title?: string; generated?: boolean }> {
+  const tail = await readFileSuffix(path, 64_000).catch(() => '');
+  let generated: string | undefined;
+  for (const line of tail.split('\n')) {
+    if (!line.includes('ai-title')) continue;
+    try {
+      const record = JSON.parse(line) as Record<string, unknown>;
+      if (record.type === 'ai-title' && typeof record.aiTitle === 'string' && record.aiTitle.trim()) generated = record.aiTitle.trim();
+    } catch { /* a partial line at the window edge is not a record. */ }
+  }
+  if (generated) return { title: generated, generated: true };
   const prefix = await readFilePrefix(path, 8_000).catch(() => '');
   let title: string | undefined;
   for (const line of prefix.split('\n')) {
     if (!line.trim()) continue;
     let record: Record<string, unknown>;
     try { record = JSON.parse(line); } catch { continue; }
-    if (record.type === 'ai-title' && typeof record.aiTitle === 'string') return record.aiTitle;
     const message = record.message as { content?: unknown } | undefined;
     if (!title && record.type === 'user') {
       const text = visibleNativeUserText(extractMessageText(message?.content));
@@ -263,7 +304,7 @@ async function claudeSessionTitle(path: string): Promise<string | undefined> {
       if (text) title = conversationTitle(text);
     }
   }
-  return title;
+  return { title };
 }
 
 /** The title the harness itself gave this thread, or nothing.
@@ -281,14 +322,22 @@ export async function nativeGeneratedTitle(
   if (harness.command !== 'claude' || !nativeId || !workspace) return undefined;
   const file = await locateNativeSessionFile(harness, nativeId, workspace, environment);
   if (!file) return undefined;
-  const prefix = await readFilePrefix(file.path, 8_000).catch(() => '');
-  for (const line of prefix.split('\n')) {
-    if (!line.trim()) continue;
+  // Read the END, not the beginning. Claude writes this record a turn or two
+  // in and then rewrites it as the conversation moves on, so the first copy is
+  // both late and stale. Measured across real transcripts: the first record
+  // sits as far as 66KB in -- well past the 8KB prefix this used to read, which
+  // is why four of six transcripts here yielded no title at all -- while the
+  // LAST one is always within ~19KB of the end, even in a 27MB file. A 64KB
+  // tail therefore finds the newest title in bounded work whatever the size.
+  const tail = await readFileSuffix(file.path, 64_000).catch(() => '');
+  let latest: string | undefined;
+  for (const line of tail.split('\n')) {
+    if (!line.includes('ai-title')) continue;
     let record: Record<string, unknown>;
     try { record = JSON.parse(line); } catch { continue; }
-    if (record.type === 'ai-title' && typeof record.aiTitle === 'string' && record.aiTitle.trim()) return record.aiTitle.trim();
+    if (record.type === 'ai-title' && typeof record.aiTitle === 'string' && record.aiTitle.trim()) latest = record.aiTitle.trim();
   }
-  return undefined;
+  return latest;
 }
 
 async function discoverClaudeFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
@@ -303,10 +352,15 @@ async function discoverClaudeFsSessions(workspace: string, environment: NativeSe
       // A title can appear after the first scan (the ai-title record is written
       // once Claude has named the chat), so it is keyed to the file's mtime.
       if (facts.mtimeMs !== file.mtimeMs) {
-        listing.files[name] = { title: await claudeSessionTitle(file.path), mtimeMs: file.mtimeMs };
+        const read = await claudeSessionTitle(file.path);
+        listing.files[name] = { title: read.title, generated: read.generated, mtimeMs: file.mtimeMs };
         discoveryCache!.dirty = true;
       }
-      sessions.push({ nativeId: name.replace(/\.jsonl$/, ''), title: listing.files[name]!.title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
+      sessions.push({
+        nativeId: name.replace(/\.jsonl$/, ''), title: listing.files[name]!.title,
+        ...(listing.files[name]!.generated ? { titleIsGenerated: true } : {}),
+        updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs,
+      });
     }
     if (sessions.length) break;
   }
