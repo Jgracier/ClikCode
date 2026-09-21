@@ -449,7 +449,14 @@ export async function aiSessionSend(
         // Same-provider failover for the native-CLI path: switching accounts means
         // switching vendor config roots, so the in-flight native conversation can't
         // continue under the old identity — start a fresh one under the fallback.
-        if (session.accountFailover !== 'on-quota-exhausted') throw failure;
+        // Running out reads the same whether or not failover is on. With it
+        // off there is simply nowhere to switch to, which is the same outcome
+        // as having switched everywhere and found nothing -- so it says the
+        // same thing rather than leaking whatever the vendor happened to call
+        // it ("Payment Required", "usage balance exhausted").
+        if (session.accountFailover !== 'on-quota-exhausted') {
+          throw new Error(usageExhaustedMessage(account ? [account] : []));
+        }
         const fallback = await nextUsableFailoverAccount(
           state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
         );

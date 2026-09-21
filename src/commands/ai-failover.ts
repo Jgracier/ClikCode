@@ -40,7 +40,7 @@ export interface AccountFailureSignals {
 }
 
 const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked))/i;
-const QUOTA_TEXT = /(?:quota (?:exceeded|exhausted)|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|out of credits|billing (?:hard )?limit)/i;
+const QUOTA_TEXT = /(?:quota (?:exceeded|exhausted)|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|out of credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
 const THROTTLE_TEXT = /(?:rate limit|too many requests|temporar(?:y|ily) throttled)/i;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
@@ -64,6 +64,16 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   };
   const rawStatus = signals.statusCode ?? carried.statusCode ?? carried.response?.status;
   const status = typeof rawStatus === 'number' ? rawStatus : undefined;
+  // Some harnesses report the code only inside the message they print. Grok
+  // Build's failure is a result record whose `errors` array holds
+  // 'API error (status 402 Payment Required): ... usage balance exhausted' --
+  // no status field anywhere, so a turn that plainly ran out of money was
+  // classified 'other' and never reached the failover path at all.
+  const embeddedStatus = (text: string): number | undefined => {
+    const found = /(?:\bstatus[ :]+|"http_status"\s*:\s*)(\d{3})\b/i.exec(text)?.[1];
+    const code = found ? Number(found) : undefined;
+    return code !== undefined && code >= 400 && code < 600 ? code : undefined;
+  };
   const errorKind = signals.errorKind ?? (typeof carried.errorKind === 'string' ? carried.errorKind : undefined);
   const rateLimitStatus = signals.rateLimitStatus ?? (typeof carried.rateLimitStatus === 'string' ? carried.rateLimitStatus : undefined);
   const message = error instanceof Error ? error.message : String(error ?? '');
@@ -77,8 +87,9 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
 
   const fromKind = errorKind ? kindFromErrorKind(errorKind) : undefined;
   if (fromKind) return fromKind;
-  if (status === 401) return 'authentication-required';
-  if (status === 402) return 'quota-exhausted';
+  const effectiveStatus = status ?? embeddedStatus(text || message);
+  if (effectiveStatus === 401) return 'authentication-required';
+  if (effectiveStatus === 402) return 'quota-exhausted';
   // 403 is also "this model is not on your plan", "region blocked", a WAF, or
   // a content policy refusal. Marking the account needs_login for those sends
   // the user through a sign-in that cannot fix anything.
