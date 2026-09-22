@@ -54,6 +54,13 @@ export type WorkerEvent =
   | { type: 'resume' }
   | { type: 'notice'; message: string }
   | { type: 'turn-error'; message: string }
+  /** A cancelled turn that produced nothing worth keeping is discarded
+   * outright (see session-worker.ts's runTurn) -- but the words the user
+   * actually typed are still theirs, so the client's own composer gets them
+   * back rather than losing them entirely. Sent only when the client's
+   * `cancel` asked for it (restoreDraft: true) and there truly was nothing
+   * to preserve as an interrupted turn instead. */
+  | { type: 'restore-draft'; text: string }
   /** The worker is exiting (idle timeout, explicit stop, an unrecoverable
    * error) -- told, not just disconnected, so a client can say why instead
    * of a bare "connection closed". */

@@ -27,6 +27,12 @@ export class BroadcastObserver implements TurnObserver {
    * sees -- not a re-derivation, a read of the one copy this class owns. */
   private liveText = '';
   private waitingLabel = '';
+  /** Mirrors TerminalHarnessPrompter.turnOutputStarted(): true once ANY
+   * visible content -- an answer token or a tool activity line -- has
+   * streamed for the turn currently in flight. What a cancel handler needs
+   * to decide between preserveInterruptedTurn (something real to keep) and
+   * discardInterruptedTurn (nothing happened yet, safe to drop entirely). */
+  private outputStarted = false;
   private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
 
   attach(socket: Socket): void {
@@ -65,15 +71,18 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   response(text: string, mode: 'append' | 'replace' = 'append'): void {
+    if (text) this.outputStarted = true;
     this.liveText = mode === 'replace' ? text : this.liveText + text;
     this.broadcast({ type: 'delta', text, mode });
   }
 
   activity(message: string): void {
+    this.outputStarted = true;
     this.broadcast({ type: 'activity', event: { kind: 'thinking', label: message } });
   }
 
   activityEvent(event: HarnessActivityEvent): void {
+    this.outputStarted = true;
     this.broadcast({ type: 'activity', event });
   }
 
@@ -97,15 +106,32 @@ export class BroadcastObserver implements TurnObserver {
     });
   }
 
+  /** onCancel/onSubmit are part of TurnObserver's shape because a real
+   * TerminalHarnessPrompter needs them for its own key handling, but the
+   * worker never calls them: a client's `cancel`/`steer` commands are
+   * handled directly by session-worker.ts against its own AbortController
+   * and LiveTurnInputBroker for the turn currently running, not through the
+   * observer at all. Accepted and ignored here rather than left off the
+   * signature, so this still satisfies the one interface both a worker and
+   * a real terminal are held to. */
   startWaiting(message: string, _onCancel?: (restoreDraft: boolean) => void, _onSubmit?: (text: string) => Promise<LiveTurnInputResult>): void {
     this.liveText = '';
     this.waitingLabel = message;
+    this.outputStarted = false;
     this.broadcast({ type: 'waiting-start', message });
   }
 
   stopWaiting(): void {
     this.waitingLabel = '';
     this.broadcast({ type: 'waiting-stop' });
+  }
+
+  get turnOutputStarted(): boolean {
+    return this.outputStarted;
+  }
+
+  get liveResponseText(): string {
+    return this.liveText;
   }
 
   /** A worker has no terminal to hand over -- it was spawned detached, with
