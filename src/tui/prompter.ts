@@ -162,8 +162,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private approvalRestoreLabel?: string;
   private readonly onWaitingKey = (key: string): void => {
     // Before approvals and before the draft: a turn running is when someone
-    // wants to read what went past, and Escape still means interrupt here.
+    // wants to read what went past.
     if (!this.pendingApproval && this.handleScrollKey(key)) return;
+    // Escape backs out one level, as it does everywhere else. Scrolled back
+    // mid-turn it returns to the live edge; pressed again -- now at the edge,
+    // where the band that says "esc to interrupt" is the thing being looked
+    // at -- it interrupts.
+    //
+    // It used to interrupt on the first press regardless, which was a fair
+    // call when scrolled-back reading was not really usable during a turn.
+    // Now that the page holds still while a turn streams, the only way back
+    // to the live edge was to kill the turn, so reading what went past cost
+    // the answer being read.
+    if (!this.pendingApproval && key === '\u001b' && this.scrolledBack) {
+      this.scrollTranscript(-Number.MAX_SAFE_INTEGER);
+      return;
+    }
     if (this.pendingApproval) {
       // The draft is never edited from here: every key is either an answer or
       // dropped, so the composer is exactly as the user left it afterwards.
@@ -852,7 +866,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // being written is not flush against the spinner. Counted here because
     // this number is the height budget -- reserve one row for a band that
     // draws two and the last line of the answer is pushed off the screen.
-    const waitingRows = this.waitingLabel && targetHeight >= 5 ? 2 : 0;
+    //
+    // ...but NOT while someone has scrolled back to read. The band carries a
+    // spinner and a running elapsed clock, so it repaints several times a
+    // second directly above the composer -- movement in the corner of the eye
+    // of a page that is otherwise deliberately still, which reads as the
+    // screen glitching rather than as status. Reading is the one moment this
+    // information is worth nothing: the reader already knows they asked
+    // something, and Escape brings them back to the live edge where the band
+    // is waiting.
+    //
+    // Zeroing it here rather than skipping the paint below does both halves
+    // at once: `if (waitingRows)` guards the band's own rows, and the height
+    // budget hands those two rows to the transcript, so scrolling back also
+    // shows two more lines of what is being read.
+    const waitingRows = this.waitingLabel && !this.scrolledBack && targetHeight >= 5 ? 2 : 0;
     let optionalRows = Math.max(0, targetHeight - 4 - waitingRows);
     const notice = this.transientNotice ?? this.currentNotice;
     const noticeRows = notice && optionalRows > 0 ? 1 : 0;
@@ -1216,7 +1244,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // construct that settles only when it closes -- a table still receiving
     // rows -- shows its tail until then, and every row of it is written on the
     // frame the block completes.
-    const maxLiveConversation = Math.max(0, targetHeight - footer.length);
+    // Scrolled back, the live conversation gives up ALL its rows, not just
+    // some. flushAlternateFrame already states this intent -- "the live
+    // region gives up its rows to the transcript" -- but it only achieved it
+    // implicitly, through `above = height - live.length`, so whatever the
+    // answer was still streaming kept a few rows and painted them directly
+    // above the composer. That is the tail of a sentence being written,
+    // changing several times a second, at the bottom of a page someone is
+    // reading: it reads as the screen glitching, and it is the one thing on
+    // screen they did not ask to look at.
+    //
+    // Zero here means the footer alone is the live block, so `above` takes
+    // every remaining row and the reader gets a still page plus the rows the
+    // conversation and the waiting band both gave back.
+    const maxLiveConversation = this.scrolledBack ? 0 : Math.max(0, targetHeight - footer.length);
     const liveConversationRows = Math.min(conversationLines.length, maxLiveConversation);
     const unbounded = [...(maxLiveConversation ? conversationLines.slice(-maxLiveConversation) : []), ...footer];
     // The hard invariant every relative motion in a frame depends on: the
