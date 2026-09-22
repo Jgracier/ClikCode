@@ -21,8 +21,16 @@ export function mergeNativeTranscript(
   source = normalizeImportedTranscript(source);
   if (!cached.length) return [...source];
   if (!source.length) return [...cached];
+  // Whitespace-insensitive on purpose: ClikCode's own cached copy of a
+  // message and the vendor's freshly re-read copy of the SAME message are not
+  // always byte-identical (a live-streamed reply can carry a paragraph break
+  // a tool call inserted that the vendor's own stored text does not). Every
+  // window this search tries is a SUFFIX of `cached`, so one mismatched
+  // message at the very end poisoned every window length, not just the
+  // longest -- the whole merge fell back to `[...cached]`, silently dropping
+  // every genuinely new turn the vendor had recorded after it.
   const equal = (left: NativeTranscriptMessage, right: NativeTranscriptMessage): boolean =>
-    left.role === right.role && left.content === right.content;
+    left.role === right.role && left.content.replace(/\s+/g, ' ').trim() === right.content.replace(/\s+/g, ' ').trim();
   const maxOverlap = Math.min(cached.length, source.length);
   for (let length = maxOverlap; length > 0; length -= 1) {
     const cachedStart = cached.length - length;
