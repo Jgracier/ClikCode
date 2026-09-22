@@ -7,6 +7,9 @@ import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocal
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { closeAbandonedSessions } from '../../session/abandoned.js';
+import { pruneSessionClaims } from '../../session/claims.js';
+import { readWorkerRecord } from '../../worker/registry.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
@@ -135,7 +138,40 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
 
 export async function aiSessionsList(): Promise<void> {
   const state = await readState();
+  // Reconciled on the way out rather than reported as-is. A worker closes its
+  // own session when it idles out, but a worker that was SIGKILLed, crashed or
+  // lost to a reboot never ran that path, so `active` accumulates sessions
+  // nothing is running. This is the moment someone is actually looking, which
+  // makes it the cheapest honest place to settle it. See session/abandoned.ts.
+  if (closeAbandonedSessions(state, await liveWorkerSessions(state.sessions)).length) await writeState(state);
+  // Claim FILES outlive the processes that wrote them when a terminal is
+  // killed rather than exited. pruneSessionClaims was written and tested for
+  // exactly this and had no caller anywhere, so dead claim files accumulated
+  // -- fourteen of twenty-seven were held by pids dead for up to twenty hours.
+  // Harmless to correctness, since claimIsHeld already judges them dead, but
+  // it made this listing report sessions as claimed that nothing was running.
+  await pruneSessionClaims(new Set(state.sessions.map((session) => session.id))).catch(() => 0);
   emitJson({ sessions: state.sessions });
+}
+
+/** Which sessions still have a worker process behind them. Read once per
+ *  sweep, so the decision below is made against one consistent snapshot. */
+async function liveWorkerSessions(
+  sessions: readonly HarnessSession[],
+): Promise<(sessionId: string) => boolean> {
+  const live = new Set<string>();
+  await Promise.all(sessions.map(async (session) => {
+    const record = await readWorkerRecord(session.id).catch(() => undefined);
+    if (!record) return;
+    try {
+      process.kill(record.pid, 0);
+      live.add(session.id);
+    } catch (error) {
+      // EPERM means it exists and belongs to someone else, which still counts.
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') live.add(session.id);
+    }
+  }));
+  return (sessionId: string) => live.has(sessionId);
 }
 
 export function preferredAccountId(
