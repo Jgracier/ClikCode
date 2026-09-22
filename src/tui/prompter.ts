@@ -253,7 +253,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // have this same limit, for this same reason.
       this.lastColumns = output.columns || 0;
       this.forgetScreenPosition();
-      logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${this.alternateScreen}`);
+      logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
       // Re-asked here, immediately, before anything is drawn. This is the
       // whole fix for "a swipe scrolls with the keyboard up but not with it
       // hidden": hiding the keyboard resizes the pty, the client reapplies
@@ -265,7 +265,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       //
       // Idempotent, so a client that never dropped them just sets what is
       // already set.
-      if (this.alternateScreen && !SELECTION_MODE.active) output.write(ENABLE_MOUSE_TRACKING);
+      if (!SELECTION_MODE.active) output.write(ENABLE_MOUSE_TRACKING);
       // No height probe here: it jumps the cursor to the bottom-right corner
       // and asks, at exactly the moment a swipe is being recognised. The size
       // the terminal announces is what the layout uses.
@@ -350,13 +350,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    *
    * On the alternate screen it costs nothing: the screen underneath, the
    * conversation and all, is exactly as it was when the overlay closes. */
-  /** Always true in practice: this prompter is only built when stdin and
-   * stdout are both TTYs. Kept as a field because close() and suspend() read
-   * it to decide whether the screen must be handed back. */
-  private readonly alternateScreen = Boolean(output.isTTY);
+  /** The alternate screen is not optional, and the old `alternateScreen`
+   * field was not a real choice: both construction sites are gated on
+   * terminalUiSupported(), which REQUIRES output.isTTY -- the one value the
+   * field was computed from. It was always true, so every
+   * `if (!this.alternateScreen) return false` was guarding against a
+   * line-oriented mode that cannot exist. The invariant is now asserted once
+   * in the constructor instead of re-tested at nine call sites, and a non-TTY
+   * caller fails loudly there rather than entering a half-working mode. */
   /** The title last given to the terminal, so a repaint does not resend it. */
 
   constructor() {
+    if (!output.isTTY) {
+      throw new Error('TerminalHarnessPrompter requires a TTY on stdout; construct it behind terminalUiSupported()');
+    }
     terminalModes.uiStarted = true;
     // Stdin is kept flowing for the whole session.
     //
@@ -376,7 +383,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The session before this one may have been closed from the client, in
     // which case its teardown was written into a pty that no longer existed.
     output.write(terminalPrepare());
-    if (this.alternateScreen) {
+    {
       // Every mode in one breath, with the screen, in this order -- copied
       // from the bare script that receives the gesture on this user's phone
       // when this program does not. Measured minutes apart in the same
@@ -1450,7 +1457,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * by itself once the reader lets go. Returns whether anything moved, so a
    * key that cannot scroll any further still means something to the caller. */
   scrollTranscript(rows: number): boolean {
-    if (!this.alternateScreen) return false;
     // Bounded by what the CURRENT screen can show -- see flushAlternateFrame.
     // Bounding it by the transcript's length instead let the offset run past
     // the end of what any frame would draw, and the rows a reader then had to
@@ -1507,7 +1513,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** Wheel notches go here, not straight to the viewport. */
   queueScroll(rows: number): boolean {
-    if (!this.alternateScreen) return false;
     this.pendingScroll += rows;
     if (inKeyBatch()) { this.drainAtBatchEnd(); return true; }
     this.drainScroll();
@@ -1562,7 +1567,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * at all, so a page key or a wheel notch reached the draft editor instead.
    * Returns whether the key was spent here. */
   private handleScrollKey(key: string): boolean {
-    if (!this.alternateScreen) return false;
     if (isMouseEvent(key)) {
       // Every mouse report is consumed, wheel or not: a click belongs to the
       // client's own selection, never to the composer.
@@ -1641,9 +1645,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       `${popReadModes()}`
       // Whoever takes the terminal takes the main screen with it: a vendor
       // login prompt drawn on our alternate screen would vanish with it.
-      + terminalTeardown(this.alternateScreen),
+      + terminalTeardown(true),
     );
-    if (this.alternateScreen) terminalModes.alternateScreen = false;
+    terminalModes.alternateScreen = false;
     process.once('SIGCONT', this.onContinue);
     process.kill(process.pid, 'SIGTSTP');
   }
@@ -1651,7 +1655,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private readonly onContinue = (): void => {
     if (this.closed) return;
     this.suspended = false;
-    if (this.alternateScreen && !terminalModes.alternateScreen) {
+    if (!terminalModes.alternateScreen) {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
     }
@@ -1838,7 +1842,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           // client this is the only way back through the conversation at all.
           // History keeps Ctrl+P and Ctrl+N, which is where it always was as
           // well, and the arrows still move through a draft once there is one.
-          if (!value && this.alternateScreen) {
+          if (!value) {
             if (this.scrollTranscript(direction === -1 ? SWIPE_ROWS : -SWIPE_ROWS)) return;
             if (direction === 1 && this.noteReadingDirection()) return;
           }
@@ -2123,7 +2127,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Re-seed the authoritative transcript at the new width when control
     // returns; native scrollback remains available above the refreshed view.
     this.suspended = false;
-    if (this.alternateScreen && !terminalModes.alternateScreen) {
+    if (!terminalModes.alternateScreen) {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
     }
