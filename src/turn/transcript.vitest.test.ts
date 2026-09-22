@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TurnTranscript, settledAnswerBlocks, settledToolRows } from './transcript';
+import { TurnTranscript, settledAnswerBlocks } from './transcript';
 import type { MessageBlock } from '../harness/prompter.js';
 
 const text = (blocks: readonly MessageBlock[]): string[] =>
@@ -42,34 +42,51 @@ describe('an answer settles a block at a time', () => {
 });
 
 describe('a tool settles when it finishes', () => {
-  const tool = (id: string, done: boolean) => ({ id, done, lines: [`${done ? 'done' : 'tool'} ${id}`] });
+  // The settling rule is owned by TurnTranscript itself; these drive it
+  // through advance(), the real production path, rather than through a
+  // standalone helper that only tests ever called.
+  const renderBlocks = (blocks: readonly MessageBlock[]): string[] => text(blocks);
+  const tool = (id: string, done: boolean) =>
+    ({ id, done, responseOffset: 0, lines: [`${done ? 'done' : 'tool'} ${id}`] });
 
   it('keeps a running tool live and retires a finished one', () => {
-    const step = settledToolRows([tool('a', true), tool('b', false)], new Set(), false);
-    expect(step.settled).toEqual(['done a']);
+    const step = new TurnTranscript().advance({
+      content: '', tools: [tool('a', true), tool('b', false)], turnEnded: false, renderBlocks,
+    });
+    expect(step.finished).toEqual(['done a']);
     expect(step.live).toEqual(['tool b']);
-    expect(step.emitted).toEqual(['a']);
   });
 
   it('never emits the same tool twice', () => {
-    const step = settledToolRows([tool('a', true)], new Set(['a']), false);
-    expect(step.settled).toEqual([]);
-    expect(step.live).toEqual([]);
+    const transcript = new TurnTranscript();
+    const first = transcript.advance({
+      content: '', tools: [tool('a', true)], turnEnded: false, renderBlocks,
+    });
+    expect(first.finished).toEqual(['done a']);
+    const second = transcript.advance({
+      content: '', tools: [tool('a', true)], turnEnded: false, renderBlocks,
+    });
+    expect(second.finished).toEqual([]);
+    expect(second.live).toEqual([]);
   });
 
   it('settles a tool that never reported completion when the turn ends', () => {
     // Some vendors simply never send one. Holding the region open for it is
     // what pinned a whole turn above the composer.
-    const step = settledToolRows([tool('stuck', false)], new Set(), true);
-    expect(step.settled).toEqual(['tool stuck']);
+    const step = new TurnTranscript().advance({
+      content: '', tools: [tool('stuck', false)], turnEnded: true, renderBlocks,
+    });
+    expect(step.finished).toEqual(['tool stuck']);
     expect(step.live).toEqual([]);
   });
 
   it('keeps every tool in a long run, with no count row', () => {
     const many = Array.from({ length: 200 }, (_, index) => tool(`t${index}`, true));
-    const step = settledToolRows(many, new Set(), false);
-    expect(step.settled).toHaveLength(200);
-    expect(step.settled.join('\n')).not.toContain('earlier tool');
+    const step = new TurnTranscript().advance({
+      content: '', tools: many, turnEnded: false, renderBlocks,
+    });
+    expect(step.finished).toHaveLength(200);
+    expect(step.finished.join('\n')).not.toContain('earlier tool');
   });
 });
 

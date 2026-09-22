@@ -7,9 +7,7 @@
  * prompter both fall back to plain stdout. One mutable reference, held here so
  * that none of those three has to import the other two to reach it.
  */
-import type { HarnessPlanEntry } from '../harness/events/turn-observer.js';
 import type { TerminalHarnessPrompter } from './prompter.js';
-import type { NormalizedTurnUsage } from '../harness/transport/options.js';
 
 export const TERMINAL: {
   /** The prompter on screen, or undefined when output is headless. */
@@ -18,12 +16,3 @@ export const TERMINAL: {
   panelsShown: number;
 } = { panelsShown: 0 };
 
-/** Prompter methods the terminal UI is gaining; feature-detected, never assumed. */
-interface OptionalTerminalMethods {
-  setPlan?(entries: readonly HarnessPlanEntry[]): void;
-  setTurnUsage?(usage: NormalizedTurnUsage): void;
-}
-
-export function optionalTerminal(): OptionalTerminalMethods | undefined {
-  return TERMINAL.active as unknown as OptionalTerminalMethods | undefined;
-}

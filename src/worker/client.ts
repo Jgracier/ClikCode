@@ -63,11 +63,6 @@ async function findRunningWorker(sessionId: string): Promise<WorkerRuntimeRecord
   return (await workerIsReachable(record.socketPath)) ? record : undefined;
 }
 
-export interface WorkerClientEvents {
-  event: [WorkerEvent];
-  close: [];
-}
-
 /** One connection to one session's worker. `send` is fire-and-forget over the
  * socket; events arrive through `.on('event', ...)` exactly as a terminal
  * used to receive them via direct method calls on TERMINAL.active -- the
