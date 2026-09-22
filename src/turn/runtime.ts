@@ -223,6 +223,9 @@ export class DurableTurnCheckpoint {
   private timer: NodeJS.Timeout | undefined;
   private writes: Promise<void> = Promise.resolve();
   private dirty = false;
+  /** A debounced write that failed with no caller to reject to. Surfaced by
+   *  complete(), so a turn whose conversation was never saved says so. */
+  private writeError: Error | undefined;
 
   private constructor(private readonly state: HarnessState, readonly session: HarnessSession) {}
 
@@ -284,6 +287,13 @@ export class DurableTurnCheckpoint {
     finishPendingTurn(this.session, response, new Date().toISOString());
     this.dirty = true;
     await this.flush();
+    // A turn that streamed perfectly but never reached disk is not a turn
+    // that succeeded, and this is the first point with a caller to tell.
+    if (this.writeError) {
+      const error = this.writeError;
+      this.writeError = undefined;
+      throw error;
+    }
   }
 
   async flush(): Promise<void> {
@@ -295,6 +305,27 @@ export class DurableTurnCheckpoint {
     } else await this.writes;
   }
 
+  /** Mark the session dirty so the next flush writes it, without awaiting.
+   *
+   * For callers inside a SYNCHRONOUS callback, which cannot await and have
+   * nowhere to report to. They used to write
+   * `void checkpoint.persistNow().catch(() => undefined)`, which discarded
+   * the failure outright; the debounced write here goes through the same
+   * path as every other write, and its failure is remembered rather than
+   * dropped (see writeError). */
+  touch(): void {
+    this.schedule();
+  }
+
+  /** The steer-landed-late case, for a synchronous caller: drop the queued
+   *  copy so it is not also sent as the next turn. The state change is
+   *  immediate and the write is left to the debounce -- the old
+   *  `unqueue(...).catch(() => undefined)` could silently leave the queued
+   *  copy in place, which is a duplicate message sent later. */
+  unqueueSoon(submission: LiveTurnSubmission): void {
+    if (consumeSessionTurn(this.session, submission.id)) this.schedule();
+  }
+
   private schedule(): void {
     this.dirty = true;
     if (this.timer) return;
@@ -302,13 +333,25 @@ export class DurableTurnCheckpoint {
       this.timer = undefined;
       if (!this.dirty) return;
       this.dirty = false;
-      void this.enqueue();
+      // A debounced write has no caller to reject to. Remember the failure so
+      // complete() -- which does have one -- reports it, instead of it
+      // vanishing into an unhandled rejection.
+      void this.enqueue().catch((error: unknown) => { this.writeError = error as Error; });
     }, 250);
   }
 
   private enqueue(): Promise<void> {
-    this.writes = this.writes.then(() => writeState(this.state));
-    return this.writes;
+    // `this.writes.then(...)` off a REJECTED promise never runs its callback,
+    // so chaining the next write onto a failed one permanently stopped
+    // writeState from ever being called again -- the turn kept streaming and
+    // nothing was saved for the rest of the checkpoint's life, with no error
+    // anywhere. Proven with a four-write reproduction: two landed.
+    //
+    // So the chain the NEXT write builds on is always settled, while the
+    // promise handed back to THIS caller still carries its own real failure.
+    const write = this.writes.catch(() => undefined).then(() => writeState(this.state));
+    this.writes = write.catch(() => undefined);
+    return write;
   }
 }
 
