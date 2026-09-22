@@ -39,7 +39,6 @@ import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
 import { closePersistentTransport, DurableTurnCheckpoint, fallbackTurnHarnesses, nameSession, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
-import { TERMINAL, optionalTerminal } from '../tui/active-terminal.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
@@ -58,6 +57,7 @@ import { sessionTranscriptMessages } from './checkpoint.js';
 export async function aiSessionSend(
   id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
 ): Promise<void> {
+  const prompter = run.prompter;
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -130,8 +130,8 @@ export async function aiSessionSend(
         ));
         }
         switchedFrom = account.label;
-        TERMINAL.active?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
-        TERMINAL.active?.phase(`switching to ${fallback.label}`);
+        prompter?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
+        prompter?.phase(`switching to ${fallback.label}`);
         account = fallback;
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
@@ -167,11 +167,11 @@ export async function aiSessionSend(
       if (!usage) return;
       turnUsage = { ...turnUsage, ...usage };
       session.lastUsage = { ...turnUsage, at: new Date().toISOString() };
-      optionalTerminal()?.setTurnUsage?.(turnUsage);
+      prompter?.setTurnUsage(turnUsage);
     };
     const onActivity = (event: HarnessActivityEvent): void => {
       checkpoint.activity(event);
-      if (TERMINAL.active) TERMINAL.active.activityEvent(event);
+      if (prompter) prompter.activityEvent(event);
       else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
     };
     const onThought = (thought: string): void => {
@@ -266,14 +266,14 @@ export async function aiSessionSend(
                 const visible = titleStream ? titleStream.push(text, delta) : text;
                 if (visible === undefined) return;
                 checkpoint.response(visible, delta);
-                TERMINAL.active?.response(visible, delta);
+                prompter?.response(visible, delta);
               },
               onActivity: (event) => {
                 cliOutputStarted = true;
                 noteTurnActivityEvent(idle, event);
                 onActivity(event);
               },
-              onPhase: (phase) => TERMINAL.active?.phase(phase),
+              onPhase: (phase) => prompter?.phase(phase),
               onUsage: noteUsage,
               onAvailableCommands: (commands) => nativeAvailableCommands.set(session.id, commands),
             });
@@ -293,7 +293,7 @@ export async function aiSessionSend(
                 ...(reported.permissionMode ? { permissionMode: reported.permissionMode } : {}),
               };
               checkpoint.persistNow().catch(() => undefined);
-              TERMINAL.active?.render(session);
+              prompter?.render(session);
             }
           },
         });
@@ -319,7 +319,7 @@ export async function aiSessionSend(
           try {
             if (transport === 'codex-app-server') {
               const overrides = appServerThreadOverrides(declaredOptions, session.harnessOptions);
-              if (overrides.unmapped.length) TERMINAL.active?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${overrides.unmapped.join(', ')}`));
+              if (overrides.unmapped.length) prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${overrides.unmapped.join(', ')}`));
               const codexInput: CodexAppServerTurnInput = {
                 binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
                 cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
@@ -338,16 +338,16 @@ export async function aiSessionSend(
                   const visible = titleStream ? titleStream.push(text, mode) : text;
                   if (visible === undefined) return;
                   checkpoint.response(visible, mode);
-                  TERMINAL.active?.response(visible, mode);
+                  prompter?.response(visible, mode);
                 },
-                onPhase: (phase) => TERMINAL.active?.phase(phase),
-                onApproval: (title, detail) => TERMINAL.active?.approval(title, detail) ?? Promise.resolve(false),
+                onPhase: (phase) => prompter?.phase(phase),
+                onApproval: (title, detail) => prompter?.approval(title, detail) ?? Promise.resolve(false),
                 onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText) => {
                   await handler(steerText);
                   await checkpoint.steer({ id: randomUUID(), text: steerText, submittedAt: new Date().toISOString() });
                 } : undefined),
                 onActivity, onThought, onUsage: noteUsage,
-                onPlan: (entries) => optionalTerminal()?.setPlan?.(entries),
+                onPlan: (entries) => prompter?.setPlan(entries),
               };
               result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
             } else {
@@ -366,18 +366,18 @@ export async function aiSessionSend(
                   const visible = titleStream ? titleStream.push(delta, 'append') : delta;
                   if (visible === undefined) return;
                   checkpoint.response(visible, 'append');
-                  TERMINAL.active?.response(visible, 'append');
+                  prompter?.response(visible, 'append');
                 },
                 onActivity, onThought, onUsage: noteUsage,
-                onPlan: (entries) => optionalTerminal()?.setPlan?.(entries),
+                onPlan: (entries) => prompter?.setPlan(entries),
                 onAvailableCommands: (commands) => { nativeAvailableCommands.set(session.id, commands); },
-                onApproval: (title, detail) => TERMINAL.active?.approval(title, detail) ?? Promise.resolve(false),
+                onApproval: (title, detail) => prompter?.approval(title, detail) ?? Promise.resolve(false),
               };
               try {
                 result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
               } catch (error) {
                 if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback || !harness.turn) throw error;
-                TERMINAL.active?.phase('using structured CLI fallback');
+                prompter?.phase('using structured CLI fallback');
                 result = await runStructuredCliTurn();
               }
             }
@@ -420,7 +420,7 @@ export async function aiSessionSend(
         if (failureKind === 'other' && !cliOutputStarted && harness.experimental && harness.fallbackTurn
           && !fallbackTurnHarnesses.has(harness.command) && (transport === 'structured-cli' || transport === 'text-cli')) {
           fallbackTurnHarnesses.add(harness.command);
-          TERMINAL.active?.phase('using compatibility turn');
+          prompter?.phase('using compatibility turn');
           continue;
         }
         if (failureKind === 'authentication-required') {
@@ -434,19 +434,19 @@ export async function aiSessionSend(
           // N: {...}" message with no attempt to actually fix it. Same
           // suspend/login/resume mechanism aiHarnessSelect uses, triggered
           // here instead of only at provider-switch time.
-          if (!authRetried && TERMINAL.active && harness.loginArgv) {
+          if (!authRetried && prompter && harness.loginArgv) {
             authRetried = true;
             await closePersistentTransport(session.id);
             if (harness.loginCapturable) {
-              TERMINAL.active.startWaiting(`signing in to ${harness.displayName}…`);
-              try { await loginNativeHarness(harness, environment); } finally { TERMINAL.active.stopWaiting(); }
+              prompter.startWaiting(`signing in to ${harness.displayName}…`);
+              try { await loginNativeHarness(harness, environment); } finally { prompter.stopWaiting(); }
             } else {
-              TERMINAL.active.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-              await TERMINAL.active.suspend();
+              prompter.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+              await prompter.suspend();
               try {
                 await loginNativeHarness(harness, environment);
               } finally {
-                TERMINAL.active.resume();
+                prompter.resume();
               }
             }
             account = await syncAccountIdentityAfterLogin(harness, account, state);
@@ -470,7 +470,7 @@ export async function aiSessionSend(
           delete session.nativeSessionPreallocated;
           turnText = interruptedTurnFailoverPrompt(session);
           checkpoint.response('', 'replace');
-          TERMINAL.active?.response('', 'replace');
+          prompter?.response('', 'replace');
           continue;
         }
         // Failover is about finding an account that can still work, so it is
@@ -533,8 +533,8 @@ export async function aiSessionSend(
         // Say why it moved. Switching happens for any failure now, so calling
         // every one of them "quota reached" would misreport a crash as a
         // spent plan.
-        TERMINAL.active?.activity(`${chalk.yellow(failureKind === 'quota-exhausted' ? 'quota reached' : 'account failed')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
-        TERMINAL.active?.phase(`retrying on ${fallback.label}`);
+        prompter?.activity(`${chalk.yellow(failureKind === 'quota-exhausted' ? 'quota reached' : 'account failed')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
+        prompter?.phase(`retrying on ${fallback.label}`);
         await closePersistentTransport(session.id);
         account = fallback;
         session.accountId = fallback.id;
@@ -554,7 +554,7 @@ export async function aiSessionSend(
           turnText = interruptedTurnFailoverPrompt(session);
         }
         checkpoint.response('', 'replace');
-        TERMINAL.active?.response('', 'replace');
+        prompter?.response('', 'replace');
         continue;
       }
       session.nativeStartedAt ??= new Date().toISOString();
@@ -585,7 +585,7 @@ export async function aiSessionSend(
       // final response are reflected in ClikCode before the turn is saved.
       await synchronizeNativeTranscript(state, session);
       await writeState(state);
-      if (!TERMINAL.active) emitHarnessOutput({ session, text: answer.text, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+      if (!prompter) emitHarnessOutput({ session, text: answer.text, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
       return;
     }
     } finally {
@@ -621,8 +621,8 @@ export async function aiSessionSend(
         ));
     }
     switchedFrom = account.id;
-    TERMINAL.active?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
-    TERMINAL.active?.phase(`switching to ${fallback.label}`);
+    prompter?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
+    prompter?.phase(`switching to ${fallback.label}`);
     account = fallback;
     session.accountId = fallback.id;
     await checkpoint.persistNow();
@@ -633,7 +633,7 @@ export async function aiSessionSend(
     // checkpoint/UI. The router has always exposed onDelta;
     // omitting it here was why direct-API responses appeared only at the end.
     checkpoint.response('', 'replace');
-    TERMINAL.active?.response('', 'replace');
+    prompter?.response('', 'replace');
     return streamLocalAiTurn({
       provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
       messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
@@ -642,7 +642,7 @@ export async function aiSessionSend(
         const visible = titleStream ? titleStream.push(delta, 'append') : delta;
         if (visible === undefined) return;
         checkpoint.response(visible, 'append');
-        TERMINAL.active?.response(visible, 'append');
+        prompter?.response(visible, 'append');
       },
     });
   };
@@ -688,8 +688,8 @@ export async function aiSessionSend(
         ));
       }
       switchedFrom ??= exhaustedAccount.id;
-      TERMINAL.active?.activity(`${chalk.yellow(failureKind === 'quota-exhausted' ? 'quota reached' : 'account failed')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
-      TERMINAL.active?.phase(`retrying on ${fallback.label}`);
+      prompter?.activity(`${chalk.yellow(failureKind === 'quota-exhausted' ? 'quota reached' : 'account failed')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
+      prompter?.phase(`retrying on ${fallback.label}`);
       account = fallback;
       session.accountId = fallback.id;
     }
@@ -699,13 +699,13 @@ export async function aiSessionSend(
     at: new Date().toISOString(), inputTokens: turn.usage.inputTokens,
     outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt,
   };
-  if (TERMINAL.active && Array.isArray(turn.toolCalls)) {
+  if (prompter && Array.isArray(turn.toolCalls)) {
     for (const call of turn.toolCalls) {
       const name = call && typeof call.name === 'string' ? call.name : 'tool';
       // The tool's own name, with nothing in front of it -- the same rule the
       // native-harness rows follow. This is the Gateway/direct-API path, and
       // it was the one place still prepending a status word.
-      TERMINAL.active.activity(chalk.dim(name));
+      prompter.activity(chalk.dim(name));
     }
   }
   state.invocations.push(invocation);
@@ -713,7 +713,7 @@ export async function aiSessionSend(
   const answer = titleStream ? extractSessionTitle(turn.text) : { title: undefined, text: turn.text };
   await checkpoint.complete(answer.text);
   await nameSession(session, { title: titleStream?.title ?? answer.title });
-  if (!TERMINAL.active) emitHarnessOutput({ session, text: answer.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+  if (!prompter) emitHarnessOutput({ session, text: answer.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
   } finally {
     await checkpoint.flush();
   }
@@ -737,6 +737,7 @@ function gatewayResultNotice(data: unknown): string | undefined {
 export async function aiGatewaySessionSend(
   config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
 ): Promise<void> {
+  const prompter = run.prompter;
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -764,7 +765,7 @@ export async function aiGatewaySessionSend(
   try {
     const harnessTurn = await runGatewayHarnessSessionTurn({
       session, prompt: turnText, baseUrl, apiKey, version: CLIKCODE_VERSION,
-      ...(TERMINAL.active ? { prompter: TERMINAL.active } : {}),
+      ...(prompter ? { prompter } : {}),
       ...(signal ? { signal } : {}),
       ...(prepared.images.length ? { images: prepared.images } : {}),
       onActivity: (event) => checkpoint.activity(event),
@@ -780,7 +781,7 @@ export async function aiGatewaySessionSend(
     const named = titleStream ? extractSessionTitle(harnessTurn.text) : { title: undefined, text: harnessTurn.text };
     await checkpoint.complete(named.text);
     await nameSession(session, { title: titleStream?.title ?? named.title });
-    if (!TERMINAL.active) {
+    if (!prompter) {
       emitHarnessOutput({
         session, text: named.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation: harnessInvocation,
       });
@@ -790,7 +791,7 @@ export async function aiGatewaySessionSend(
   } catch (error) {
     if (!gatewayHarnessUnavailable(error)) { await checkpoint.flush(); throw error; }
     const notice = gatewayHarnessFallbackNotice(error);
-    if (TERMINAL.active) TERMINAL.active.activity(chalk.dim(notice));
+    if (prompter) prompter.activity(chalk.dim(notice));
     else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('Gateway:')} ${notice}\n`);
   }
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
@@ -808,7 +809,7 @@ export async function aiGatewaySessionSend(
   let buffer = '';
   let reply = '';
   let gatewayNotice: string | undefined;
-  const streamToTerminal = !isJsonDefaultMode() && !TERMINAL.active;
+  const streamToTerminal = !isJsonDefaultMode() && !prompter;
   let wroteDelta = false;
   for (;;) {
     const { done, value } = await reader.read();
@@ -829,8 +830,8 @@ export async function aiGatewaySessionSend(
           const visible = titleStream ? titleStream.push(event.text, 'append') : event.text;
           if (visible !== undefined) {
             checkpoint.response(visible, 'append');
-            TERMINAL.active?.phase('generating response');
-            TERMINAL.active?.response(visible, 'append');
+            prompter?.phase('generating response');
+            prompter?.response(visible, 'append');
             if (streamToTerminal) { output.write(visible); wroteDelta = true; }
           }
         }
@@ -854,12 +855,12 @@ export async function aiGatewaySessionSend(
         if (event.type === 'status' && typeof event.label === 'string') {
           const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
           checkpoint.activity(activityEvent);
-          if (TERMINAL.active) {
-            TERMINAL.active.activityEvent(activityEvent);
+          if (prompter) {
+            prompter.activityEvent(activityEvent);
             // Gateway labels are already humanized (for example,
             // "Restarting the app…"). Apply that richer label after the
             // generic lifecycle updates active-tool tracking.
-            TERMINAL.active.phase(event.label);
+            prompter.phase(event.label);
           }
           else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(activityEvent)) output.write(`${activity}\n`);
         }
@@ -869,7 +870,7 @@ export async function aiGatewaySessionSend(
     }
   }
   if (gatewayNotice) {
-    if (TERMINAL.active) TERMINAL.active.activity(`${chalk.yellow('gateway')} ${chalk.dim(gatewayNotice)}`);
+    if (prompter) prompter.activity(`${chalk.yellow('gateway')} ${chalk.dim(gatewayNotice)}`);
     else if (!isJsonDefaultMode()) output.write(`${wroteDelta ? '\n' : ''}${chalk.yellow('Gateway:')} ${gatewayNotice}\n`);
     if (!reply) reply = gatewayNotice;
   }
@@ -881,7 +882,7 @@ export async function aiGatewaySessionSend(
   await checkpoint.complete(answered.text);
   await nameSession(session, { title: titleStream?.title ?? answered.title });
   if (wroteDelta) output.write('\n\n');
-  else if (!TERMINAL.active) emitHarnessOutput({ session, text: answered.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
+  else if (!prompter) emitHarnessOutput({ session, text: answered.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
   } finally {
     await checkpoint.flush();
   }
