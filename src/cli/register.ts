@@ -17,8 +17,15 @@ import { aiGatewayStatus, aiModelsList, aiUsage } from '../commands/ai/status.js
 import { aiStart, aiStatus, aiStop } from '../daemon/server.js';
 import { gatewayLogin } from '../commands/gateway.js';
 import { isGatewayEnabled } from '../constants.js';
+import { runSessionWorker } from '../worker/session-worker.js';
 
 export function registerClikCodeCommands(program: Command, config: Conf): void {
+  // Not a user command: the entry point client.ts's spawnSessionWorker spawns
+  // as a fresh, detached process (see worker/client.ts). Hidden rather than
+  // undocumented-but-listed, since running it by hand does something real
+  // (binds a socket, writes a runtime record) that only makes sense as a
+  // spawn target.
+  program.command('session-worker <id>', { hidden: true }).action((id: string) => runSessionWorker(id));
   program.command('start').description('Start the optional loopback-only control API')
     .option('--port <port>', 'Optional explicit loopback port; default is OS-assigned')
     .action((options) => aiStart(config, options));
