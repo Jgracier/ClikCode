@@ -7,6 +7,7 @@ import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES, NATIVE_USAGE_READING_PROBES } from './usage-probes.js';
+import { learnedUsageReading } from './usage-learning.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, usageCacheKey, usageReadingIsCurrent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 
@@ -20,8 +21,18 @@ export async function nativeUsageReading(
   // gate used to be `if (!probe) return undefined`, which meant removing a
   // probe also made every reading that harness had already given unreadable.
   const reportsOnStream = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
-  if (!probe && !reportsOnStream) return undefined;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  // Twenty-one of the twenty-four harnesses publish no usage at all. For those
+  // the figure is LEARNED from this account's own history -- see
+  // usage-learning.ts. It needs no probe, no network and no cache (it is
+  // arithmetic over invocations we already store), so it short-circuits ahead
+  // of all of that. It returns undefined until the account has actually hit
+  // the limit enough times to know where it is, which is why this reads as
+  // "no usage source" exactly as before on a fresh account.
+  if (!probe && !reportsOnStream) {
+    if (!account) return undefined;
+    return learnedUsageReading(account.usageLearning, state.invocations, account.id, Date.now());
+  }
   const cacheKey = usageCacheKey(session.nativeHarness, account?.id, session.nativeSessionId);
   const cached = nativeUsageCache.get(cacheKey);
   // The account's own record is the shared reading: every terminal sees it, so
@@ -106,12 +117,16 @@ function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, ha
  * any, or a bare stand-in otherwise — codexUsageProbe ignores the session
  * argument entirely, and a stand-in with no nativeSessionId simply yields no
  * OpenCode label rather than a wrong one. */
-/** Whether anything can ever produce a usage figure for this harness: a probe
- * we can run, or a turn stream it reports on itself. The account picker and
- * the status line both ask this before showing a usage column at all. */
-function harnessReportsUsage(command: string): boolean {
-  return NATIVE_USAGE_PROBES[command] !== undefined || NATIVE_STREAM_USAGE_READINGS[command] !== undefined;
-}
+// There was a harnessReportsUsage(command) gate here, asking whether any
+// harness could ever produce a usage figure. Every harness can now: one has a
+// probe, or reports on its own stream, or has a limit learned from its own
+// refusals. A predicate that is true for all twenty-four inputs is not a
+// gate, so it is gone rather than left returning a constant.
+//
+// The question that actually matters was always the other one -- does this
+// account have something to say RIGHT NOW -- and that is answered where the
+// evidence lives: a probe returns nothing, or learnedUsageReading withholds a
+// figure until the account has hit its limit enough times to place it.
 
 export async function accountUsageLabel(
   account: AiHarnessAccount, state: HarnessState, options: { network?: boolean } = {},
@@ -124,7 +139,7 @@ async function accountUsageReading(
 ): Promise<UsageReading | undefined> {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
-  if (!harness || !harnessReportsUsage(harness.command)) return undefined;
+  if (!harness) return undefined;
   return nativeUsageReading(accountPseudoSession(account, state, harness.command), state, options);
 }
 
@@ -137,7 +152,7 @@ async function accountUsageReading(
 export function cachedAccountUsageLabel(account: AiHarnessAccount, state: HarnessState): string | undefined {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
-  if (!harness || !harnessReportsUsage(harness.command)) return undefined;
+  if (!harness) return undefined;
   void state;
   const reported = nativeUsageCache.get(usageCacheKey(harness.command, account.id));
   if (!reported || reported.failed || !(reported.windows?.length ?? 0)) return undefined;
