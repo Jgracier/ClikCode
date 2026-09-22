@@ -123,8 +123,13 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       activeController = undefined;
       activeLiveInput = undefined;
       activeRestoreDraft = false;
-      observer.stopWaiting();
+      // Render before stopWaiting, deliberately: a client (see
+      // worker/turn-bridge.ts) treats waiting-stop as "the turn is over,
+      // stop listening" and detaches its event handler the instant it
+      // arrives -- this final snapshot must already have been sent, or it
+      // is broadcast to a socket nothing is reading from anymore.
       observer.render((await currentSessionAndAccount()).session);
+      observer.stopWaiting();
       turnRunning = false;
       scheduleIdleExit();
     }
