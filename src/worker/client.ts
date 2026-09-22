@@ -72,16 +72,39 @@ export interface WorkerClientEvents {
  * socket; events arrive through `.on('event', ...)` exactly as a terminal
  * used to receive them via direct method calls on TERMINAL.active -- the
  * shape carried over on purpose (see turn/observer.ts), only the transport
- * between "something happened" and "something is told about it" changed. */
+ * between "something happened" and "something is told about it" changed.
+ *
+ * One exception: the very first event, attach's own answering snapshot (or
+ * attach-rejected), is consumed here and never reaches `.on('event', ...)`
+ * at all -- exposed instead as `initialSnapshot`. A caller about to submit
+ * a turn (turn-bridge.ts's runTurnThroughWorker, the only caller today)
+ * sets up its OWN listener strictly AFTER attach() resolves, which means
+ * without this it would see the pre-submit snapshot -- the session as it
+ * was BEFORE the message about to be sent -- and paint it right over
+ * whatever optimistic "here is what you just typed" render the caller
+ * already did. Confirmed live, not theoretical: a fake-terminal test
+ * caught this exact ordering the first time this shipped. */
 export class WorkerClient extends EventEmitter {
   private buffer = '';
+  readonly initialSnapshot: Promise<Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }>>;
 
   private constructor(private readonly socket: Socket) {
     super();
+    let resolveInitial!: (event: Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }>) => void;
+    let sawInitial = false;
+    this.initialSnapshot = new Promise((resolve) => { resolveInitial = resolve; });
     socket.on('data', (chunk) => {
       const { messages, rest } = decodeFrames(this.buffer + chunk.toString('utf8'));
       this.buffer = rest;
-      for (const message of messages) this.emit('event', message as WorkerEvent);
+      for (const message of messages) {
+        const event = message as WorkerEvent;
+        if (!sawInitial && (event.type === 'snapshot' || event.type === 'attach-rejected')) {
+          sawInitial = true;
+          resolveInitial(event);
+          continue;
+        }
+        this.emit('event', event);
+      }
     });
     socket.on('close', () => this.emit('close'));
   }
@@ -95,6 +118,8 @@ export class WorkerClient extends EventEmitter {
     });
     const client = new WorkerClient(socket);
     client.send({ type: 'attach', token: record.token });
+    const initial = await client.initialSnapshot;
+    if (initial.type === 'attach-rejected') { client.close(); throw new Error(`worker rejected this connection: ${initial.reason}`); }
     return client;
   }
 

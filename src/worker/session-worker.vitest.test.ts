@@ -17,8 +17,23 @@ const previousHome = process.env.CLIKCODE_HOME;
 const previousWorkerEntry = process.env.CLIKCODE_WORKER_ENTRY;
 let root: string | undefined;
 const spawnedClients: WorkerClient[] = [];
+/** Every session id this file has spawned a worker for, so afterEach can
+ * actually terminate each one -- closing the WorkerClient only disconnects;
+ * the worker itself is designed to keep running for up to 30 idle minutes
+ * (see IDLE_EXIT_MS in session-worker.ts), which is correct in production
+ * and exactly wrong left to itself in a test suite run over and over. A
+ * real run of this file once left 70+ of these alive on a real machine
+ * before this existed -- confirmed live, not a hypothetical. */
+const spawnedSessionIds: string[] = [];
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
+
+async function terminateSpawnedWorkers(): Promise<void> {
+  for (const sessionId of spawnedSessionIds.splice(0)) {
+    const record = await readWorkerRecord(sessionId).catch(() => undefined);
+    if (record) { try { process.kill(record.pid, 'SIGTERM'); } catch { /* already gone */ } }
+  }
+}
 
 beforeAll(async () => {
   // vitest's own process.argv[1] is not a runnable clikcode entry (this
@@ -40,6 +55,9 @@ afterAll(() => {
 
 afterEach(async () => {
   for (const client of spawnedClients.splice(0)) client.close();
+  // Must run while CLIKCODE_HOME still points at this test's own temp
+  // directory -- readWorkerRecord looks the record up under it.
+  await terminateSpawnedWorkers();
   if (previousHome === undefined) delete process.env.CLIKCODE_HOME;
   else process.env.CLIKCODE_HOME = previousHome;
   if (root) await rm(root, { recursive: true, force: true });
@@ -57,6 +75,7 @@ async function isolatedSession(): Promise<HarnessSession> {
   };
   state.sessions.push(session);
   await writeState(state);
+  spawnedSessionIds.push(session.id);
   return session;
 }
 
@@ -80,7 +99,7 @@ describe('session worker (real spawned process, real socket)', () => {
     const session = await isolatedSession();
     const client = await WorkerClient.attach(session.id);
     spawnedClients.push(client);
-    const snapshot = await nextEvent(client, 'snapshot');
+    const snapshot = await client.initialSnapshot;
     expect(snapshot).toMatchObject({ type: 'snapshot', session: { id: session.id } });
   });
 
@@ -88,12 +107,12 @@ describe('session worker (real spawned process, real socket)', () => {
     const session = await isolatedSession();
     const first = await WorkerClient.attach(session.id);
     spawnedClients.push(first);
-    await nextEvent(first, 'snapshot');
+    await first.initialSnapshot;
     const recordAfterFirst = await readWorkerRecord(session.id);
 
     const second = await WorkerClient.attach(session.id);
     spawnedClients.push(second);
-    await nextEvent(second, 'snapshot');
+    await second.initialSnapshot;
     const recordAfterSecond = await readWorkerRecord(session.id);
 
     // Same worker process both times -- proven by the same pid still owning
@@ -105,7 +124,7 @@ describe('session worker (real spawned process, real socket)', () => {
     const session = await isolatedSession();
     const legitimate = await WorkerClient.attach(session.id);
     spawnedClients.push(legitimate);
-    await nextEvent(legitimate, 'snapshot');
+    await legitimate.initialSnapshot;
 
     // A second, independent connection to the SAME socket, but with a
     // deliberately wrong token -- simulates a stale/forged record rather
@@ -133,10 +152,10 @@ describe('session worker (real spawned process, real socket)', () => {
     const session = await isolatedSession();
     const first = await WorkerClient.attach(session.id);
     spawnedClients.push(first);
-    await nextEvent(first, 'snapshot');
+    await first.initialSnapshot;
     const second = await WorkerClient.attach(session.id);
     spawnedClients.push(second);
-    await nextEvent(second, 'snapshot');
+    await second.initialSnapshot;
 
     // A refresh asks the worker to re-render from disk; both attached
     // clients should see it, proving the broadcast reaches every socket,
@@ -159,7 +178,7 @@ describe('session worker (real spawned process, real socket)', () => {
     const session = await isolatedSession();
     const client = await WorkerClient.attach(session.id);
     spawnedClients.push(client);
-    await nextEvent(client, 'snapshot');
+    await client.initialSnapshot;
 
     client.send({ type: 'submit', text: 'hello', echo: true });
     const started = nextEvent(client, 'waiting-start');
@@ -174,7 +193,7 @@ describe('session worker (real spawned process, real socket)', () => {
     const session = await isolatedSession();
     const client = await WorkerClient.attach(session.id);
     spawnedClients.push(client);
-    await nextEvent(client, 'snapshot');
+    await client.initialSnapshot;
 
     client.send({ type: 'cancel', restoreDraft: false });
     // Nothing to assert an absence of directly -- prove the worker is still

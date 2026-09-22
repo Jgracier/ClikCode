@@ -57,6 +57,18 @@ import { interactiveSessionManager, interactiveSessionPicker } from '../../tui/p
 import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
+import { closeAllWorkerClients, runTurnThroughWorker } from '../../worker/turn-bridge.js';
+
+/** Opt-in, temporary: routes real terminal turns through a session worker
+ * (src/worker/) instead of running them in this process directly. Off by
+ * default while this gets real hands-on exercise -- the direct path below
+ * is completely unchanged and is what every session still uses unless this
+ * is set. Once trusted, this flag and the direct path it guards against are
+ * both meant to go away, along with the SIGHUP/SIGINT-ignoring block a few
+ * lines down and claim.ts/claims.ts -- see project memory
+ * clikcode-worker-client-split for why (a client that can safely die on
+ * disconnect no longer needs any of that machinery). */
+const USE_SESSION_WORKER = process.env.CLIKCODE_USE_WORKER === '1';
 
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();
@@ -291,6 +303,21 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               : {}),
           };
           rl.render(pending, activeAccount);
+          if (USE_SESSION_WORKER && rl instanceof TerminalHarnessPrompter) {
+            // The worker owns cancellation/steering and the preserve-vs-
+            // discard decision on a real cancel itself now (see
+            // worker/session-worker.ts's runTurn) -- interruptedSubmission,
+            // a few lines below in the catch block this bypasses, is what
+            // the DIRECT path still needs that decision made FOR it from.
+            // Left unset here on purpose: `cancelled` will be false for
+            // this path regardless (runTurnThroughWorker never rethrows an
+            // ordinary cancellation, only a genuine failure), so that
+            // block's own `interruptedSubmission &&` check already no-ops
+            // correctly without this being threaded through it too.
+            const outcome = await runTurnThroughWorker(targetId, rl, promptText, turn);
+            if (outcome.notice) notice = outcome.notice;
+            return;
+          }
           const turnController = new AbortController();
           const liveInput = new LiveTurnInputBroker();
           interruptedSubmission = { text: promptText, restoreOnEscape: false };
@@ -535,6 +562,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   } finally {
     if (usageInterval) clearInterval(usageInterval);
     if (claimInterval) clearInterval(claimInterval);
+    if (USE_SESSION_WORKER) await closeAllWorkerClients().catch(() => undefined);
     await closePersistentTransport().catch(() => undefined);
     // Hand the conversation back so the next terminal can resume it. Best
     // effort: a failure here only means the claim expires on its own TTL.
