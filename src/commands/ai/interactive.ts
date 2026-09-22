@@ -59,27 +59,35 @@ import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
 import { closeAllWorkerClients, runTurnThroughWorker } from '../../worker/turn-bridge.js';
 
-/** Routes real terminal turns through a session worker (src/worker/) rather
- * than running them in this process. ON by default; `CLIKCODE_USE_WORKER=0`
- * falls back to the direct in-process path, which remains completely
- * unchanged.
- *
- * The opt-out is kept deliberately, not left behind: the worker has one
- * known untested gap (a worker has no TTY, so a mid-turn interactive vendor
- * login can only report that it is blocked) against a direct path with
- * hundreds of real invocations behind it. Deleting the fallback is a
- * separate decision that wants real dogfooding first, and it is what
- * unblocks removing claim.ts/claims.ts -- see project memory
- * clikcode-worker-client-split.
- *
- * NOT on that deletion list, contrary to the earlier plan: the
- * SIGHUP/SIGINT-ignoring block a few lines down. Its SIGINT half guards
- * client-side identity derivation and vendor login, and the worker design
- * keeps both of those in the client on purpose -- so that block protects a
- * real, previously reproduced bug (an account never saved because a hangup
- * killed the process before any handler could run) that the worker split
- * does not address. */
-const USE_SESSION_WORKER = process.env.CLIKCODE_USE_WORKER !== '0';
+// The CLIKCODE_USE_WORKER escape hatch is gone: an ANSI terminal always runs
+// its turns through a session worker now. What remains below is not a
+// fallback for the worker -- it is the path for a terminal that has no
+// alternate screen at all, which is a different thing that was easy to
+// mistake for one.
+//
+// Three deletions the earlier plan expected here are NOT possible, and the
+// reasons are worth keeping so they are not re-attempted:
+//
+//   - The direct in-process turn below cannot go. The worker branch is
+//     gated on `rl instanceof TerminalHarnessPrompter`, and when
+//     terminalUiSupported() is false `rl` is a plain readline instead. So
+//     this path serves the cases capabilities.ts exists for -- CI consoles,
+//     IDE output panes, Emacs shells, screen-reader mode -- and a worker
+//     cannot serve them, having no screen to hand back.
+//
+//   - claim.ts therefore stays too, because that path still needs to record
+//     which process holds a conversation.
+//
+//   - claims.ts was never the worker's business at all: state/write.ts,
+//     state/read.ts and state/migrate.ts use it as the file lock that stops
+//     two processes corrupting index.json.
+//
+// Also staying, contrary to the earlier plan: the SIGHUP/SIGINT-ignoring
+// block a few lines down. Its SIGINT half guards client-side identity
+// derivation and vendor login, both of which the worker design keeps in the
+// client on purpose, so it protects a real reproduced failure (an account
+// never saved because a hangup killed the process before any handler ran)
+// that the worker split does not address.
 
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();
@@ -314,7 +322,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               : {}),
           };
           rl.render(pending, activeAccount);
-          if (USE_SESSION_WORKER && rl instanceof TerminalHarnessPrompter) {
+          if (rl instanceof TerminalHarnessPrompter) {
             // The worker owns cancellation/steering and the preserve-vs-
             // discard decision on a real cancel itself now (see
             // worker/session-worker.ts's runTurn) -- interruptedSubmission,
@@ -573,7 +581,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   } finally {
     if (usageInterval) clearInterval(usageInterval);
     if (claimInterval) clearInterval(claimInterval);
-    if (USE_SESSION_WORKER) await closeAllWorkerClients().catch(() => undefined);
+    await closeAllWorkerClients().catch(() => undefined);
     await closePersistentTransport().catch(() => undefined);
     // Hand the conversation back so the next terminal can resume it. Best
     // effort: a failure here only means the claim expires on its own TTL.
