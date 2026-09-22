@@ -618,6 +618,18 @@ export async function aiSessionSend(
       // the invocation is pushed so the window sum includes this turn: the
       // high-water mark must be a cost the vendor actually permitted.
       account.usageLearning = recordAllowed(account.usageLearning, state.invocations, account.id, Date.parse(invocation.at));
+      // A turn that was served is proof the account is not out of quota.
+      // Nothing else cleared this for most harnesses: the only other
+      // clearers are a manual /account reselect and a usage PROBE reporting
+      // headroom, and twenty-one of the twenty-four harnesses have no probe.
+      // So an account marked exhausted stayed exhausted forever -- found
+      // live, with two accounts answering normally while still flagged,
+      // which deprioritised them in failover and slowly starved it of
+      // candidates.
+      if (account.quotaState === 'exhausted') {
+        account.quotaState = 'available';
+        account.quotaRetryAt = undefined;
+      }
       session.attachments = [];
       const answer = titleStream ? extractSessionTitle(result.text) : { title: undefined, text: result.text };
       await checkpoint.complete(answer.text);
@@ -762,6 +774,11 @@ export async function aiSessionSend(
   state.invocations.push(invocation);
   // Same as the vendor-CLI path: an allowed turn raises the learned ceiling.
   account.usageLearning = recordAllowed(account.usageLearning, state.invocations, account.id, Date.parse(invocation.at));
+  // Same proof-by-success rule as the vendor-CLI path above.
+  if (account.quotaState === 'exhausted') {
+    account.quotaState = 'available';
+    account.quotaRetryAt = undefined;
+  }
   session.attachments = [];
   const answer = titleStream ? extractSessionTitle(turn.text) : { title: undefined, text: turn.text };
   await checkpoint.complete(answer.text);
