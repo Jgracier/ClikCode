@@ -27,6 +27,7 @@ import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingT
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { nativeTurnResult, type NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { nativeTurnUsage } from '../harness/protocol/turn-usage.js';
@@ -184,6 +185,34 @@ export async function aiSessionSend(
       delete session.nativeSessionPreallocated;
       await checkpoint.persistNow();
     };
+    /** The response-delta rule, in one place. Every transport owes the same
+     * three steps -- through the title filter, then to the checkpoint and to
+     * the screen -- and they differed only in which default mode they passed.
+     * This was three copies, and drift between them was not hypothetical: the
+     * structured-CLI copy once skipped the title filter entirely, which made
+     * what was displayed differ from what was persisted, and the transcript
+     * then read the saved answer as new content and drew the whole reply a
+     * second time. That was the duplicated response. One function cannot
+     * drift from itself. */
+    const emitResponseDelta = (text: string, mode: 'append' | 'replace' = 'append'): void => {
+      const visible = titleStream ? titleStream.push(text, mode) : text;
+      if (visible === undefined) return;
+      checkpoint.response(visible, mode);
+      prompter?.response(visible, mode);
+    };
+    /** The observer members every transport implements identically. Each
+     * transport spreads this and then overrides only what genuinely differs
+     * for it (codex's rate limits and steering, the structured CLI's own idle
+     * bookkeeping) -- so a member absent from a transport's literal is a
+     * deliberate default, not a forgotten one. */
+    const sharedObserver = {
+      onActivity, onThought, onUsage: noteUsage,
+      onResponseDelta: emitResponseDelta,
+      onPhase: (phase: string) => prompter?.phase(phase),
+      onPlan: (entries: readonly HarnessPlanEntry[]) => prompter?.setPlan(entries),
+      onApproval: (title: string, detail?: string) => prompter?.approval(title, detail) ?? Promise.resolve(false),
+      onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
+    } satisfies HarnessTurnObserver;
     for (;;) {
       const environment = turnEnvironment(harness, account);
       const hasImages = images.length > 0;
@@ -251,31 +280,19 @@ export async function aiSessionSend(
             // the quota probe, and persisting what the harness says about
             // itself.
             const outcome = reportStructuredLine(cliHarness, lineText, {
+              ...sharedObserver,
+              // Only the idle bookkeeping is this transport's own: a line on
+              // stdout is the sole proof a one-shot CLI is still working.
               onResponseDelta: (text, mode) => {
                 cliOutputStarted = true;
                 idle.noteActivity();
-                // Through the title filter, like every other transport. This
-                // path was the one that skipped it, so the first turn of an
-                // unnamed chat streamed the raw <clikcode-title> tag onto the
-                // screen -- and, worse, left what was displayed different from
-                // the cleaned text that gets persisted. The transcript then
-                // read the saved answer as new content and emitted the whole
-                // reply a second time underneath the copy already there. That
-                // is the duplicated response.
-                const delta = mode ?? 'append';
-                const visible = titleStream ? titleStream.push(text, delta) : text;
-                if (visible === undefined) return;
-                checkpoint.response(visible, delta);
-                prompter?.response(visible, delta);
+                emitResponseDelta(text, mode ?? 'append');
               },
               onActivity: (event) => {
                 cliOutputStarted = true;
                 noteTurnActivityEvent(idle, event);
                 onActivity(event);
               },
-              onPhase: (phase) => prompter?.phase(phase),
-              onUsage: noteUsage,
-              onAvailableCommands: (commands) => nativeAvailableCommands.set(session.id, commands),
             });
             if (outcome.live) confirmNativeSession();
             if (outcome.error) streamError = outcome.error;
@@ -334,20 +351,13 @@ export async function aiSessionSend(
                   // resetsAt survives into account.usage for the reset-time line.
                   void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
                 },
-                onResponseDelta: (text, mode = 'append') => {
-                  const visible = titleStream ? titleStream.push(text, mode) : text;
-                  if (visible === undefined) return;
-                  checkpoint.response(visible, mode);
-                  prompter?.response(visible, mode);
-                },
-                onPhase: (phase) => prompter?.phase(phase),
-                onApproval: (title, detail) => prompter?.approval(title, detail) ?? Promise.resolve(false),
+                ...sharedObserver,
+                // Steering is genuinely codex-only: it is the one transport
+                // that accepts input mid-turn.
                 onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText) => {
                   await handler(steerText);
                   await checkpoint.steer({ id: randomUUID(), text: steerText, submittedAt: new Date().toISOString() });
                 } : undefined),
-                onActivity, onThought, onUsage: noteUsage,
-                onPlan: (entries) => prompter?.setPlan(entries),
               };
               result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
             } else {
@@ -360,18 +370,7 @@ export async function aiSessionSend(
                 ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
                 cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
                 environment, signal, images, onSessionId,
-                onResponseDelta: (delta) => {
-                  // Same filter as every other transport: ACP harnesses were
-                  // streaming the raw title tag too.
-                  const visible = titleStream ? titleStream.push(delta, 'append') : delta;
-                  if (visible === undefined) return;
-                  checkpoint.response(visible, 'append');
-                  prompter?.response(visible, 'append');
-                },
-                onActivity, onThought, onUsage: noteUsage,
-                onPlan: (entries) => prompter?.setPlan(entries),
-                onAvailableCommands: (commands) => { nativeAvailableCommands.set(session.id, commands); },
-                onApproval: (title, detail) => prompter?.approval(title, detail) ?? Promise.resolve(false),
+                ...sharedObserver,
               };
               try {
                 result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
