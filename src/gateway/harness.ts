@@ -23,9 +23,9 @@ import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/pr
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
-import type { HarnessPrompter } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
+import type { TurnObserver } from '../turn/observer.js';
 
 /** The gateway's own refusals, as opposed to a turn that genuinely failed.
  * 503 CLIKCODE_DISABLED is the documented administrator kill switch, and a 404
@@ -42,7 +42,7 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   baseUrl: string;
   apiKey: string;
   version: string;
-  prompter?: HarnessPrompter;
+  prompter?: TurnObserver;
   signal?: AbortSignal;
   images?: readonly string[];
   /** Injected by tests; production uses the real gateway client. */
@@ -73,7 +73,7 @@ export async function runGatewayHarnessSessionTurn(
     ...(input.images?.length ? { images: input.images } : {}),
     onResponseDelta: (text, mode) => {
       input.onResponseDelta?.(text, mode);
-      prompter?.response?.(text, mode);
+      prompter?.response(text, mode);
     },
     onActivity: (event) => {
       // The loop reports its own tool names; classify them here so a gateway
@@ -82,13 +82,13 @@ export async function runGatewayHarnessSessionTurn(
       const category = toolCategory(event.label, undefined, Boolean((event as { diff?: unknown }).diff), GATEWAY_HARNESS_COMMAND);
       const classified = category ? { ...event, category } : event;
       input.onActivity?.(classified as never);
-      prompter?.activityEvent?.(classified as never);
+      prompter?.activityEvent(classified as never);
     },
-    onPhase: (phase) => { (prompter as { phase?: (p: string) => void } | undefined)?.phase?.(phase); },
-    onPlan: (entries) => { (prompter as { setPlan?: (e: unknown) => void } | undefined)?.setPlan?.(entries); },
+    onPhase: (phase) => prompter?.phase(phase),
+    onPlan: (entries) => prompter?.setPlan(entries),
     // No prompter means a headless run; a turn that cannot ask must not
     // silently act, so an unattended approval is a refusal.
-    onApproval: async (title, detail) => (prompter?.approval ? prompter.approval(title, detail) : false),
+    onApproval: async (title, detail) => (await prompter?.approval(title, detail)) ?? false,
   });
 }
 
