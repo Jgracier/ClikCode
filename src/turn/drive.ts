@@ -586,6 +586,14 @@ export async function aiSessionSend(
           // The same thread, under a new account: it holds the conversation,
           // the interrupted request and every tool call it had already made.
           // All it is owed is the word to carry on.
+          //
+          // 'present' counts here as much as 'carried'. It means the thread
+          // never had to move, because both accounts run this harness against
+          // the same vendor home -- true for the fifteen harnesses that
+          // declare no profileEnv at all. Those were re-seeding the whole
+          // conversation to reach a file sitting exactly where the next
+          // account would look for it, which is the difference between a
+          // failover costing a 20KB prompt and costing nothing.
           turnText = INTERRUPTED_TURN_REQUEST;
         } else {
           session.nativeSessionId = undefined;

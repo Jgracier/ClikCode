@@ -31,8 +31,11 @@ describe('carrying a vendor session between account profiles', () => {
       to: { CLAUDE_CONFIG_DIR: to },
     });
 
-    expect(carried).toBe(join(to, 'projects', project, 'session-one.jsonl'));
-    await expect(readFile(carried!, 'utf8')).resolves.toBe('{"type":"user"}\n');
+    // The verb, plus the file itself: carryNativeSession reports WHETHER the
+    // thread is reachable, not where it landed, so the landing is checked
+    // directly rather than inferred from the return value.
+    expect(carried).toBe('carried');
+    await expect(readFile(join(to, 'projects', project, 'session-one.jsonl'), 'utf8')).resolves.toBe('{"type":"user"}\n');
     // Copied, never moved: the account that ran out keeps its own history.
     await expect(readFile(join(from, 'projects', project, 'session-one.jsonl'), 'utf8')).resolves.toBe('{"type":"user"}\n');
   });
@@ -54,8 +57,8 @@ describe('carrying a vendor session between account profiles', () => {
       to: { CODEX_HOME: to },
     });
 
-    expect(carried).toBe(join(to, day, name));
-    await expect(readFile(carried!, 'utf8')).resolves.toBe('{"type":"response_item"}\n');
+    expect(carried).toBe('carried');
+    await expect(readFile(join(to, day, name), 'utf8')).resolves.toBe('{"type":"response_item"}\n');
   });
 
   it('updates the copy waiting in a profile the conversation returns to', async () => {
@@ -78,15 +81,15 @@ describe('carrying a vendor session between account profiles', () => {
       to: { CLAUDE_CONFIG_DIR: to },
     });
 
-    await expect(carry(a, b)).resolves.toBe(file(b));
+    await expect(carry(a, b)).resolves.toBe('carried');
     // The thread keeps working under B, which appends to B's copy.
     await writeFile(file(b), '{"turn":1}\n{"turn":2}\n{"turn":3}\n', 'utf8');
 
-    await expect(carry(b, a)).resolves.toBe(file(a));
+    await expect(carry(b, a)).resolves.toBe('carried');
     await expect(readFile(file(a), 'utf8')).resolves.toBe('{"turn":1}\n{"turn":2}\n{"turn":3}\n');
     // And carrying the same file again is a no-op, not a rewrite.
     const before = (await stat(file(a))).mtimeMs;
-    await expect(carry(b, a)).resolves.toBe(file(a));
+    await expect(carry(b, a)).resolves.toBe('carried');
     expect((await stat(file(a))).mtimeMs).toBe(before);
   });
 
@@ -105,10 +108,40 @@ describe('carrying a vendor session between account profiles', () => {
     await expect(carryNativeSession({
       harness: harnessFor('claude'), nativeId: undefined, workspace: WORKSPACE, ...profiles,
     })).resolves.toBeUndefined();
-    // Both accounts share one profile: it is already where it needs to be.
+  });
+
+  it('reports a shared profile as PRESENT, not as nothing to carry', async () => {
+    // The distinction this whole type exists for. Both of these used to
+    // return undefined -- the same answer as "this thread is unreachable" --
+    // and the caller responded by discarding the thread id and re-sending the
+    // entire conversation as a rehydration prompt. The thread had not moved.
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
+
+    // Same profile path on both sides.
     await expect(carryNativeSession({
       harness: harnessFor('claude'), nativeId: 'session-one', workspace: WORKSPACE,
       from: { CLAUDE_CONFIG_DIR: join(root, 'a') }, to: { CLAUDE_CONFIG_DIR: join(root, 'a') },
+    })).resolves.toBe('present');
+
+    // And the case that covers most of the catalog: a harness with no
+    // per-account profile at all. Fifteen of the twenty-four declare no
+    // profileEnv, so every account runs against one vendor home and the
+    // thread is always already in place.
+    await expect(carryNativeSession({
+      harness: harnessFor('opencode'), nativeId: 'session-one', workspace: WORKSPACE,
+      from: {}, to: {},
+    })).resolves.toBe('present');
+  });
+
+  it('still reports unreachable when the profiles genuinely differ', async () => {
+    // A harness with an isolated profile whose on-disk layout is unknown:
+    // the thread really is stranded in the losing account's home, and
+    // re-seeding is the honest answer.
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
+    await expect(carryNativeSession({
+      harness: { command: 'gemini', profileEnv: 'GEMINI_CLI_HOME' } as AiLocalHarnessDefinition,
+      nativeId: 'session-one', workspace: WORKSPACE,
+      from: { GEMINI_CLI_HOME: join(root, 'a') }, to: { GEMINI_CLI_HOME: join(root, 'b') },
     })).resolves.toBeUndefined();
   });
 });
