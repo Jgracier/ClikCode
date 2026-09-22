@@ -11,12 +11,14 @@ const INVOCATION_KEEP = 1000;
 export type Invocation = HarnessState['invocations'][number];
 
 export interface InvocationRollup {
-  day: string; accountId: string; provider: string; model: string;
+  day: string; accountId: string; provider: string; model?: string;
   calls: number; inputTokens: number; outputTokens: number; latencyMs: number;
 }
 
 function rollupKey(invocation: Invocation): string {
-  return [String(invocation.at).slice(0, 10), invocation.accountId, invocation.provider, invocation.model].join('|');
+  // An absent model groups with other absent ones rather than being folded
+  // into some real model's totals.
+  return [String(invocation.at).slice(0, 10), invocation.accountId, invocation.provider, invocation.model ?? ''].join('|');
 }
 
 /** Keeps the newest INVOCATION_KEEP records and folds the rest into per-day,
@@ -62,7 +64,7 @@ interface InvocationTotals { calls: number; inputTokens: number; outputTokens: n
  * narrows by account/provider/model (the dimensions a rollup preserves). */
 function invocationTotals(
   state: HarnessState,
-  match: (entry: { accountId: string; provider: string; model: string }) => boolean = () => true,
+  match: (entry: { accountId: string; provider: string; model?: string }) => boolean = () => true,
 ): InvocationTotals {
   const totals: InvocationTotals = { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
   for (const invocation of state.invocations ?? []) {

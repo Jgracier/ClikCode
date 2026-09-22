@@ -4,7 +4,12 @@ import { FAILOVER_PREAMBLE } from './failover-prompt.js';
 
 export { FAILOVER_PREAMBLE };
 
-type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'other';
+/** `request-invalid` is the odd one out and the reason it exists: every other
+ *  kind describes something about the ACCOUNT, so trying the next account is a
+ *  sensible response. A rejected request is about the REQUEST -- the same argv
+ *  will be refused identically by every account, so failing over just walks
+ *  the whole list failing the same way. */
+type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'request-invalid' | 'other';
 
 /** Usage probes deliberately return display labels so provider-specific
  * response shapes stay out of routing. Interpret only explicit percentage
@@ -45,6 +50,20 @@ interface AccountFailureSignals {
 const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked))/i;
 const QUOTA_TEXT = /(?:quota (?:exceeded|exhausted)|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|out of credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
 const THROTTLE_TEXT = /(?:rate limit|too many requests|temporar(?:y|ily) throttled)/i;
+/** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
+ * agy 1.2.7 on a real authenticated Antigravity account, which is where this
+ * came from: ClikCode sent `--effort` alongside `--model`, and Antigravity
+ * encodes effort in the model id instead, so it answered
+ *   'invalid model selection (--model "claude-opus-4-6-thinking"
+ *    --effort "medium"): --effort is not supported for model ...'
+ * and for a mismatched pair
+ *   '--model gpt-oss-120b-medium conflicts with --effort=high'.
+ * Every account then failed the same way, which read to the user as "all my
+ * accounts are broken" -- and one unauthenticated account in the list made
+ * each pointless attempt cost a 60-second interactive-auth timeout. Kept to
+ * wording a CLI uses for its own flag validation; nothing here matches a
+ * model or plan entitlement problem, which IS account-specific. */
+const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
   if (/auth|unauthori[sz]ed|invalid_?api_?key|invalid_?(?:token|credentials|grant)|token_?expired|login/i.test(errorKind)) return 'authentication-required';
@@ -110,6 +129,10 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // no other vendor's equivalent phrasing has been verified, so none is
   // guessed at.
   if (/no rollout found/i.test(text)) return 'native-thread-invalid';
+  // Last, so a genuine auth/quota/throttle signal always wins: those can
+  // legitimately be worded as a rejection too, and they ARE worth another
+  // account.
+  if (REQUEST_INVALID_TEXT.test(text)) return 'request-invalid';
   return 'other';
 }
 
