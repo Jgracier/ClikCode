@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './failover';
+import { accountFailureReason, classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './failover';
 
 describe('ClikCode account failover', () => {
   it('does not confuse temporary throttling with exhausted quota', () => {
@@ -90,6 +90,42 @@ describe('a rejected request is not an account failure', () => {
     // explaining flag validation is not a vendor rejecting argv.
     expect(classifyAccountFailure(
       new Error('Here is how "invalid model selection" errors work: the CLI conflicts with --effort when...'),
+      { isResultError: false },
+    )).toBe('other');
+  });
+});
+
+describe('an ineligible account is named as such, not as a generic failure', () => {
+  /**
+   * Verbatim from agy 1.2.7 on a token that had just refreshed successfully,
+   * so this is not an auth problem and signing in again cannot fix it. It
+   * matched none of the existing patterns, classified as 'other', and the
+   * user was told "account failed" -- true, useless, and indistinguishable
+   * from a crash.
+   */
+  const ELIGIBILITY = 'Eligibility check failed: Your current account is not eligible for Antigravity. Verify your account to continue.';
+
+  it('classifies the vendor eligibility refusal', () => {
+    expect(classifyAccountFailure(new Error(ELIGIBILITY), { isResultError: true })).toBe('account-ineligible');
+  });
+
+  it('still prefers a real quota or auth signal over it', () => {
+    // These can mention verification too; the account-level signals win.
+    expect(classifyAccountFailure(new Error('usage balance exhausted'), { isResultError: true })).toBe('quota-exhausted');
+    expect(classifyAccountFailure(new Error('oauth token has expired'), { isResultError: true })).toBe('authentication-required');
+  });
+
+  it('gives every failure kind a reason worth showing', () => {
+    expect(accountFailureReason('quota-exhausted')).toBe('usage exhausted');
+    expect(accountFailureReason('account-ineligible')).toBe('account not eligible');
+    expect(accountFailureReason('authentication-required')).toBe('sign-in needed');
+    expect(accountFailureReason('temporarily-throttled')).toBe('rate limited');
+    expect(accountFailureReason('other')).toBe('account failed');
+  });
+
+  it('does not read an eligibility refusal out of model prose', () => {
+    expect(classifyAccountFailure(
+      new Error('Let me explain: "not eligible" errors happen when your account needs verification.'),
       { isResultError: false },
     )).toBe('other');
   });

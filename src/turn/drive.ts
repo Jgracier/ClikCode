@@ -9,6 +9,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
+import { accountFailureReason } from './failover.js';
 import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir, open } from 'node:fs/promises';
@@ -576,7 +577,7 @@ export async function aiSessionSend(
         // Say why it moved. Switching happens for any failure now, so calling
         // every one of them "quota reached" would misreport a crash as a
         // spent plan.
-        prompter?.activity(`${chalk.yellow(failureKind === 'quota-exhausted' ? 'quota reached' : 'account failed')} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
+        prompter?.activity(`${chalk.yellow(accountFailureReason(failureKind))} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
         prompter?.phase(`retrying on ${fallback.label}`);
         await closePersistentTransport(session.id);
         account = fallback;
@@ -751,7 +752,7 @@ export async function aiSessionSend(
         ));
       }
       switchedFrom ??= exhaustedAccount.id;
-      prompter?.activity(`${chalk.yellow(failureKind === 'quota-exhausted' ? 'quota reached' : 'account failed')} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
+      prompter?.activity(`${chalk.yellow(accountFailureReason(failureKind))} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
       prompter?.phase(`retrying on ${fallback.label}`);
       account = fallback;
       session.accountId = fallback.id;
