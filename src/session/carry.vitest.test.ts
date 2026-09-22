@@ -201,4 +201,26 @@ describe('carrying a vendor session between account profiles', () => {
     expect(await readFile(join(stale, 'events.jsonl'), 'utf8')).toContain('"n":3');
     expect((await readdir(join(root, 'b', 'session-state'))).sort()).toEqual(['session-one']);
   });
+
+  it("carries a Qwen thread and leaves its liveness file behind", async () => {
+    // Qwen's path is Claude's with an extra `chats` level, and its cwd name
+    // comes from its own sanitizeCwd -- one name, not Claude's two. The
+    // runtime.json beside the transcript marks a LIVE session for anything
+    // scanning the directory, so carrying it would announce a session running
+    // in a profile where nothing runs.
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
+    const harness = { command: 'qwen', profileEnv: 'QWEN_HOME' } as AiLocalHarnessDefinition;
+    const chats = join(root, 'a', 'projects', WORKSPACE.replace(/[^a-zA-Z0-9]/g, '-'), 'chats');
+    await mkdir(chats, { recursive: true });
+    await writeFile(join(chats, 'session-one.jsonl'), '{"sessionId":"session-one"}\n');
+    await writeFile(join(chats, 'session-one.runtime.json'), '{"pid":1}');
+
+    await expect(carryNativeSession({
+      harness, nativeId: 'session-one', workspace: WORKSPACE,
+      from: { QWEN_HOME: join(root, 'a') }, to: { QWEN_HOME: join(root, 'b') },
+    })).resolves.toBe('carried');
+
+    const landed = join(root, 'b', 'projects', WORKSPACE.replace(/[^a-zA-Z0-9]/g, '-'), 'chats');
+    expect((await readdir(landed)).sort()).toEqual(['session-one.jsonl']);
+  });
 });
