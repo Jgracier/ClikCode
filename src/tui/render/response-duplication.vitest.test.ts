@@ -19,6 +19,18 @@ describe('the live answer slot', () => {
     expect(transientAssistantRequired('the full answer\n\n', false, 4, noEntries, 'the full answer')).toBe(false);
   });
 
+  it('ignores an internal paragraph break the stream inserted around a tool call', () => {
+    // appendText() inserts a blank line between text blocks a tool call split
+    // apart, but checkpoint.complete() persists the vendor's own `result`
+    // field, which joins the same two blocks without that inserted break.
+    // Real content, same words -- only the separator differs -- so this must
+    // still be recognized as the same answer, not drawn a second time.
+    expect(transientAssistantRequired(
+      'First I checked the file.\n\nThen I fixed the bug.', false, 4, noEntries,
+      'First I checked the file. Then I fixed the bug.',
+    )).toBe(false);
+  });
+
   it('drops it when the saved message merely ends with the streamed text', () => {
     expect(transientAssistantRequired('tail part', false, 4, noEntries, 'head part\ntail part')).toBe(false);
   });

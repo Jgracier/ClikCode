@@ -206,9 +206,20 @@ export function transientAssistantRequired(
   // authoritative render(). Any paint in between -- stopWaiting() does one --
   // drew the reply twice, once from the transcript and once from the stream.
   // Drawing a live copy of an answer that is already saved is never right.
+  //
+  // What gets persisted (checkpoint.complete's `result.text`, the vendor's own
+  // final field) and what streamed live (`liveResponse`, built by appendText
+  // inserting a blank line between text blocks a tool call split apart) are
+  // not always byte-identical even for the exact same answer -- only their
+  // whitespace differs. An exact/suffix match on the raw strings missed every
+  // multi-block reply (any answer with at least one tool call before its last
+  // words, which is nearly all of them), so this compares with runs of
+  // whitespace collapsed: the real content matches, only the formatting used
+  // to join it differed.
   if (liveResponse && !waiting && settledAssistant !== undefined) {
-    const live = liveResponse.trim();
-    const settled = settledAssistant.trim();
+    const normalize = (value: string): string => value.trim().replace(/\s+/g, ' ');
+    const live = normalize(liveResponse);
+    const settled = normalize(settledAssistant);
     if (live && (settled === live || settled.endsWith(live))) return false;
   }
   return Boolean(liveResponse || (waiting && entries.some((entry) =>
