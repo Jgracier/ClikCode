@@ -22,10 +22,15 @@ describe('local harness catalog', () => {
   });
 
   it('uses one reversible command/provider mapping for every supported local harness', () => {
-    expect(AI_LOCAL_HARNESSES.map((item) => item.command)).toEqual([
-      'claude', 'codex', 'gemini', 'opencode', 'copilot', 'aider', 'goose', 'amp', 'antigravity', 'pi',
-      'droid', 'kiro', 'qwen', 'cline', 'kilo', 'cursor',
-      'hermes', 'command', 'kimi', 'auggie', 'vibe', 'openhands', 'cn',
+    // Sorted, not in declaration order: array position carries no meaning
+    // (the pickers sort by harnessTierRank), so pinning the order only broke
+    // this test every time an entry was inserted. The SET still catches a
+    // harness silently appearing or disappearing, which is the part worth
+    // guarding.
+    expect(AI_LOCAL_HARNESSES.map((item) => item.command).sort()).toEqual([
+      'aider', 'amp', 'antigravity', 'auggie', 'claude', 'cline', 'cn', 'codex',
+      'command', 'copilot', 'cursor', 'droid', 'gemini', 'goose', 'grok', 'hermes',
+      'kilo', 'kimi', 'kiro', 'opencode', 'openhands', 'pi', 'qwen', 'vibe',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(localHarnessForCommand(harness.command)).toEqual(harness);
@@ -100,7 +105,7 @@ describe('local harness catalog', () => {
 
   it('uses each vendor\'s exact native-session selector', () => {
     expect(nativeHarnessTurnArgv(localHarnessForCommand('droid')!, { prompt: 'continue', nativeSessionId: 'droid-thread' }))
-      .toEqual(['exec', '--output-format', 'json', '--session-id', 'droid-thread', 'continue']);
+      .toEqual(['exec', '--output-format', 'stream-json', '--session-id', 'droid-thread', 'continue']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('kiro')!, { prompt: 'continue', nativeSessionId: 'kiro-thread', effort: 'high' }))
       .toEqual(['chat', '--no-interactive', '--agent-engine', 'v3', '--output-format', 'stream-json', '--resume-id', 'kiro-thread', '--effort', 'high', 'continue']);
   });
@@ -137,16 +142,21 @@ describe('local harness catalog', () => {
   });
 
   it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
-    const fullThreeTier = new Set(['codex', 'claude', 'gemini', 'cursor', 'qwen', 'droid', 'command']);
+    // Kept hardcoded on purpose: deriving these from the catalog would make
+    // the test agree with whatever the catalog says, which is not a test.
+    // grok, kimi, vibe, openhands and cn were added after the previous lists
+    // were written.
+    const fullThreeTier = new Set(['codex', 'claude', 'grok', 'gemini', 'cursor', 'qwen', 'droid', 'command', 'kimi', 'vibe']);
     const askAndAuto = new Set(['kilo']);
+    const bypassAndAuto = new Set(['openhands']);
     const askAndBypass = new Set([
       'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'cline',
-      'hermes', 'command',
+      'hermes', 'cn',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
-      expect(harnessSupportsPermissionMode(harness, 'ask')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || askAndAuto.has(harness.command));
-      expect(harnessSupportsPermissionMode(harness, 'bypass')).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command));
-      expect(harnessSupportsPermissionMode(harness, 'auto')).toBe(fullThreeTier.has(harness.command) || askAndAuto.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'ask'), `${harness.command} ask`).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || askAndAuto.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'bypass'), `${harness.command} bypass`).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || bypassAndAuto.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'auto'), `${harness.command} auto`).toBe(fullThreeTier.has(harness.command) || askAndAuto.has(harness.command) || bypassAndAuto.has(harness.command));
     }
   });
 
@@ -311,11 +321,18 @@ describe('local harness catalog', () => {
       expect(acp[command]!.experimental, command).toBeUndefined();
       expect(localHarnessForCommand(command)!.transport, command).toBe('acp');
     }
-    for (const [command, argv] of Object.entries({ gemini: ['--experimental-acp'], opencode: ['acp'], goose: ['acp'], qwen: ['--experimental-acp'], kiro: ['acp'], kilo: ['acp'], auggie: ['--acp'] })) {
+    // gemini moved to a supported `--acp` (its own --help calls
+    // --experimental-acp deprecated), so it is no longer in the experimental
+    // group even though ClikCode still PREFERS its CLI transport.
+    expect(acp.gemini).toMatchObject({ argv: ['--acp'] });
+    expect(acp.gemini!.experimental).toBeUndefined();
+    for (const [command, argv] of Object.entries({ opencode: ['acp'], goose: ['acp'], qwen: ['--experimental-acp'], kiro: ['acp'], kilo: ['acp'], auggie: ['--acp'] })) {
       expect(acp[command], command).toMatchObject({ argv, experimental: true });
       expect(localHarnessForCommand(command)!.transport, command).not.toBe('acp');
     }
-    expect(acp.kimi).toMatchObject({ argv: ['--acp'] });
+    // kimi's ACP is a SUBCOMMAND, not a flag -- corrected in the catalog
+    // against the real Kimi Code 2.0.2 and never reflected here.
+    expect(acp.kimi).toMatchObject({ argv: ['acp'] });
     expect(acp.vibe).toEqual({ binary: 'vibe-acp', argv: [] });
     expect(acp.openhands).toMatchObject({ argv: ['acp'] });
     for (const harness of AI_LOCAL_HARNESSES) {
@@ -335,7 +352,7 @@ describe('local harness catalog', () => {
     expect(harnessAcpLaunch(localHarnessForCommand('hermes')!, { permissionMode: 'bypass', effort: 'max' }))
       .toMatchObject({ binary: 'hermes', argv: ['--reasoning', 'max', '--yolo', 'acp'] });
     expect(harnessAcpLaunch(localHarnessForCommand('vibe')!)).toMatchObject({ binary: 'vibe-acp', argv: [] });
-    expect(harnessAcpLaunch(localHarnessForCommand('gemini')!)).toMatchObject({ argv: ['--experimental-acp'], experimental: true });
+    expect(harnessAcpLaunch(localHarnessForCommand('gemini')!)).toMatchObject({ argv: ['--acp'], experimental: false });
     expect(harnessAcpLaunch(localHarnessForCommand('claude')!)).toBeUndefined();
   });
 
@@ -391,7 +408,7 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(localHarnessForCommand('opencode')!, { prompt: '--help me' })).toEqual(['run', '--format', 'json', '--', '--help me']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('cursor')!, { prompt: '-f' }).slice(-2)).toEqual(['--', '-f']);
     // A prompt that is a FLAG VALUE can never take `--`; it gets the space guard.
-    expect(nativeHarnessTurnArgv(localHarnessForCommand('gemini')!, { prompt: '--yolo' }).slice(-2)).toEqual(['-p', ' --yolo']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('gemini')!, { prompt: '--yolo' }).slice(-2)).toEqual(['--prompt', ' --yolo']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('aider')!, { prompt: '-x' }).slice(-2)).toEqual(['--message', ' -x']);
     // Positional, but `--` support undeclared: space guard.
     expect(nativeHarnessTurnArgv(localHarnessForCommand('droid')!, { prompt: '-rf' }).at(-1)).toBe(' -rf');
