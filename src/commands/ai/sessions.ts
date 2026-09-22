@@ -13,7 +13,6 @@ import { writeState } from '../../session/state/write.js';
 import { setEmitHarnessOutput } from '../account.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
-import { markSessionLeftOpen } from '../../session/claim.js';
 import { normalizeModelWord, optionForHarness, parseHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession } from './conversations.js';
@@ -212,44 +211,53 @@ function sessionIsEmpty(session: HarnessSession): boolean {
   return !sessionTranscriptMessages(session).length && !session.nativeSessionId && !session.gatewayConfirmed;
 }
 
-/** Close is centralized even when the selected native agent has already exited. */
-export async function aiSessionClose(id: string): Promise<void> {
+/** Ending a session, both ways it can end.
+ *
+ * Close and leave share the whole decision and differ only in the tail, so
+ * they are one function: an EMPTY session is dropped either way (it has no
+ * branch worth preserving, and /exit is how nearly every session ends -- that
+ * is why blank "opened and did nothing" chats accumulated forever), while a
+ * non-empty one is either marked closed or left open.
+ *
+ * Leaving deliberately does NOT close: closing a terminal must not make the
+ * next startup fall back to an older provider branch of the same
+ * conversation. Leaving touches the current branch so it stays the default
+ * next launch, without changing its provider-owned session identity.
+ */
+async function endSession(id: string, intent: 'close' | 'leave'): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  const announce = (): void => {
+    if (intent === 'close') emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
+  };
   if (sessionIsEmpty(session)) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
-    return emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
+    return announce();
   }
-  if (session.status !== 'closed') {
-    session.status = 'closed';
-    session.closedAt = new Date().toISOString();
-    session.updatedAt = session.closedAt;
+  const now = new Date().toISOString();
+  if (intent === 'close') {
+    if (session.status !== 'closed') {
+      session.status = 'closed';
+      session.closedAt = now;
+      session.updatedAt = now;
+      await writeState(state);
+    }
+  } else {
+    session.status = 'active';
+    delete session.closedAt;
+    session.updatedAt = now;
     await writeState(state);
   }
-  emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
+  announce();
 }
 
-/** Save-and-leave lifecycle used by /exit. This deliberately does not call
- * aiSessionClose in the non-empty case: closing a terminal must not make
- * startup fall back to an older provider branch of the same conversation. An
- * empty session has no branch to preserve, so it is dropped exactly like
- * aiSessionClose would rather than accumulating forever -- /exit is how
- * nearly every session ends, and it is the overwhelmingly common way a blank
- * "opened and did nothing" chat was never being cleaned up at all. */
-export async function aiSessionLeave(id: string): Promise<void> {
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (sessionIsEmpty(session)) {
-    state.sessions = state.sessions.filter((item) => item.id !== id);
-    await writeState(state);
-    return;
-  }
-  markSessionLeftOpen(session, new Date().toISOString());
-  await writeState(state);
-}
+/** Close is centralized even when the selected native agent has already exited. */
+export const aiSessionClose = (id: string): Promise<void> => endSession(id, 'close');
+
+/** Save-and-leave lifecycle used by /exit. */
+export const aiSessionLeave = (id: string): Promise<void> => endSession(id, 'leave');
 
 export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; permissions?: AiHarnessPermissionMode; accountFailover?: 'never' | 'on-quota-exhausted'; nativeSession?: string }): Promise<void> {
   if (options.route !== undefined && options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');

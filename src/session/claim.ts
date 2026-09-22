@@ -57,12 +57,3 @@ export function claimSession(session: HarnessSession, now = new Date().toISOStri
 export function releaseSession(session: HarnessSession): void {
   if (session.claim?.pid === process.pid && session.claim.host === hostname()) delete session.claim;
 }
-
-/** Leaving the foreground application is not the same operation as closing a
- * conversation. Touch the current branch so it remains the default branch on
- * the next launch, without changing its provider-owned session identity. */
-export function markSessionLeftOpen(session: HarnessSession, now: string): void {
-  session.status = 'active';
-  delete session.closedAt;
-  session.updatedAt = now;
-}
