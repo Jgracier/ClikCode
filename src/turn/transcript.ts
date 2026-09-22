@@ -50,30 +50,6 @@ export function settledAnswerBlocks(
   };
 }
 
-/** A tool row is settled the moment the tool finishes: completion is what
- * rewrites it with its output preview, so before that it must stay live, and
- * after it nothing touches it again. A tool that never reports completion is
- * settled by the end of the turn rather than pinning the region forever. */
-export function settledToolRows(
-  tools: readonly { id: string; done: boolean; lines: readonly string[] }[],
-  alreadyEmitted: ReadonlySet<string>,
-  turnEnded: boolean,
-): { settled: string[]; live: string[]; emitted: string[] } {
-  const settled: string[] = [];
-  const live: string[] = [];
-  const emitted: string[] = [];
-  for (const tool of tools) {
-    if (alreadyEmitted.has(tool.id)) continue;
-    if (tool.done || turnEnded) {
-      settled.push(...tool.lines);
-      emitted.push(tool.id);
-    } else {
-      live.push(...tool.lines);
-    }
-  }
-  return { settled, live, emitted };
-}
-
 /** A tool row carries the response offset it started at, so a tool that
  * settles in the same frame as the prose around it lands where it happened
  * rather than after everything. Nothing is ever re-ordered once written: a

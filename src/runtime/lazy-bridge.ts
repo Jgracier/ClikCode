@@ -4,7 +4,7 @@
  * per-vendor fact is a declared field on the catalog entry. */
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import type { AiCustomAcpHarnessInput, AiHarnessAcpLaunch, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition, AiRouterRuntime } from '../harness/definition.js';
+import type { AiHarnessAcpLaunch, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition, AiRouterRuntime } from '../harness/definition.js';
 
 const require = createRequire(import.meta.url);
 let routerRuntime: AiRouterRuntime | undefined;
@@ -64,8 +64,6 @@ export const harnessSupportsImages = (harness: AiLocalHarnessDefinition): boolea
 
 /** Built-in catalog plus any registered custom ACP harnesses. */
 export const allLocalHarnesses = (): readonly AiLocalHarnessDefinition[] => localCatalog().allLocalHarnesses();
-const registerCustomHarnesses = (definitions: readonly AiLocalHarnessDefinition[]): readonly AiLocalHarnessDefinition[] => localCatalog().registerCustomHarnesses(definitions);
-const customAcpHarness = (definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition => localCatalog().customAcpHarness(definition);
 export const harnessAcpLaunch = (
   harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode },
 ): AiHarnessAcpLaunch | undefined => localCatalog().harnessAcpLaunch(harness, input);

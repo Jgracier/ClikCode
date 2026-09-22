@@ -23,29 +23,4 @@ export { ERROR_CATALOG } from './catalog.generated.js';
 export type { ProblemJson } from './catalog.generated.js';
 export { parseProblemJson, problemJsonMessage } from './catalog.generated.js';
 
-import { ERROR_CATALOG } from './catalog.generated.js';
 
-interface ResolvedCatalogError {
-  code: string;
-  message: string;
-  remediation?: string;
-}
-
-/**
- * Resolve a catalog entry from the code the API attached.
- *
- * `inferCatalogCode` used to sit behind this as a fallback: twelve regexes guessing a code out of
- * the error prose. It was deleted, not replaced. Every one of its patterns was a guess at a value
- * the platform already knows and now always sends — and its guesses were routinely wrong in a way
- * that mattered, because `/build (failed|error)/` matches almost any build output and would relabel
- * a specific verdict as the generic BUILDER_BUILD_FAILED. Showing the user the real code, or no
- * code and the raw error, is strictly more honest than showing a confident wrong one.
- */
-function resolveCatalogError(
-  explicitCode?: string | null
-): ResolvedCatalogError | null {
-  const code = explicitCode && ERROR_CATALOG[explicitCode] ? explicitCode : null;
-  if (!code) return null;
-  const entry = ERROR_CATALOG[code] ?? ERROR_CATALOG.INTERNAL;
-  return { code, message: entry.message, remediation: entry.remediation };
-}
