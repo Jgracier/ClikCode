@@ -15,9 +15,15 @@
  *
  * Copy, never move: the losing account's history stays its own, and a failed
  * copy simply leaves the caller to fall back to re-seeding.
+ *
+ * What gets copied is an ARTIFACT, not strictly a file: most vendors keep a
+ * conversation in one transcript, but Copilot keeps a directory -- the
+ * transcript plus the workspace.yaml that names the id and cwd it resumes
+ * against. Both shapes carry the same way here, so a vendor that splits its
+ * conversation across a few files needs a store entry and nothing more.
  */
 
-import { copyFile, mkdir, rename, stat } from 'node:fs/promises';
+import { cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { locateNativeSessionFile, nativeSessionRoot, type NativeSessionEnvironment } from './discovery/locations.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -102,23 +108,56 @@ export async function carryNativeSession(input: CarryNativeSessionInput): Promis
     // transcript and silently drop that work. A vendor transcript is an
     // append-only log, so the newer, longer file is the current one, and it
     // replaces what is there; an identical one is left alone.
-    const [here, there] = await Promise.all([
-      stat(destination).catch(() => undefined),
-      stat(source.path).catch(() => undefined),
-    ]);
+    const [here, there] = await Promise.all([measure(destination), measure(source.path)]);
     if (!there) return undefined;
-    if (here && here.size >= there.size && here.mtimeMs >= there.mtimeMs) return 'carried';
+    if (here && here.size >= there.size && here.mtime >= there.mtime) return 'carried';
     await mkdir(dirname(destination), { recursive: true });
     // Through a temporary name in the destination directory: a half-copied
     // transcript that a resume then read would be worse than no transcript.
     const staged = `${destination}.clikcode-carry`;
-    await copyFile(source.path, staged);
-    // rename() replaces an existing destination atomically, so a resume can
-    // never read a file that is half one transcript and half the other.
-    await rename(staged, destination);
+    await rm(staged, { recursive: true, force: true });
+    await cp(source.path, staged, { recursive: true });
+    // rename() replaces an existing destination atomically -- but only a file
+    // over a file. A non-empty directory refuses to be renamed over, so the
+    // one already there moves aside first and is deleted only once the new one
+    // is in place; a crash in between leaves the old copy recoverable rather
+    // than leaving no copy at all.
+    if (here?.directory) {
+      const displaced = `${destination}.clikcode-old`;
+      await rm(displaced, { recursive: true, force: true });
+      await rename(destination, displaced);
+      await rename(staged, destination);
+      await rm(displaced, { recursive: true, force: true });
+    } else {
+      await rename(staged, destination);
+    }
     return 'carried';
   } catch {
     // fail-open-ok: carrying is an optimization over re-seeding, never a requirement.
     return undefined;
   }
+}
+
+/** Size and recency of an artifact, whether it is one transcript or a tree of
+ *  them, so the "newer and longer wins" rule above reads the same for both.
+ *
+ *  A vendor transcript is append-only, so total bytes across the tree only
+ *  grows as a conversation does, and the newest mtime in it is when the thread
+ *  last spoke. Comparing the aggregate is therefore the same comparison a
+ *  single file gets, not an approximation of it. */
+async function measure(
+  path: string,
+): Promise<{ size: number; mtime: number; directory: boolean } | undefined> {
+  const entry = await stat(path).catch(() => undefined);
+  if (!entry) return undefined;
+  if (!entry.isDirectory()) return { size: entry.size, mtime: entry.mtimeMs, directory: false };
+  let size = 0;
+  let mtime = entry.mtimeMs;
+  for (const child of await readdir(path, { withFileTypes: true })) {
+    const inner = await measure(join(path, child.name));
+    if (!inner) continue;
+    size += inner.size;
+    mtime = Math.max(mtime, inner.mtime);
+  }
+  return { size, mtime, directory: true };
 }
