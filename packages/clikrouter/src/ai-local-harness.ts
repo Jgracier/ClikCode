@@ -124,6 +124,12 @@ export interface AiHarnessTurnDefinition {
   output: 'text' | 'json' | 'json-lines';
   /** Ordered JSON property names that may contain the final assistant text. */
   responseFields?: readonly string[];
+  /** Literal phrases this vendor writes into its OWN result text when an
+   *  account is out of usage, while still reporting the turn as a success.
+   *  Matched literally and declared per harness, never inferred -- see
+   *  AiLocalHarnessDefinition in the app's definition.ts for why that
+   *  distinction matters. */
+  quotaSignals?: readonly string[];
   resumeSupportsWorkspaceSelector?: boolean;
 }
 
@@ -449,7 +455,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // permission mode -- it means "retrieval and non-editing tools only", which
   // is read-only, not approval-prompting, so mapping it would quietly make
   // the harness unable to edit whenever someone chose Ask.
-  { command: 'auggie', provider: 'augment', displayName: 'Augment Auggie', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.augment/commands', '~/.augment/commands'], acp: { argv: ['--acp'], experimental: true }, experimental: true, localAuth: ['oauth', 'vendor-cli'], binary: 'auggie', npmPackage: '@augmentcode/auggie', statusArgv: ['account', 'status'], loginArgv: ['login'], logoutArgv: ['logout'], modelDiscoveryArgv: ['model', 'list'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace-root'], effortArgvPrefix: ['--reasoning-effort'], turn: { startArgv: ['--print', '--output-format', 'json'], output: 'json', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'auggie', provider: 'augment', displayName: 'Augment Auggie', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.augment/commands', '~/.augment/commands'], acp: { argv: ['--acp'], experimental: true }, experimental: true, localAuth: ['oauth', 'vendor-cli'], binary: 'auggie', npmPackage: '@augmentcode/auggie', statusArgv: ['account', 'status'], loginArgv: ['login'], logoutArgv: ['logout'], modelDiscoveryArgv: ['model', 'list'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace-root'], effortValues: ['low', 'medium', 'high'], effortArgvPrefix: ['--reasoning-effort'], turn: { startArgv: ['--print', '--output-format', 'json'], output: 'json', responseFields: ['result', 'response', 'text'], quotaSignals: ['You have run out of usage for', 'run out of usage'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // Mistral Vibe ships ACP as a SEPARATE executable, `vibe-acp`, with no argv.
   // `vibe --prompt` is its documented programmatic mode (plain text).
   // Read from mistral-vibe on a real install (pip/uv, not npm, so there is no
