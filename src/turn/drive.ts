@@ -44,7 +44,7 @@ import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
 import { harnessTurnTransport } from '../harness/transport/select.js';
-import { harnessAcpLaunch, harnessCanRunTurns, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
+import { harnessAcpLaunch, harnessCanRunTurns, isDirectModelProvider, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { localApiKey } from '../daemon/server.js';
@@ -76,7 +76,24 @@ export async function aiSessionSend(
   let turnText = `${text}${prepared.textContext}`;
   const startedAt = Date.now();
 
-  if (account.authKind === 'vendor-cli') {
+  // Auth and transport are separate questions, and conflating them was a real
+  // bug: this fork used to be `authKind === 'vendor-cli'`, so ANY other auth
+  // kind fell through to a direct HTTP turn. That is right for the five
+  // harnesses whose provider is a genuine model API (anthropic, openai,
+  // google, xai, nous) and impossible for the twelve that name themselves as
+  // their provider -- aider, cline, continue, goose, kilo, kimi, kiro,
+  // opencode, openhands, pi, qwen, mistral-vibe. There is no aider endpoint;
+  // aider talks to whichever vendor the user's key belongs to. All twelve
+  // advertise api-key in localAuth, so picking it was a few keystrokes away
+  // and threw a raw `unknown AI provider: aider` from inside the registry.
+  //
+  // An API key is a credential, not a transport. Where the provider has no
+  // directly addressable model API, the key still reaches the tool -- the
+  // child inherits this process's environment (see transport/native's
+  // `env: { ...process.env, ...envOverrides }`) and an api-key account's
+  // credentialRef already names that variable -- so the correct behaviour is
+  // to run the vendor CLI, exactly as vendor-cli auth does.
+  if (account.authKind === 'vendor-cli' || !isDirectModelProvider(account.provider)) {
     const harness = session.nativeHarness
       ? localHarnessForCommand(session.nativeHarness)
       : localHarnessForProvider(account.provider);
