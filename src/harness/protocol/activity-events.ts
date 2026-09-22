@@ -6,7 +6,7 @@ import { visibleSlice } from '../../tui/render/width.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import { CLAUDE_SHAPED, JsonRecord, OPENCODE_SHAPED, asRecord } from './json-lines.js';
-import { categoryOf, toolCategory, toolLabel } from './tools.js';
+import { categoryOf, formatToolRow, toolCategory, toolLabel } from './tools.js';
 
 /** Line-capped, not byte-capped: a diff that's still readable at a glance
  * beats a byte-perfect one that pushes everything else out of the 5-line
@@ -198,8 +198,10 @@ function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[
       const detail = asRecord(call?.value) ?? call;
       const name = String(detail?.name ?? 'tool');
       const args = asRecord(detail?.arguments);
-      if (call?.status === 'error') return [{ kind: 'tool-error', label: name, ...categoryOf(name, args, command), ...identity }];
-      return [{ kind: 'tool-start', label: toolLabel(name, args), ...categoryOf(name, args, command), ...identity }];
+      // Start and error read the same: `args` is in hand either way, and a
+      // tool that FAILED is the one a reader most wants identified.
+      const kind = call?.status === 'error' ? 'tool-error' as const : 'tool-start' as const;
+      return [{ kind, label: toolLabel(name, args), ...categoryOf(name, args, command), ...identity }];
     }
     if (block?.type === 'toolResponse') {
       const result = asRecord(block.toolResult);
@@ -336,7 +338,10 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       const rawOutput = innerType === 'tool_completed' ? blockText(inner.result) : typeof inner.error === 'string' ? inner.error : '';
       const output = cappedActivityOutput(rawOutput);
       return {
-        kind, label: kind === 'tool-start' && description ? `${name}(${visibleSlice(description, 72)})` : name,
+        // Through the shared formatter, and on every kind -- this repeated
+        // the format inline and showed the description only while running,
+        // so the same tool changed shape the moment it finished.
+        kind, label: formatToolRow(name, description),
         ...categoryOf(name, undefined, harness.command),
         ...(typeof inner.toolCallId === 'string' ? { id: inner.toolCallId } : {}),
         ...(output?.length ? { output } : {}),
