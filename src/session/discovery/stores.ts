@@ -29,14 +29,42 @@ export type NativeSessionEnvironment = Readonly<Record<string, string>>;
  *  anything about how the vendor lays its files out. */
 export type NativeSessionFile = { path: string; root: string };
 
+/** Everything a vendor-specific carry needs to move one conversation. */
+export type NativeSessionCarry = {
+  nativeId: string;
+  workspace: string;
+  /** The environment the conversation was written under. */
+  from: NativeSessionEnvironment;
+  /** The environment it has to be readable under. */
+  to: NativeSessionEnvironment;
+};
+
+/** A store describes a conversation one of two ways, and implements the
+ *  matching member:
+ *
+ *  - `locate` -- the conversation IS a path (a transcript, or a directory of
+ *    them). Almost every vendor. Carrying is then a copy the caller performs,
+ *    and the same path is also what a title read opens.
+ *  - `carry` -- the conversation is not separable as a path, so only the
+ *    vendor's own store knows how to move it. Hermes is the one so far: every
+ *    conversation lives as rows in one shared SQLite database that also holds
+ *    the account's other sessions, so copying the file would overwrite them.
+ *
+ *  `root` is required either way: it is what tells two accounts apart, and a
+ *  shared root already means the conversation never moved. */
 export interface NativeSessionStore {
   /** The directory this vendor keeps conversations under, for a given
    *  environment, or undefined when that environment cannot place it. */
   root(environment: NativeSessionEnvironment): string | undefined;
   /** The file holding one conversation, or undefined when it is not there. */
-  locate(
+  locate?(
     root: string, nativeId: string, workspace: string, environment: NativeSessionEnvironment,
   ): Promise<NativeSessionFile | undefined>;
+  /** Move one conversation into `to`, returning whether it is now readable
+   *  there. Must never fail destructively: the caller's fallback is to
+   *  re-seed, which is always available, so anything uncertain returns false
+   *  and leaves both stores as they were. */
+  carry?(input: NativeSessionCarry): Promise<boolean>;
 }
 
 export function nativeDataRoot(

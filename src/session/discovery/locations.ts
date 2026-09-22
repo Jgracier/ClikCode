@@ -42,6 +42,9 @@ export async function locateNativeSessionFile(
 ): Promise<NativeSessionFile | undefined> {
   const store = nativeSessionStore(harness);
   const root = store?.root(environment);
-  if (!store || !root || !nativeId) return undefined;
+  // A store that carries its own conversations (see NativeSessionStore) has no
+  // per-conversation path to hand back, and that is not a failure: callers
+  // already treat undefined as "not reachable as a file".
+  if (!store?.locate || !root || !nativeId) return undefined;
   return store.locate(root, nativeId, workspace, environment);
 }
