@@ -9,6 +9,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
+import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
 import { mkdir, open } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { stdout as output } from 'node:process';
@@ -511,6 +512,10 @@ export async function aiSessionSend(
           account.quotaState = 'exhausted';
           account.quotaRetryAt = undefined;
           exhaustedAnyAccount = true;
+          // The one observation that makes a learned limit possible: this much
+          // was refused. Only recorded for a real quota refusal -- a crash
+          // says nothing about where the ceiling is.
+          account.usageLearning = recordRefused(account.usageLearning, state.invocations, account.id, Date.now());
         }
         attemptedAccounts.add(account.id);
         await checkpoint.persistNow();
@@ -597,6 +602,10 @@ export async function aiSessionSend(
         latencyMs: Date.now() - startedAt,
       };
       state.invocations.push(invocation);
+      // An allowed turn raises this account's learned ceiling. Recorded after
+      // the invocation is pushed so the window sum includes this turn: the
+      // high-water mark must be a cost the vendor actually permitted.
+      account.usageLearning = recordAllowed(account.usageLearning, state.invocations, account.id, Date.parse(invocation.at));
       session.attachments = [];
       const answer = titleStream ? extractSessionTitle(result.text) : { title: undefined, text: result.text };
       await checkpoint.complete(answer.text);
@@ -698,6 +707,7 @@ export async function aiSessionSend(
         exhaustedAccount.quotaState = 'exhausted';
         exhaustedAccount.quotaRetryAt = undefined;
         exhaustedAnyApiAccount = true;
+        exhaustedAccount.usageLearning = recordRefused(exhaustedAccount.usageLearning, state.invocations, exhaustedAccount.id, Date.now());
       }
       attemptedAccounts.add(exhaustedAccount.id);
       // Preserve every failed candidate before looking for the next one. A
@@ -738,6 +748,8 @@ export async function aiSessionSend(
     }
   }
   state.invocations.push(invocation);
+  // Same as the vendor-CLI path: an allowed turn raises the learned ceiling.
+  account.usageLearning = recordAllowed(account.usageLearning, state.invocations, account.id, Date.parse(invocation.at));
   session.attachments = [];
   const answer = titleStream ? extractSessionTitle(turn.text) : { title: undefined, text: turn.text };
   await checkpoint.complete(answer.text);
