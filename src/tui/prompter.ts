@@ -698,9 +698,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // What the harness reported running beats what it was asked to run: a
     // session with no explicit choice knows nothing until the vendor
     // answers, and a vendor that substituted a model said so on its own
-    // stream. Never a synthetic label -- there is no model named "automatic"
-    // to fall back to displaying.
-    const rawModel = harness?.modelArgvPrefix ? session.reported?.model ?? session.model ?? 'default' : undefined;
+    // stream. Never a synthetic label: there is no model named "automatic",
+    // and none named "default" either -- that placeholder was just the same
+    // lie under a quieter name. A session's model is resolved to something
+    // the harness really publishes when the harness is chosen and when the
+    // session opens (resolveNativeModel), so an empty one here means the
+    // harness publishes nothing at all. Showing no model is honest; showing
+    // a fabricated one is not.
+    const rawModel = harness?.modelArgvPrefix ? session.reported?.model ?? session.model ?? undefined : undefined;
     const model = nativeModelLabel(harness?.command, rawModel);
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     // The title used to share this line with provider/model/directory, which

@@ -100,6 +100,32 @@ function nativeModelCatalogCached(
   return { models: [...new Set(account?.models ?? [])] };
 }
 
+/** The model a session will actually run with, resolved to one the harness
+ * really publishes.
+ *
+ * Resolution order: what the harness itself is currently configured to use,
+ * then the first model it publishes. There is deliberately no placeholder at
+ * the end of that chain -- "default" and "automatic" are not models, and a
+ * session displaying one is a session whose real model nobody knows. That was
+ * a real bug twice: the picker showed "automatic", which no harness accepts,
+ * and replacing it with "default" only renamed the same lie.
+ *
+ * Returns undefined ONLY when the harness publishes nothing at all (not
+ * installed, or its discovery command failed). Callers must then show nothing
+ * rather than invent a name -- an absent model is honest, a fabricated one is
+ * not. `configured` is preferred even when it is not in `models`, because a
+ * vendor reporting its own current setting is better evidence than a list its
+ * discovery command may have truncated. */
+export async function resolveNativeModel(
+  harness: AiLocalHarnessDefinition,
+  account?: AiHarnessAccount,
+): Promise<string | undefined> {
+  const catalog = await nativeModelCatalog(harness, account);
+  const configured = catalog.configured?.trim();
+  if (configured) return configured;
+  return catalog.models.find((model) => model.trim().length > 0);
+}
+
 export async function nativeModelCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,

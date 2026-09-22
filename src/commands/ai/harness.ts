@@ -11,7 +11,7 @@ import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
-import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
+import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { announceBareInteractiveLogin, harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../account.js';
 import { deriveAccountLabel } from '../../harness/accounts/labels.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
@@ -131,10 +131,8 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       }
     }
   }
-  if (!session.model) {
-    const catalog = await nativeModelCatalog(harness, account);
-    if (catalog.configured) session.model = catalog.configured;
-  }
+  // Always a real model, never a placeholder -- see resolveNativeModel.
+  if (!session.model) session.model = await resolveNativeModel(harness, account) ?? null;
   session.updatedAt = new Date().toISOString();
   await writeState(state);
   const compatible = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');

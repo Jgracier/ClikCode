@@ -27,7 +27,10 @@ function renderSessionCard(session: HarnessSession, account?: string): string {
     line('project', compactPath(session.workspace ?? process.cwd())),
     line('provider', sessionProviderLabel(session)),
     line('account', account ?? 'default'),
-    line('model', modelLabel ?? 'provider default'),
+    // Omitted when there is no real model, never printed as a placeholder:
+    // this card is also the JSON contract, and a fabricated model id there
+    // would be consumed as if it were real.
+    ...(modelLabel ? [line('model', modelLabel)] : []),
     line('effort', session.route === 'gateway' ? 'platform managed' : session.effort),
     line('permissions', session.route === 'gateway' ? 'platform policy' : session.permissionMode ?? 'ask'),
     line('session', session.id.slice(0, 8)),
