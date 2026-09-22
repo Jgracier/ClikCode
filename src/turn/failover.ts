@@ -9,7 +9,7 @@ export { FAILOVER_PREAMBLE };
  *  sensible response. A rejected request is about the REQUEST -- the same argv
  *  will be refused identically by every account, so failing over just walks
  *  the whole list failing the same way. */
-type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'request-invalid' | 'other';
+export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | 'authentication-required' | 'native-thread-invalid' | 'request-invalid' | 'account-ineligible' | 'other';
 
 /** Usage probes deliberately return display labels so provider-specific
  * response shapes stay out of routing. Interpret only explicit percentage
@@ -63,6 +63,16 @@ const THROTTLE_TEXT = /(?:rate limit|too many requests|temporar(?:y|ily) throttl
  * each pointless attempt cost a 60-second interactive-auth timeout. Kept to
  * wording a CLI uses for its own flag validation; nothing here matches a
  * model or plan entitlement problem, which IS account-specific. */
+/** The account is real and signed in, but the vendor will not serve it --
+ *  a plan or verification problem rather than a credential one. Confirmed
+ *  verbatim from agy 1.2.7 on a refreshed, valid token:
+ *    "Eligibility check failed: Your current account is not eligible for
+ *     Antigravity. Verify your account to continue."
+ *  It matched none of the patterns above, so it classified as 'other' and
+ *  the user was told "account failed" -- true but useless, since it names
+ *  neither the problem nor the fix. Signing in again cannot help, which is
+ *  why this is distinct from authentication-required. */
+const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|no valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription))/i;
 const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
@@ -79,6 +89,23 @@ function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
  * `stderrTail` that captureNativeHarnessTurn attaches, or `signals.stderrText`)
  * or from an error the caller did not mark as model text -- never from a
  * turn's stdout, where "I hit the rate limit handling code" is just prose. */
+/** What to tell someone when a turn moves to another account.
+ *
+ * The message used to be one of two words -- "quota reached" or the catch-all
+ * "account failed" -- so an ineligible account, an expired sign-in and a
+ * crash all read identically, and none of them said what to do about it. The
+ * classifier already knows which it was; this just says it out loud. */
+export function accountFailureReason(kind: AccountFailureKind): string {
+  switch (kind) {
+    case 'quota-exhausted': return 'usage exhausted';
+    case 'temporarily-throttled': return 'rate limited';
+    case 'authentication-required': return 'sign-in needed';
+    case 'account-ineligible': return 'account not eligible';
+    case 'native-thread-invalid': return 'thread expired';
+    default: return 'account failed';
+  }
+}
+
 export function classifyAccountFailure(error: unknown, signals: AccountFailureSignals = {}): AccountFailureKind {
   const carried = (error ?? {}) as {
     statusCode?: unknown; response?: { status?: unknown }; errorKind?: unknown; rateLimitStatus?: unknown;
@@ -129,6 +156,9 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // no other vendor's equivalent phrasing has been verified, so none is
   // guessed at.
   if (/no rollout found/i.test(text)) return 'native-thread-invalid';
+  // Before request-invalid: an ineligible account is about the ACCOUNT, so
+  // the next one is worth trying, whereas a rejected request is not.
+  if (INELIGIBLE_TEXT.test(text)) return 'account-ineligible';
   // Last, so a genuine auth/quota/throttle signal always wins: those can
   // legitimately be worded as a rejection too, and they ARE worth another
   // account.
