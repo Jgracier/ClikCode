@@ -10,6 +10,10 @@ import { NativeSessionEnvironment } from './locations.js';
 import { readOpencodeTranscript } from './vendors/opencode.js';
 import { discoverPiFsSessions } from './vendors/pi.js';
 import { DiscoveredNativeSession } from './discovered-session.js';
+import type { NativeSessionStore } from './stores.js';
+import { claudeSessionStore } from './vendors/claude-store.js';
+import { codexSessionStore } from './vendors/codex-store.js';
+import { antigravitySessionStore } from './vendors/antigravity-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -35,3 +39,21 @@ export const ADOPTED_TRANSCRIPT_READERS: Readonly<Record<string, (harness: AiLoc
   codex: (_harness, nativeId, workspace, environment) => readCodexFsTranscript(nativeId, workspace, environment),
   opencode: readOpencodeTranscript,
 };
+
+/** Where each vendor keeps a conversation on disk. One entry per vendor, so
+ * teaching ClikCode to carry a thread across an account failover is a line
+ * here plus a small module -- not an edit to two if-chains.
+ *
+ * Only layouts directly observed on disk are listed. A harness with no entry
+ * re-seeds on failover exactly as before, which is correct rather than
+ * degraded: for the fifteen harnesses that run every account against one
+ * vendor home, the thread never moves and there is nothing to carry. */
+export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>> = {
+  claude: claudeSessionStore,
+  codex: codexSessionStore,
+  antigravity: antigravitySessionStore,
+};
+
+export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {
+  return NATIVE_SESSION_STORES[harness.command];
+}
