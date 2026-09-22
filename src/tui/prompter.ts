@@ -867,20 +867,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // this number is the height budget -- reserve one row for a band that
     // draws two and the last line of the answer is pushed off the screen.
     //
-    // ...but NOT while someone has scrolled back to read. The band carries a
-    // spinner and a running elapsed clock, so it repaints several times a
-    // second directly above the composer -- movement in the corner of the eye
-    // of a page that is otherwise deliberately still, which reads as the
-    // screen glitching rather than as status. Reading is the one moment this
-    // information is worth nothing: the reader already knows they asked
-    // something, and Escape brings them back to the live edge where the band
-    // is waiting.
-    //
-    // Zeroing it here rather than skipping the paint below does both halves
-    // at once: `if (waitingRows)` guards the band's own rows, and the height
-    // budget hands those two rows to the transcript, so scrolling back also
-    // shows two more lines of what is being read.
-    const waitingRows = this.waitingLabel && !this.scrolledBack && targetHeight >= 5 ? 2 : 0;
+    // This band STAYS while someone scrolls back to read. It is the answer to
+    // "is it still working", and losing it mid-read leaves no sign a turn is
+    // even running. What does not stay is the answer's text -- see
+    // maxLiveConversation below. The distinction is the point: a spinner and
+    // an elapsed clock in a fixed place are status, while a sentence being
+    // rewritten under the eye is the thing that made reading impossible.
+    const waitingRows = this.waitingLabel && targetHeight >= 5 ? 2 : 0;
     let optionalRows = Math.max(0, targetHeight - 4 - waitingRows);
     const notice = this.transientNotice ?? this.currentNotice;
     const noticeRows = notice && optionalRows > 0 ? 1 : 0;
@@ -1254,9 +1247,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // reading: it reads as the screen glitching, and it is the one thing on
     // screen they did not ask to look at.
     //
-    // Zero here means the footer alone is the live block, so `above` takes
-    // every remaining row and the reader gets a still page plus the rows the
-    // conversation and the waiting band both gave back.
+    // The waiting band above deliberately does NOT do this. A spinner and an
+    // elapsed clock in a fixed place answer "is it still working" without
+    // competing for the eye; a sentence rewriting itself does. Only the words
+    // go.
     const maxLiveConversation = this.scrolledBack ? 0 : Math.max(0, targetHeight - footer.length);
     const liveConversationRows = Math.min(conversationLines.length, maxLiveConversation);
     const unbounded = [...(maxLiveConversation ? conversationLines.slice(-maxLiveConversation) : []), ...footer];
