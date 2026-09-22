@@ -49,14 +49,18 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
   });
 
   it('folds the duplicates and keeps everything else', () => {
-    // Of the registry's rows, 77 restate a control the user already had. What
+    // Of the registry's rows, 72 restate a control the user already had. What
     // is left is the genuinely vendor-specific surface. Six harnesses publish
     // nothing a ClikCode control does not already own -- a model selector, a
     // permission mode -- so their vendor surface is correctly empty rather
     // than a list of duplicates.
+    //
+    // Was 73 until Antigravity's effort option was removed: that harness
+    // encodes effort in the model id and rejects --effort outright, so the
+    // row was not a duplicate control, it was one that could never work.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(73);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(72);
     expect(kept.length).toBe(149);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     expect(emptied.map((h) => h.command)).toEqual(['grok', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']);

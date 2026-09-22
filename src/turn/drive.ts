@@ -489,6 +489,16 @@ export async function aiSessionSend(
           prompter?.response('', 'replace');
           continue;
         }
+        // A rejected REQUEST is not an account problem, and trying the next
+        // account cannot fix it -- the same argv gets refused identically
+        // every time. This is exactly what made a single bad flag look like
+        // "every account failed": ClikCode sent --effort to Antigravity,
+        // which encodes effort in the model id, and then walked all seven
+        // accounts collecting the same refusal, paying a 60-second
+        // interactive-auth timeout on the one that was not signed in.
+        // Surface the vendor's own complaint instead, which names the
+        // problem.
+        if (failureKind === 'request-invalid') throw failure;
         // Failover is about finding an account that can still work, so it is
         // not gated on the failure being a quota refusal. A turn that died
         // for any other reason still moves to the next account that has usage
@@ -577,7 +587,7 @@ export async function aiSessionSend(
       delete session.nativeSessionPreallocated;
       const usage = turnUsage as NormalizedTurnUsage | undefined;
       const invocation = {
-        id: randomUUID(), accountId: account.id, provider: harness.provider, model: model ?? 'provider-default',
+        id: randomUUID(), accountId: account.id, provider: harness.provider, ...(model ? { model } : {}),
         at: new Date().toISOString(), sessionId: session.id,
         ...(usage?.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
         ...(usage?.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
@@ -676,9 +686,12 @@ export async function aiSessionSend(
         account.status = 'needs_login';
         await writeState(state);
       }
-      // Same rule as the vendor-CLI path above: move to the next account that
-      // has usage whatever went wrong, but only call an account spent when it
-      // actually refused for quota.
+      // Same rules as the vendor-CLI path above, both of them: a rejected
+      // request is not an account problem and no other account will accept
+      // it either, so surface it rather than walking the list; otherwise move
+      // to the next account that has usage whatever went wrong, and only call
+      // an account spent when it actually refused for quota.
+      if (failureKind === 'request-invalid') throw error;
       if (session.accountFailover !== 'on-quota-exhausted') throw error;
       const exhaustedAccount = account;
       if (failureKind === 'quota-exhausted') {
@@ -789,7 +802,7 @@ export async function aiGatewaySessionSend(
     if (harnessTurn.isError) throw new Error(harnessTurn.text || 'gateway harness turn failed');
     const harnessInvocation = {
       id: randomUUID(), sessionId: session.id, accountId: 'gateway',
-      provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform',
+      provider: session.provider ?? 'clikdeploy-gateway', ...(session.model ? { model: session.model } : {}),
       at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
     };
     state.invocations.push(harnessInvocation);
@@ -891,7 +904,7 @@ export async function aiGatewaySessionSend(
     if (!reply) reply = gatewayNotice;
   }
   if (!reply) throw new Error('gateway AI response contained no text');
-  const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', model: session.model ?? 'platform', at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
+  const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', ...(session.model ? { model: session.model } : {}), at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
   session.attachments = [];
   const answered = titleStream ? extractSessionTitle(reply) : { title: undefined, text: reply };

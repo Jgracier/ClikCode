@@ -357,6 +357,23 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // subcommands, this is a genuine (trivial) turn, not a free auth-only
   // call, since agy has no login-only command in its own CLI surface.
   // profileEnv: 'HOME' -- confirmed live: agy resolves its entire config
+  // Effort is NOT an independent dimension here, which is why this entry
+  // declares no effortValues and no effortArgvPrefix even though `agy --help`
+  // lists --effort. Antigravity encodes effort in the MODEL ID -- its own
+  // `agy models` prints gemini-3.8-flash-high / -medium / -low,
+  // gemini-3.1-pro-high / -low, gpt-oss-120b-medium -- and the CLI rejects any
+  // combination that is not consistent with that. Verified live against agy
+  // 1.2.7 on a real authenticated account:
+  //   --model claude-opus-4-6-thinking --effort medium
+  //     -> "--effort is not supported for model claude-opus-4-6-thinking"
+  //   --model gpt-oss-120b-medium --effort high
+  //     -> "--model gpt-oss-120b-medium conflicts with --effort=high"
+  //   --model claude-opus-4-6-thinking (no --effort)
+  //     -> SUCCESS
+  // Declaring the flag made ClikCode send it on every turn, so EVERY
+  // antigravity turn failed on every account -- and because the failure
+  // looked like the account's fault, failover then walked the whole account
+  // list failing identically. Choosing effort means choosing the model.
   // tree (~/.gemini/antigravity-cli/, credentials included) from $HOME, the
   // same way it would with a real home directory, so redirecting HOME per
   // account is a real isolation mechanism here, not a guess -- verified
@@ -380,7 +397,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // stdio: 'inherit' via suspend/resume, same as Claude Code/Codex --
   // real output on screen, including the actual prompt a fresh user needs
   // to complete it, at the cost of the raw JSON dump this doesn't hide.
-  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'antigravity', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['low', 'medium', 'high'], profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, localAuth: ['oauth', 'vendor-cli'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--dangerously-skip-permissions'] } }, profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
+  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'antigravity', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, localAuth: ['oauth', 'vendor-cli'], binary: 'agy', loginArgv: ['-p', 'hi', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--dangerously-skip-permissions'] } }, profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
   { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', modelDiscoveryArgv: ['--list-models'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
   // Checked against droid 0.223.0: `droid exec` takes -m/--model,
   // -r/--reasoning-effort, --cwd, -s/--session-id, --auto low|medium|high and
