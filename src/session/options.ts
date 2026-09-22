@@ -90,7 +90,13 @@ export function sessionPickerOptions(
     const model = nativeModelLabel(latest.nativeHarness, latest.model);
     return {
       label: title,
-      detail: `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''} · ${model ?? 'default'} · ${new Date(latest.updatedAt).toLocaleString()}${history.length > 1 ? ` · Tab: ${history.length} history entries` : ''}`,
+      // The model segment is dropped entirely when there is no real one,
+      // rather than printed as "default" -- see resolveNativeModel.
+      detail: [
+        `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''}`,
+        model, new Date(latest.updatedAt).toLocaleString(),
+        ...(history.length > 1 ? [`Tab: ${history.length} history entries`] : []),
+      ].filter(Boolean).join(' · '),
       value: latest.id,
       alternates: history.length > 1 ? history.map((session) => ({
         label: `${'  '.repeat(depthFor(session))}${providerLabel(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${new Date(session.updatedAt).toLocaleString()}`,
@@ -169,11 +175,17 @@ export function normalizeFailoverWord(value: string): 'never' | 'on-quota-exhaus
   throw new Error('failover must be auto or never');
 }
 
-/** 'auto' and 'default' clear the field back to "no override" rather than
- * being stored as literal model ids -- no vendor CLI has a model named
- * either word. Every entry point that can set a model (slash commands,
- * `/settings`, and the `sessions create`/`sessions set` CLI flags) routes
- * through this so they can't drift out of sync on which words clear it. */
+/** 'auto' and 'default' mean "no explicit override" rather than being stored
+ * as literal model ids -- no vendor CLI has a model named either word. Every
+ * entry point that can set a model (slash commands, `/settings`, and the
+ * `sessions create`/`sessions set` CLI flags) routes through this so they
+ * can't drift out of sync on which words clear it.
+ *
+ * Returning null is a request to RESOLVE, not an instruction to store null.
+ * Callers must follow it with resolveNativeModel(); a session persisted with
+ * a null model is what used to surface in the UI as "automatic", and then as
+ * "default" after that word was merely renamed. A session must always name a
+ * model its harness really publishes. */
 export function normalizeModelWord(value: string): string | null {
   return value === 'auto' || value === 'default' ? null : value;
 }

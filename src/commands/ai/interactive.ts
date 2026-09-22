@@ -23,7 +23,7 @@ import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessFor
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { nativeUsageReading } from '../../harness/accounts/account-usage.js';
-import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
+import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, discardInterruptedTurn, nativeAvailableCommands, persistentTransports, preserveInterruptedTurn, synchronizeNativeTranscript, turnEnvironment } from '../../turn/runtime.js';
 import { aiGatewaySessionSend } from '../../turn/drive.js';
@@ -205,9 +205,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       : session.provider ? localHarnessForProvider(session.provider) : undefined;
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
     if (harness) {
-      const catalog = await nativeModelCatalog(harness, account);
-      if (catalog.configured) {
-        session.model = catalog.configured;
+      const resolved = await resolveNativeModel(harness, account);
+      if (resolved) {
+        session.model = resolved;
         session.updatedAt = new Date().toISOString();
         stateChanged = true;
       }

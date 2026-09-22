@@ -14,6 +14,7 @@ import { stdin as input } from 'node:process';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
@@ -195,8 +196,16 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!value) throw new Error('Choose a model from /model or use /model <name>.');
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
-    const model = normalizeModelWord(value);
-    if (model) await assertRealModel(harness, state.accounts.find((item) => item.id === session.accountId), model);
+    const account = state.accounts.find((item) => item.id === session.accountId);
+    // `/model auto` and `/model default` mean "stop overriding", not "store a
+    // word no vendor accepts" -- so they RESOLVE to whatever the harness
+    // really publishes instead of clearing the field to null. A null here is
+    // what used to surface as "automatic", then as "default": a session whose
+    // real model nobody could name.
+    const requested = normalizeModelWord(value);
+    if (requested) await assertRealModel(harness, account, requested);
+    const model = requested ?? await resolveNativeModel(harness, account) ?? null;
+    if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
     session.model = model;
     session.updatedAt = new Date().toISOString();
     await writeState(state);
@@ -307,7 +316,11 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       session.route = 'local';
       if (leavingGateway) {
         const defaults = resolveDefaultSettings(state, account.provider);
-        session.model = state.providerSettings[account.provider]?.model ?? null;
+        // Coming back from the gateway the session has no local model yet. A
+        // remembered provider setting wins; otherwise resolve a real one from
+        // the harness rather than leaving null for the UI to paper over.
+        session.model = state.providerSettings[account.provider]?.model
+          ?? await resolveLocalModelFor(account, state) ?? null;
         session.effort = defaults.effort;
         session.permissionMode = defaults.permissionMode;
         session.accountFailover = defaults.accountFailover;
@@ -317,9 +330,13 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     } else if (setting === 'model') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
-      const model = normalizeModelWord(value);
-      if (model) await assertRealModel(harness, state.accounts.find((item) => item.id === session.accountId), model);
-      session.model = model;
+      const modelAccount = state.accounts.find((item) => item.id === session.accountId);
+      const requestedModel = normalizeModelWord(value);
+      if (requestedModel) await assertRealModel(harness, modelAccount, requestedModel);
+      // Same rule as the /model handler above: clear-words resolve, never null.
+      const resolvedModel = requestedModel ?? await resolveNativeModel(harness, modelAccount) ?? null;
+      if (!resolvedModel) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
+      session.model = resolvedModel;
     } else if (setting === 'effort') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!harness) throw new Error('Choose a provider before setting effort.');
@@ -389,7 +406,11 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       session.route = 'local';
       if (leavingGateway) {
         const defaults = resolveDefaultSettings(state, account.provider);
-        session.model = state.providerSettings[account.provider]?.model ?? null;
+        // Coming back from the gateway the session has no local model yet. A
+        // remembered provider setting wins; otherwise resolve a real one from
+        // the harness rather than leaving null for the UI to paper over.
+        session.model = state.providerSettings[account.provider]?.model
+          ?? await resolveLocalModelFor(account, state) ?? null;
         session.effort = defaults.effort;
         session.permissionMode = defaults.permissionMode;
         session.accountFailover = defaults.accountFailover;
@@ -484,6 +505,18 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   undo: async ({ session }) => { throw new Error(undoUnavailableMessage(session)); },
 };
+
+/** A real model for a local account's harness, or undefined when its harness
+ * publishes none. Shared by both leavingGateway branches so they cannot
+ * disagree about what "no model yet" resolves to. */
+async function resolveLocalModelFor(
+  account: { provider: string; id: string },
+  state: { accounts: { id: string }[] },
+): Promise<string | undefined> {
+  const harness = localHarnessForProvider(account.provider);
+  if (!harness) return undefined;
+  return resolveNativeModel(harness, state.accounts.find((item) => item.id === account.id) as never);
+}
 
 export async function aiSessionCommand(id: string, input: string): Promise<string> {
   const state = await readState();

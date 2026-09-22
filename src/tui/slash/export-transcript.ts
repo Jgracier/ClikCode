@@ -13,7 +13,10 @@ function transcriptMarkdown(session: HarnessSession): string {
   const header = [
     `# ${title}`, '',
     `- Provider: ${sessionProviderLabel(session)}`,
-    `- Model: ${session.model ?? 'provider default'}`,
+    // Omitted rather than written as "provider default": an exported
+    // transcript claiming a model that does not exist is worse than one that
+    // does not name a model.
+    ...(session.model ? [`- Model: ${session.model}`] : []),
     `- Workspace: ${session.workspace ?? process.cwd()}`,
     `- Exported: ${new Date().toISOString()}`, '',
   ];
