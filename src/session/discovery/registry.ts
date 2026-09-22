@@ -14,6 +14,8 @@ import type { NativeSessionStore } from './stores.js';
 import { claudeSessionStore } from './vendors/claude-store.js';
 import { codexSessionStore } from './vendors/codex-store.js';
 import { antigravitySessionStore } from './vendors/antigravity-store.js';
+import { geminiSessionStore } from './vendors/gemini-store.js';
+import { piSessionStore } from './vendors/pi-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -52,6 +54,8 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   claude: claudeSessionStore,
   codex: codexSessionStore,
   antigravity: antigravitySessionStore,
+  gemini: geminiSessionStore,
+  pi: piSessionStore,
 };
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {
