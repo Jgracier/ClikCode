@@ -1142,11 +1142,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const selectedOption = row.index === selected;
         const available = Math.max(1, width - 4);
         const label = visibleSlice(row.option.label, available);
-        let remaining = available - terminalCellWidth(label);
-        const argHint = row.option.argHint && remaining > 3 ? visibleSlice(row.option.argHint, remaining - 1) : '';
-        remaining -= argHint ? terminalCellWidth(argHint) + 1 : 0;
+        const remaining = available - terminalCellWidth(label);
         const detail = row.option.detail && remaining > 3 ? visibleSlice(row.option.detail, remaining - 2) : '';
-        footer.push(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${argHint ? ` ${chalk.dim(argHint)}` : ''}${detail ? `  ${chalk.dim(detail)}` : ''}`);
+        footer.push(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
       }
       for (let index = windowed.length; index < visibleRows; index++) footer.push('');
       footer.push(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);

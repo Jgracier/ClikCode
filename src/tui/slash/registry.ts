@@ -248,12 +248,11 @@ function slashHelpSections(
   for (const row of slashRows(session, harness, extras, true)) {
     if (row.group === 'Switch harness') continue;
     const aliases = resolveSlashCommand(row.value.slice(1))?.aliases ?? [];
-    const usage = `${row.label}${row.argHint ? ` ${row.argHint}` : ''}`;
-    sections.set(row.group, [...(sections.get(row.group) ?? []), [usage, `${row.detail}${aliases.length ? ` (also /${aliases.join(', /')})` : ''}`]]);
+    sections.set(row.group, [...(sections.get(row.group) ?? []), [row.label, `${row.detail}${aliases.length ? ` (also /${aliases.join(', /')})` : ''}`]]);
   }
   const result = SLASH_GROUP_ORDER.filter((group) => sections.has(group)).map((group) => ({ group, rows: sections.get(group)! }));
   result.push({ group: 'Switch harness', rows: [
-    ['/<harness> [request]', 'hand off to another provider and optionally send a first request'],
+    ['/<harness>', 'hand off to another provider and optionally send a first request'],
     ['//<text>', 'send a slash command to the harness itself, verbatim'],
   ] });
   return result;
