@@ -348,10 +348,17 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       };
     }
   }
-  // Pi's own envelope: a flat `{ type: 'toolcall_start', toolName }` --
-  // verified from its own docs (packages/coding-agent/docs/json.md), but
-  // the docs excerpt available didn't name a paired completion event, so
-  // (same as Command Code above) this only ever reports 'tool-start'.
+  // Pi's own envelope. Two shapes, and only one of them pairs:
+  //   tool_execution_start / tool_execution_end   -- a real pair, so a tool
+  //     row resolves the moment it finishes, like every other harness.
+  //   message_update -> assistantMessageEvent.toolcall_start  -- verified
+  //     from its own docs (packages/coding-agent/docs/json.md), which name
+  //     no paired completion, so a row started this way is only settled by
+  //     the end of the turn (TurnTranscript's `tool.done || turnEnded`).
+  //
+  // The note here used to add "same as Command Code above", which is no
+  // longer true: that harness maps tool_completed and
+  // tool_errored/denied/hook_blocked, so it resolves its rows normally.
   if (harness.command === 'pi') {
     if (type === 'tool_execution_start') {
       return { kind: 'tool-start', label: String(value.toolName ?? 'tool'), ...categoryOf(String(value.toolName ?? 'tool'), undefined, harness.command) };
