@@ -8,8 +8,16 @@ import type { ToolCategory } from '../prompter.js';
  * nothing about what was touched; every vendor carries the target in the
  * call's input under one of a few well-known keys. */
 export function toolLabel(name: string, input?: Record<string, unknown>): string {
-  const target = ['file_path', 'filePath', 'path', 'notebook_path', 'command', 'pattern', 'query', 'url']
-    .map((key) => input?.[key])
+  // Matched with separators and case removed, the same way tool NAMES are
+  // below, because vendors disagree about spelling far more than about
+  // meaning: Antigravity writes CommandLine and AbsolutePath where others
+  // write command and file_path. Comparing the normalised form covers those
+  // without a per-vendor table, and covers the next vendor's spelling too.
+  const WANTED = ['filepath', 'path', 'notebookpath', 'absolutepath', 'command', 'commandline',
+    'pattern', 'query', 'url'];
+  const normalise = (key: string): string => key.replace(/[\s_-]/g, '').toLowerCase();
+  const target = WANTED
+    .map((wanted) => Object.entries(input ?? {}).find(([key]) => normalise(key) === wanted)?.[1])
     .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
   if (!target) return name;
   const firstLine = target.split(/\r?\n/, 1)[0]!.trim();
@@ -84,7 +92,7 @@ const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>> = {
   kiro: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
   amp: { stream: 'structured', note: 'JSON-lines turn; tool events classify by name where the stream reports one.' },
   pi: { stream: 'structured', note: 'JSON-lines turn; tool events classify by name where the stream reports one.' },
-  antigravity: { stream: 'structured', note: 'step_update carries step.tool_name and no input, so the verb table alone classifies it.' },
+  antigravity: { stream: 'structured', note: 'step_update carries tool_name AND tool_info.parameters (CommandLine on run_command, AbsolutePath on view_file), verified against agy 1.2.7. An earlier note here claimed there was no input, which is why every tool row read as a bare name.' },
   cursor: { stream: 'structured', note: 'tool events carry a name and a description, not an input record; the verb table alone classifies them.' },
   command: { stream: 'structured', note: 'tool_running/tool_completed/tool_errored carry toolName; shell and edit both match the verb table.' },
   auggie: { stream: 'structured', note: 'JSON turn; ACP tool events classify by name.' },

@@ -221,10 +221,19 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
     if (step?.step_type === 'tool') {
       const state = String(step.state ?? '');
+      const name = String(step.tool_name ?? 'tool');
+      // The parameters ARE on the stream, contrary to what tools.ts used to
+      // say about this harness. Verified against agy 1.2.7: a tool step
+      // carries tool_info.parameters, with CommandLine on run_command and
+      // AbsolutePath on view_file. Reading only tool_name is what reduced
+      // every tool row to a bare "run_command" with no sign of what ran --
+      // and it also cost the classifier its best signal, since a command is
+      // what tells a nameless tool apart from a read.
+      const parameters = asRecord(asRecord(step.tool_info)?.parameters);
       return {
         kind: /error|fail/i.test(state) ? 'tool-error' : state === 'DONE' ? 'tool-done' : 'tool-start',
-        label: String(step.tool_name ?? 'tool'),
-        ...categoryOf(String(step.tool_name ?? 'tool'), undefined, harness.command),
+        label: toolLabel(name, parameters),
+        ...categoryOf(name, parameters, harness.command),
       };
     }
   }
