@@ -100,9 +100,14 @@ describe('carrying a vendor session between account profiles', () => {
     await expect(carryNativeSession({
       harness: harnessFor('claude'), nativeId: 'missing', workspace: WORKSPACE, ...profiles,
     })).resolves.toBeUndefined();
-    // A harness whose layout is not known.
+    // A harness whose layout is not known. gemini used to be the example
+    // here and no longer is -- it has a store now -- so this uses copilot,
+    // whose profile holds only logs, suggesting its threads live server-side
+    // where nothing local can reach them.
     await expect(carryNativeSession({
-      harness: harnessFor('gemini'), nativeId: 'session-one', workspace: WORKSPACE, ...profiles,
+      harness: { command: 'copilot', profileEnv: 'COPILOT_HOME' } as AiLocalHarnessDefinition,
+      nativeId: 'session-one', workspace: WORKSPACE,
+      from: { COPILOT_HOME: join(root, 'a') }, to: { COPILOT_HOME: join(root, 'b') },
     })).resolves.toBeUndefined();
     // No session at all.
     await expect(carryNativeSession({
