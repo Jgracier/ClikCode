@@ -21,6 +21,7 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/defi
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../session/model.js';
 import type { HarnessAvailableCommand } from '../harness/events/turn-observer.js';
+import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { readState } from '../session/state/read.js';
@@ -45,6 +46,11 @@ export interface TurnRunOptions {
   /** The interactive loop keeps ONE app-server / ACP child per open session
    * and closes it itself; headless sends stay one-shot. */
   persistentTransports?: boolean;
+  /** Who is watching this turn, explicitly -- never read from a global. A
+   * headless caller (CLI, daemon, a slash command with no terminal) omits
+   * this and gets the plain stdout/emitHarnessOutput fallback every
+   * TERMINAL.active check used to fall back to on its own. */
+  prompter?: TerminalHarnessPrompter;
 }
 
 

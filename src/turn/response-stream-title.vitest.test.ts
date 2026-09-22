@@ -22,12 +22,12 @@ describe('streamed answers go through the title filter', () => {
     const lines = source.split('\n');
     const offenders: string[] = [];
     for (const [index, line] of lines.entries()) {
-      if (!/TERMINAL\.active\?\.response\(/.test(line)) continue;
+      if (!/prompter\?\.response\(/.test(line)) continue;
       // Clearing the slot for a retry passes a literal empty string.
       if (/response\(''/.test(line)) continue;
       // The answer being painted must be a filtered value, never the raw
       // delta the transport handed over.
-      const painted = /TERMINAL\.active\?\.response\((\w+)/.exec(line)?.[1];
+      const painted = /prompter\?\.response\((\w+)/.exec(line)?.[1];
       if (painted === 'text' || painted === 'delta') {
         offenders.push(`line ${index + 1}: ${line.trim()}`);
       }
@@ -39,7 +39,7 @@ describe('streamed answers go through the title filter', () => {
     const source = await readFile(new URL('./drive.ts', import.meta.url), 'utf8');
     // Each streaming call site names a filtered variable, and every one of
     // those is produced by titleStream.push.
-    const painted = [...source.matchAll(/TERMINAL\.active\?\.response\((\w+)/g)].map((m) => m[1]);
+    const painted = [...source.matchAll(/prompter\?\.response\((\w+)/g)].map((m) => m[1]);
     expect(painted.length).toBeGreaterThanOrEqual(4);
     for (const name of new Set(painted)) {
       if (name === 'answer') continue;

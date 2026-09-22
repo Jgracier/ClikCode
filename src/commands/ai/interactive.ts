@@ -276,7 +276,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const activeState = await readState();
         const active = activeState.sessions.find((item) => item.id === targetId);
         const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
-        const run = { persistentTransports: true, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) };
+        const run = {
+          persistentTransports: true,
+          ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}),
+          ...(rl instanceof TerminalHarnessPrompter ? { prompter: rl } : {}),
+        };
         if (active && rl.render) {
           const pending: HarnessSession = {
             ...active,
