@@ -190,6 +190,19 @@ export interface AiLocalHarnessDefinition {
     promptGuard?: 'double-dash' | 'space';
     output: 'text' | 'json' | 'json-lines';
     responseFields?: readonly string[];
+    /** Literal phrases this vendor puts in its OWN result text when an
+     *  account is out of usage, while still reporting the turn as a success.
+     *  Augment's auggie does exactly that: is_error false, subtype "success",
+     *  exit 0, and the upgrade notice where the answer should be -- so the
+     *  turn looked fine, the notice was stored as the assistant's reply, the
+     *  account was never marked exhausted and failover never fired.
+     *
+     *  Declared per harness and matched literally, never as a general
+     *  heuristic. classifyAccountFailure deliberately refuses to read
+     *  model-authored prose (a model discussing rate limits must not trigger
+     *  failover); this is the narrow exception for text the VENDOR wrote, and
+     *  it is opt-in one harness at a time so that exception can be audited. */
+    quotaSignals?: readonly string[];
     resumeSupportsWorkspaceSelector?: boolean;
   };
   session?: {

@@ -169,6 +169,26 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
       ? `${harness.displayName}: ${errorMessage}`
       : `${harness.displayName} returned no assistant text in its structured output`);
   }
+  // A vendor that answers "you are out of usage" while reporting SUCCESS.
+  // Augment's auggie does this: is_error false, subtype "success", exit 0,
+  // and the upgrade notice sitting where the answer belongs. Left alone, the
+  // notice became the assistant's reply in the transcript, the account stayed
+  // marked available, and failover never fired -- verified live on a real
+  // exhausted account.
+  //
+  // Only phrases the harness itself declares are matched, so this cannot
+  // mistake a model TALKING about running out of usage for an account that
+  // has. errorKind is set to the same vocabulary the rest of the pipeline
+  // already understands, so classifyAccountFailure resolves it to
+  // 'quota-exhausted' and the existing failover and usage-learning paths
+  // handle it with no new branching anywhere.
+  const quotaSignal = harness.turn.quotaSignals?.find((phrase) => text.includes(phrase));
+  if (quotaSignal) {
+    throw Object.assign(
+      new Error(`${harness.displayName}: ${text.replace(/\s+/g, ' ').trim()}`),
+      { errorKind: 'quota_exhausted', isResultError: true },
+    );
+  }
   return { text, ...(isError ? { isError } : {}), ...extras };
 }
 
