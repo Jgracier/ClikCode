@@ -9,6 +9,9 @@ export interface NativeTurnUsage {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   totalTokens?: number;
+  /** Reasoning tokens where the vendor counts them separately. Billed and
+   *  quota-consuming, so they belong in a cost figure. */
+  thinkingTokens?: number;
   totalCostUsd?: number;
   durationMs?: number;
   numTurns?: number;
@@ -83,22 +86,42 @@ export function nativeSelfReportFromLine(lineText: string): NativeSelfReport | u
 export function nativeUsageFromValue(value: unknown): NativeTurnUsage | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
-  const type = String(record.type ?? '');
+  // `type` is the common spelling; `event` is antigravity's and several
+  // generic-json harnesses'. Reading only `type` meant those were never even
+  // considered as terminal records.
+  const type = String(record.type ?? record.event ?? '');
   // Only terminal/summary records: per-message usage on an `assistant` event is
   // a partial count that the final record supersedes.
   if (type && !/(?:^|[._-])(?:result|complete|completed|finish|finished|done|usage|stats?)(?:$|[._-])/i.test(type)) return undefined;
-  const usage = asRecord(record.usage) ?? asRecord(record.stats) ?? asRecord(record.token_usage) ?? asRecord(asRecord(record.part)?.tokens);
+  // Usage sits beside the terminal marker for some vendors and one level
+  // INSIDE the payload for others: antigravity emits
+  // `{event:"result", result:{..., usage:{...}}}`, so reading only the top
+  // level found nothing and every antigravity turn recorded zero tokens.
+  // The nested envelopes are named, not guessed, so this cannot wander into
+  // an unrelated object that happens to hold a `usage` key.
+  const envelope = asRecord(record.result) ?? asRecord(record.turn) ?? asRecord(record.data)
+    ?? asRecord(record.response) ?? asRecord(record.summary);
+  const usage = asRecord(record.usage) ?? asRecord(record.stats) ?? asRecord(record.token_usage)
+    ?? asRecord(asRecord(record.part)?.tokens)
+    ?? asRecord(envelope?.usage) ?? asRecord(envelope?.stats) ?? asRecord(envelope?.token_usage);
   const cache = asRecord(usage?.cache);
   const result: NativeTurnUsage = {};
   const assign = <K extends keyof NativeTurnUsage>(key: K, number: number | undefined): void => { if (number !== undefined) result[key] = number; };
   assign('inputTokens', finiteNumber(usage?.input_tokens, usage?.inputTokens, usage?.prompt_tokens, usage?.input));
   assign('outputTokens', finiteNumber(usage?.output_tokens, usage?.outputTokens, usage?.completion_tokens, usage?.output));
-  assign('cacheReadTokens', finiteNumber(usage?.cache_read_input_tokens, usage?.cached_input_tokens, usage?.cacheReadTokens, usage?.cached, cache?.read));
+  assign('cacheReadTokens', finiteNumber(usage?.cache_read_input_tokens, usage?.cached_input_tokens, usage?.cache_read_tokens, usage?.cacheReadTokens, usage?.cached, cache?.read));
   assign('cacheCreationTokens', finiteNumber(usage?.cache_creation_input_tokens, usage?.cacheWriteTokens, cache?.write));
   assign('totalTokens', finiteNumber(usage?.total_tokens, usage?.totalTokens, usage?.total));
+  // Reasoning tokens are billed and counted by several vendors (antigravity's
+  // `thinking_tokens`, others' `reasoning_tokens`) and were being dropped.
+  assign('thinkingTokens', finiteNumber(usage?.thinking_tokens, usage?.thinkingTokens, usage?.reasoning_tokens));
   assign('totalCostUsd', finiteNumber(record.total_cost_usd, record.cost_usd, record.totalCostUsd, usage?.total_cost_usd, asRecord(record.part)?.cost));
-  assign('durationMs', finiteNumber(record.duration_ms, record.durationMs));
-  assign('numTurns', finiteNumber(record.num_turns, record.numTurns));
+  assign('durationMs', finiteNumber(record.duration_ms, record.durationMs,
+    envelope?.duration_ms, envelope?.durationMs,
+    // Seconds, not ms: antigravity publishes `duration_seconds`.
+    ...(finiteNumber(record.duration_seconds, envelope?.duration_seconds) !== undefined
+      ? [finiteNumber(record.duration_seconds, envelope?.duration_seconds)! * 1000] : [])));
+  assign('numTurns', finiteNumber(record.num_turns, record.numTurns, envelope?.num_turns, envelope?.numTurns));
   return Object.keys(result).length ? result : undefined;
 }
 
