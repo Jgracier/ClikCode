@@ -149,3 +149,41 @@ describe('the candidate window set is the standard vendor set', () => {
     expect(CANDIDATE_WINDOWS.map((w) => w.name)).toEqual(['1h', '5h', '24h', 'weekly']);
   });
 });
+
+describe('reported cost is preferred over token counts', () => {
+  const base: Invocation = {
+    id: 'c1', accountId: 'acct', provider: 'anthropic', model: 'opus',
+    at: new Date(T0).toISOString(), latencyMs: 1000,
+  };
+
+  it('uses costUsd when the vendor reports it', () => {
+    // A dollar figure already encodes the model's price and the vendor's
+    // cache discount, so it needs no per-model weight.
+    expect(turnCost({ ...base, costUsd: 0.25 })).toBe(250_000);
+  });
+
+  it('ignores a per-model weight when cost is reported', () => {
+    // Weighting a dollar figure by a model multiplier would double-count the
+    // model's price, which is already in the dollars.
+    expect(turnCost({ ...base, costUsd: 0.25 }, { opus: 9 })).toBe(250_000);
+  });
+
+  it('prefers cost even when token fields are also present', () => {
+    // This is the real Claude shape: input 2, cache_read 10118, output 60,
+    // and a cost. Scoring it by tokens would treat a heavily cached turn as
+    // if it were fresh work.
+    expect(turnCost({ ...base, inputTokens: 2, outputTokens: 60, cacheReadTokens: 10118, costUsd: 0.2758295 }))
+      .toBe(275_829.5);
+  });
+
+  it('falls back to summed tokens when no cost is reported', () => {
+    expect(turnCost({ ...base, inputTokens: 2, outputTokens: 60, cacheReadTokens: 10118 })).toBe(10_180);
+  });
+
+  it('treats a zero cost as absent rather than as a free turn', () => {
+    // A vendor emitting 0.0 is reporting "unknown", not "this was free";
+    // taking it literally would make every turn cost nothing and the learned
+    // ceiling would never rise.
+    expect(turnCost({ ...base, costUsd: 0, totalTokens: 500 })).toBe(500);
+  });
+});

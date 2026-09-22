@@ -66,6 +66,14 @@ export interface QuotaHit {
    *  window name. Snapshotted rather than recomputed later, because the
    *  invocation log is pruned and rolled up and would not survive. */
   costs: Record<string, number>;
+  /** Raw tokens per model inside the LONGEST candidate window at the moment of
+   *  refusal, keyed by model id. This is what makes per-model weights
+   *  learnable at all: two refusals with different model mixes are two
+   *  equations, and without the breakdown there is only a total, which carries
+   *  no information about which model was expensive. Raw tokens, deliberately
+   *  unweighted -- weighting them here would fold the current estimate into
+   *  the evidence used to revise it. */
+  tokensByModel?: Record<string, number>;
 }
 
 export interface UsageLearning {
@@ -85,7 +93,26 @@ type Invocation = HarnessState['invocations'][number];
  * expressed in turns is learned exactly the same way as one expressed in
  * tokens, because the method only cares that the unit is consistent. */
 export function turnCost(invocation: Invocation, weights: Readonly<Record<string, number>> = {}): number {
+  // Reported cost first, and it needs no per-model weight at all: a dollar
+  // figure ALREADY encodes both the model's price and whatever discount the
+  // vendor applies to cache reads. Claude reports it on 404 of the 576
+  // invocations on this machine, and its token fields alone are misleading --
+  // a real turn read input_tokens 2, cache_read_tokens 10118, output 60, so
+  // anything weighting those equally would score a heavily cached turn as if
+  // it were fresh work.
+  //
+  // Mixing units inside one window would be wrong, but cannot happen: an
+  // account belongs to exactly one provider, so cost is either reported for
+  // all of its turns or none of them. Scaled up because the high-water mark
+  // is stored as an integer-ish magnitude and sub-dollar turns would
+  // otherwise quantise badly.
+  if (invocation.costUsd !== undefined && invocation.costUsd > 0) return invocation.costUsd * 1_000_000;
   const weight = (invocation.model && weights[invocation.model]) || 1;
+  // No total is published by several vendors, Claude among them; the parts
+  // are. Cache reads are counted at full rate deliberately -- the unit only
+  // has to be CONSISTENT, because the limit is learned in whatever unit this
+  // returns. A "correct" discount is unknowable per vendor and would add a
+  // guess without adding accuracy.
   const tokens = invocation.totalTokens
     ?? ((invocation.inputTokens ?? 0) + (invocation.outputTokens ?? 0) + (invocation.cacheReadTokens ?? 0));
   if (tokens > 0) return tokens * weight;
@@ -121,6 +148,21 @@ function snapshot(
   return costs;
 }
 
+/** Raw, unweighted tokens per model inside the longest candidate window. */
+function tokensByModel(
+  invocations: readonly Invocation[], accountId: string, at: number,
+): Record<string, number> {
+  const longest = CANDIDATE_WINDOWS.reduce((a, b) => (b.ms > a.ms ? b : a)).ms;
+  const out: Record<string, number> = {};
+  for (const invocation of invocations) {
+    if (invocation.accountId !== accountId || !invocation.model) continue;
+    const when = Date.parse(invocation.at);
+    if (!Number.isFinite(when) || when > at || when <= at - longest) continue;
+    out[invocation.model] = (out[invocation.model] ?? 0) + turnCost({ ...invocation, model: undefined });
+  }
+  return out;
+}
+
 /** A turn was ALLOWED: raise the high-water mark. Monotone by construction --
  *  a limit never learned downward is a limit that never over-promises. */
 export function recordAllowed(
@@ -141,11 +183,92 @@ export function recordRefused(
   learning: UsageLearning | undefined, invocations: readonly Invocation[], accountId: string,
   at: number, weights?: Readonly<Record<string, number>>,
 ): UsageLearning {
-  const hits = [...(learning?.hits ?? []), { at: new Date(at).toISOString(), costs: snapshot(invocations, accountId, at, weights) }];
+  const hits = [...(learning?.hits ?? []), {
+    at: new Date(at).toISOString(),
+    costs: snapshot(invocations, accountId, at, weights),
+    tokensByModel: tokensByModel(invocations, accountId, at),
+  }];
   return {
     highWater: { ...(learning?.highWater ?? {}) },
     hits: hits.slice(-KEEP_HITS),
   };
+}
+
+/** Refusals needed before per-model weights are fitted at all: enough
+ *  equations to outnumber the unknowns, plus one. Below this the weights stay
+ *  1.0, which is exactly the behaviour before any of this existed. */
+const MIN_HITS_FOR_WEIGHTS = 3;
+/** Pull toward 1.0. With two or three observations an unregularised fit will
+ *  happily explain the noise with an absurd weight (a model seen once at 200
+ *  tokens "must" cost 400x); this keeps it honest and makes the estimate
+ *  degrade toward "all models equal" instead of toward nonsense. */
+const WEIGHT_RIDGE = 0.5;
+/** A fitted weight outside this range is not believed. Vendors do charge
+ *  premium models several times more, but not a thousand times more, and a
+ *  value out here means the fit found noise rather than signal. */
+const WEIGHT_BOUNDS = { min: 0.1, max: 25 };
+
+/** Relative per-model cost, fitted from refusals.
+ *
+ * Every refusal is one equation: the weighted tokens in the window at that
+ * moment had reached the limit, and the limit is already estimated by the
+ * high-water mark. So with the limit KNOWN this is an ordinary linear
+ * least-squares problem in the weights alone -- far better conditioned than
+ * solving for the limit and the weights together, which is scale-indeterminate
+ * (double every weight, double the limit, same predictions).
+ *
+ * Solved by ridge-regularised normal equations: (AᵀA + λI)w = Aᵀb + λ·1.
+ * Small enough (one unknown per model the account has actually used) that
+ * plain Gaussian elimination is the right solver.
+ *
+ * Returns an empty map when there is not enough evidence, and callers then
+ * weight every model 1.0. That is the point: an unfitted weight is 1, never a
+ * guess.
+ */
+export function fitModelWeights(learning: UsageLearning | undefined, windowName: string): Record<string, number> {
+  const hits = (learning?.hits ?? []).filter((hit) => hit.tokensByModel && Object.keys(hit.tokensByModel).length);
+  const limit = learning?.highWater[windowName] ?? 0;
+  if (hits.length < MIN_HITS_FOR_WEIGHTS || limit <= 0) return {};
+  const models = [...new Set(hits.flatMap((hit) => Object.keys(hit.tokensByModel!)))].sort();
+  if (!models.length || hits.length <= models.length) return {};
+
+  // A: rows of per-model tokens, b: the limit each row reached.
+  const rows = hits.map((hit) => models.map((m) => hit.tokensByModel![m] ?? 0));
+  const scale = Math.max(...rows.flat(), 1);
+  const a = rows.map((row) => row.map((v) => v / scale));
+  const b = hits.map(() => limit / scale);
+
+  const n = models.length;
+  const matrix: number[][] = Array.from({ length: n }, () => Array.from({ length: n + 1 }, () => 0));
+  for (let i = 0; i < n; i += 1) {
+    for (let j = 0; j < n; j += 1) {
+      let sum = i === j ? WEIGHT_RIDGE : 0;
+      for (const row of a) sum += row[i]! * row[j]!;
+      matrix[i]![j] = sum;
+    }
+    let rhs = WEIGHT_RIDGE;   // ridge pulls toward 1.0
+    for (const [r, row] of a.entries()) rhs += row[i]! * b[r]!;
+    matrix[i]![n] = rhs;
+  }
+  // Gaussian elimination with partial pivoting.
+  for (let col = 0; col < n; col += 1) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r += 1) if (Math.abs(matrix[r]![col]!) > Math.abs(matrix[pivot]![col]!)) pivot = r;
+    if (Math.abs(matrix[pivot]![col]!) < 1e-12) return {};   // singular: no usable answer
+    [matrix[col], matrix[pivot]] = [matrix[pivot]!, matrix[col]!];
+    for (let r = 0; r < n; r += 1) {
+      if (r === col) continue;
+      const factor = matrix[r]![col]! / matrix[col]![col]!;
+      for (let k = col; k <= n; k += 1) matrix[r]![k]! -= factor * matrix[col]![k]!;
+    }
+  }
+  const weights: Record<string, number> = {};
+  for (const [i, model] of models.entries()) {
+    const value = matrix[i]![n]! / matrix[i]![i]!;
+    if (!Number.isFinite(value) || value < WEIGHT_BOUNDS.min || value > WEIGHT_BOUNDS.max) return {};
+    weights[model] = value;
+  }
+  return weights;
 }
 
 export interface LearnedWindow {

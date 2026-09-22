@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
 import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
+import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir, open } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { stdout as output } from 'node:process';
@@ -67,7 +68,7 @@ export async function aiSessionSend(
   if (!session.accountId) throw new Error('local AI session has no account selected');
   let account = state.accounts.find((item) => item.id === session.accountId);
   if (!account) throw new Error('local AI session account was removed');
-  const model = session.model ?? account.models[0] ?? null;
+  let model: string | null = session.model ?? account.models[0] ?? null;
   if (model && account.models.length > 0 && !account.models.includes(model)) {
     throw new Error(`model "${model}" is not available through local account "${account.label}"`);
   }
@@ -101,6 +102,17 @@ export async function aiSessionSend(
     if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
     if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
     if (harness.provider !== account.provider) throw new Error(`session provider ${harness.displayName} does not match account "${account.label}"`);
+    // Resolve a real model here too, not only when a session is OPENED.
+    // A headless send -- `sessions send`, and every member of a fan-out --
+    // never goes through the interactive open path, so it recorded no model
+    // at all: the invocation landed with the field absent and usage could
+    // not be attributed to anything. Cheap to call (the catalog is cached
+    // for five minutes) and persisted, so the next turn on this session
+    // finds it already there.
+    if (!model) {
+      model = await resolveNativeModel(harness, account) ?? null;
+      if (model) session.model = model;
+    }
     // An unnamed chat gets a title from the harness that writes one, and asks
     // the model for one where the harness does not. The request rides on this
     // turn's text only -- never on what is stored as the user's message -- and
