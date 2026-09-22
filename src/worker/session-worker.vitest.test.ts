@@ -149,4 +149,38 @@ describe('session worker (real spawned process, real socket)', () => {
     expect(firstSnapshot).toMatchObject({ session: { id: session.id } });
     expect(secondSnapshot).toMatchObject({ session: { id: session.id } });
   });
+
+  it('a submit that fails immediately still completes the waiting-start/stop lifecycle', async () => {
+    // No account configured on this session, so aiGatewaySessionSend rejects
+    // right away ("local AI session has no account selected") -- exercises
+    // the real failure path (not a happy-path mock): the worker must still
+    // bracket it with waiting-start/waiting-stop and report a turn-error,
+    // not hang or crash.
+    const session = await isolatedSession();
+    const client = await WorkerClient.attach(session.id);
+    spawnedClients.push(client);
+    await nextEvent(client, 'snapshot');
+
+    client.send({ type: 'submit', text: 'hello', echo: true });
+    const started = nextEvent(client, 'waiting-start');
+    const errored = nextEvent(client, 'turn-error');
+    const stopped = nextEvent(client, 'waiting-stop');
+    await expect(started).resolves.toMatchObject({ type: 'waiting-start' });
+    await expect(errored).resolves.toMatchObject({ type: 'turn-error' });
+    await expect(stopped).resolves.toMatchObject({ type: 'waiting-stop' });
+  });
+
+  it('a cancel with no turn running is a harmless no-op, not an error', async () => {
+    const session = await isolatedSession();
+    const client = await WorkerClient.attach(session.id);
+    spawnedClients.push(client);
+    await nextEvent(client, 'snapshot');
+
+    client.send({ type: 'cancel', restoreDraft: false });
+    // Nothing to assert an absence of directly -- prove the worker is still
+    // alive and answering normally afterward, which a crash or a hang from
+    // the cancel would have broken.
+    client.send({ type: 'refresh' });
+    await expect(nextEvent(client, 'snapshot')).resolves.toMatchObject({ session: { id: session.id } });
+  });
 });

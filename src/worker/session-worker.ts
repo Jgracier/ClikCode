@@ -13,6 +13,8 @@ import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
 import { aiGatewaySessionSend } from '../turn/drive.js';
 import { readState } from '../session/state/read.js';
+import { LiveTurnInputBroker } from '../turn/live-input.js';
+import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/runtime.js';
 import { BroadcastObserver } from './broadcast-observer.js';
 import { decodeFrames, encodeFrame, type ClientCommand } from './protocol.js';
 import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socketPathFor, writeWorkerRecord } from './registry.js';
@@ -47,6 +49,12 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   let turnRunning = false;
   let idleTimer: NodeJS.Timeout | undefined;
   const connections = new Map<Socket, ConnectionState>();
+  /** The turn currently in flight, if any -- both cleared together in
+   * runTurn's `finally`. A `cancel` with nothing running is simply a no-op:
+   * there is nothing to abort, not an error worth reporting. */
+  let activeController: AbortController | undefined;
+  let activeLiveInput: LiveTurnInputBroker | undefined;
+  let activeRestoreDraft = false;
 
   const scheduleIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
@@ -63,20 +71,60 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     return { session: found, account };
   };
 
+  const broadcastNotice = (message: string): void => {
+    for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'notice', message }));
+  };
+
   const runTurn = async (command: Extract<ClientCommand, { type: 'submit' }>): Promise<void> => {
     turnRunning = true;
     if (idleTimer) clearTimeout(idleTimer);
+    const controller = new AbortController();
+    const liveInput = new LiveTurnInputBroker();
+    activeController = controller;
+    activeLiveInput = liveInput;
+    // startWaiting/stopWaiting bracket the call the same way interactive.ts's
+    // own runInteractiveTurn does today -- drive.ts itself never calls
+    // either, by design (see turn/observer.ts): they are the ORCHESTRATOR
+    // signalling "a turn is in flight", not something a turn declares about
+    // itself. In the worker model the worker is that orchestrator now, and
+    // stopWaiting is the one event every client needs regardless of outcome
+    // to know a `submit` it sent has actually finished -- broadcast in
+    // `finally`, covering success, a caught failure, and cancellation alike.
+    observer.startWaiting('thinking');
     try {
-      await aiGatewaySessionSend(config, sessionId, command.text, undefined, {
+      await aiGatewaySessionSend(config, sessionId, command.text, controller.signal, {
         persistentTransports: true,
         prompter: observer,
+        liveInput,
         ...(command.queuedTurnId ? { queuedTurnId: command.queuedTurnId } : {}),
       });
     } catch (error) {
-      observer.render((await currentSessionAndAccount()).session);
-      const message = error instanceof Error ? error.message : String(error);
-      for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'turn-error', message }));
+      const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
+      if (cancelled) {
+        // Same distinction interactive.ts's own catch makes today: something
+        // worth keeping (text or tool activity already streamed) is
+        // preserved as an interrupted turn a future turn can carry on from;
+        // nothing yet is simply discarded, as if it was never sent.
+        const outputStarted = observer.turnOutputStarted;
+        if (outputStarted) await preserveInterruptedTurn(sessionId, command.text, observer.liveResponseText, true);
+        else {
+          await discardInterruptedTurn(sessionId, command.text);
+          if (activeRestoreDraft) {
+            for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'restore-draft', text: command.text }));
+          }
+        }
+        broadcastNotice(outputStarted ? 'Stopped' : activeRestoreDraft ? 'Stopped · draft restored' : 'Stopped');
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'turn-error', message }));
+      }
     } finally {
+      liveInput.close();
+      activeController = undefined;
+      activeLiveInput = undefined;
+      activeRestoreDraft = false;
+      observer.stopWaiting();
+      observer.render((await currentSessionAndAccount()).session);
       turnRunning = false;
       scheduleIdleExit();
     }
@@ -102,11 +150,26 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (command.type === 'approval-response') { observer.resolveApproval(command.id, command.approved); return; }
     if (command.type === 'refresh') { observer.render((await currentSessionAndAccount()).session); return; }
     if (command.type === 'detach') { socket.end(); return; }
-    // 'steer' and 'cancel' need the live-input/abort-signal plumbing
-    // turn/live-input.ts already provides to the interactive client today;
-    // wiring that through is the remaining work before this worker can
-    // actually replace commands/ai/interactive.ts's own turn loop, not
-    // something this pass pretends to have solved.
+    if (command.type === 'cancel') {
+      // Nothing running is not an error -- a cancel racing the turn's own
+      // natural completion is ordinary, not a client mistake to report.
+      if (!activeController) return;
+      activeRestoreDraft = command.restoreDraft;
+      activeController.abort();
+      return;
+    }
+    if (command.type === 'steer') {
+      if (!activeLiveInput) return;
+      // Best-effort: a steer that fails (the turn finished between the
+      // client sending it and this running) has nothing left to steer into
+      // -- the broker's own submit() already falls back to the durable
+      // queue for the more common races; only report what neither of those
+      // paths can recover from.
+      try { await activeLiveInput.submit(command.text); } catch (error) {
+        broadcastNotice(`Could not send: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
   };
 
   const server = createServer((socket) => {
