@@ -24,6 +24,7 @@ import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
+import { createPendingWorkTracker, MAX_PENDING_CONTINUATIONS, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, withTitleRequest } from '../session/title.js';
@@ -201,7 +202,10 @@ export async function aiSessionSend(
       session.lastUsage = { ...turnUsage, at: new Date().toISOString() };
       prompter?.setTurnUsage(turnUsage);
     };
+    const pendingWork = createPendingWorkTracker(harness.command);
+    let pendingContinuations = 0;
     const onActivity = (event: HarnessActivityEvent): void => {
+      pendingWork.note(event);
       checkpoint.activity(event);
       if (prompter) prompter.activityEvent(event);
       else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
@@ -256,6 +260,7 @@ export async function aiSessionSend(
       let streamError: { message: string; statusCode?: number; kind?: string } | undefined;
       let cliOutputStarted = false;
       turnUsage = undefined;
+      pendingWork.reset();
       const runStructuredCliTurn = async (): Promise<NativeTurnResult> => {
         const cliHarness: AiLocalHarnessDefinition = fallbackTurnHarnesses.has(harness.command) && harness.fallbackTurn
           ? { ...harness, turn: harness.fallbackTurn } : harness;
@@ -638,6 +643,20 @@ export async function aiSessionSend(
       if (account.quotaState === 'exhausted') {
         account.quotaState = 'available';
         account.quotaRetryAt = undefined;
+      }
+      // The harness ended the turn with a tool it never settled -- it
+      // backgrounded a command and stopped. Re-drive it so it goes and reads
+      // the result, instead of leaving the answer stranded in a task log and
+      // the session looking finished. See pending-work.ts.
+      if (pendingWork.outstanding > 0 && pendingContinuations < MAX_PENDING_CONTINUATIONS) {
+        const waited = pendingContinuationDelayMs(pendingContinuations);
+        pendingContinuations += 1;
+        prompter?.phase('waiting on background command');
+        await new Promise((resolve) => setTimeout(resolve, waited));
+        if (signal?.aborted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+        prompter?.activity(chalk.dim('continuing after background command'));
+        turnText = PENDING_CONTINUATION_PROMPT;
+        continue;
       }
       session.attachments = [];
       const answer = titleStream ? extractSessionTitle(result.text) : { title: undefined, text: result.text };

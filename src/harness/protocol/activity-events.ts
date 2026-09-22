@@ -232,9 +232,18 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       // and it also cost the classifier its best signal, since a command is
       // what tells a nameless tool apart from a read.
       const parameters = asRecord(asRecord(step.tool_info)?.parameters);
+      // step_index is this harness's tool-call identity, and it is on every
+      // update for the step. Without it an ACTIVE update and the DONE that
+      // follows look like two unrelated events: the TUI appends a detached
+      // completion instead of settling the row, and -- since a backgrounded
+      // command is detected as a start with no matching completion -- a tool
+      // that merely reported progress twice would be mistaken for one still
+      // waiting. See turn/pending-work.ts.
+      const stepIndex = step.step_index;
       return {
         kind: /error|fail/i.test(state) ? 'tool-error' : state === 'DONE' ? 'tool-done' : 'tool-start',
         label: toolLabel(name, parameters),
+        ...(typeof stepIndex === 'number' ? { id: `step-${stepIndex}` } : {}),
         ...categoryOf(name, parameters, harness.command),
       };
     }
