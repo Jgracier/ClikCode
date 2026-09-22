@@ -223,4 +223,28 @@ describe('carrying a vendor session between account profiles', () => {
     const landed = join(root, 'b', 'projects', WORKSPACE.replace(/[^a-zA-Z0-9]/g, '-'), 'chats');
     expect((await readdir(landed)).sort()).toEqual(['session-one.jsonl']);
   });
+
+  it('carries a Command Code thread using its own lowercased cwd slug', async () => {
+    // Command Code's slug is lowercased with runs of non-alphanumerics
+    // collapsed to one dash and no leading dash -- three ways it differs from
+    // Claude Code's and Qwen's names for the same cwd, all pinned against the
+    // real CLI's output.
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
+    const harness = { command: 'command', profileEnv: 'HOME' } as AiLocalHarnessDefinition;
+    const workspace = '/tmp/probe/work.dir_x/A b';
+    const dir = join(root, 'a', '.commandcode', 'projects', 'tmp-probe-work-dir-x-a-b');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'session-one.jsonl'), '{"type":"header"}\n');
+    // Not the conversation: checkpoints and prompt history, per its own docs.
+    await writeFile(join(dir, 'session-one.checkpoints.jsonl'), '{}\n');
+    await writeFile(join(dir, 'session-one.prompts.jsonl'), '{}\n');
+
+    await expect(carryNativeSession({
+      harness, nativeId: 'session-one', workspace,
+      from: { HOME: join(root, 'a') }, to: { HOME: join(root, 'b') },
+    })).resolves.toBe('carried');
+
+    const landed = join(root, 'b', '.commandcode', 'projects', 'tmp-probe-work-dir-x-a-b');
+    expect((await readdir(landed)).sort()).toEqual(['session-one.jsonl']);
+  });
 });
