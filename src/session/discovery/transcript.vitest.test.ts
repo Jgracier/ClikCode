@@ -40,6 +40,31 @@ describe('mergeNativeTranscript', () => {
     expect(mergeNativeTranscript(source, source)).toEqual(source);
   });
 
+  it('still syncs new vendor turns when only whitespace differs on the last cached message', () => {
+    // The live stream inserts a blank line between text blocks a tool call
+    // split apart; the vendor's own stored copy of the same answer joins them
+    // without it. Every overlap window this search tries is a SUFFIX of
+    // `cached`, so it always includes that last, differently-formatted
+    // message -- an exact match therefore failed at every window length, not
+    // just the longest one, and the whole merge fell back to `[...cached]`,
+    // silently dropping every genuinely new turn the vendor had recorded
+    // after it. Not a duplicate -- a missed sync.
+    const cached = [
+      message('user', 'a'),
+      message('assistant', 'First part.\n\nSecond part.'),
+    ];
+    const source = [
+      ...cached.map((m) => m.role === 'assistant' ? message('assistant', 'First part. Second part.') : m),
+      message('user', 'new question'),
+      message('assistant', 'new answer'),
+    ];
+    expect(mergeNativeTranscript(cached, source)).toEqual([
+      ...cached,
+      message('user', 'new question'),
+      message('assistant', 'new answer'),
+    ]);
+  });
+
   it('reads Codex transcripts from the linked account CODEX_HOME', async () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-codex-profile-'));
     const nativeId = '01999999-9999-7999-8999-999999999999';
