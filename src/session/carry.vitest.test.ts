@@ -1,7 +1,7 @@
 /** A vendor session belongs to the account whose profile it was written in.
  * Carrying the one file across is what lets a quota failover resume the
  * thread instead of seeding a fresh one with a retelling of it. */
-import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -139,14 +139,66 @@ describe('carrying a vendor session between account profiles', () => {
   });
 
   it('still reports unreachable when the profiles genuinely differ', async () => {
-    // A harness with an isolated profile whose on-disk layout is unknown:
-    // the thread really is stranded in the losing account's home, and
-    // re-seeding is the honest answer.
+    // An isolated profile whose store knows the layout but finds nothing
+    // there: the thread really is stranded, and re-seeding is the honest
+    // answer. Absent-on-disk and layout-unknown deliberately give the same
+    // answer, because the caller can do nothing different about either.
     const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
     await expect(carryNativeSession({
       harness: { command: 'gemini', profileEnv: 'GEMINI_CLI_HOME' } as AiLocalHarnessDefinition,
       nativeId: 'session-one', workspace: WORKSPACE,
       from: { GEMINI_CLI_HOME: join(root, 'a') }, to: { GEMINI_CLI_HOME: join(root, 'b') },
     })).resolves.toBeUndefined();
+  });
+
+  it('carries a conversation that is a DIRECTORY, not a single file', async () => {
+    // Copilot keeps a tree per conversation -- the transcript plus the
+    // workspace.yaml naming the id and cwd it resumes against -- so copying
+    // only "the file" would land a transcript the CLI then refuses to resume.
+    // Verified against the real CLI: carrying the tree makes it emit
+    // session.resume rather than starting over.
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
+    const harness = { command: 'copilot', profileEnv: 'COPILOT_HOME' } as AiLocalHarnessDefinition;
+    const from = { COPILOT_HOME: join(root, 'a') };
+    const to = { COPILOT_HOME: join(root, 'b') };
+    const session = join(root, 'a', 'session-state', 'session-one');
+    await mkdir(join(session, 'checkpoints'), { recursive: true });
+    await writeFile(join(session, 'events.jsonl'), '{"type":"session.start"}\n');
+    await writeFile(join(session, 'workspace.yaml'), 'id: session-one\n');
+    await writeFile(join(session, 'checkpoints', 'index.md'), '# Checkpoint History\n');
+
+    await expect(carryNativeSession({
+      harness, nativeId: 'session-one', workspace: WORKSPACE, from, to,
+    })).resolves.toBe('carried');
+
+    const carried = join(root, 'b', 'session-state', 'session-one');
+    // Every part, including the nested directory -- not just the transcript.
+    expect(await readFile(join(carried, 'events.jsonl'), 'utf8')).toContain('session.start');
+    expect(await readFile(join(carried, 'workspace.yaml'), 'utf8')).toContain('session-one');
+    expect(await readFile(join(carried, 'checkpoints', 'index.md'), 'utf8')).toContain('Checkpoint');
+    // And no staging leftovers beside it.
+    expect((await readdir(join(root, 'b', 'session-state'))).sort()).toEqual(['session-one']);
+  });
+
+  it('replaces a stale carried directory with the longer one', async () => {
+    // A -> B -> A finds its own earlier tree waiting, one switch out of date.
+    // The size+recency rule has to aggregate across the tree for this, since
+    // no single file in it is the conversation.
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
+    const harness = { command: 'copilot', profileEnv: 'COPILOT_HOME' } as AiLocalHarnessDefinition;
+    const from = { COPILOT_HOME: join(root, 'a') };
+    const to = { COPILOT_HOME: join(root, 'b') };
+    const source = join(root, 'a', 'session-state', 'session-one');
+    const stale = join(root, 'b', 'session-state', 'session-one');
+    await mkdir(source, { recursive: true });
+    await mkdir(stale, { recursive: true });
+    await writeFile(join(stale, 'events.jsonl'), '{"n":1}\n');
+    await writeFile(join(source, 'events.jsonl'), '{"n":1}\n{"n":2}\n{"n":3}\n');
+
+    await expect(carryNativeSession({
+      harness, nativeId: 'session-one', workspace: WORKSPACE, from, to,
+    })).resolves.toBe('carried');
+    expect(await readFile(join(stale, 'events.jsonl'), 'utf8')).toContain('"n":3');
+    expect((await readdir(join(root, 'b', 'session-state'))).sort()).toEqual(['session-one']);
   });
 });
