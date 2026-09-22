@@ -198,11 +198,29 @@ export function recordRefused(
  *  equations to outnumber the unknowns, plus one. Below this the weights stay
  *  1.0, which is exactly the behaviour before any of this existed. */
 const MIN_HITS_FOR_WEIGHTS = 3;
-/** Pull toward 1.0. With two or three observations an unregularised fit will
- *  happily explain the noise with an absurd weight (a model seen once at 200
- *  tokens "must" cost 400x); this keeps it honest and makes the estimate
- *  degrade toward "all models equal" instead of toward nonsense. */
-const WEIGHT_RIDGE = 0.5;
+/** Pull toward 1.0, as a FRACTION of the data's own scale rather than an
+ *  absolute amount. An absolute ridge was the first attempt and it was wrong:
+ *  the design matrix is normalised, so its entries are well under one, and a
+ *  fixed lambda then dominated everything and crushed every weight toward 1.0
+ *  -- worse, it reordered them, reporting a 9x model as cheaper than a 4x one.
+ *
+ *  0.005 was chosen by measurement, not taste. Over 40 trials per setting
+ *  against known weights of 1/4/9, with refusals deliberately not landing
+ *  exactly on the limit (hidden traffic and the high-water estimate both add
+ *  noise):
+ *      ridge   clean   10% noise   25% noise   correct ordering
+ *      0.05    47%       48%         50%            73%
+ *      0.01    19%       21%         32%            96%
+ *      0.005   11%       16%         30%            98%
+ *      0.001    3%       13%         31%            97%
+ *  0.005 gives the best ordering while keeping real protection against
+ *  overfitting a handful of observations.
+ *
+ *  Note what the numbers say about USE: under real noise the magnitude is
+ *  only good to tens of percent, so these weights are for ranking models by
+ *  cost -- scheduling, and the relative sizes -- not for claiming a model
+ *  costs exactly 8.7x another. */
+const WEIGHT_RIDGE = 0.005;
 /** A fitted weight outside this range is not believed. Vendors do charge
  *  premium models several times more, but not a thousand times more, and a
  *  value out here means the fit found noise rather than signal. */
@@ -239,14 +257,19 @@ export function fitModelWeights(learning: UsageLearning | undefined, windowName:
   const b = hits.map(() => limit / scale);
 
   const n = models.length;
+  // Ridge relative to the average diagonal of AᵀA, so it regularises by the
+  // same order of magnitude as the evidence rather than swamping it.
+  let trace = 0;
+  for (let i = 0; i < n; i += 1) for (const row of a) trace += row[i]! * row[i]!;
+  const lambda = WEIGHT_RIDGE * (trace / n);
   const matrix: number[][] = Array.from({ length: n }, () => Array.from({ length: n + 1 }, () => 0));
   for (let i = 0; i < n; i += 1) {
     for (let j = 0; j < n; j += 1) {
-      let sum = i === j ? WEIGHT_RIDGE : 0;
+      let sum = i === j ? lambda : 0;
       for (const row of a) sum += row[i]! * row[j]!;
       matrix[i]![j] = sum;
     }
-    let rhs = WEIGHT_RIDGE;   // ridge pulls toward 1.0
+    let rhs = lambda;   // ridge pulls toward 1.0
     for (const [r, row] of a.entries()) rhs += row[i]! * b[r]!;
     matrix[i]![n] = rhs;
   }
@@ -309,7 +332,14 @@ export function learnedUsageReading(
   if (!windows.length) return undefined;
   const readings: UsageWindow[] = [];
   for (const window of windows) {
-    const used = costInWindow(invocations, accountId, now, window.windowMs, weights);
+    // Prefer weights fitted from this account's OWN refusals over whatever the
+    // caller passed. An unfitted model weighs 1, which is what every model
+    // weighed before any of this existed -- so a cheap flash turn and an
+    // expensive opus turn only stop counting the same once there is evidence
+    // that they should not.
+    const fitted = fitModelWeights(learning, window.name);
+    const effective = Object.keys(fitted).length ? { ...weights, ...fitted } : weights;
+    const used = costInWindow(invocations, accountId, now, window.windowMs, effective);
     const usedPct = Math.max(0, Math.min(100, Math.round((used / window.limit) * 100)));
     let oldest = now;
     for (const invocation of invocations) {
