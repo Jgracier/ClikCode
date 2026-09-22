@@ -126,7 +126,7 @@ export async function aiSessionSend(
     const baseMessages = sessionTranscriptMessages(session);
     const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
     run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
-    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
+    run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
     let switchedFrom: string | undefined;
     /** Whether any account actually ran out, as opposed to failing some other
      * way. Decides whether "Usage Exhausted" is the truth at the end. */
@@ -282,7 +282,7 @@ export async function aiSessionSend(
         const confirmNativeSession = (): void => {
           if (!session.nativeSessionPreallocated) return;
           delete session.nativeSessionPreallocated;
-          void checkpoint.persistNow().catch(() => undefined);
+          checkpoint.touch();
         };
         const idle = createTurnIdleController();
         turnOutput = await captureNativeHarnessTurn(cliHarness, argv, environment, {
@@ -326,7 +326,7 @@ export async function aiSessionSend(
                 ...(reported.model ? { model: reported.model } : {}),
                 ...(reported.permissionMode ? { permissionMode: reported.permissionMode } : {}),
               };
-              checkpoint.persistNow().catch(() => undefined);
+              checkpoint.touch();
               prompter?.render(session);
             }
           },
@@ -621,7 +621,7 @@ export async function aiSessionSend(
   }
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
-    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
+    run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   let switchedFrom: string | undefined;
   const attemptedAccounts = new Set<string>();
   try {
@@ -811,7 +811,7 @@ export async function aiGatewaySessionSend(
     else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('Gateway:')} ${notice}\n`);
   }
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
-    run.liveInput?.setLateSteerHandler((submission) => { void checkpoint.unqueue(submission).catch(() => undefined); });
+    run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   try {
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
