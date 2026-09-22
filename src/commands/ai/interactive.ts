@@ -59,16 +59,27 @@ import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
 import { closeAllWorkerClients, runTurnThroughWorker } from '../../worker/turn-bridge.js';
 
-/** Opt-in, temporary: routes real terminal turns through a session worker
- * (src/worker/) instead of running them in this process directly. Off by
- * default while this gets real hands-on exercise -- the direct path below
- * is completely unchanged and is what every session still uses unless this
- * is set. Once trusted, this flag and the direct path it guards against are
- * both meant to go away, along with the SIGHUP/SIGINT-ignoring block a few
- * lines down and claim.ts/claims.ts -- see project memory
- * clikcode-worker-client-split for why (a client that can safely die on
- * disconnect no longer needs any of that machinery). */
-const USE_SESSION_WORKER = process.env.CLIKCODE_USE_WORKER === '1';
+/** Routes real terminal turns through a session worker (src/worker/) rather
+ * than running them in this process. ON by default; `CLIKCODE_USE_WORKER=0`
+ * falls back to the direct in-process path, which remains completely
+ * unchanged.
+ *
+ * The opt-out is kept deliberately, not left behind: the worker has one
+ * known untested gap (a worker has no TTY, so a mid-turn interactive vendor
+ * login can only report that it is blocked) against a direct path with
+ * hundreds of real invocations behind it. Deleting the fallback is a
+ * separate decision that wants real dogfooding first, and it is what
+ * unblocks removing claim.ts/claims.ts -- see project memory
+ * clikcode-worker-client-split.
+ *
+ * NOT on that deletion list, contrary to the earlier plan: the
+ * SIGHUP/SIGINT-ignoring block a few lines down. Its SIGINT half guards
+ * client-side identity derivation and vendor login, and the worker design
+ * keeps both of those in the client on purpose -- so that block protects a
+ * real, previously reproduced bug (an account never saved because a hangup
+ * killed the process before any handler could run) that the worker split
+ * does not address. */
+const USE_SESSION_WORKER = process.env.CLIKCODE_USE_WORKER !== '0';
 
 export async function aiSessionOpenDefault(config: Conf): Promise<void> {
   const state = await readState();
