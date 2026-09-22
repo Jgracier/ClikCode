@@ -18,6 +18,7 @@ import { geminiSessionStore } from './vendors/gemini-store.js';
 import { piSessionStore } from './vendors/pi-store.js';
 import { copilotSessionStore } from './vendors/copilot-store.js';
 import { qwenSessionStore } from './vendors/qwen-store.js';
+import { commandSessionStore } from './vendors/command-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -60,6 +61,7 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   pi: piSessionStore,
   copilot: copilotSessionStore,
   qwen: qwenSessionStore,
+  command: commandSessionStore,
 };
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {
