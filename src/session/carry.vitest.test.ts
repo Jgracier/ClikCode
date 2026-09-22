@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { carryNativeSession } from './carry';
 import { resetNativeSessionDiscoveryCache } from './discovery/cache';
 import type { AiLocalHarnessDefinition } from '../harness/definition';
+import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
+import { NATIVE_SESSION_STORES } from './discovery/registry';
 
 const harnessFor = (command: string): AiLocalHarnessDefinition => ({ command } as AiLocalHarnessDefinition);
 const WORKSPACE = '/home/someone/projects/thing';
@@ -246,5 +248,18 @@ describe('carrying a vendor session between account profiles', () => {
 
     const landed = join(root, 'b', '.commandcode', 'projects', 'tmp-probe-work-dir-x-a-b');
     expect((await readdir(landed)).sort()).toEqual(['session-one.jsonl']);
+  });
+
+  it('leaves no harness unable to carry a thread across a failover', () => {
+    // A harness carries a thread one of two ways: it has a store, or it
+    // declares no profileEnv and so runs every account against one vendor
+    // home, where the thread never moved. A harness that GAINS a profileEnv
+    // without gaining a store would silently go back to re-seeding the whole
+    // conversation on every failover, which is exactly the regression this
+    // guards -- it is invisible from the outside, because re-seeding works.
+    const uncovered = allLocalHarnesses()
+      .filter((harness) => !NATIVE_SESSION_STORES[harness.command] && harness.profileEnv)
+      .map((harness) => `${harness.command} (profileEnv=${harness.profileEnv})`);
+    expect(uncovered).toEqual([]);
   });
 });
