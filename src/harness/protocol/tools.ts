@@ -7,6 +7,23 @@ import type { ToolCategory } from '../prompter.js';
 /** `Edit(src/app.ts)` rather than a bare `Edit`. The tool name alone says
  * nothing about what was touched; every vendor carries the target in the
  * call's input under one of a few well-known keys. */
+/** The one place that decides what a tool row looks like.
+ *
+ * Every harness's parser funnels through here so the shape, the first-line
+ * rule and the width cap are identical no matter which vendor produced the
+ * event. They had drifted into four shapes -- `name(detail)`, a bare detail
+ * with no name, `name` alone, and a hand-built `name(description)` that
+ * repeated this formatting inline -- so the same action looked different
+ * depending on which harness ran it.
+ *
+ * A detail that adds nothing is dropped rather than padded: a tool whose only
+ * parameters are an opaque id reads better as its bare name than as
+ * `name(some-uuid)`. */
+export function formatToolRow(name: string, detail?: string): string {
+  const firstLine = detail?.split(/\r?\n/, 1)[0]?.trim();
+  return firstLine ? `${name}(${visibleSlice(firstLine, 72)})` : name;
+}
+
 export function toolLabel(name: string, input?: Record<string, unknown>): string {
   // Matched with separators and case removed, the same way tool NAMES are
   // below, because vendors disagree about spelling far more than about
@@ -19,9 +36,7 @@ export function toolLabel(name: string, input?: Record<string, unknown>): string
   const target = WANTED
     .map((wanted) => Object.entries(input ?? {}).find(([key]) => normalise(key) === wanted)?.[1])
     .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
-  if (!target) return name;
-  const firstLine = target.split(/\r?\n/, 1)[0]!.trim();
-  return firstLine ? `${name}(${visibleSlice(firstLine, 72)})` : name;
+  return formatToolRow(name, target);
 }
 
 /** Vendors do not agree on tool names, but they agree on verbs. Matched
