@@ -26,6 +26,7 @@
 import { cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { locateNativeSessionFile, nativeSessionRoot, type NativeSessionEnvironment } from './discovery/locations.js';
+import { nativeSessionStore } from './discovery/registry.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 
 type CarryNativeSessionInput = {
@@ -98,6 +99,15 @@ export async function carryNativeSession(input: CarryNativeSessionInput): Promis
   const target = nativeSessionRoot(harness, input.to);
   if (!target) return undefined;
   if (target === nativeSessionRoot(harness, input.from)) return 'present';
+  // A vendor whose conversation is not separable as a path carries it itself
+  // -- Hermes keeps every conversation as rows in one shared database. See
+  // NativeSessionStore.
+  const store = nativeSessionStore(harness);
+  if (store?.carry) {
+    const carried = await store.carry({ nativeId, workspace, from: input.from, to: input.to })
+      .catch(() => false);
+    return carried ? 'carried' : undefined;
+  }
   const source = await locateNativeSessionFile(harness, nativeId, workspace, input.from);
   if (!source) return undefined;
   const destination = join(target, relative(source.root, source.path));
