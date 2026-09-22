@@ -55,6 +55,11 @@ function withoutRuntime<T>(read: (router: HarnessCatalogRuntime) => T, structura
   }
 }
 
+/** Whether a provider id names a model API this process can call directly.
+ *  False for a tool that merely names itself as its provider (aider, goose,
+ *  opencode and nine others) -- those have no endpoint, so an api-key account
+ *  on them must run the vendor CLI, not a direct HTTP turn. */
+export const isDirectModelProvider = (provider: string): boolean => Boolean(localCatalog().getAiProvider(provider));
 export const localHarnessForCommand = (command: string): AiLocalHarnessDefinition | undefined => localCatalog().localHarnessForCommand(command);
 export const localHarnessForProvider = (provider: string): AiLocalHarnessDefinition | undefined => localCatalog().localHarnessForProvider(provider);
 export const localHarnessCapabilityManifest = (harness: AiLocalHarnessDefinition): AiHarnessCapabilityManifest => localCatalog().localHarnessCapabilityManifest(harness);

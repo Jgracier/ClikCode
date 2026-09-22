@@ -200,6 +200,9 @@ export interface AiRouterRuntime {
   streamAiChatTurn(input: Record<string, unknown>): Promise<any>;
   AI_LOCAL_HARNESS_ADAPTER_VERSION: number;
   AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[];
+  /** A provider row when this id is a model API that can be addressed
+   *  directly, undefined when it merely names a tool (see catalog.ts). */
+  getAiProvider(id: string): { id: string; envKey?: string } | undefined;
   localHarnessForCommand(command: string): AiLocalHarnessDefinition | undefined;
   localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined;
   localHarnessCapabilityManifest(harness: AiLocalHarnessDefinition): AiHarnessCapabilityManifest;
