@@ -98,7 +98,7 @@ export async function runTurnThroughWorker(
             rl.setTurnUsage(event.usage);
             return;
           case 'approval-request':
-            void rl.approval(event.title, event.detail).then((approved) => {
+            void rl.approval(event.title, event.detail, event.preview, event.rule).then((approved) => {
               client.send({ type: 'approval-response', id: event.id, approved });
             });
             return;

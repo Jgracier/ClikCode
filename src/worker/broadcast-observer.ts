@@ -33,7 +33,7 @@ export class BroadcastObserver implements TurnObserver {
    * to decide between preserveInterruptedTurn (something real to keep) and
    * discardInterruptedTurn (nothing happened yet, safe to drop entirely). */
   private outputStarted = false;
-  private readonly pendingApprovals = new Map<string, (approved: boolean) => void>();
+  private readonly pendingApprovals = new Map<string, (approved: boolean | 'always') => void>();
 
   attach(socket: Socket): void {
     this.clients.add(socket);
@@ -53,7 +53,7 @@ export class BroadcastObserver implements TurnObserver {
     return this.waitingLabel ? { text: this.liveText, waitingLabel: this.waitingLabel } : undefined;
   }
 
-  resolveApproval(id: string, approved: boolean): void {
+  resolveApproval(id: string, approved: boolean | 'always'): void {
     const resolve = this.pendingApprovals.get(id);
     if (!resolve) return;
     this.pendingApprovals.delete(id);
@@ -98,11 +98,11 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'usage', usage });
   }
 
-  approval(title: string, detail?: string, preview?: ApprovalPreview): Promise<boolean> {
+  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'> {
     const id = randomUUID();
     return new Promise((resolveApproval) => {
       this.pendingApprovals.set(id, resolveApproval);
-      this.broadcast({ type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}) });
+      this.broadcast({ type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}), ...(rule ? { rule } : {}) });
     });
   }
 

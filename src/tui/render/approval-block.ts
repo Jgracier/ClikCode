@@ -16,7 +16,14 @@ export type ApprovalPreview = {
   diff?: readonly string[] | { removed: readonly string[]; added: readonly string[] };
 };
 
-export type ApprovalRequest = { title: string; detail?: string; preview?: ApprovalPreview; resolve: (accepted: boolean) => void };
+/** `rule` is the permission rule this request could be answered with once and
+ *  for all -- e.g. `Bash(npm test:*)`. Present only where the caller can
+ *  actually persist one, so the "always" answer is never offered when nothing
+ *  would remember it. */
+export type ApprovalRequest = {
+  title: string; detail?: string; preview?: ApprovalPreview; rule?: string;
+  resolve: (accepted: boolean | 'always') => void;
+};
 
 const APPROVAL_DIFF_PREVIEW_LINES = 8;
 
@@ -27,15 +34,19 @@ const APPROVAL_DIFF_PREVIEW_LINES = 8;
  *    pressed first to focus the approval -- until then y/n/Enter are ignored,
  *    because they are exactly the characters the user is in the middle of
  *    typing;
- *  - then y/Y allows once, n/N and Enter (the default) deny.
+ *  - then y/Y allows once, n/N and Enter (the default) deny;
+ *  - a/A allows always, and ONLY where a rule was offered -- otherwise it is
+ *    ignored rather than silently meaning "once", since a key that appears to
+ *    remember an answer and does not is worse than no key at all.
  * Nothing typed while an approval is pending ever reaches the draft. */
 export function approvalKeyAction(
-  key: string, elapsedMs: number, needsFocus: boolean, focused: boolean,
-): 'allow' | 'deny' | 'focus' | 'ignore' {
+  key: string, elapsedMs: number, needsFocus: boolean, focused: boolean, hasRule = false,
+): 'allow' | 'always' | 'deny' | 'focus' | 'ignore' {
   if (elapsedMs < APPROVAL_GUARD_MS) return 'ignore';
   if (key === '\u001b' || key === '\u0003') return 'deny';
   if (needsFocus && !focused) return key === '\t' ? 'focus' : 'ignore';
   if (key === 'y' || key === 'Y') return 'allow';
+  if (hasRule && (key === 'a' || key === 'A')) return 'always';
   if (key === 'n' || key === 'N' || key === '\r' || key === '\n') return 'deny';
   return 'ignore';
 }
@@ -46,7 +57,7 @@ export function approvalKeyAction(
  * prompt exists to show. When the block cannot fit, detail rows are dropped
  * from the middle and the count of hidden rows is stated. */
 export function approvalBlockRows(
-  request: { title: string; detail?: string; preview?: ApprovalPreview }, width: number, maxRows: number,
+  request: { title: string; detail?: string; preview?: ApprovalPreview; rule?: string }, width: number, maxRows: number,
   state: { guarded: boolean; needsFocus: boolean; focused: boolean; queued: number },
 ): string[] {
   const inner = Math.max(8, width - 4);
@@ -67,10 +78,16 @@ export function approvalBlockRows(
     return `    ${line.startsWith('+') ? chalk.green(clipped) : line.startsWith('-') ? chalk.red(clipped) : clipped}`;
   });
   if (diffLines.length > shownDiff.length) shownDiff.push(`    ${chalk.dim(`+${diffLines.length - shownDiff.length} more`)}`);
-  const keys = width >= 46 ? '[y] yes  [n] no  [esc] deny' : '[y] [n] [esc]';
+  // The "always" key is offered only when a rule came with the request, and
+  // the rule itself is shown: "always" has to say what it will remember, or
+  // the user is agreeing to something unstated.
+  const keys = request.rule
+    ? (width >= 60 ? '[y] once  [a] always  [n] no  [esc] deny' : '[y] [a] [n] [esc]')
+    : (width >= 46 ? '[y] yes  [n] no  [esc] deny' : '[y] [n] [esc]');
+  const lead = request.rule && width >= 60 ? `Allow? ${chalk.dim(`always = ${request.rule}`)} ` : 'Allow once? ';
   const question = state.needsFocus && !state.focused
     ? (width >= 72 ? `Draft kept. Press [tab] to answer, then ${keys}` : `[tab] to answer · ${keys}`)
-    : `Allow once? ${keys}`;
+    : `${lead}${keys}`;
   const answer = `  ${state.guarded ? chalk.dim(question) : chalk.bold(question)}`;
   const body = [...detail, ...shownDiff];
   const room = Math.max(0, maxRows - title.length - 1);
