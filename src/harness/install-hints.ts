@@ -65,8 +65,22 @@ export const HARNESS_INSTALL_HINTS: Readonly<Record<string, HarnessInstallHint>>
   // lists supported platforms and links a downloads page, with no command to
   // quote. Antigravity's CLI ships with the Antigravity editor rather than
   // separately. Neither gets an invented command.
-  kiro: { docs: 'https://kiro.dev/docs/getting-started/installation/' },
-  antigravity: { docs: 'https://antigravity.google' },
+  kiro: {
+    // Ran it: installs a `kiro-cli` binary into ~/.local/bin. The entry here
+    // carried only the docs link, so choosing Kiro told the user to go and
+    // read a web page instead of giving them the one line that works.
+    command: 'curl -fsSL https://cli.kiro.dev/install | bash',
+    docs: 'https://kiro.dev/docs/getting-started/installation/',
+    source: 'https://kiro.dev/cli/ and cli.kiro.dev/install (verified: HTTP 200, a real install script)',
+  },
+  antigravity: {
+    // A native Go binary -- no Node, no npm -- which the script puts at
+    // ~/.local/bin/agy. That matches what is on this machine exactly, path
+    // and all, which is the corroboration for taking this from its docs.
+    command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    docs: 'https://antigravity.google/docs/cli/install/',
+    source: 'https://antigravity.google/docs/cli/install/ (verified: HTTP 200, a real install script)',
+  },
 };
 
 /** The message shown when a harness has no npm package to install. */
