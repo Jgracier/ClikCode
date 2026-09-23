@@ -40,6 +40,47 @@ export function shouldRequestTitle(session: Pick<HarnessSession, 'name' | 'title
   return !session.name && (session.titleAttempts ?? 0) < TITLE_REQUEST_ATTEMPTS;
 }
 
+/** Whether the prompt about to be sent asks for a name.
+ *
+ * The prompt itself is the only honest source. The request is text appended to
+ * one prompt -- so a retry that replaced that prompt (with "carry on", or with
+ * a retelling of the interrupted turn) is not asking any more, whatever the
+ * turn intended when it started. */
+export function promptAsksForTitle(prompt: string): boolean {
+  return prompt.includes(OPEN);
+}
+
+/** The title stream for the attempt about to run, from ONE rule: the stream
+ * exists if and only if this attempt's prompt asks for a name, and every
+ * attempt starts it over.
+ *
+ * Applied at the top of the retry loop, beside the other per-attempt resets,
+ * rather than remembered at each retry site -- because there are five of those
+ * in the native path alone (compatibility turn, re-login, invalid thread,
+ * account failover, background-command continuation) and the first version of
+ * this fix handled one. Both failure modes are silent: a stream carried across
+ * a retry keeps the abandoned attempt's half-formed title AND, being settled,
+ * hands the next reply's marker to the screen unstripped.
+ *
+ * A title already found is kept: it is this chat's name, and the rest of the
+ * reply still has to flow through the settled stream. */
+export function titleStreamForAttempt(
+  current: StreamingTitle | undefined,
+  prompt: string,
+  session: Pick<HarnessSession, 'titleAttempts'>,
+): StreamingTitle | undefined {
+  if (current?.title) return current;
+  if (promptAsksForTitle(prompt)) {
+    current?.restart();
+    return current ?? new StreamingTitle();
+  }
+  // The prompt stopped asking, so no name is coming from this turn. Give the
+  // attempt back rather than let a chat lose one of its two chances to a
+  // reply it was never going to get.
+  if (current) refundTitleRequest(session);
+  return undefined;
+}
+
 /** Give back the request this turn spent, because the turn stopped being the
  * one that asked. An account switch mid-turn re-drives the vendor's own
  * thread with "carry on" and no longer carries the title request, so no title
