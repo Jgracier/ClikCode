@@ -98,6 +98,14 @@ export async function interactiveAccountPicker(
 const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
   anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GOOGLE_API_KEY', qwen: 'DASHSCOPE_API_KEY',
   kiro: 'KIRO_API_KEY',
+  // Each read out of the installed binary rather than guessed, because the
+  // generic <PROVIDER>_API_KEY fallback gets every one of these wrong:
+  // "factory" is not FACTORY's provider word in its own env, and command-code
+  // would become COMMAND_CODE_API_KEY only by luck.
+  amp: 'AMP_API_KEY',            // `amp --help`
+  cursor: 'CURSOR_API_KEY',      // `cursor-agent --help`
+  factory: 'FACTORY_API_KEY',    // present in the droid bundle
+  'command-code': 'COMMAND_CODE_API_KEY', // satisfies cmdc's own auth gate, used to drive a real turn
   // Confirmed real and current, not guessed: google-antigravity/antigravity-cli
   // issue #632 was closed 2 days before this was written (state_reason:
   // "completed"), with a maintainer's exact working recipe --
