@@ -232,6 +232,15 @@ export interface AiLocalHarnessDefinition {
     argv: readonly string[];
     placement?: 'root' | 'turn';
   }>>>;
+  /** Exact vendor ENVIRONMENT for each normalized permission choice, for a
+   * vendor that carries its tool-approval policy that way instead of in argv.
+   *
+   * Goose is the case this exists for: it has no per-run mode flag at all --
+   * only `goose configure`, an in-session `/mode`, and GOOSE_MODE. Leaving it
+   * unset is not neutral: its own issue tracker records that a missing
+   * GOOSE_MODE auto-approves every tool call, so a harness ClikCode drove
+   * without this ran in bypass no matter which mode the user had chosen. */
+  permissionEnv?: Readonly<Partial<Record<AiHarnessPermissionMode, Readonly<Record<string, string>>>>>;
   /** Argv that precedes each image path on a turn, e.g. `['--image']`. Absent
    * means this vendor CLI has no attach-an-image flag ClikCode knows about. */
   imageArgvPrefix?: readonly string[];
@@ -335,7 +344,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { ...OPENCODE_FAMILY, command: 'opencode', provider: 'opencode', displayName: 'OpenCode', tier: 'primary', binary: 'opencode', npmPackage: 'opencode-ai' },
   { command: 'copilot', provider: 'github-copilot', displayName: 'GitHub Copilot', surface: 'terminal', tier: 'primary', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp', '--stdio'], effortArgvPrefix: ['--effort'] }, retiredOptionIds: ['allow-all'], localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['-C'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--allow-all'] } }, imageArgvPrefix: ['--attachment'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], continueArgv: ['--continue'] } },
   { command: 'aider', provider: 'aider', displayName: 'Aider', surface: 'terminal', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'CONVENTIONS.md', nativeSlashPassthrough: false, localAuth: ['api-key', 'vendor-cli'], binary: 'aider', modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models', ''], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yes-always'] } }, imageArgvPrefix: ['--file'], turn: { startArgv: [], createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'], promptArgvPrefix: ['--message'], output: 'text' }, session: { idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'] } },
-  { command: 'goose', provider: 'goose', displayName: 'Goose', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'goose', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], experimental: true }, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', modelArgvPrefix: ['--model'], turn: { startArgv: ['run', '--output-format', 'stream-json'], createIdPrefix: ['--name'], resumeIdPrefix: ['--resume', '--name'], promptArgvPrefix: ['--text'], output: 'json-lines', responseFields: ['text', 'content', 'response'] }, session: { idKind: 'uuid', createIdPrefix: ['--name'], resumeIdPrefix: ['session', '--resume', '--name'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' } },
+  { command: 'goose', provider: 'goose', displayName: 'Goose', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'goose', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], experimental: true }, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass', 'auto'], permissionEnv: { ask: { GOOSE_MODE: 'approve' }, bypass: { GOOSE_MODE: 'auto' }, auto: { GOOSE_MODE: 'smart_approve' } }, turn: { startArgv: ['run', '--output-format', 'stream-json'], createIdPrefix: ['--name'], resumeIdPrefix: ['--resume', '--name'], promptArgvPrefix: ['--text'], output: 'json-lines', responseFields: ['text', 'content', 'response'] }, session: { idKind: 'uuid', createIdPrefix: ['--name'], resumeIdPrefix: ['session', '--resume', '--name'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' } },
   // Amp's execute mode has a documented `--stream-json` switch that emits
   // Claude Code-compatible stream-json (system/assistant/result envelopes), so
   // it borrows the claude-stream-json parser family. UNVERIFIED LIVE: amp is
@@ -1138,7 +1147,11 @@ export function harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolea
 }
 
 export function harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean {
-  return Boolean(harness.permissionModes?.includes(mode));
+  if (!harness.permissionModes?.includes(mode)) return false;
+  // Declaring the mode is not enough: something has to actually carry it to
+  // the vendor, or selecting it would silently do nothing -- which is the one
+  // outcome a permission control must never have.
+  return Boolean(harness.permissionArgv?.[mode] ?? harness.permissionEnv?.[mode]);
 }
 
 export function harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean {

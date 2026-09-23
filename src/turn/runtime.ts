@@ -17,7 +17,7 @@ import { usageLabelIsExhausted, usageLabelRemainingPercent } from './failover.js
 import { normalizeSessionTitle } from '../session/title.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../session/model.js';
 import type { HarnessAvailableCommand } from '../harness/events/turn-observer.js';
@@ -98,8 +98,20 @@ export async function closePersistentTransport(sessionId?: string): Promise<void
 
 /** Profile isolation plus, for HOME-rooted profiles, the user's real git/npm/
  * gh/docker configuration so a turn can still commit, push and install. */
-export function turnEnvironment(harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined): Record<string, string> {
-  return homeRedirectEnvironment(harness, nativeProfileEnvironment(account?.nativeProfile), { home: homedir(), exists: existsSync });
+export function turnEnvironment(
+  harness: AiLocalHarnessDefinition,
+  account: AiHarnessAccount | undefined,
+  permissionMode?: AiHarnessPermissionMode,
+): Record<string, string> {
+  const environment = homeRedirectEnvironment(harness, nativeProfileEnvironment(account?.nativeProfile), { home: homedir(), exists: existsSync });
+  // A vendor that carries its tool-approval policy in the environment rather
+  // than in argv -- Goose, whose only other routes are `goose configure` and
+  // an in-session /mode. Omitting it is not neutral: an unset GOOSE_MODE
+  // auto-approves every tool call, so the mode has to be stated on every turn
+  // and not merely offered in the picker. Management commands pass no mode and
+  // get none, which is right: they run no tools.
+  const permission = permissionMode ? harness.permissionEnv?.[permissionMode] : undefined;
+  return permission ? { ...environment, ...permission } : environment;
 }
 
 /** Name a chat, once, from a title the model produced.
