@@ -17,6 +17,8 @@ import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/runtime.js';
 import { BroadcastObserver } from './broadcast-observer.js';
 import { decodeFrames, encodeFrame, type ClientCommand } from './protocol.js';
+import { disposeSessionState } from '../agent/session-state.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socketPathFor, writeWorkerRecord } from './registry.js';
 
 /** No attached client and no turn running, for this long: the worker exits
@@ -194,6 +196,14 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   });
 
   const shutdown = async (reason: string): Promise<void> => {
+    // Background shells the agent tools started are spawned DETACHED on
+    // everything but Windows, so they outlive this process rather than dying
+    // with it. disposeSessionState is the only thing that kills them and had
+    // no caller anywhere, which meant a background command survived its
+    // worker, its session and this terminal -- indefinitely. Done on every
+    // shutdown reason, not just the idle one: whenever this worker is going
+    // away, so is the session whose shells these are.
+    disposeSessionState(stateDirectory(), sessionId);
     for (const connection of connections.keys()) {
       connection.write(encodeFrame({ type: 'shutdown', reason }));
       connection.end();
