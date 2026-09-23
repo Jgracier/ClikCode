@@ -1,28 +1,15 @@
-/** Which models an account can actually use: discovered live from the
- * harness's own CLI where one exists, hardcoded only where verified, and
- * cached because a picker cannot wait on a subprocess. */
+/** Which models an account can actually use: discovered from the harness
+ * itself -- its CLI, its config, or its own bundled table -- and cached only
+ * for as long as what it was derived from stays the same. */
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
+import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } from '../definition.js';
-
-/**
- * Claude Code's `--model` aliases are deliberately version-less — they always
- * track whatever Anthropic currently ships for that tier, so passing the bare
- * alias (not a dated id) is the correct, future-proof argv value. That leaves
- * the alias alone unreadable in a picker ("sonnet" looks stale next to
- * "Sonnet 5"), so this is display-only: which concrete generation each alias
- * currently resolves to, verified against a real `claude --model <alias>
- * --output-format stream-json` run's `system.init.model` field. Update when
- * Anthropic ships a new tier — same manual-maintenance shape as the Copilot
- * model list a few lines below.
- */
-const CLAUDE_ALIAS_LABELS: Readonly<Record<string, string>> = {
-  fable: 'Fable 5.1', opus: 'Opus 5', sonnet: 'Sonnet 5', haiku: 'Haiku 4.5',
-};
+import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
 
 /** Provider-specific model naming belongs to account metadata, not generic
  * session pickers or terminal renderers. Unknown models always pass through. */
@@ -31,20 +18,75 @@ export function nativeModelLabel(
   model: string | null | undefined,
 ): string | undefined {
   if (!model) return undefined;
-  return harnessCommand === 'claude' ? CLAUDE_ALIAS_LABELS[model] ?? model : model;
+  // From the installed Claude Code's own table (claude-models.ts), never a
+  // constant: a constant is how the picker kept saying "Opus 5" after Claude
+  // Code shipped Opus 5.5.
+  return harnessCommand === 'claude' ? claudeModelLabel(model) ?? model : model;
 }
 
-// Model lists change even less often than installation status -- 5 minutes
-// is conservative, not aggressive. Without this, every single /model open
-// re-ran a real subprocess (harness.modelDiscoveryArgv) with up to a
-// 12-second timeout for any harness that declares one (opencode, several
-// others) -- on top of inspectNativeHarness's own cost this stacked into
-// exactly the "options are still slow" report, in a second picker beyond
-// /provider.
+/** A catalog is cached for exactly as long as what it was derived from.
+ *
+ * It used to be five minutes for everything, keyed on the harness alone. That
+ * is wrong in both directions: a Claude Code update showed the old models for
+ * the rest of the window, and an unchanged machine re-ran every `models`
+ * subprocess on the clock anyway.
+ *
+ * Most of a catalog is derived from FILES -- the vendor binary, its config,
+ * its own model cache -- and a file's identity (path, mtime, size) is a stat
+ * away. So the key is those identities: any change and the entry simply does
+ * not match, however recent it is; no change and it stays good indefinitely.
+ *
+ * The one input no file can witness is a vendor's `models` command, which
+ * asks a server whose list can change on its own. Only harnesses that declare
+ * one get a time limit, and only for that reason. */
+const modelCatalogCache = new Map<string, { at: number; fingerprint: string; result: ModelCatalogResult }>();
 
-const modelCatalogCache = new Map<string, { at: number; result: ModelCatalogResult }>();
+/** For `modelDiscoveryArgv` only: how long a server-sourced list is trusted. */
+const SERVER_LIST_TTL_MS = 300_000;
 
-const MODEL_CATALOG_CACHE_TTL_MS = 300_000;
+async function fileIdentity(path: string | undefined): Promise<string> {
+  if (!path) return '-';
+  try {
+    const info = await stat(path);
+    return `${path}:${info.mtimeMs}:${info.size}`;
+  } catch { return `${path}:absent`; }
+}
+
+function catalogProfileRoot(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): string | undefined {
+  return account?.nativeProfile?.path
+    ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined)
+    ?? (harness.command === 'codex' ? join(homedir(), '.codex')
+      : harness.command === 'claude' ? join(homedir(), '.claude') : undefined);
+}
+
+/** Every file nativeModelCatalogUncached reads, as identities, plus the
+ * account's own model list. Kept beside the reader it describes: a file read
+ * there and not listed here is a value that can go stale unnoticed. */
+async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): Promise<string> {
+  const root = catalogProfileRoot(harness, account);
+  const files = [
+    // The binary: an update changes what `models` prints and, for Claude
+    // Code, the alias table read out of the bundle itself.
+    await resolveBinaryPath(harness.binary),
+    ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
+    ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
+  ];
+  const identities = await Promise.all(files.map(fileIdentity));
+  return [...identities, (account?.models ?? []).join(',')].join('|');
+}
+
+function cacheKey(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): string {
+  return `${harness.command}:${account?.nativeProfile?.path ?? account?.id ?? 'default'}`;
+}
+
+/** The cached catalog, only if it still describes what is on disk now. */
+async function cachedCatalog(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): Promise<ModelCatalogResult | undefined> {
+  const cached = modelCatalogCache.get(cacheKey(harness, account));
+  if (!cached) return undefined;
+  if (cached.fingerprint !== await catalogFingerprint(harness, account)) return undefined;
+  if (harness.modelDiscoveryArgv && Date.now() - cached.at >= SERVER_LIST_TTL_MS) return undefined;
+  return cached.result;
+}
 
 /** How long the model picker will wait for a vendor's own model list before
  * opening with whatever it already has. Measured on the installed harnesses:
@@ -68,9 +110,8 @@ export async function nativeModelCatalogForPicker(
   account?: AiHarnessAccount,
   waitMs = MODEL_CATALOG_PICKER_WAIT_MS,
 ): Promise<ModelCatalogResult> {
-  const cacheKey = `${harness.command}:${account?.nativeProfile?.path ?? account?.id ?? 'default'}`;
-  const cached = modelCatalogCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < MODEL_CATALOG_CACHE_TTL_MS) return cached.result;
+  const cached = await cachedCatalog(harness, account);
+  if (cached) return cached;
   const fallback = { models: [...new Set(account?.models ?? [])] };
   // The discovery promise is never abandoned, only outrun: it keeps going and
   // populates the cache whether or not this picker still cares.
@@ -85,19 +126,6 @@ export async function nativeModelCatalogForPicker(
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-/** Synchronous variant for callers that genuinely cannot await: returns only
- * what is already cached or known locally, and refreshes in the background. */
-function nativeModelCatalogCached(
-  harness: AiLocalHarnessDefinition,
-  account?: AiHarnessAccount,
-): ModelCatalogResult {
-  const cacheKey = `${harness.command}:${account?.nativeProfile?.path ?? account?.id ?? 'default'}`;
-  const cached = modelCatalogCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < MODEL_CATALOG_CACHE_TTL_MS) return cached.result;
-  void nativeModelCatalog(harness, account).catch(() => undefined);
-  return { models: [...new Set(account?.models ?? [])] };
 }
 
 /** The model a session will actually run with, resolved to one the harness
@@ -130,11 +158,13 @@ export async function nativeModelCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
 ): Promise<ModelCatalogResult> {
-  const cacheKey = `${harness.command}:${account?.nativeProfile?.path ?? account?.id ?? 'default'}`;
-  const cached = modelCatalogCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < MODEL_CATALOG_CACHE_TTL_MS) return cached.result;
+  const cached = await cachedCatalog(harness, account);
+  if (cached) return cached;
+  // Fingerprinted BEFORE reading, so a file that changes mid-read leaves an
+  // entry that no longer matches rather than one that looks current.
+  const fingerprint = await catalogFingerprint(harness, account);
   const result = await nativeModelCatalogUncached(harness, account);
-  modelCatalogCache.set(cacheKey, { at: Date.now(), result });
+  modelCatalogCache.set(cacheKey(harness, account), { at: Date.now(), fingerprint, result });
   return result;
 }
 
@@ -185,10 +215,8 @@ async function nativeModelCatalogUncached(
 ): Promise<ModelCatalogResult> {
   const models = new Set(account?.models ?? []);
   const addDiscoveredModels = (raw: string): void => { for (const model of discoveredModelsFrom(raw)) models.add(model); };
-  const profileRoot = account?.nativeProfile?.path
-    ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined)
-    ?? (harness.command === 'codex' ? join(homedir(), '.codex')
-      : harness.command === 'claude' ? join(homedir(), '.claude') : undefined);
+  const profileRoot = catalogProfileRoot(harness, account);
+  let labels: Record<string, string> | undefined;
   let configured: string | undefined;
   if (profileRoot && harness.command === 'codex') {
     try {
@@ -206,7 +234,20 @@ async function nativeModelCatalogUncached(
       const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown };
       if (typeof settings.model === 'string' && settings.model.trim()) configured = settings.model.trim();
     } catch { /* Claude will choose its own default when no setting exists. */ }
-    ['fable', 'opus', 'sonnet', 'haiku'].forEach((model) => models.add(model));
+    // The aliases and their names come from the installed Claude Code's own
+    // table. If it cannot be read, the aliases alone are still right --
+    // Claude Code resolves them to its latest per family itself -- and they
+    // are shown bare rather than with a label that may be a release behind.
+    const table = await claudeModelTable(harness.binary);
+    const aliases = claudeModelAliases(table);
+    (aliases.length ? aliases : ['fable', 'opus', 'sonnet', 'haiku']).forEach((model) => models.add(model));
+    if (table) {
+      labels = {};
+      for (const alias of aliases) {
+        const name = table.displayNames[table.aliases[alias]!];
+        if (name) labels[alias] = name;
+      }
+    }
   }
   // Copilot had the same problem, worse: a full hardcoded model list with
   // no discovery mechanism and no verification against Copilot CLI itself
@@ -225,6 +266,6 @@ async function nativeModelCatalogUncached(
   return {
     ...(configured ? { configured } : {}),
     models: [...models],
-    ...(harness.command === 'claude' ? { labels: CLAUDE_ALIAS_LABELS } : {}),
+    ...(labels ? { labels } : {}),
   };
 }

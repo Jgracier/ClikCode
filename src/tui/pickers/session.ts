@@ -93,29 +93,34 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
  * it is still pending. */
 const NATIVE_SESSION_DISCOVERY = { run: discoverAdoptableSessions };
 
-const NATIVE_DISCOVERY_TTL_MS = 60_000;
-
-let nativeDiscoveryCache: { key: string; at: number; result: Promise<AdoptableNativeSession[]> } | undefined;
+let nativeDiscoveryCache: { key: string; result: Promise<AdoptableNativeSession[]> } | undefined;
 
 function resetNativeDiscoveryCache(): void {
   nativeDiscoveryCache = undefined;
 }
 
-/** Reopening /resume inside one terminal re-spawned every installed vendor CLI
- * from scratch. The listing does not change meaningfully minute to minute, so
- * hold it briefly — keyed on the inputs that would change the answer. */
+/** One discovery at a time for the same inputs -- a picker that reopens while
+ * the last one is still running shares it rather than starting another.
+ *
+ * No longer held for a minute afterwards. That layer sat on top of caches that
+ * already follow the right rule (session/discovery/cache.ts: file facts by
+ * directory mtime, an empty vendor listing by binary identity plus a clock,
+ * a non-empty listing never), and it overrode them: a session started in
+ * another terminal was invisible to /resume for up to sixty seconds even
+ * though its directory's mtime had already said so. */
 function cachedAdoptableSessions(state: HarnessState, workspace: string): Promise<AdoptableNativeSession[]> {
   const key = [workspace, ...state.accounts.map((item) => `${item.id}:${item.nativeProfile?.path ?? ''}`).sort()].join('\u0000');
   const cached = nativeDiscoveryCache;
-  if (cached && cached.key === key && Date.now() - cached.at < NATIVE_DISCOVERY_TTL_MS) return cached.result;
+  if (cached && cached.key === key) return cached.result;
   const result = NATIVE_SESSION_DISCOVERY.run(state, workspace).catch(() => {
     // fail-open-ok: discovery is passive enrichment of a list that is already
     // complete for ClikCode's own conversations. A vendor CLI that fails must
     // not take /resume down with it, and must not be cached as an answer.
-    nativeDiscoveryCache = undefined;
     return [] as AdoptableNativeSession[];
+  }).finally(() => {
+    if (nativeDiscoveryCache?.result === result) nativeDiscoveryCache = undefined;
   });
-  nativeDiscoveryCache = { key, at: Date.now(), result };
+  nativeDiscoveryCache = { key, result };
   return result;
 }
 
