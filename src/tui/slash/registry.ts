@@ -52,6 +52,12 @@ interface SlashCommandEntry {
   group: SlashGroup;
   availability(session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability;
   handlerKey: SlashHandlerKey;
+  /** `apply` means the ARGUMENT form of this command is a pure state write
+   * that can run while a turn is streaming: no picker, no panel, nothing on
+   * screen but the status line it is already reflected in. Those apply the
+   * moment they are typed. Everything else waits for the turn to end, which
+   * is the next moment it could run without taking the screen. */
+  duringTurn?: 'apply';
 }
 
 const always = (): SlashAvailability => ({ available: true });
@@ -79,11 +85,12 @@ const bothRoutes = (what: string) => (
 
 function entry(
   name: string, group: SlashGroup, description: string,
-  extra: Partial<Pick<SlashCommandEntry, 'aliases' | 'argHint' | 'availability' | 'handlerKey'>> = {},
+  extra: Partial<Pick<SlashCommandEntry, 'aliases' | 'argHint' | 'availability' | 'handlerKey' | 'duringTurn'>> = {},
 ): SlashCommandEntry {
   return {
     name, group, description, aliases: extra.aliases ?? [], availability: extra.availability ?? always,
     handlerKey: extra.handlerKey ?? name as SlashHandlerKey, ...(extra.argHint ? { argHint: extra.argHint } : {}),
+    ...(extra.duringTurn ? { duringTurn: extra.duringTurn } : {}),
   };
 }
 
@@ -109,7 +116,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('attachments', 'Workspace', 'queued files; `clear` empties them', { argHint: '[clear]' }),
 
   entry('provider', 'Provider', 'choose a provider', { aliases: ['switch', 'engine'] }),
-  entry('account', 'Provider', 'switch accounts', { argHint: '[label]' }),
+  entry('account', 'Provider', 'switch accounts', { argHint: '[label]', duringTurn: 'apply' }),
   entry('accounts', 'Provider', 'list and manage accounts', { argHint: '[use|login|add|remove|failover …]' }),
   entry('login', 'Provider', 'sign in to the current provider', { availability: needsHarness('signing in') }),
   entry('logout', 'Provider', 'sign the current account out', { availability: needsHarness('signing out') }),
@@ -117,6 +124,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 
   entry('model', 'Settings', 'choose or set a model', {
     argHint: '[name]',
+    duringTurn: 'apply',
     availability: (session, harness) => {
       const base = needsHarness('choosing a model')(session, harness);
       if (!base.available) return base;
@@ -124,8 +132,8 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
     },
   }),
   entry('models', 'Settings', 'list models configured on local accounts'),
-  entry('effort', 'Settings', 'reasoning level', { argHint: '[level]', availability: needsHarness('setting effort') }),
-  entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions') }),
+  entry('effort', 'Settings', 'reasoning level', { argHint: '[level]', availability: needsHarness('setting effort'), duringTurn: 'apply' }),
+  entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),
   entry('settings', 'Settings', 'configure this workspace', { argHint: '[route|account|model|effort|permissions|option|global|provider …]' }),
@@ -332,6 +340,13 @@ type SlashRoute =
  *   5. advertised by the ACP agent, or the harness declares
  *      `nativeSlashPassthrough`                           -> native, verbatim
  *   6. otherwise unknown, with a did-you-mean suggestion. */
+/** Whether this route can be applied to a session while a turn is streaming.
+ * Only the argument form: without one, `/model` is a picker and a picker
+ * needs the screen the answer is being written on. */
+export function slashRouteAppliesDuringTurn(route: SlashRoute): boolean {
+  return route.kind === 'command' && route.entry.duringTurn === 'apply' && route.args.trim().length > 0;
+}
+
 export function routeSlashInput(line: string, context: SlashRouteContext = {}): SlashRoute {
   const text = line.trim();
   if (!text.startsWith('/')) return { kind: 'prompt', prompt: text };

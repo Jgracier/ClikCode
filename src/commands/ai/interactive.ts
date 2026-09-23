@@ -23,7 +23,7 @@ import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessFor
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
-import { queueCommandDuringTurn } from '../../tui/slash/queue.js';
+import { commandDuringTurn } from '../../tui/slash/queue.js';
 import { nativeUsageReading } from '../../harness/accounts/account-usage.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
@@ -358,7 +358,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           TERMINAL.active?.startWaiting('thinking', (restoreDraft) => {
             interruptedSubmission!.restoreOnEscape = restoreDraft && turn.echo;
             turnController.abort();
-          }, (text) => liveInput.submit(text), (text) => queueCommandDuringTurn(targetId, text));
+          }, (text) => liveInput.submit(text), (text) => commandDuringTurn(targetId, text));
           try { await aiGatewaySessionSend(config, targetId, promptText, turnController.signal, { ...run, liveInput }); }
           finally {
             liveInput.close();
