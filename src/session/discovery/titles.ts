@@ -1,22 +1,9 @@
 /** Naming a conversation that the vendor never named. */
 
-import { failoverPromptRequest } from '../../turn/failover-prompt.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { readFileSuffix } from './files.js';
-import { NativeSessionEnvironment, locateNativeSessionFile } from './locations.js';
-
-/** A short, single-line title from a chat's first real message — used both
- * here (a discovered session with no explicit title) and by ai.ts itself
- * (naming a session after its own first turn). Lives here, not ai.ts, so
- * ai.ts can depend on this module without this module depending back on it —
- * a real circular import the other way around, not just a style preference. */
-export function conversationTitle(prompt: string): string {
-  // A rehydration prompt is ClikCode talking to the vendor, not the user
-  // talking to ClikCode. Naming a session after one produced the literal
-  // title "Continue the same ClikCode conversation after an account or pro…".
-  const title = (failoverPromptRequest(prompt) ?? prompt).replace(/\s+/g, ' ').trim();
-  return title.length > 64 ? `${title.slice(0, 63).trimEnd()}…` : title;
-}
+import { type NativeSessionEnvironment } from './stores.js';
+import { locateNativeSessionFile } from './registry.js';
 
 /** The title the harness itself gave this thread, or nothing.
  *

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt } from './failover.js';
 import { failoverPromptRequest, normalizeImportedTranscript } from './failover-prompt.js';
-import { conversationTitle } from '../session/discovery/titles.js';
+import { conversationTitle } from '../session/discovery/conversation-title.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import type { HarnessSession } from '../session/model.js';

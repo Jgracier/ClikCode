@@ -4,7 +4,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { newestFiles } from '../files.js';
-import { NativeSessionEnvironment, nativeDataRoot } from '../locations.js';
+import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
 import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Cursor Agent's own `ls`/`--resume` are interactive pickers with no JSON

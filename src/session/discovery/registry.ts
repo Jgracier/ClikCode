@@ -6,11 +6,14 @@ import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { discoverClaudeFsSessions, readClaudeFsTranscript } from './vendors/claude.js';
 import { discoverCodexFsSessions, readCodexFsTranscript } from './vendors/codex.js';
 import { discoverCursorFsSessions } from './vendors/cursor.js';
-import { NativeSessionEnvironment } from './locations.js';
+import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionFile } from './stores.js';
 import { readOpencodeTranscript } from './vendors/opencode.js';
 import { discoverPiFsSessions } from './vendors/pi.js';
 import { DiscoveredNativeSession } from './discovered-session.js';
 import type { NativeSessionStore } from './stores.js';
+
+export type { NativeSessionEnvironment, NativeSessionFile } from './stores.js';
+export { nativeDataRoot };
 import { claudeSessionStore } from './vendors/claude-store.js';
 import { codexSessionStore } from './vendors/codex-store.js';
 import { antigravitySessionStore } from './vendors/antigravity-store.js';
@@ -68,4 +71,36 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {
   return NATIVE_SESSION_STORES[harness.command];
+}
+
+/** Where a vendor keeps this session's conversation, under a GIVEN
+ * environment rather than this process's own.
+ *
+ * The environment is what makes it useful: every ClikCode account runs its
+ * harness against a redirected home, so the same id resolves to a different
+ * path per account. Reading a title is one use; carrying a conversation from
+ * one account's profile to another's is the other.
+ *
+ * These live beside the table they read rather than in a module of their own.
+ * That module existed, delegated both calls straight to nativeSessionStore,
+ * and cost a six-way import cycle for it -- vendors reached back through it
+ * for a type it only re-exported, which is what made the store table's own
+ * import order load-bearing. */
+export function nativeSessionRoot(
+  harness: AiLocalHarnessDefinition, environment: NativeSessionEnvironment = {},
+): string | undefined {
+  return nativeSessionStore(harness)?.root(environment);
+}
+
+export async function locateNativeSessionFile(
+  harness: AiLocalHarnessDefinition, nativeId: string, workspace: string,
+  environment: NativeSessionEnvironment = {},
+): Promise<NativeSessionFile | undefined> {
+  const store = nativeSessionStore(harness);
+  const root = store?.root(environment);
+  // A store that carries its own conversations (see NativeSessionStore) has no
+  // per-conversation path to hand back, and that is not a failure: callers
+  // already treat undefined as "not reachable as a file".
+  if (!store?.locate || !root || !nativeId) return undefined;
+  return store.locate(root, nativeId, workspace, environment);
 }
