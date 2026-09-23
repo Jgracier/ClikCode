@@ -478,6 +478,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // not erased -- so the new one starts on a clean viewport.
       this.emitted.requestReseed();
     }
+    // A snapshot that already holds this turn's durable record -- folded into
+    // `messages`, its journal gone -- IS the end of the turn for the screen,
+    // whichever order it and "stopped waiting" arrive in. The worker sends the
+    // final snapshot first; the in-process path stops first. Ending it here,
+    // before anything is drawn, is what makes that order irrelevant: the live
+    // answer is retired once, into the place the saved one is then matched
+    // against. Drawing the snapshot while still waiting put the answer on
+    // screen twice (saved and live); dropping the live copy without retiring
+    // it made the last block vanish. Both were seen, in that order, across
+    // two fixes that each chose one arrival order. See scripts/tui-e2e.
+    if (this.waitingLabel && this.currentSession?.id === session.id && !session.pendingTurn
+      && (session.messages?.length ?? 0) > this.activityAnchor) {
+      this.stopWaiting(false);
+    }
     if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
     this.currentAccount = account;
