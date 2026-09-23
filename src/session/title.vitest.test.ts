@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SESSION_TITLE_MAX, StreamingTitle, TITLE_REQUEST_ATTEMPTS, extractSessionTitle, normalizeSessionTitle,
-  refundTitleRequest, sessionTitleSource, shouldRequestTitle, withTitleRequest,
+  refundTitleRequest, sessionTitleSource, shouldRequestTitle, titleStreamForAttempt, withTitleRequest,
 } from './title.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition';
 
@@ -167,5 +167,58 @@ describe('an account switch mid-turn', () => {
     const named = { name: 'Prod Disk Cleanup', titleAttempts: TITLE_REQUEST_ATTEMPTS };
     refundTitleRequest(named);
     expect(shouldRequestTitle(named)).toBe(false);
+  });
+});
+
+/** One rule, at the top of the retry loop, instead of five retry sites each
+ * remembering. The prompt about to be sent is the whole input. */
+describe('the title stream for one attempt', () => {
+  const session = (titleAttempts: number) => ({ titleAttempts });
+
+  it('starts one when the prompt asks, and starts it over on the next attempt', () => {
+    const asked = withTitleRequest('clean up the prod disk');
+    const first = titleStreamForAttempt(undefined, asked, session(1));
+    expect(first).toBeDefined();
+    first!.push('Looking at the workspace', 'append');
+    const second = titleStreamForAttempt(first, asked, session(1));
+    // Same object, but no longer settled: the new reply's marker gets stripped.
+    expect(second).toBe(first);
+    expect(second!.push('<clikcode-title>Prod Disk Cleanup</clikcode-title>\nOn it.', 'append')).toBe('On it.');
+    expect(second!.title).toBe('Prod Disk Cleanup');
+  });
+
+  it('drops it and refunds when the retry prompt no longer asks', () => {
+    const state = session(1);
+    const stream = titleStreamForAttempt(undefined, withTitleRequest('clean up the prod disk'), state);
+    stream!.push('Looking at the wor', 'append');
+    // What the vendor-CLI failover sends instead: carry on with the thread.
+    const next = titleStreamForAttempt(stream, 'Continue the interrupted latest request.', state);
+    expect(next).toBeUndefined();
+    expect(state.titleAttempts).toBe(0);
+  });
+
+  it('refunds once, however many retries follow', () => {
+    const state = session(1);
+    const stream = titleStreamForAttempt(undefined, withTitleRequest('x'), state);
+    let next = titleStreamForAttempt(stream, 'carry on', state);
+    next = titleStreamForAttempt(next, 'carry on', state);
+    expect(next).toBeUndefined();
+    expect(state.titleAttempts).toBe(0);
+  });
+
+  it('keeps a title it already found, whatever the next prompt says', () => {
+    const state = session(1);
+    const stream = titleStreamForAttempt(undefined, withTitleRequest('x'), state);
+    stream!.push('<clikcode-title>Prod Disk Cleanup</clikcode-title>\nOn it.', 'append');
+    // The background-command continuation: a new prompt, mid-reply, that asks
+    // for no name. The name is already this chat's.
+    const next = titleStreamForAttempt(stream, 'Continue: read the background command output.', state);
+    expect(next).toBe(stream);
+    expect(next!.title).toBe('Prod Disk Cleanup');
+    expect(state.titleAttempts).toBe(1);
+  });
+
+  it('never starts one for a prompt that never asked', () => {
+    expect(titleStreamForAttempt(undefined, 'a plain prompt', session(0))).toBeUndefined();
   });
 });

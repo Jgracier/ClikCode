@@ -27,7 +27,7 @@ import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEve
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
-import { extractSessionTitle, refundTitleRequest, sessionTitleSource, shouldRequestTitle, StreamingTitle, withTitleRequest } from '../session/title.js';
+import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, titleStreamForAttempt, withTitleRequest } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -270,6 +270,12 @@ export async function aiSessionSend(
       let cliOutputStarted = false;
       turnUsage = undefined;
       pendingWork.reset();
+      // Naming is for a new chat, and only from a reply that was actually
+      // asked for a name -- so nothing about it may cross a retry. This loop
+      // has five retry paths and each one either keeps this prompt or replaces
+      // it; deciding here, from the prompt itself, is what makes that true for
+      // all five instead of the ones someone remembered.
+      titleStream = titleStreamForAttempt(titleStream, turnText, session);
       const runStructuredCliTurn = async (): Promise<NativeTurnResult> => {
         const cliHarness: AiLocalHarnessDefinition = fallbackTurnHarnesses.has(harness.command) && harness.fallbackTurn
           ? { ...harness, turn: harness.fallbackTurn } : harness;
@@ -619,18 +625,6 @@ export async function aiSessionSend(
           // does the same).
           turnText = interruptedTurnFailoverPrompt(session);
         }
-        // Naming is for a new chat, and only from the reply that was actually
-        // asked for a name. Neither prompt above carries the title request any
-        // more -- one asks the carried thread to carry on, the other retells
-        // the interrupted turn -- so no title is coming, and the half-formed
-        // one the abandoned attempt may have started is not this chat's name.
-        // Drop the stream (a settled one would also pass the next reply
-        // through verbatim, marker and all) and give the attempt back, so a
-        // chat that is still unnamed gets asked again on its next turn.
-        if (titleStream) {
-          titleStream = undefined;
-          refundTitleRequest(session);
-        }
         checkpoint.response('', 'replace');
         prompter?.response('', 'replace');
         continue;
@@ -682,7 +676,11 @@ export async function aiSessionSend(
         continue;
       }
       session.attachments = [];
-      const answer = titleStream ? extractSessionTitle(result.text) : { title: undefined, text: result.text };
+      // Unconditional: extracting from text with no marker returns it
+      // unchanged, and the one thing that must never happen is a marker
+      // reaching the screen because the stream that would have stripped it
+      // belonged to an attempt this reply replaced.
+      const answer = extractSessionTitle(result.text);
       await checkpoint.complete(answer.text);
       await nameSession(session, {
         title: titleStream?.title ?? answer.title,
@@ -761,6 +759,10 @@ export async function aiSessionSend(
    * other way -- decides whether "Usage Exhausted" is the truth at the end. */
   let exhaustedAnyApiAccount = false;
   for (;;) {
+    // Same rule as the native loop above. This path re-sends the whole prompt
+    // on a switch, title request included, so the stream restarts rather than
+    // being dropped -- which is a consequence of the rule, not a second rule.
+    titleStream = titleStreamForAttempt(titleStream, turnText, session);
     try {
       turn = await invoke(account);
       break;
@@ -806,12 +808,6 @@ export async function aiSessionSend(
       prompter?.phase(accountSwitchPhase(fallback.label));
       account = fallback;
       session.accountId = fallback.id;
-      // Unlike the vendor-CLI failover, this re-sends the whole prompt --
-      // title request included -- so the next account is genuinely asked
-      // again. The stream has to start over with it: left settled from the
-      // abandoned attempt it would keep that attempt's title and hand the new
-      // reply's marker to the screen unstripped.
-      titleStream?.restart();
     }
   }
   const invocation = {
@@ -837,7 +833,7 @@ export async function aiSessionSend(
     account.quotaRetryAt = undefined;
   }
   session.attachments = [];
-  const answer = titleStream ? extractSessionTitle(turn.text) : { title: undefined, text: turn.text };
+  const answer = extractSessionTitle(turn.text);
   await checkpoint.complete(answer.text);
   await nameSession(session, { title: titleStream?.title ?? answer.title });
   if (!prompter) emitHarnessOutput({ session, text: answer.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
@@ -905,7 +901,7 @@ export async function aiGatewaySessionSend(
     };
     state.invocations.push(harnessInvocation);
     session.attachments = [];
-    const named = titleStream ? extractSessionTitle(harnessTurn.text) : { title: undefined, text: harnessTurn.text };
+    const named = extractSessionTitle(harnessTurn.text);
     await checkpoint.complete(named.text);
     await nameSession(session, { title: titleStream?.title ?? named.title });
     if (!prompter) {
@@ -918,10 +914,9 @@ export async function aiGatewaySessionSend(
   } catch (error) {
     if (!gatewayHarnessUnavailable(error)) { await checkpoint.flush(); throw error; }
     const notice = gatewayHarnessFallbackNotice(error);
-    // The assistant below answers the same prompt, title request and all, so
-    // this is another attempt at one reply rather than a continuation of the
-    // abandoned one.
-    titleStream?.restart();
+    // The assistant below is a second attempt at the same prompt, not a
+    // continuation of the abandoned one.
+    titleStream = titleStreamForAttempt(titleStream, turnText, session);
     if (prompter) prompter.activity(chalk.dim(notice));
     else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('Gateway:')} ${notice}\n`);
   }
@@ -1009,7 +1004,7 @@ export async function aiGatewaySessionSend(
   const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', ...(session.model ? { model: session.model } : {}), at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
   session.attachments = [];
-  const answered = titleStream ? extractSessionTitle(reply) : { title: undefined, text: reply };
+  const answered = extractSessionTitle(reply);
   await checkpoint.complete(answered.text);
   await nameSession(session, { title: titleStream?.title ?? answered.title });
   if (wroteDelta) output.write('\n\n');
