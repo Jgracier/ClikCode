@@ -5,7 +5,7 @@ import { harnessSupportsEffort, localHarnessForCommand } from '../../runtime/laz
 import { readState } from '../../session/state/read.js';
 import { optionForHarness, VALID_EFFORTS } from '../../session/options.js';
 import { chooseOption } from './choose.js';
-import { applySettingScope } from './settings.js';
+import { applySettingScope } from './setting-scope.js';
 
 export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const state = await readState();

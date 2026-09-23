@@ -18,7 +18,7 @@ import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { requiresProviderHandoff } from '../../session/options.js';
-import { preferredAccountId } from './sessions.js';
+import { preferredAccountId } from './preferred-account.js';
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
  * it first if needed, and — only inside the interactive terminal session,

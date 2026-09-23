@@ -174,19 +174,6 @@ async function liveWorkerSessions(
   return (sessionId: string) => live.has(sessionId);
 }
 
-export function preferredAccountId(
-  state: HarnessState, provider: string, current?: string | null,
-  where: (account: AiHarnessAccount) => boolean = () => true,
-): string | null {
-  const ready = state.accounts.filter((account) => account.provider === provider && account.status === 'ready' && where(account));
-  if (!ready.length) return null;
-  if (current && ready.some((account) => account.id === current)) return current;
-  const lastUsed = [...state.sessions]
-    .filter((session) => session.accountId && ready.some((account) => account.id === session.accountId))
-    .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.accountId;
-  return lastUsed ?? ready[0]!.id;
-}
-
 /** The very first launch on a machine, with nothing to carry forward. */
 function firstEverSession(state: HarnessState, workspace: string, now: string): HarnessSession {
   const defaults = resolveDefaultSettings(state, null);

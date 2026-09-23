@@ -1,6 +1,7 @@
 /** The settings menu, and the scope (global or per-provider) a chosen
  * setting is written at. */
 
+import { applySettingScope } from './setting-scope.js';
 import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
@@ -14,32 +15,6 @@ import { interactiveEnginePicker } from './engine.js';
 import { interactiveModelPicker } from './model.js';
 import { interactiveHarnessOptionPicker } from './options.js';
 import { interactivePermissionPicker } from './permissions.js';
-
-/** After picking a new value, ask what it applies to instead of making that a
- * separate "Defaults for new chats" menu that asks the same question about the
- * same settings a second time. One flow per setting: choose the value, then
- * choose the scope. */
-export async function applySettingScope(
-  rl: HarnessPrompter, id: string, key: 'effort' | 'permissions' | 'failover' | 'model', value: string,
-): Promise<void> {
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-  const scope = await chooseOption(rl, 'Apply to', [
-    { label: 'This chat only', value: 'session' as const },
-    { label: 'Global default', detail: 'every provider, unless overridden', value: 'global' as const },
-    ...(harness ? [{ label: `${harness.displayName} default`, detail: 'this provider only', value: 'provider' as const }] : []),
-  ]);
-  if (!scope) return;
-  if (scope === 'session') {
-    if (key === 'failover') await aiSessionCommand(id, `/accounts failover ${value}`);
-    else await aiSessionCommand(id, `/${key} ${value}`);
-  } else if (scope === 'global') {
-    await aiSettingsSetGlobal(key, value);
-  } else if (harness) {
-    await aiSettingsSetProvider(harness.command, key, value);
-  }
-}
 
 async function interactiveFailoverPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const state = await readState();
