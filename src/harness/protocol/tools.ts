@@ -80,7 +80,7 @@ interface HarnessToolMapping {
   note: string;
 }
 
-const CLAUDE_TOOL_NAMES: Readonly<Record<string, ToolCategory>> = {
+export const CLAUDE_TOOL_NAMES: Readonly<Record<string, ToolCategory>> = {
   // Read/Edit/Write/Bash/Glob/Grep/WebFetch/NotebookRead/NotebookEdit all
   // match the verb table already. These two are the background-shell tools it
   // cannot reach, and they carry no input that would classify them either.
@@ -93,7 +93,7 @@ const CLAUDE_TOOL_NAMES: Readonly<Record<string, ToolCategory>> = {
  * absence the map exists to prevent. */
 export const GATEWAY_HARNESS_COMMAND = 'clikdeploy-gateway';
 
-const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>> = {
+export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>> = {
   claude: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'tool_use blocks carry name and input; Edit/Write also carry a diff, which settles them outright.' },
   qwen: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'Claude-shaped stream, parsed by the same branch and named the same way.' },
   grok: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'Claude-shaped stream, confirmed live from its own init line, so the same branch reads it.' },
@@ -105,7 +105,7 @@ const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>> = {
   cline: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
   droid: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
   kiro: { stream: 'structured', note: 'ACP toolRequest carries name and arguments.' },
-  amp: { stream: 'structured', note: 'JSON-lines turn; tool events classify by name where the stream reports one.' },
+  amp: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'declares the Claude stream (`claude-stream-json`), so its tools are named the Claude way; this row said "classify by name where the stream reports one" and left them to the generic verb table.' },
   pi: { stream: 'structured', note: 'JSON-lines turn; tool events classify by name where the stream reports one.' },
   antigravity: { stream: 'structured', note: 'step_update carries tool_name AND tool_info.parameters (CommandLine on run_command, AbsolutePath on view_file), verified against agy 1.2.7. An earlier note here claimed there was no input, which is why every tool row read as a bare name.' },
   cursor: { stream: 'structured', note: 'tool events carry a name and a description, not an input record; the verb table alone classifies them.' },
