@@ -9,7 +9,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountFailureReason } from './failover.js';
+import { accountSwitchNotice, accountSwitchPhase } from './failover.js';
 import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir, open } from 'node:fs/promises';
@@ -163,8 +163,8 @@ export async function aiSessionSend(
         ));
         }
         switchedFrom = account.label;
-        prompter?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
-        prompter?.phase(`switching to ${fallback.label}`);
+        prompter?.activity(chalk.yellow(accountSwitchNotice('quota-exhausted', fallback.label)));
+        prompter?.phase(accountSwitchPhase(fallback.label));
         account = fallback;
         session.accountId = fallback.id;
         session.nativeSessionId = undefined;
@@ -591,8 +591,8 @@ export async function aiSessionSend(
         // Say why it moved. Switching happens for any failure now, so calling
         // every one of them "quota reached" would misreport a crash as a
         // spent plan.
-        prompter?.activity(`${chalk.yellow(accountFailureReason(failureKind))} ${chalk.dim(`${switchedFrom} → ${fallback.label}, retrying…`)}`);
-        prompter?.phase(`retrying on ${fallback.label}`);
+        prompter?.activity(chalk.yellow(accountSwitchNotice(failureKind, fallback.label)));
+        prompter?.phase(accountSwitchPhase(fallback.label));
         await closePersistentTransport(session.id);
         account = fallback;
         session.accountId = fallback.id;
@@ -718,9 +718,9 @@ export async function aiSessionSend(
           state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
         ));
     }
-    switchedFrom = account.id;
-    prompter?.activity(`${chalk.yellow('quota exhausted')} ${chalk.dim(`${account.label} → ${fallback.label}`)}`);
-    prompter?.phase(`switching to ${fallback.label}`);
+    switchedFrom = account.label;
+    prompter?.activity(chalk.yellow(accountSwitchNotice('quota-exhausted', fallback.label)));
+    prompter?.phase(accountSwitchPhase(fallback.label));
     account = fallback;
     session.accountId = fallback.id;
     await checkpoint.persistNow();
@@ -789,9 +789,9 @@ export async function aiSessionSend(
           state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
         ));
       }
-      switchedFrom ??= exhaustedAccount.id;
-      prompter?.activity(`${chalk.yellow(accountFailureReason(failureKind))} ${chalk.dim(`${exhaustedAccount.label} → ${fallback.label}, retrying…`)}`);
-      prompter?.phase(`retrying on ${fallback.label}`);
+      switchedFrom = exhaustedAccount.label;
+      prompter?.activity(chalk.yellow(accountSwitchNotice(failureKind, fallback.label)));
+      prompter?.phase(accountSwitchPhase(fallback.label));
       account = fallback;
       session.accountId = fallback.id;
     }

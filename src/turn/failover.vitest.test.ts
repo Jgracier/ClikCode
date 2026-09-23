@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './failover';
+import { accountFailureReason, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './failover';
 
 describe('ClikCode account failover', () => {
   it('does not confuse temporary throttling with exhausted quota', () => {
@@ -128,5 +128,71 @@ describe('an ineligible account is named as such, not as a generic failure', () 
       new Error('Let me explain: "not eligible" errors happen when your account needs verification.'),
       { isResultError: false },
     )).toBe('other');
+  });
+});
+
+describe('one wording for an account switch, wherever it happens', () => {
+  // Four switch sites -- native and api-key, each with a pre-turn check and a
+  // reactive one -- had each written this line for itself, and they had
+  // drifted into two wordings for the same event: the pre-turn pair said
+  // "quota exhausted … switching to X", the reactive pair "<reason> …
+  // retrying…". Running out of usage is not a retry.
+  it('says running out plainly, and calls it a switch rather than a retry', () => {
+    expect(accountSwitchNotice('quota-exhausted', 'work@example.com'))
+      .toBe('out of usage, switching to work@example.com');
+  });
+
+  it('never calls a switch a retry, for any failure kind', () => {
+    const kinds = ['quota-exhausted', 'temporarily-throttled', 'authentication-required',
+      'account-ineligible', 'native-thread-invalid', 'other'] as const;
+    for (const kind of kinds) {
+      const notice = accountSwitchNotice(kind, 'acct-b');
+      expect(notice, kind).toContain('switching to acct-b');
+      expect(notice, kind).not.toMatch(/retry|retrying/i);
+    }
+  });
+
+  it('still names the real reason when it is not usage', () => {
+    expect(accountSwitchNotice('temporarily-throttled', 'acct-b')).toBe('rate limited, switching to acct-b');
+    expect(accountSwitchNotice('authentication-required', 'acct-b')).toBe('sign-in needed, switching to acct-b');
+  });
+
+  it('phrases the status line as a switch too', () => {
+    expect(accountSwitchPhase('acct-b')).toBe('switching to acct-b');
+  });
+});
+
+describe('classifying what a vendor actually says when it runs out', () => {
+  // Every string here was captured from a real refusal on a real account.
+  // Both of the first two were classified 'other' and shown as "account
+  // failed … retrying", which is how a spent plan came to read like a crash:
+  // the pattern wanted "quota exceeded" while antigravity writes "quota
+  // reached" and copilot puts the verb BEFORE the noun.
+  const quota = [
+    ['antigravity', 'API error (attempt 1): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 76h57m39s.'],
+    ['copilot', 'You have exceeded your monthly quota'],
+    ['auggie', 'You have run out of usage for this month'],
+    ['grok', 'API error (status 402 Payment Required): usage balance exhausted'],
+  ] as const;
+
+  it.each(quota)('reads %s running out as usage exhausted', (_vendor, text) => {
+    const kind = classifyAccountFailure(new Error(text), { isResultError: true });
+    expect(kind).toBe('quota-exhausted');
+    expect(accountFailureReason(kind)).toBe('usage exhausted');
+  });
+
+  it('still separates a transient throttle from a spent plan', () => {
+    // A 429 alone is not "out of usage" -- it comes back in seconds. Only the
+    // quota wording promotes it, which is why antigravity's 429 counts and a
+    // bare rate limit does not.
+    for (const text of ['rate limit exceeded, please retry', 'Error: 429 Too Many Requests']) {
+      expect(classifyAccountFailure(new Error(text), { isResultError: true })).toBe('temporarily-throttled');
+    }
+  });
+
+  it('does not call an ordinary crash a spent plan', () => {
+    // Saying it ran out when it did not would invent a reason, and would mark
+    // a perfectly good account exhausted.
+    expect(classifyAccountFailure(new Error('Error: spawn ENOENT'), { isResultError: true })).toBe('other');
   });
 });

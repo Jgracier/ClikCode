@@ -100,7 +100,6 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
     }
     return undefined;
   },
-  qwen: (value, harness) => parsers.claude!(value, harness),
   // Read from cursor-agent's own emitter: with --stream-partial-output every
   // text delta is an `assistant` record (always with timestamp_ms), and the
   // deltas accumulated so far are then RE-SENT as one full `assistant` record
@@ -148,7 +147,6 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
     const text = typeof part?.text === 'string' ? part.text : typeof value.text === 'string' ? value.text : '';
     return text ? { text, mode: 'append' } : undefined;
   },
-  kilo: (value, harness) => parsers.opencode!(value, harness),
 };
 
 /** Envelope types that never carry the assistant's own words. Checked first so
@@ -194,11 +192,42 @@ const genericParser: ResponseParser = (value) => {
   return undefined;
 };
 
+/** By the parser FAMILY the catalog declares, which is what that field is for.
+ *
+ * The table above is keyed by COMMAND, so a harness that merely speaks
+ * another vendor's stream shape needed a hand-written delegating entry --
+ * `qwen: parsers.claude`, `kilo: parsers.opencode`. Three harnesses never got
+ * one: Grok, Gemini and Amp all declare `claude-stream-json` and all fell
+ * through to genericParser.
+ *
+ * That is not a cosmetic miss. On Claude's stream-json, genericParser appends
+ * the text TWICE -- once from `content_block_delta`, then again from the
+ * completed `assistant` message carrying the whole block -- because it has
+ * none of the claude parser's sawDeltas guard. Every paragraph was printed
+ * twice, bare-concatenated ("…policy work.I'll pick up from…"), which is what
+ * the duplicated response on Grok actually was.
+ *
+ * Declaring the family is now enough; no harness needs an entry of its own to
+ * reuse a parser. */
+const parsersByFamily: Readonly<Record<string, ResponseParser>> = {
+  'claude-stream-json': (value, harness) => parsers.claude!(value, harness),
+  'opencode-json': (value, harness) => parsers.opencode!(value, harness),
+  'cursor-stream-json': (value, harness) => parsers.cursor!(value, harness),
+  'cline-json': (value, harness) => parsers.cline!(value, harness),
+  'pi-json': (value, harness) => parsers.pi!(value, harness),
+  antigravity: (value, harness) => parsers.antigravity!(value, harness),
+  goose: (value, harness) => parsers.goose!(value, harness),
+};
+
 /** The response update carried by one already-parsed record. */
 function nativeResponseUpdateFromValue(harness: AiLocalHarnessDefinition, value: unknown): NativeResponseUpdate | undefined {
   const record = object(value);
   if (!record || Array.isArray(value)) return undefined;
-  return (parsers[harness.command] ?? genericParser)(record, harness);
+  // Command first, so a harness can still have a parser of its very own.
+  const parser = parsers[harness.command]
+    ?? (harness.parser ? parsersByFamily[harness.parser] : undefined)
+    ?? genericParser;
+  return parser(record, harness);
 }
 
 export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText: string): NativeResponseUpdate | undefined {
