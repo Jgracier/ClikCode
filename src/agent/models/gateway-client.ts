@@ -143,11 +143,11 @@ export class GatewayModelClient implements ModelClient {
       });
     } catch (error) {
       if (request.signal?.aborted) throw turnCancelledError();
-      throw new ModelClientError(`Could not reach Gateway: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
+      throw new ModelClientError(`Could not reach ClikDeploy Gateway: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
     }
 
     if (!response.ok) {
-      let message = `Gateway returned HTTP ${response.status}`;
+      let message = `ClikDeploy Gateway returned HTTP ${response.status}`;
       let code: string | undefined;
       let retryAfter = parseRetryAfter(response.headers.get('retry-after'));
       try {
@@ -161,7 +161,7 @@ export class GatewayModelClient implements ModelClient {
       } catch { /* non-JSON error body: the status line is the message */ }
       throw new ModelClientError(message, { kind: errorKindForStatus(response.status), statusCode: response.status, ...(code ? { code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
     }
-    if (!response.body) throw new ModelClientError('Gateway returned an empty response', { kind: 'other', statusCode: response.status });
+    if (!response.body) throw new ModelClientError('ClikDeploy Gateway returned an empty response', { kind: 'other', statusCode: response.status });
 
     const parser = new SseParser();
     let text = '';
@@ -210,7 +210,7 @@ export class GatewayModelClient implements ModelClient {
           break;
         case 'error': {
           const retryAfter = parseRetryAfter(frame.retryAfter);
-          throw new ModelClientError(typeof frame.message === 'string' && frame.message ? frame.message : 'Gateway reported an error', {
+          throw new ModelClientError(typeof frame.message === 'string' && frame.message ? frame.message : 'ClikDeploy Gateway reported an error', {
             kind: errorKindForCode(frame.code), ...(typeof frame.code === 'string' ? { code: frame.code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}),
           });
         }
@@ -230,11 +230,11 @@ export class GatewayModelClient implements ModelClient {
       await reader.cancel().catch(() => undefined);
       if (request.signal?.aborted) throw turnCancelledError();
       if (error instanceof ModelClientError) throw error;
-      throw new ModelClientError(`Gateway stream failed: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
+      throw new ModelClientError(`ClikDeploy Gateway stream failed: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
     }
     // A stream that ends without `finish` was cut off; treating the partial
     // text as a complete answer would silently drop tool calls.
-    if (stopReason === undefined) throw new ModelClientError('Gateway stream ended before the turn finished', { kind: 'other', code: 'incomplete_stream' });
+    if (stopReason === undefined) throw new ModelClientError('ClikDeploy Gateway stream ended before the turn finished', { kind: 'other', code: 'incomplete_stream' });
     return { text, toolCalls, stopReason, usage, ...(servedModel ? { servedModel } : {}), ...(contextWindow ? { contextWindow } : {}) };
   }
 }

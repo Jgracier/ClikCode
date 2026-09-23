@@ -11,7 +11,7 @@ function formatTokens(value: number | undefined): string {
 
 export function contextUsageText(session: HarnessSession): string {
   const usage = session.lastUsage;
-  const who = session.route === 'gateway' ? 'Gateway' : sessionHarness(session)?.displayName ?? 'The provider';
+  const who = session.route === 'gateway' ? 'ClikDeploy Gateway' : sessionHarness(session)?.displayName ?? 'The provider';
   if (!usage) return `${who} has not reported token usage for this conversation yet. It appears here after a turn on a harness that publishes usage events.`;
   const used = usage.totalTokens ?? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || undefined);
   const window = usage.contextWindow;

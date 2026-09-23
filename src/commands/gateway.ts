@@ -81,7 +81,7 @@ async function requestJson(
   if (!response.ok) {
     const detail = payload?.error?.message ?? payload?.error ?? payload?.message;
     throw new GatewayHttpError(
-      typeof detail === 'string' && detail ? detail : `Gateway request failed with HTTP ${response.status}`,
+      typeof detail === 'string' && detail ? detail : `ClikDeploy Gateway request failed with HTTP ${response.status}`,
       response.status
     );
   }

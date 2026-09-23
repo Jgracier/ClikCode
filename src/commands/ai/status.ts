@@ -42,6 +42,6 @@ export async function aiGatewayStatus(config: Conf): Promise<void> {
     apiUrl,
     authentication: 'oauth-or-api-key',
     credentialBoundary: 'gateway-auth-only',
-    hint: `Run \`${harnessCommand()} gateway login\` to connect Gateway, or use \`${harnessCommand()} accounts add\` for a provider login that stays local.`,
+    hint: `Run \`${harnessCommand()} gateway login\` to connect ClikDeploy Gateway, or use \`${harnessCommand()} accounts add\` for a provider login that stays local.`,
   });
 }

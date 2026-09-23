@@ -281,7 +281,7 @@ export function providerPickerOptions(
   // ones still sort to the top, which is what the split was really for.
   const visible = ordered;
   return [{
-    label: 'Gateway',
+    label: 'ClikDeploy Gateway',
     detail: `· ${gatewayConnected ? 'connected' : 'sign in with OAuth'}${session.route === 'gateway' ? ' · current' : ''}`,
     value: { kind: 'gateway' },
   }, ...visible.map(({ harness, inspection }) => ({

@@ -19,7 +19,7 @@ const COMPACT_PROMPT = 'Summarize this conversation so far for a fresh session t
 export async function compactConversation(
   id: string, session: HarnessSession, focus: string, send: (id: string, prompt: string) => Promise<void>,
 ): Promise<string | void> {
-  if (session.route === 'gateway') throw new Error('Gateway manages its own context; /compact applies only to local harnesses.');
+  if (session.route === 'gateway') throw new Error('ClikDeploy Gateway manages its own context; /compact applies only to local harnesses.');
   if (!hasConversationContent(session)) throw new Error('There is nothing to compact yet.');
   const harness = sessionHarness(session);
   if (harness?.nativeSlashPassthrough && session.nativeSessionId) {

@@ -55,7 +55,7 @@ export async function interactivePermissionPicker(rl: HarnessPrompter, id: strin
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route === 'gateway') throw new Error('Gateway permissions are enforced by authenticated platform policy.');
+  if (session.route === 'gateway') throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy.');
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const current = session.permissionMode ?? 'ask';
   const descriptions: Record<AiHarnessPermissionMode, string> = {
