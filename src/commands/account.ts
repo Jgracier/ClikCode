@@ -13,7 +13,7 @@ import { emitJson } from '../cli/structured-output.js';
 import { captureNativeHarnessOutput, runNativeHarnessCommand } from '../harness/transport/native/command.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { accountVerificationHint } from '../turn/failover.js';
+import { accountVerification, verificationNotice } from '../turn/failover.js';
 import { localHarnessForCommand, localHarnessForProvider, localRouter } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
 import { harnessStatePath } from '../session/state/paths.js';
@@ -252,6 +252,8 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
         existingMatch.status = 'ready';
         const replacedProfile = nativeProfile ? existingMatch.nativeProfile : undefined;
         if (nativeProfile) existingMatch.nativeProfile = nativeProfile;
+        existingMatch.verification = undefined;
+        const verifyNotice = recordVerification(existingMatch, loginError);
         await writeState(state);
         // The profile this login replaces holds the stale credentials; nothing
         // references it any more, so it goes rather than lingering on disk.
@@ -259,7 +261,7 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
           await purgeAccountProfile({ nativeProfile: replacedProfile }, state.accounts).catch(() => undefined);
         }
         emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });
-        announceVerification(existingMatch.label, loginError);
+        if (verifyNotice) emitHarnessOutput({ panel: 'error', message: verifyNotice });
         return existingMatch.label;
       }
       accountLabel = derived;
@@ -272,13 +274,16 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   // matched an unrelated account, the push was skipped, and "connected" was
   // still announced. The isolated profile directory it had just built was
   // left orphaned, once per attempt.
+  let verifyNotice: string | undefined;
   if (!state.accounts.some((account) => account.provider === harness.provider
     && account.label.toLowerCase() === accountLabel.toLowerCase())) {
-    state.accounts.push({ id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) });
+    const created: AiHarnessAccount = { id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) };
+    verifyNotice = recordVerification(created, loginError);
+    state.accounts.push(created);
     await writeState(state);
   }
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
-  announceVerification(accountLabel, loginError);
+  if (verifyNotice) emitHarnessOutput({ panel: 'error', message: verifyNotice });
   return accountLabel;
 }
 
@@ -334,10 +339,12 @@ export async function aiAccountLogout(labelOrId: string): Promise<void> {
 /** A login can succeed while the vendor still refuses to serve the account
  * until it is verified (agy: "Verify your account to continue"). The sign-in
  * is kept, but "connected" alone leaves the user to discover the block on the
- * first turn, so say what to do about it now. */
-function announceVerification(label: string, loginError: unknown): void {
-  const hint = loginError ? accountVerificationHint(label, loginError) : undefined;
-  if (hint) emitHarnessOutput({ panel: 'error', message: hint });
+ * first turn, so record it on the account and say what to do about it now. */
+function recordVerification(account: AiHarnessAccount, loginError: unknown): string | undefined {
+  const verification = loginError ? accountVerification(loginError) : undefined;
+  if (!verification) return undefined;
+  account.verification = { ...verification, at: new Date().toISOString() };
+  return verificationNotice(verification);
 }
 
 const loginStatusCache = new Map<string, { at: number; needsLogin: boolean }>();

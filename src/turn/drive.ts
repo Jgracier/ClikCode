@@ -9,7 +9,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountSwitchNotice, accountSwitchPhase, accountVerificationHint } from './failover.js';
+import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice } from './failover.js';
 import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir, open } from 'node:fs/promises';
@@ -593,8 +593,12 @@ export async function aiSessionSend(
         // Say why it moved. Switching happens for any failure now, so calling
         // every one of them "quota reached" would misreport a crash as a
         // spent plan.
-        const verifyHint = failureKind === 'account-ineligible' ? accountVerificationHint(account.label, failure) : undefined;
-        if (verifyHint) prompter?.activity(chalk.yellow(verifyHint));
+        const verification = failureKind === 'account-ineligible' ? accountVerification(failure) : undefined;
+        if (verification) {
+          account.verification = { ...verification, at: new Date().toISOString() };
+          await checkpoint.persistNow();
+          prompter?.activity(chalk.yellow(verificationNotice(verification)));
+        }
         prompter?.activity(chalk.yellow(accountSwitchNotice(failureKind, fallback.label)));
         prompter?.phase(accountSwitchPhase(fallback.label));
         await closePersistentTransport(session.id);
@@ -668,6 +672,7 @@ export async function aiSessionSend(
         account.quotaState = 'available';
         account.quotaRetryAt = undefined;
       }
+      account.verification = undefined;
       // The harness ended the turn with a tool it never settled -- it
       // backgrounded a command and stopped. Re-drive it so it goes and reads
       // the result, instead of leaving the answer stranded in a task log and
@@ -841,6 +846,7 @@ export async function aiSessionSend(
     account.quotaState = 'available';
     account.quotaRetryAt = undefined;
   }
+  account.verification = undefined;
   session.attachments = [];
   const answer = extractSessionTitle(turn.text);
   await checkpoint.complete(answer.text);

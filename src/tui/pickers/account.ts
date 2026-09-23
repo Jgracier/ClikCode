@@ -19,6 +19,8 @@ import { refreshPlaceholderAccountLabels } from '../../harness/accounts/labels.j
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { accountPickerOptions, type ProviderAccountChoice } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
+import { hasLocalDisplay, openLoginUrl } from '../../gateway/login/url.js';
+import { verificationNotice } from '../../turn/failover.js';
 import { chooseOption } from './choose.js';
 
 export async function interactiveAccountPicker(
@@ -86,6 +88,15 @@ export async function interactiveAccountPicker(
       continue;
     }
     if (!selected || selected.kind !== 'account') return undefined;
+    // Choosing an account the vendor is holding for verification cannot work
+    // yet: send the user to the fix instead, and keep them in the list so
+    // "I've verified it" (Tab) is one step away.
+    const pending = providerAccounts.find((account) => account.id === selected.accountId)?.verification;
+    if (pending) {
+      if (pending.url && hasLocalDisplay()) openLoginUrl(pending.url);
+      rl.panel?.('Verify this account', `${verificationNotice(pending)}\n\nWhen you have finished, press Tab on it and choose “I’ve verified it”.`);
+      continue;
+    }
     await aiSessionCommand(id, `/settings account ${selected.accountId}`);
     return id;
   }
@@ -241,6 +252,11 @@ export async function manageAccountAction(rl: HarnessPrompter, accountId: string
   if (!account || !harness) return;
   if (action === 'remove') {
     await aiAccountRemove(account.id);
+    return;
+  }
+  if (action === 'verified') {
+    account.verification = undefined;
+    await writeState(state);
     return;
   }
   if (account.authKind !== 'vendor-cli') return;

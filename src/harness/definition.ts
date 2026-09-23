@@ -104,6 +104,10 @@ export interface AiHarnessAccount {
   status: 'ready' | 'needs_login' | 'offline';
   quotaState?: 'available' | 'exhausted';
   quotaRetryAt?: string;
+  /** The vendor signed this account in but will not serve it until the user
+   * verifies it (e.g. Google's "Verify your account"). A fact about the
+   * account, cleared by a turn that succeeds or by the user saying it is done. */
+  verification?: { url?: string; at: string };
   credentialRef: string;
   /** Last usage reading for this account, shared across every terminal.
    * The figure belongs to the account, not to one chat, so caching it per

@@ -202,9 +202,9 @@ describe('accountVerificationHint', () => {
     const error = Object.assign(new Error('exit 1'), {
       stderrTail: 'Eligibility check failed: Verify your account to continue.\nhttps://accounts.google.com/signin/continue?sarp=1&x=2\n',
     });
-    expect(accountVerificationHint('a@b.com', error)).toBe('Google needs verification: https://accounts.google.com/signin/continue?sarp=1&x=2');
+    expect(accountVerificationHint(error)).toBe('Google needs verification: https://accounts.google.com/signin/continue?sarp=1&x=2');
   });
   it('is silent for other failures', () => {
-    expect(accountVerificationHint('a@b.com', new Error('RESOURCE_EXHAUSTED quota reached'))).toBeUndefined();
+    expect(accountVerificationHint(new Error('RESOURCE_EXHAUSTED quota reached'))).toBeUndefined();
   });
 });
