@@ -10,10 +10,19 @@
  * The write goes through each harness's own `mcp add`, not through its config
  * file. A config format is a private detail a vendor may change between
  * releases; `mcp add` is the documented surface, and it is what validates the
- * entry. Two grammars exist, both read from real CLIs: most take the target
- * as a positional (`mcp add <name> <commandOrUrl> [args...]`, identical across
- * Claude, Gemini and Grok), while Codex requires `--url <url>` for a remote
- * server or `-- <command> [args...]` for a local one.
+ * entry. Four grammars exist, every one read off a real CLI: most take the
+ * target as a positional (`mcp add <name> <commandOrUrl> [args...]`, identical
+ * across Claude, Gemini, Grok, Qwen and Command Code), Codex requires
+ * `--url <url>` for a remote server or `-- <command> [args...]` for a local
+ * one, Copilot/Amp/Cline take a URL positionally but insist on `--` before a
+ * local command, and Hermes/Auggie name every part with a flag.
+ *
+ * A harness with an MCP manager but no recorded grammar is left out rather
+ * than guessed at. Cursor is the instructive case: it has `mcp login`, `list`,
+ * `list-tools`, `enable` and `disable` but no `add` at all, because it reads
+ * servers from `.cursor/mcp.json` and `enable` only approves one that is
+ * already written. Guessing an `add` for it would write nothing and report
+ * success.
  */
 import { captureNativeHarnessOutput } from './transport/native/command.js';
 import { nativeProfileEnvironment } from './transport/profile-environment.js';
@@ -39,8 +48,12 @@ export function isRemoteTarget(target: string): boolean {
 /** How one harness spells `mcp add`, as the catalog records it. */
 type McpAddGrammar = {
   argv: readonly string[];
-  shape: 'positional' | 'url-or-doubledash' | 'doubledash-local';
+  shape: 'positional' | 'url-or-doubledash' | 'doubledash-local' | 'named-flags';
   transportPrefix?: readonly string[];
+  urlPrefix?: readonly string[];
+  commandPrefix?: readonly string[];
+  argsPrefix?: readonly string[];
+  argsStyle?: 'list' | 'joined';
 };
 
 /** What the catalog says about this harness, or undefined when it records no
@@ -73,6 +86,20 @@ export function mcpAddArgv(
     return remote
       ? [...add.argv, ...transport, entry.name, entry.target]
       : [...add.argv, entry.name, '--', entry.target, ...(entry.args ?? [])];
+  }
+  if (add.shape === 'named-flags') {
+    // Hermes and Auggie: nothing positional but the name. Hermes documents
+    // `--args` as "must be the last option", which the name-first order below
+    // satisfies for both.
+    const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
+    if (remote) return [...add.argv, entry.name, ...transport, ...(add.urlPrefix ?? []), entry.target];
+    const args = entry.args ?? [];
+    const argsArgv = args.length && add.argsPrefix
+      // Auggie takes one pre-joined string; Hermes takes a list. Passing a
+      // list where a string is wanted silently registers only the first.
+      ? [...add.argsPrefix, ...(add.argsStyle === 'joined' ? [args.join(' ')] : args)]
+      : [];
+    return [...add.argv, entry.name, ...(add.commandPrefix ?? []), entry.target, ...argsArgv];
   }
   const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
   return [...add.argv, ...transport, entry.name, entry.target, ...(entry.args ?? [])];

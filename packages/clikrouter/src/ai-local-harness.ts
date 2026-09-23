@@ -84,16 +84,28 @@ export interface AiHarnessManagerDefinition {
   /** How this harness spells "add an MCP server", so one ClikCode-level entry
    * can be installed into every harness that has one.
    *
-   * Three shapes exist, each read from a real CLI. Most take the target as a
+   * Four shapes exist, each read from a real CLI. Most take the target as a
    * positional -- `mcp add <name> <commandOrUrl> [args...]`, identical across
-   * Claude, Gemini, Grok and Antigravity. Codex demands `--url <url>` for a
-   * remote server or `-- <command> [args...]` for a local one. Copilot, Amp
-   * and Cline take a URL positionally but need `--` before a local command. */
+   * Claude, Gemini, Grok, Antigravity, Qwen and Command Code. Codex demands
+   * `--url <url>` for a remote server or `-- <command> [args...]` for a local
+   * one. Copilot, Amp and Cline take a URL positionally but need `--` before a
+   * local command. Hermes and Auggie name every part with a flag -- the URL,
+   * the command, and its arguments each have their own -- and take nothing
+   * positionally but the server name. */
   add?: {
     argv: readonly string[];
-    shape: 'positional' | 'url-or-doubledash' | 'doubledash-local';
+    shape: 'positional' | 'url-or-doubledash' | 'doubledash-local' | 'named-flags';
     /** Flag carrying stdio|sse|http where the harness wants one stated. */
     transportPrefix?: readonly string[];
+    /** named-flags only: where the URL, the command, and its arguments go. */
+    urlPrefix?: readonly string[];
+    commandPrefix?: readonly string[];
+    argsPrefix?: readonly string[];
+    /** named-flags only. Hermes takes `--args a b c`; Auggie takes one
+     *  pre-joined string. Getting this backwards hands the server a single
+     *  argument that merely contains spaces, which fails at connect time
+     *  rather than at add time. */
+    argsStyle?: 'list' | 'joined';
   };
 }
 
@@ -756,7 +768,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('max-tool-calls', 'Maximum tool calls', 'Cumulative tool-call limit', 'safety', ['--max-tool-calls'], 'number'),
       flag('safe-mode', 'Safe mode', 'Disable context, hooks, extensions, skills, MCP, subagents, and memory', 'safety', ['--safe-mode']),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, skills: { label: 'Skills', manageArgv: ['skills'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['-t'] } }, skills: { label: 'Skills', manageArgv: ['skills'] } },
     features: ['skills', 'extensions', 'subagents', 'workflows', 'memory', 'plan mode'],
   },
   cline: {
@@ -807,6 +819,10 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   // has one: `hermes mcp add --url ...` opens an interactive prompt ("Does
   // this server require authentication?") and waits on stdin, so driving it
   // headlessly hangs the fan-out rather than failing it. Checked live.
+  auggie: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', transportPrefix: ['-t'], urlPrefix: ['-u'], commandPrefix: ['-c'], argsPrefix: ['--args'], argsStyle: 'joined' } } },
+  },
   hermes: {
     options: [
       value('provider', 'Inference provider', 'Override the inference provider', 'model', ['--provider']),
@@ -818,7 +834,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('ignore-rules', 'Ignore rules', 'Skip AGENTS.md, memory, and preloaded skills', 'safety', ['--ignore-rules']),
       flag('yolo', 'Bypass approvals', 'Bypass dangerous-command approvals', 'permissions', ['--yolo'], { dangerous: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, tools: { label: 'Tools', manageArgv: ['tools'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, tools: { label: 'Tools', manageArgv: ['tools'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
     features: ['skills', 'bundles', 'plugins', 'hooks', 'memory', 'fallback providers', 'toolsets'],
   },
   command: {
@@ -836,7 +852,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('worktree', 'Managed worktree', 'Run in an isolated managed worktree', 'session', ['--worktree'], { requiresNewSession: true }),
       flag('ephemeral', 'Ephemeral session', 'Do not persist the native session', 'session', ['--no-session'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Mods', manageArgv: ['mods'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add', '-s', 'user'], shape: 'positional', transportPrefix: ['-t'] } }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Mods', manageArgv: ['mods'] } },
     features: ['skills', 'mods', 'taste learning', 'MCP', 'managed worktrees', 'plan mode'],
   },
 };
