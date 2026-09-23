@@ -63,4 +63,20 @@ describe('which steers reach the transcript', () => {
       { id: 'steer#0#0', done: true, responseOffset: 0, lines: ['row:no offset'] },
     ]);
   });
+
+  it('matches a live steer to its durable copy by identity, not by its words', () => {
+    // "yes" sent twice is two steers. Matched by text, the second was hidden
+    // behind the first one's durable copy.
+    const result = rows({
+      durable: [{ text: 'yes', responseOffset: 1, id: 'a' }],
+      live: [{ ...live('yes', 5), id: 'a' }, { ...live('yes', 6), id: 'b' }],
+    });
+    expect(result.map((row) => row.lines[0])).toEqual(['row:yes', 'row:yes']);
+  });
+
+  it('hides the live copy once its durable one, with the same id, has landed', () => {
+    const result = rows({ durable: [{ text: 'check tests', responseOffset: 1, id: 'a' }], live: [{ ...live('check tests', 5), id: 'a' }] });
+    expect(result).toHaveLength(1);
+  });
 });
+

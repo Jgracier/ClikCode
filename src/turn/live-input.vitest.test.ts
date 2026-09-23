@@ -32,3 +32,18 @@ describe('live turn input broker', () => {
     await expect(pending).rejects.toThrow('turn ended before live input was ready');
   });
 });
+
+describe('a message keeps the id it was typed under', () => {
+  it('is steered and queued under the caller\'s id, so its durable copy matches its row', async () => {
+    const steered: string[] = [];
+    const queued: string[] = [];
+    const broker = new LiveTurnInputBroker();
+    broker.bindQueue(async (submission) => { queued.push(submission.id); });
+    broker.setSteerHandler(async (_text, submission) => { steered.push(submission.id); });
+    expect((await broker.submit('steer this', 'row-1')).submission.id).toBe('row-1');
+    broker.setSteerHandler(undefined);
+    expect((await broker.submit('queue this', 'row-2')).submission.id).toBe('row-2');
+    expect(steered).toEqual(['row-1']);
+    expect(queued).toEqual(['row-2']);
+  });
+});

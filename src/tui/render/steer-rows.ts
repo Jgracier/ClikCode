@@ -17,12 +17,12 @@
 /** Anything the live composer is tracking. Only 'steered' entries are ever
  *  drawn here; the rest are still in flight or failed. */
 export type LiveSubmission = {
-  text: string; sequence: number; responseOffset: number;
+  text: string; sequence: number; responseOffset: number; id?: string;
   state: 'sending' | 'queued' | 'steered' | 'error' | 'command';
 };
 
 /** A steer already folded into the conversation by the transcript reader. */
-export type DurableSteer = { text: string; responseOffset?: number };
+export type DurableSteer = { text: string; responseOffset?: number; id?: string };
 
 export type SteerRow = { id: string; done: true; responseOffset: number; lines: string[] };
 
@@ -46,10 +46,12 @@ export function steerTranscriptRows(input: {
     responseOffset: item.responseOffset ?? 0, lines: input.render(item.text),
   }));
   const durableTexts = new Set(durable.map((item) => item.text));
+  const durableIds = new Set(durable.flatMap((item) => (item.id ? [item.id] : [])));
   for (const item of input.live) {
     if (item.state !== 'steered') continue;
-    // Already drawn from the durable side.
-    if (durableTexts.has(item.text)) continue;
+    // Already drawn from the durable side -- by identity where both carry
+    // one, so two steers that say the same thing are still two steers.
+    if (item.id && durableIds.size ? durableIds.has(item.id) : durableTexts.has(item.text)) continue;
     if (input.materializedPendingTurn && input.retiredThisSession.has(item.text)) continue;
     rows.push({ id: `steer#${item.sequence}`, done: true, responseOffset: item.responseOffset, lines: input.render(item.text) });
   }

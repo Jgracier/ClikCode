@@ -92,7 +92,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingDraft = '';
   private waitingCursor = 0;
   private waitingSubmit?: (text: string) => Promise<LiveTurnInputResult>;
-  private waitingSubmissions: Array<{ localId: number; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command' }> = [];
+  /** `id` arrives with the answer to the submission, and is the same id its
+   * durable copy (a queued turn, a recorded steer) is stored under. */
+  private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command' }> = [];
   private waitingSubmissionId = 0;
   private timelineSequence = 0;
   private readonly waitingSubmissionWrites = new Set<Promise<void>>();
@@ -251,7 +253,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.updateWaiting();
       const write = submit(line).then((result) => {
         const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
-        if (item) item.state = result.disposition;
+        if (item) {
+          item.state = result.disposition;
+          item.id = result.submission.id;
+        }
         this.updateWaiting();
       }).catch(() => {
         const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
@@ -967,12 +972,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The stored copy wins, being the one that survives this process. Steers
     // are deduplicated against their durable copy the same way, just below.
     const storedQueuedTexts = new Set(storedQueued.map((item) => item.text));
+    const storedQueuedIds = new Set(storedQueued.map((item) => item.id));
+    // By identity once the worker has answered with one; by text only in the
+    // moment before -- when a match can only be this same message, already
+    // written. Matching by text alone showed "yes" sent twice as one row.
+    const storedCopy = (item: { id?: string; text: string }): boolean => (item.id ? storedQueuedIds.has(item.id) : storedQueuedTexts.has(item.text));
     const queuedMessages = [
       // A queued COMMAND is not a message and gets no row: it runs when the
       // turn ends and shows whatever it shows then.
       ...storedQueued.filter((item) => item.kind !== 'command')
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
-      ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedQueuedTexts.has(item.text))
+      ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedCopy(item))
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
     ];
     // The final status row is written without a trailing newline, so using

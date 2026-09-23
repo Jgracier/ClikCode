@@ -175,11 +175,13 @@ export function recordPendingActivity(session: HarnessSession, event: HarnessAct
 }
 
 export function recordPendingSteer(
-  session: HarnessSession, text: string, submittedAt: string, responseOffset: number, now: string,
+  session: HarnessSession, text: string, submittedAt: string, responseOffset: number, now: string, id?: string,
 ): void {
   const pending = session.pendingTurn;
   if (!pending || !text.trim()) return;
-  pending.steers = [...(pending.steers ?? []), { text: text.trim(), submittedAt, responseOffset: Math.max(0, responseOffset) }];
+  pending.steers = [...(pending.steers ?? []), {
+    text: text.trim(), submittedAt, responseOffset: Math.max(0, responseOffset), ...(id ? { id } : {}),
+  }];
   pending.updatedAt = now;
   session.updatedAt = now;
 }

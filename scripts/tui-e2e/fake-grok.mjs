@@ -31,8 +31,8 @@ const nextTurn = () => {
 
 if (argv.includes('--version')) { console.log('grok 9.9.9 (fake)'); process.exit(0); }
 if (argv.includes('--help')) { console.log('Usage: grok [options]\n  --reasoning-effort <EFFORT>  Reasoning effort'); process.exit(0); }
-if (argv[0] === 'models') { console.log('grok-4\ngrok-4-fast'); process.exit(0); }
-if (argv[0] === 'login' || argv[0] === 'logout' || (argv[0] === 'auth')) process.exit(0);
+if (argv[0] === 'models' || argv.includes('--list-models')) { console.log('grok-4\ngrok-4-fast'); process.exit(0); }
+if (['login', 'logout', 'auth', 'status'].includes(argv[0])) process.exit(0);
 const turn = nextTurn();
 
 const at = argv.indexOf('--session-id');
@@ -50,6 +50,25 @@ const streamBlock = async (index, text) => {
   }
   out({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: [{ type: 'text', text }] } });
 };
+
+// FAKE_FAMILY=generic speaks the shape the generic-json reader handles --
+// whole assistant messages, a tool lifecycle, a final result -- the way
+// Command Code and the other generic-json harnesses do.
+const generic = process.env.FAKE_FAMILY === 'generic';
+if (generic) {
+  for (const [index, block] of turn.blocks.entries()) {
+    await sleep(400);
+    out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: block }] } });
+    if (index < turn.blocks.length - 1) {
+      out({ type: 'event', event: { type: 'tool_running', toolCallId: `t${index}`, toolName: 'shell', description: 'git log -1 --oneline' } });
+      await sleep(600);
+      out({ type: 'event', event: { type: 'tool_completed', toolCallId: `t${index}`, toolName: 'shell', result: [{ type: 'text', text: 'abc123 fix' }] } });
+    }
+  }
+  await sleep(300);
+  out({ type: 'result', subtype: 'success', is_error: false, session_id: sessionId, result: turn.blocks[turn.blocks.length - 1] });
+  process.exit(0);
+}
 
 for (const [index, block] of turn.blocks.entries()) {
   await streamBlock(index * 2, block);

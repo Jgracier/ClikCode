@@ -74,7 +74,7 @@ export interface HarnessSession {
     activities?: string[];
     /** Additional user instructions accepted by a provider's active-turn
      * steering protocol. They are part of this turn, not future prompts. */
-    steers?: Array<{ text: string; submittedAt: string; responseOffset?: number }>;
+    steers?: Array<{ text: string; submittedAt: string; responseOffset?: number; id?: string }>;
     startedAt: string;
     updatedAt: string;
     outputStarted: boolean;
