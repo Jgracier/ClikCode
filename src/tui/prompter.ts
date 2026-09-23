@@ -25,6 +25,7 @@ import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
+import { steerTranscriptRows } from './render/steer-rows.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
@@ -997,21 +998,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const steerRows = (text: string): string[] => [
         '', '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '',
       ];
-      // A steer is drawn live, and sessionTranscriptMessages() also
-      // materializes it as a real user message; only one of the two may reach
-      // the transcript.
-      const durable = materializedPendingTurn ? [] : pending?.steers ?? [];
-      tools.push(...durable.map((item, index) => ({
-        id: `steer#${item.responseOffset ?? 0}#${index}`, done: true,
-        responseOffset: item.responseOffset ?? 0, lines: steerRows(item.text),
-      })));
-      const durableTexts = new Set(durable.map((item) => item.text));
-      tools.push(...this.waitingSubmissions
-        .filter((item) => item.state === 'steered' && !durableTexts.has(item.text)
-          && !(materializedPendingTurn && this.retiredThisSession.has(item.text)))
-        .map((item) => ({
-          id: `steer#${item.sequence}`, done: true, responseOffset: item.responseOffset, lines: steerRows(item.text),
-        })));
+      tools.push(...steerTranscriptRows({
+        durable: pending?.steers ?? [], live: this.waitingSubmissions,
+        materializedPendingTurn, retiredThisSession: this.retiredThisSession, render: steerRows,
+      }));
       return tools;
     };
     const renderBlocks = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
