@@ -57,7 +57,7 @@ export const codexPathById = new Map<string, string>();
 
 function discoveryCachePath(): string | undefined {
   // Tests that never relocated ClikCode's state must not touch the real one.
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim() && !process.env.CLIKDEPLOY_AI_HOME?.trim()) return undefined;
+  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return undefined;
   return join(stateDirectory(), 'cache', 'native-discovery.json');
 }
 

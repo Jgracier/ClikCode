@@ -1,4 +1,4 @@
-/** Wiring between ClikCode's local agent loop and the ClikDeploy Gateway.
+/** Wiring between ClikCode's local agent loop and the Gateway.
  *
  * The endpoint this talks to says what the split is, in its own header: the
  * coding-agent loop runs LOCALLY, and `/api/clikcode/v1/turn` supplies model
@@ -10,10 +10,6 @@
  * conversation store are all here (gateway-harness/), and this module is the
  * seam: it turns a ClikCode session into a GatewayHarnessTurnInput, and turns
  * the loop's callbacks back into the prompter's own transcript rows.
- *
- * Before this existed, a gateway session ran `/api/assistant/chat` instead --
- * the platform assistant, which cannot see this machine's files. That is why
- * /review and /init used to refuse on the gateway route.
  */
 import { stdout as output } from 'node:process';
 import { GatewayModelClient, ModelClientError } from '../agent/models/gateway-client.js';

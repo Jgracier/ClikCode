@@ -4,7 +4,7 @@
 // The gateway and a user's computer speak this small, provider-neutral
 // vocabulary. Provider adapters remain in the router; credentials deliberately
 // do not appear here. A BYO account is a local credential *reference*, never a
-// token that can be uploaded to or read by ClikDeploy.
+// token that can be uploaded to or read by the gateway.
 
 export type AiHarnessRoute = 'local' | 'gateway';
 export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';

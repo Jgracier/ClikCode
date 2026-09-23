@@ -7,10 +7,8 @@ import { join } from 'node:path';
 
 /** Root of all local ClikCode state. Relocatable for tests and portable installs. */
 export function stateDirectory(): string {
-  const clikCode = process.argv[1]?.includes('clikcode') || process.argv[1]?.includes('index-clikcode');
   return process.env.CLIKCODE_HOME?.trim()
-    || process.env.CLIKDEPLOY_AI_HOME?.trim()
-    || (clikCode ? join(homedir(), '.clikcode') : join(homedir(), '.clikdeploy', 'ai'));
+    || join(homedir(), '.clikcode');
 }
 
 export function sessionsDirectory(): string {

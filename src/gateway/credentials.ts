@@ -12,7 +12,6 @@ import {
   DEFAULT_GATEWAY_URL,
   GATEWAY_URL_ENV,
   GATEWAY_URL_OVERRIDE_ENV,
-  LEGACY_GATEWAY_URL_ENV,
   normalizeApiUrl,
   type AuthByUrl,
 } from '../constants.js';
@@ -22,8 +21,7 @@ import { readCanonicalAuth, writeCanonicalAuth } from './local-auth.js';
 export function getApiUrl(config: Conf): string {
   const explicitOverride =
     process.env[GATEWAY_URL_OVERRIDE_ENV] ||
-    process.env[GATEWAY_URL_ENV] ||
-    process.env[LEGACY_GATEWAY_URL_ENV];
+    process.env[GATEWAY_URL_ENV];
   if (explicitOverride) {
     return normalizeApiUrl(explicitOverride);
   }

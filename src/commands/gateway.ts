@@ -1,5 +1,5 @@
 /**
- * Slim ClikDeploy Gateway sign-in for ClikCode.
+ * Slim Gateway sign-in for ClikCode.
  *
  * Performs the same browser OAuth login as commands/auth.ts `login` with
  * `--google` / `--github`: the Gate PKCE device flow (init → open browser →
@@ -81,7 +81,7 @@ async function requestJson(
   if (!response.ok) {
     const detail = payload?.error?.message ?? payload?.error ?? payload?.message;
     throw new GatewayHttpError(
-      typeof detail === 'string' && detail ? detail : `ClikDeploy request failed with HTTP ${response.status}`,
+      typeof detail === 'string' && detail ? detail : `Gateway request failed with HTTP ${response.status}`,
       response.status
     );
   }
@@ -119,7 +119,7 @@ export async function gatewayLogin(
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Authentication failed: ${message}`);
     if (error instanceof GatewayHttpError && error.status === 401) {
-      console.error('Tip: CLIKDEPLOY_API_URL must point to the same platform you signed in to.');
+      console.error('Tip: CLIKCODE_GATEWAY_URL must point to the same platform you signed in to.');
     }
     process.exit(1);
   }

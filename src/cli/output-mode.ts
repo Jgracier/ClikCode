@@ -1,11 +1,11 @@
 import { globalFlag } from './flags.js';
 
 function isJsonOutputRequested(): boolean {
-  return globalFlag('json') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'json';
+  return globalFlag('json') || process.env.CLIKCODE_OUTPUT_MODE === 'json';
 }
 
 function isHumanOutputRequested(): boolean {
-  return globalFlag('human') || process.env.CLIKDEPLOY_OUTPUT_MODE === 'human';
+  return globalFlag('human') || process.env.CLIKCODE_OUTPUT_MODE === 'human';
 }
 
 /**

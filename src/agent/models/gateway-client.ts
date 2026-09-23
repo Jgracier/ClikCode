@@ -1,4 +1,4 @@
-/** ModelClient for the ClikDeploy Gateway turn route:
+/** ModelClient for the Gateway turn route:
  * `POST {baseUrl}/api/clikcode/v1/turn`, answered as Server-Sent Events. */
 import type { HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
@@ -143,7 +143,7 @@ export class GatewayModelClient implements ModelClient {
       });
     } catch (error) {
       if (request.signal?.aborted) throw turnCancelledError();
-      throw new ModelClientError(`Could not reach ClikDeploy Gateway: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
+      throw new ModelClientError(`Could not reach Gateway: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
     }
 
     if (!response.ok) {

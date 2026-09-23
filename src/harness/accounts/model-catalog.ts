@@ -55,7 +55,7 @@ interface ModelCatalogMemoFile {
 let memo: { path: string; data: ModelCatalogMemoFile; dirty: boolean } | undefined;
 
 function memoPath(): string | undefined {
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim() && !process.env.CLIKDEPLOY_AI_HOME?.trim()) return undefined;
+  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return undefined;
   const directory = stateDirectory();
   return directory ? join(directory, 'model-catalog.json') : undefined;
 }

@@ -2,7 +2,7 @@
   "name": "@clikcode/router",
   "version": "0.1.0",
   "private": true,
-  "description": "Provider-agnostic AI request normalization and router-selection logic: one dialect layer across ~40 providers (registry, request building, response extraction) plus the candidate-ranking algorithm. No storage, no credentials, no platform-specific business logic — those stay in the app that wires this up (see @clikdeploy/platform-domains's connectors for ClikDeploy's own Redis/Postgres-backed wiring: live latency/cost EWMAs, cooldowns, credential resolution, billing attribution).",
+  "description": "Provider-agnostic AI request normalization and router-selection logic: one dialect layer across many providers (registry, request building, response extraction) plus the candidate-ranking algorithm. No storage, no credentials, no platform-specific business logic.",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "//exports": [

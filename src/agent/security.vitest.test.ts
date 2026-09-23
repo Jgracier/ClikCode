@@ -135,7 +135,7 @@ describe('classifyCommand', () => {
 
 describe('secrets and caps', () => {
   it('scrubs credential-bearing environment variables', () => {
-    const scrubbed = scrubEnvironment({ PATH: '/bin', OPENAI_API_KEY: 'a', GH_TOKEN: 'b', MY_SECRET: 'c', DB_PASSWORD: 'd', CLIKDEPLOY_URL: 'e', clikdeploy_x: 'f', HOME: '/h', KEYBOARD: 'us', UNSET: undefined });
+    const scrubbed = scrubEnvironment({ PATH: '/bin', OPENAI_API_KEY: 'a', GH_TOKEN: 'b', MY_SECRET: 'c', DB_PASSWORD: 'd', CLIKCODE_URL: 'e', clikcode_x: 'f', HOME: '/h', KEYBOARD: 'us', UNSET: undefined });
     expect(scrubbed).toEqual({ PATH: '/bin', HOME: '/h', KEYBOARD: 'us' });
   });
 

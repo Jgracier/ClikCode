@@ -1,9 +1,7 @@
 /**
  * The on-disk gateway credential, under ClikCode's own config home.
  *
- * Writes only ever land in ~/.config/clikcode (and ~/.clikcode/api-key). Reads
- * fall back to the pre-split ClikDeploy locations so an existing login keeps
- * working; the first write after that migrates it.
+ * Writes land in ~/.config/clikcode (and ~/.clikcode/api-key).
  */
 import fs from 'fs';
 import os from 'os';
@@ -35,16 +33,8 @@ function getCanonicalAuthPaths(): { authJsonPath: string; apiKeyPath: string } {
   return { authJsonPath, apiKeyPath };
 }
 
-/** Read-only migration source: where the ClikDeploy CLI kept the same credential. */
-function getLegacyAuthPaths(): { authJsonPath: string; apiKeyPath: string } {
-  return {
-    authJsonPath: path.join(resolveConfigHome(), 'clikdeploy', 'auth.json'),
-    apiKeyPath: path.join(os.homedir(), '.clikdeploy', 'api-key'),
-  };
-}
-
 export function readCanonicalAuth(): CanonicalAuthRecord | null {
-  return readAuthFrom(getCanonicalAuthPaths()) ?? readAuthFrom(getLegacyAuthPaths());
+  return readAuthFrom(getCanonicalAuthPaths());
 }
 
 function readAuthFrom({ authJsonPath, apiKeyPath }: { authJsonPath: string; apiKeyPath: string }): CanonicalAuthRecord | null {

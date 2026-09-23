@@ -93,7 +93,7 @@ export function localApiKey(account: AiHarnessAccount): string {
 /** Starts an intentionally loopback-only harness service. It exposes no provider tokens. */
 export async function aiStart(_config: Conf, options: { port?: string }): Promise<void> {
   // The control API is optional. When no port is requested, defer entirely to
-  // the OS so ClikCode never competes with ClikDeploy or another local tool.
+  // the OS so ClikCode never competes with another local tool.
   const port = options.port === undefined ? 0 : Number(options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be an integer from 0 to 65535');
   const runtimeDirectory = join(harnessStatePath(), '..');

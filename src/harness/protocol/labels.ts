@@ -10,7 +10,7 @@ export function compactPath(path: string): string {
 }
 
 export function sessionProviderLabel(session: HarnessSession): string {
-  if (session.route === 'gateway') return 'ClikDeploy Gateway';
+  if (session.route === 'gateway') return 'Gateway';
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   return harness?.displayName ?? session.provider ?? 'Not selected';
 }

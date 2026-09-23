@@ -13,7 +13,7 @@ describe('output-mode', () => {
   });
 
   it('defaults to json mode unless human output is requested', async () => {
-    delete process.env.CLIKDEPLOY_OUTPUT_MODE;
+    delete process.env.CLIKCODE_OUTPUT_MODE;
     const mod = await import('./output-mode.js');
     expect(mod.isJsonDefaultMode()).toBe(true);
 
@@ -33,8 +33,8 @@ describe('output-mode', () => {
   describe('exit code contract', () => {
     it('fails the shell for a thrown command error, in json mode', async () => {
       vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-      delete process.env.CLIKDEPLOY_OUTPUT_MODE;
-      process.env.CLIKDEPLOY_OUTPUT_MODE = 'json';
+      delete process.env.CLIKCODE_OUTPUT_MODE;
+      process.env.CLIKCODE_OUTPUT_MODE = 'json';
       process.exitCode = 0;
       const { handleCommandError } = await import('./program.js');
       handleCommandError(new Error('host unreachable'));

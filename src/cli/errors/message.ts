@@ -105,7 +105,7 @@ function toCliErrorMessageBase(error: unknown): string {
     code === "ENOTFOUND" || code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_SOCKET" ||
     isBareFetchFailure
   ) {
-    return "ClikDeploy is temporarily unavailable (it may be deploying or restarting). Please retry in a few minutes.";
+    return "The Gateway is temporarily unavailable. Please retry in a few minutes.";
   }
   // THE decode. `problemJsonMessage` renders the catalogued title and the
   // catalogued remediation — the reason ERROR_CATALOG has a `remediation` column

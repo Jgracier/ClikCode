@@ -38,7 +38,7 @@ let memo: { path: string; data: VersionMemoFile; dirty: boolean } | undefined;
 
 function memoPath(): string | undefined {
   // Tests that never relocated ClikCode's state must not touch the real one.
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim() && !process.env.CLIKDEPLOY_AI_HOME?.trim()) return undefined;
+  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return undefined;
   const directory = stateDirectory();
   return directory ? join(directory, 'harness-versions.json') : undefined;
 }

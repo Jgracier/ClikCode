@@ -27,7 +27,7 @@ describe("AI provider registry", () => {
   it("gives every provider a model-discovery source", () => {
     for (const provider of providers) {
       // self-hosted's "models" are live ModelDeployment rows enumerated
-      // per-candidate (ai-self-hosted-candidates.ts in platform-domains) —
+      // per-candidate (in the calling application) —
       // there is no static catalog or probeable endpoint to declare here.
       if (provider.id === "self-hosted") continue;
       // Text-routable rows need a chat endpoint (or a configurable base URL).
@@ -164,7 +164,7 @@ describe("modelTokenLimits", () => {
 
   // xAI's subscription is spent through the vendor's OWN CLI and nothing else. Its CLI proxy
   // (cli-chat-proxy.grok.com) answered every bare-client turn 426 `Grok CLI version (none) is
-  // outdated` (prod, 2026-09-05) because it gates on the CLI's own version header, and api.x.ai
+  // outdated` because it gates on the CLI's own version header, and api.x.ai
   // 403s the bearer on chat — so there is no `oauthChat` (spoofing the header is not a transport)
   // and the row is 'harness', with `@xai-official/grok` baked into the worker image. The
   // load-bearing negatives: no direct surface, no unsupported-reason (it IS spendable), and the

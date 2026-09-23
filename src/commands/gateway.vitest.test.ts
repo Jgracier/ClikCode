@@ -8,6 +8,7 @@ vi.mock('../gateway/local-auth.js', () => ({
 
 import { writeCanonicalAuth, readCanonicalAuth } from '../gateway/local-auth.js';
 import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
+import { DEFAULT_GATEWAY_URL } from '../constants.js';
 import { gatewayLogin } from './gateway.js';
 
 function makeConfig(initial: Record<string, unknown> = {}) {
@@ -26,24 +27,24 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  delete process.env.CLIKDEPLOY_API_URL;
-  delete process.env.CLIKDEPLOY_API_URL_OVERRIDE;
+  delete process.env.CLIKCODE_GATEWAY_URL;
+  delete process.env.CLIKCODE_GATEWAY_URL_OVERRIDE;
 });
 
 describe('gateway-credentials', () => {
   it('defaults to the platform URL and ignores a saved localhost URL', () => {
-    expect(getApiUrl(makeConfig())).toBe('https://clikdeploy.com');
-    expect(getApiUrl(makeConfig({ apiUrl: 'http://localhost:3000/' }))).toBe('https://clikdeploy.com');
+    expect(getApiUrl(makeConfig())).toBe(DEFAULT_GATEWAY_URL);
+    expect(getApiUrl(makeConfig({ apiUrl: 'http://localhost:3000/' }))).toBe(DEFAULT_GATEWAY_URL);
     expect(getApiUrl(makeConfig({ apiUrl: 'https://self.example/' }))).toBe('https://self.example');
   });
 
   it('prefers the env override', () => {
-    process.env.CLIKDEPLOY_API_URL = 'http://localhost:3000/';
+    process.env.CLIKCODE_GATEWAY_URL = 'http://localhost:3000/';
     expect(getApiUrl(makeConfig({ apiUrl: 'https://self.example' }))).toBe('http://localhost:3000');
   });
 
   it('resolves keys: canonical for a matching or unscoped URL, then per-URL, then legacy', () => {
-    const config = makeConfig({ authByUrl: { 'https://clikdeploy.com': { apiKey: 'per-url', user: {} } }, apiKey: 'legacy' });
+    const config = makeConfig({ authByUrl: { [DEFAULT_GATEWAY_URL]: { apiKey: 'per-url', user: {} } }, apiKey: 'legacy' });
     expect(getApiKeyForUrl(config)).toBe('per-url');
     expect(getApiKeyForUrl(config, 'https://other.example')).toBe('legacy');
     vi.mocked(readCanonicalAuth).mockReturnValue({ apiUrl: 'https://other.example', apiKey: 'canon', updatedAt: '' });
@@ -63,7 +64,7 @@ describe('gatewayLogin (embedded)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       calls.push({ url: String(url), body, headers: init?.headers as Record<string, string> });
-      if (String(url).endsWith('/device/init')) return jsonResponse({ data: { flowId: 'flow-1', authUrl: 'https://clikdeploy.com/auth?flow=flow-1' } });
+      if (String(url).endsWith('/device/init')) return jsonResponse({ data: { flowId: 'flow-1', authUrl: `${DEFAULT_GATEWAY_URL}/auth?flow=flow-1` } });
       if (String(url).endsWith('/device/poll')) {
         polls += 1;
         if (polls === 1) return jsonResponse({ status: 'pending' });
@@ -80,9 +81,9 @@ describe('gatewayLogin (embedded)', () => {
     });
 
     expect(user).toEqual({ email: 'u@x.com' });
-    expect(opened).toEqual(['https://clikdeploy.com/auth?flow=flow-1']);
+    expect(opened).toEqual([`${DEFAULT_GATEWAY_URL}/auth?flow=flow-1`]);
     const init = calls[0]!;
-    expect(init.url).toBe('https://clikdeploy.com/api/gate/auth/device/init');
+    expect(init.url).toBe(`${DEFAULT_GATEWAY_URL}/api/gate/auth/device/init`);
     expect(init.body).toMatchObject({ provider: 'github', codeChallengeMethod: 'S256' });
     const poll = calls[1]!;
     expect(poll.body.flowId).toBe('flow-1');
@@ -90,8 +91,8 @@ describe('gatewayLogin (embedded)', () => {
     expect(poll.url).not.toContain(poll.body.codeVerifier);
     expect(calls.at(-1)!.headers.Authorization).toBe('Bearer ck_live');
     expect(config._store.apiKey).toBe('ck_live');
-    expect(config._store.authByUrl).toEqual({ 'https://clikdeploy.com': { apiKey: 'ck_live', user: { email: 'u@x.com' } } });
-    expect(writeCanonicalAuth).toHaveBeenCalledWith(expect.objectContaining({ apiUrl: 'https://clikdeploy.com', apiKey: 'ck_live' }));
+    expect(config._store.authByUrl).toEqual({ [DEFAULT_GATEWAY_URL]: { apiKey: 'ck_live', user: { email: 'u@x.com' } } });
+    expect(writeCanonicalAuth).toHaveBeenCalledWith(expect.objectContaining({ apiUrl: DEFAULT_GATEWAY_URL, apiKey: 'ck_live' }));
   });
 
   it('throws AUTH_EXPIRED when the flow expires and stores nothing', async () => {

@@ -24,7 +24,7 @@ describe('harness state normalization', () => {
       devicePublicKey: { kty: 'OKP' },
       accounts: [],
       sessions: [
-        { id: 'gateway', route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null, effort: 'platform-managed', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
+        { id: 'gateway', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
         { id: 'local', route: 'local', accountId: null, provider: null, model: null, effort: 'medium', permissionMode: 'workspace-write', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
       ],
       invocations: [],

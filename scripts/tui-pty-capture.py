@@ -1,9 +1,10 @@
 import os, pty, select, sys, time, fcntl, termios, struct
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sid = open('/tmp/sid.txt').read().strip()
-argv = ['node', 'apps/clikcode/dist/index.js', 'sessions', 'open', sid]
+argv = ['node', os.path.join(ROOT, 'dist/index.js'), 'sessions', 'open', sid]
 pid, fd = pty.fork()
 if pid == 0:
-    os.chdir('/home/justin-gracier/projects/clikdeploy')
+    os.chdir(ROOT)
     os.execvp(argv[0], argv)
 # Phone-ish size: 56 cols x 72 rows, matching the user's cursor.log.
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 72, 56, 0, 0))

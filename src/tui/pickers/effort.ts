@@ -12,7 +12,7 @@ export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): 
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route === 'gateway') throw new Error('ClikDeploy Gateway reasoning effort is selected by platform routing policy.');
+  if (session.route === 'gateway') throw new Error('Gateway reasoning effort is selected by platform routing policy.');
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   if (harness && !harnessSupportsEffort(harness)) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
   // What the installed harness says it accepts -- for Codex, what THIS model

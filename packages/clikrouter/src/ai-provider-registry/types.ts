@@ -614,7 +614,7 @@ export interface AiProviderSpec {
    * `max_context_length` — see probe-adapters.ts's deriveContextWindow) and
    * persists it as AiProviderModel.contextWindowTokens; the catalog feeds
    * (models.dev / LiteLLM) backfill it for models whose own vendor publishes
-   * none. platform-domains' resolveModelTokenLimits is the ONE place the two
+   * none. the calling application's token-limit resolver is the ONE place the two
    * sources are arbitrated — real per-model evidence wins, this floor stands in
    * where none exists — and ai-router-candidates.ts now attaches the merged
    * value to every routable candidate so SELECTION can refuse a model that

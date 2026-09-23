@@ -20,11 +20,11 @@ import { chooseOption } from './choose.js';
 async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<void> {
   const apiUrl = getApiUrl(config);
   if (getApiKeyForUrl(config, apiUrl)) return;
-  const provider = await chooseOption(rl, 'Sign in to ClikDeploy Gateway', [
+  const provider = await chooseOption(rl, 'Sign in to Gateway', [
     { label: 'Continue with Google', value: 'google' as const },
     { label: 'Continue with GitHub', value: 'github' as const },
   ]);
-  if (!provider) throw new Error('ClikDeploy Gateway sign-in was cancelled.');
+  if (!provider) throw new Error('Gateway sign-in was cancelled.');
   if (rl instanceof TerminalHarnessPrompter) await rl.suspend();
   try {
     await gatewayLogin(config, { google: provider === 'google', github: provider === 'github', embedded: true });
@@ -52,7 +52,7 @@ async function newGatewayConversation(config: Conf, rl: HarnessPrompter, current
   const session: HarnessSession = {
     id, conversationId: conversationIdFor(current), parentSessionId: current.id,
     handoff: { fromSessionId: current.id, fromHarness: current.nativeHarness ?? current.route, at: now },
-    route: 'gateway', accountId: null, provider: 'clikdeploy-gateway', model: null,
+    route: 'gateway', accountId: null, provider: 'gateway', model: null,
     effort: 'platform-managed', accountFailover: 'never',
     workspace: current.workspace ?? process.cwd(), name: current.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || undefined,
     ...(sessionTranscriptMessages(current).length

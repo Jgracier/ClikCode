@@ -8,10 +8,10 @@ import { sessionHarness } from './context.js';
 export function capabilitiesText(session: HarnessSession): string {
   if (session.route === 'gateway') {
     return [
-      'ClikDeploy Gateway capabilities',
+      'Gateway capabilities',
       'Inference routing: platform managed',
       'Streaming: live SSE token deltas with bounded fallback chunking',
-      'Tools: ClikDeploy capability registry and MCP bridge',
+      'Tools: Gateway capability registry and MCP bridge',
       'Permissions: authenticated server policy and confirmation gates',
       'Sessions: durable ClikCode transcript replay',
       'Models and effort: selected by Gateway routing policy',

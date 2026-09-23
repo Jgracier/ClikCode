@@ -269,7 +269,7 @@ export function classifyCommand(command: string, scope?: PathScope): CommandClas
 
 // ── environment scrubbing ────────────────────────────────────────────────────
 
-const SCRUBBED_ENV_PATTERN = /(_KEY|_TOKEN|_SECRET|PASSWORD|CLIKDEPLOY_)/i;
+const SCRUBBED_ENV_PATTERN = /(_KEY|_TOKEN|_SECRET|PASSWORD|CLIKCODE_)/i;
 
 export function scrubEnvironment(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
   const out: Record<string, string> = {};

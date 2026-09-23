@@ -1,7 +1,7 @@
 # @clikcode/router
 
 Provider-agnostic AI request normalization and router-selection logic: one
-dialect layer across 68 providers (registry, request building, response
+dialect layer across dozens of providers (registry, request building, response
 extraction) plus the candidate-ranking algorithm.
 
 ## Scope — what lives here vs. what doesn't
@@ -19,11 +19,10 @@ application instead:
 - Reading/writing Redis or a database (live latency EWMAs, cost EWMAs,
   cooldowns, durable success/failure counters, credential resolution,
   billing attribution)
-- Anything that knows what "ClikDeploy" is
+- Anything platform-specific
 
-See `@clikdeploy/platform-domains`'s `domains/connectors/` for this
-platform's own wiring: it calls into this package's pure functions and
-supplies the live signals from its own Redis/Postgres-backed stores.
+The calling application wires this package's pure functions to its own live
+signals and stores.
 
 ## Contents
 
@@ -43,10 +42,7 @@ supplies the live signals from its own Redis/Postgres-backed stores.
   `auto-budget` / `auto-frontier` (blend + explore), `budget` / `frontier`
   (lexicographic), `explicit` (pin). `ACCESS_RANK` prefers connected
   `subscription` / `subscription-harness` (0) over `free-tier` (1). The
-  metered gate lives in `buildEligibleRouterCandidates` in platform-domains,
-  not a deleted `filterAiRouteCandidatesByBilling`. Shipped agent-runtime
-  task rows default `strategy: "auto"`, `allowMetered: false`,
-  `allowOauth: true`.
+  metered gate lives in the calling application.
 
 ## Renaming
 

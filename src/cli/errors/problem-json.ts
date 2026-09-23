@@ -1,12 +1,5 @@
 /**
- * GENERATED FILE — DO NOT EDIT.
- *
- * Source:    packages/core/src/errors.ts (ERROR_CATALOG)
- *            packages/core/src/problem-json.ts (the one problem+json decoder)
- * Generator: apps/cli/scripts/generate-error-catalog.cjs
- * Guard:     src/utils/error-catalog.drift.vitest.test.ts fails if this is stale.
- *
- * Regenerate with: pnpm --filter clikdeploy-cli generate:error-catalog
+ * Error catalog and the one problem+json (RFC 7807) decoder for Gateway responses.
  */
 
 export type ErrorSeverity = 'info' | 'warning' | 'error' | 'critical';
@@ -20,110 +13,10 @@ export interface ErrorCatalogEntry {
 }
 
 export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
-  BUILDER_TIMEOUT: {
-    message: 'Image build exceeded its maximum runtime.',
-    remediation: 'Retry the deploy; if it persists, reduce build work or raise the build timeout.',
-    httpStatus: 504,
-    severity: 'error',
-    userFacing: true,
-  },
-  BUILDER_IDLE_TIMEOUT: {
-    message: 'Image build stalled with no progress before completing.',
-    remediation: 'Check builder load and network to the base-image registry, then retry.',
-    httpStatus: 504,
-    severity: 'error',
-    userFacing: true,
-  },
-  BUILDER_BUILD_FAILED: {
-    message: 'Image build failed.',
-    remediation: 'Inspect the build logs for the failing step and fix the Dockerfile/source.',
-    httpStatus: 422,
-    severity: 'error',
-    userFacing: true,
-  },
-  DEPLOY_AWAITING_REQUIRED_CHECKS: {
-    message: 'This push deploy is waiting for the required checks on its commit.',
-    remediation: 'It starts automatically when the required checks succeed, and is refused if any of them fails.',
-    httpStatus: 202,
-    severity: 'info',
-    userFacing: true,
-  },
-  SOURCE_COMMIT_UNRESOLVED: {
-    message: 'Could not resolve the commit to deploy.',
-    remediation:
-      'Check that the repository and branch (or commit) exist and that ClikDeploy can read the repository — connect the Git provider or install the GitHub App for a private repo — then deploy again.',
-    httpStatus: 422,
-    severity: 'error',
-    userFacing: true,
-  },
-  AGENT_DOCKER_OP_FAILED: {
-    message: 'A Docker operation on the target server failed.',
-    remediation: 'Verify the Docker daemon is healthy and has capacity, then retry.',
-    httpStatus: 502,
-    severity: 'error',
-    userFacing: true,
-  },
-  AGENT_UNAVAILABLE: {
-    message: 'The server agent is not reachable.',
-    remediation: 'Confirm the agent process is running and connected, then retry.',
-    httpStatus: 503,
-    severity: 'error',
-    userFacing: true,
-  },
-  DEPLOY_HEALTHCHECK_FAILED: {
-    message: 'The deployed container failed its health check.',
-    remediation: 'Review container logs and the health-check/port configuration.',
-    httpStatus: 502,
-    severity: 'error',
-    userFacing: true,
-  },
-  IMAGE_NOT_INSPECTABLE: {
-    message: 'The built image could not be inspected on the target server.',
-    remediation: 'The transfer or registry blob is likely incomplete; rebuild and redeploy.',
-    httpStatus: 502,
-    severity: 'error',
-    userFacing: true,
-  },
-  OOM_KILLED: {
-    message: 'The container was killed for exceeding its memory limit.',
-    remediation: 'Increase the memory limit or reduce the workload footprint.',
-    httpStatus: 503,
-    severity: 'error',
-    userFacing: true,
-  },
-  REGISTRY_BLOB_MISSING: {
-    message: 'A required image layer was missing from the registry.',
-    remediation: 'Re-push the base image or rebuild so all layers are re-uploaded.',
-    httpStatus: 502,
-    severity: 'error',
-    userFacing: false,
-  },
   RATE_LIMITED: {
     message: 'Rate limit exceeded.',
     remediation: 'Back off and retry after the indicated window.',
     httpStatus: 429,
-    severity: 'warning',
-    userFacing: true,
-  },
-  WORKER_NOT_CONNECTED: {
-    message: 'The deployment worker is not connected.',
-    remediation: 'Wait for the worker to reconnect, or restart it, then retry.',
-    httpStatus: 503,
-    severity: 'error',
-    userFacing: true,
-  },
-  MCP_TOOL_FAILED: {
-    message: 'An MCP tool invocation failed.',
-    remediation: 'Check the tool arguments and the upstream service, then retry.',
-    httpStatus: 502,
-    severity: 'error',
-    userFacing: true,
-  },
-  MCP_TOOL_TIMEOUT: {
-    message: 'The tool did not finish within its time budget and was cancelled.',
-    remediation:
-      'Retry, or narrow the request (a smaller time window, fewer lines, a single target) so the tool has less work to do.',
-    httpStatus: 504,
     severity: 'warning',
     userFacing: true,
   },
@@ -134,74 +27,6 @@ export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
     severity: 'warning',
     userFacing: true,
   },
-  DEPLOY_POLICY_BLOCKED: {
-    message: 'Deployment blocked by policy.',
-    remediation:
-      'Satisfy the policy that refused the deploy (e.g. make the required GitHub checks pass on the deployed commit) and retry.',
-    httpStatus: 409,
-    severity: 'warning',
-    userFacing: true,
-  },
-  SERVER_DOCKER_NOT_READY: {
-    message: 'Docker is not ready on the target server.',
-    remediation:
-      'Wait for the agent to finish setting up Docker (or fix the Docker failure it reported) and retry the deploy.',
-    httpStatus: 409,
-    severity: 'warning',
-    userFacing: true,
-  },
-  APP_DELETE_IN_PROGRESS: {
-    message: 'This app is currently being deleted.',
-    remediation: 'Wait for the delete to finish; then re-create the app if you still need it.',
-    httpStatus: 409,
-    severity: 'warning',
-    userFacing: true,
-  },
-  APP_NOT_FOUND: {
-    message: 'The requested app was not found.',
-    remediation: 'Verify the app id/name and that it belongs to your account.',
-    httpStatus: 404,
-    severity: 'error',
-    userFacing: true,
-  },
-  SERVER_NOT_FOUND: {
-    message: 'The requested server was not found.',
-    remediation:
-      'Verify the server id and that it belongs to your account, or add the server first.',
-    httpStatus: 404,
-    severity: 'error',
-    userFacing: true,
-  },
-  SOURCE_RESOLVE_FAILED: {
-    message: 'Could not resolve a deployable image or source.',
-    remediation:
-      'Check the image name/tag or source repository, supply concrete values for any template variables, then retry.',
-    httpStatus: 422,
-    severity: 'error',
-    userFacing: true,
-  },
-  DB_PROVISION_FAILED: {
-    message: 'A required database dependency did not become ready.',
-    remediation: 'Check the database container logs and resources, then retry the deploy.',
-    httpStatus: 500,
-    severity: 'error',
-    userFacing: true,
-  },
-  DOMAIN_ATTACH_FAILED: {
-    message: 'Attaching the domain/route (DNS, TLS, or reverse proxy) failed.',
-    remediation:
-      'Verify DNS points to the server and ports 80/443 are reachable, then retry.',
-    httpStatus: 502,
-    severity: 'error',
-    userFacing: true,
-  },
-  GIT_AUTH_REQUIRED: {
-    message: 'Your Git connection is missing or has expired.',
-    remediation: 'Reconnect your Git provider and try again.',
-    httpStatus: 401,
-    severity: 'warning',
-    userFacing: true,
-  },
   INTERNAL: {
     message: 'An internal error occurred.',
     remediation: 'Retry; if it persists, contact support with the trace id.',
@@ -209,24 +34,9 @@ export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
     severity: 'critical',
     userFacing: false,
   },
-
-  // ── Control-plane gate codes ───────────────────────────────────────────────
-  //
-  // These five were a SECOND code namespace: `ControlPlaneErrorCode` in
-  // apps/web/src/lib/control-plane/response.ts, six codes used by 7 of the 45
-  // /api/gate routes and by none of the other 477. A client decoding a `code`
-  // therefore had to know which of two vocabularies a route spoke, and the CLI's
-  // ERROR_CATALOG — generated from THIS table — could resolve neither the code
-  // nor a remediation for any of them.
-  //
-  // Folded in rather than deleted, because the gate routes' `{ success, data }`
-  // envelope is a real wire contract with shipped CLI versions. `cpError` is now
-  // a thin wrapper that keeps that envelope and takes its codes from here; the
-  // sixth code, `INTERNAL_ERROR`, is an alias of `INTERNAL` above and was
-  // collapsed into it.
   AUTH_REQUIRED: {
     message: 'Authentication is required for this request.',
-    remediation: 'Run `clik login`, or supply a valid API key, then retry.',
+    remediation: 'Run `clikcode gateway login`, then retry.',
     httpStatus: 401,
     severity: 'warning',
     userFacing: true,
@@ -261,47 +71,12 @@ export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
   },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Inlined verbatim from packages/core/src/problem-json.ts
-// ─────────────────────────────────────────────────────────────────────────────
-
-// =============================================================================
-// PROBLEM+JSON — the ONE decoder for the platform's HTTP error contract.
-// =============================================================================
-//
-// WHY THIS FILE EXISTS
-// --------------------
-// `toProblemJson` (errors.ts) has emitted RFC 7807 on every route that goes
-// through apps/web/src/lib/api/route-handlers.ts for a long time:
-//
-//   { type, title, status, code, traceId, remediation }
-//
-// Both first-party clients then decoded it by reading `data.error ?? data.message`
-// — two keys problem+json does not have. `detail` is the only key resembling
-// either, and `toProblemJson` omits it in production by design. So in production
-// the decode always missed and the client fell back to its transport library's
-// sentence: the CLI printed axios's "Request failed with status code 404" and
-// the MCP transport printed "Request failed (404)". `title`, `code` and the
-// ERROR_CATALOG's `remediation` — the entire point of the catalog — reached no
-// user and no model.
-//
-// THE RULE: one decoder. A client does not get to invent its own idea of where
-// the error lives in a response body. Everything the platform has ever emitted
-// as an error envelope is decoded HERE, into one shape, and nothing downstream
-// reaches into a response body for an error string again.
-//
-// ZERO IMPORTS, DELIBERATELY. apps/cli ships as a standalone npm package and
-// genuinely cannot import from `@/packages/core` (see apps/cli/src/utils/
-// error-catalog.ts). This file is therefore self-contained so the CLI's
-// generator can inline it verbatim — the catalog it needs for enrichment is
-// passed in, never imported. One source, two copies, a drift test.
-
-/** Structured, user-safe quota payload (QUOTA_EXCEEDED only — see toProblemJson). */
+/** Structured, user-safe detail payload attached to a problem. */
 export interface ProblemDetails {
   [key: string]: unknown;
 }
 
-/** RFC 7807 problem+json, as this platform emits and consumes it. */
+/** RFC 7807 problem+json, as the Gateway emits it. */
 export interface ProblemJson {
   type: string;
   title: string;
@@ -327,7 +102,7 @@ export interface ParseProblemJsonOptions {
   /**
    * ERROR_CATALOG, injected rather than imported (see the header). Supplies
    * `title`/`remediation` for envelopes that carry a code but no prose — which
-   * is every control-plane `cpError` body.
+   * is every `{ success, error }` envelope body.
    */
   catalog?: Readonly<Record<string, ProblemCatalogEntry>>;
 }
@@ -359,16 +134,13 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Decode ANY error body this platform emits into one `ProblemJson`.
+ * Decode ANY error body the Gateway emits into one `ProblemJson`.
  *
  * Recognised envelopes, in order:
  *
  *  1. RFC 7807 — `{ type, title, status, code, traceId?, remediation?, detail? }`.
- *     What `toProblemJson` emits on every route-handlers route.
- *  2. Control-plane — `{ success: false, error: { code, message, details?, traceId? } }`.
- *     What `cpError` emits on the gate routes.
- *  3. Legacy flat — `{ error: string | object }` or `{ message: string }`.
- *     What hand-rolled `NextResponse.json({ error })` routes emit.
+ *  2. Envelope — `{ success: false, error: { code, message, details?, traceId? } }`.
+ *  3. Flat — `{ error: string | object }` or `{ message: string }`.
  *
  * Returns `null` — never a guess — when the body carries no error contract at
  * all. A null answer is the caller's signal to fall back to the thrown error's
@@ -392,7 +164,7 @@ export function parseProblemJson(
     const entry = enrich(rfcCode);
     const status = num(root.status) ?? options.status ?? entry?.httpStatus ?? 500;
     const problem: ProblemJson = {
-      type: str(root.type) ?? `https://errors.clikdeploy.com/${rfcCode}`,
+      type: str(root.type) ?? `urn:clikcode:error:${rfcCode}`,
       title: rfcTitle,
       status,
       code: rfcCode,
@@ -414,14 +186,14 @@ export function parseProblemJson(
     return problem;
   }
 
-  // ── 2. Control-plane envelope ─────────────────────────────────────────────
+  // ── 2. `{ success, error }` envelope ─────────────────────────────────────────────
   const cp = root.success === false ? record(root.error) : null;
   if (cp) {
     const code = str(cp.code) ?? 'INTERNAL';
     const entry = enrich(code);
     const title = str(cp.message) ?? entry?.message ?? 'Request failed.';
     const problem: ProblemJson = {
-      type: `https://errors.clikdeploy.com/${code}`,
+      type: `urn:clikcode:error:${code}`,
       title,
       status: options.status ?? entry?.httpStatus ?? 500,
       code,
@@ -464,7 +236,7 @@ export function parseProblemJson(
   }
   const entry = enrich(code);
   const problem: ProblemJson = {
-    type: `https://errors.clikdeploy.com/${code ?? 'INTERNAL'}`,
+    type: `urn:clikcode:error:${code ?? 'INTERNAL'}`,
     title,
     status: options.status ?? entry?.httpStatus ?? 500,
     code: code ?? 'INTERNAL',
