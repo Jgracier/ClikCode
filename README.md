@@ -35,7 +35,7 @@ it. Nothing to click. You find out afterwards.
 ## Install
 
 ```sh
-npm install -g clikcode
+npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz
 ```
 
 Requires **Node.js 22.12 or newer**. Nothing to configure. You do not need any
