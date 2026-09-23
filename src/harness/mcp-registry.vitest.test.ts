@@ -156,7 +156,13 @@ describe('spelling "add this MCP server"', () => {
   it('offers nothing for a harness with no recorded grammar', () => {
     // Never guessed: a wrong argv writes a broken entry.
     expect(mcpAddArgv(grammarOf('aider'), local)).toBeUndefined();
-    // aider and pi have no MCP surface at all -- zero mentions in --help.
+    // aider, pi and cn have no MCP surface of their own to map onto. Worth
+    // stating how that was established, because a naive grep says otherwise:
+    // pi and cn DO contain the string `mcpServers`, but only inside their
+    // vendored Google GenAI SDK ("not supported in Vertex AI"), which is
+    // request-shaping for Gemini's own MCP feature and not a config surface.
+    // aider 0.86.2 has no MCP flag at all. cn can only install a server from
+    // its hub by slug, which cannot express a name + command + args.
     expect(mcpAddArgv(grammarOf('pi'), local)).toBeUndefined();
   });
 

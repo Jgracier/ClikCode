@@ -158,6 +158,17 @@ export interface AiHarnessManagerDefinition {
     file: string;
     /** The object key holding the name -> server map. */
     key: string;
+    /** Default json. `yaml` is written through a document parse so the
+     *  user's comments and formatting survive -- a vendor config is their
+     *  file, and losing their provider settings to gain one MCP server would
+     *  be a bad trade. */
+    format?: 'json' | 'yaml';
+    /** How ONE server is spelled in this vendor's file. `mcp-servers` is the
+     *  common `{ command, args } | { url }` convention. `goose-extension` is
+     *  Goose's own shape, verified by writing it and reading it back with
+     *  `goose info -v`: { name, type: stdio|streamable_http, cmd + args | uri,
+     *  enabled }. */
+    entryShape?: 'mcp-servers' | 'goose-extension';
   };
 }
 
@@ -702,7 +713,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('with-builtin', 'Built-in extensions', 'Built-in extensions enabled for the run', 'tools', ['--with-builtin'], 'string-list'),
       flag('ephemeral', 'Ephemeral session', 'Do not store the Goose session', 'session', ['--no-session'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'Extensions and MCP', manageArgv: ['configure'] }, skills: { label: 'Skills', listArgv: ['skills', 'list'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['configure'], configFile: { homeRelativeDir: ['.config', 'goose'], file: 'config.yaml', key: 'extensions', format: 'yaml', entryShape: 'goose-extension' } }, skills: { label: 'Skills', listArgv: ['skills', 'list'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['extensions', 'recipes', 'ACP', 'scheduled recipes', 'session export'],
   },
   // MCP surfaces read from each CLI's own --help on a real install. These
