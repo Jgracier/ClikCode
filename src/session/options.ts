@@ -281,7 +281,7 @@ export function providerPickerOptions(
   // ones still sort to the top, which is what the split was really for.
   const visible = ordered;
   return [{
-    label: 'ClikDeploy Gateway',
+    label: 'Gateway',
     detail: `· ${gatewayConnected ? 'connected' : 'sign in with OAuth'}${session.route === 'gateway' ? ' · current' : ''}`,
     value: { kind: 'gateway' },
   }, ...visible.map(({ harness, inspection }) => ({
@@ -318,7 +318,15 @@ function providerAccountPickerOptions(
         : { label: 'Remove', value: 'remove' };
       return {
         label: account.label,
-        detail: `${usage ? `· ${usage} ` : usagePending ? '· checking usage… ' : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status === 'needs_login' ? `· ${chalk.yellow('needs reauthentication')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.verification ? `· ${chalk.yellow('needs verification')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(Tab for options)')}` : ''}`.trim(),
+        detail: [
+          usage ? `· ${usage}` : usagePending ? '· checking…' : '',
+          account.authKind === 'api-key' ? '· API' : '',
+          account.status === 'needs_login' ? `· ${chalk.yellow('reauth')}` : '',
+          account.quotaState === 'exhausted' ? `· ${chalk.yellow('out of usage')}` : '',
+          account.verification ? `· ${chalk.yellow('verify')}` : '',
+          account.id === session.accountId ? '· current' : '',
+          actions.length ? chalk.dim('(Tab)') : '',
+        ].filter(Boolean).join(' '),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
         actions,
         deleteAction,

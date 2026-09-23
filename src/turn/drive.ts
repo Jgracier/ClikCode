@@ -899,7 +899,7 @@ export async function aiGatewaySessionSend(
   if (titleStream) session.titleAttempts = (session.titleAttempts ?? 0) + 1;
   const baseUrl = getApiUrl(config).replace(/\/$/, '');
   const apiKey = getApiKeyForUrl(config, baseUrl);
-  if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
+  if (!apiKey) throw new Error(`Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
@@ -918,7 +918,7 @@ export async function aiGatewaySessionSend(
     if (harnessTurn.isError) throw new Error(harnessTurn.text || 'gateway harness turn failed');
     const harnessInvocation = {
       id: randomUUID(), sessionId: session.id, accountId: 'gateway',
-      provider: session.provider ?? 'clikdeploy-gateway', ...(session.model ? { model: session.model } : {}),
+      provider: session.provider ?? 'gateway', ...(session.model ? { model: session.model } : {}),
       at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
     };
     state.invocations.push(harnessInvocation);
@@ -928,7 +928,7 @@ export async function aiGatewaySessionSend(
     await nameSession(session, { title: titleStream?.title ?? named.title });
     if (!prompter) {
       emitHarnessOutput({
-        session, text: named.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation: harnessInvocation,
+        session, text: named.text, usage: { attributedBy: 'gateway' }, invocation: harnessInvocation,
       });
     }
     await checkpoint.flush();
@@ -984,7 +984,7 @@ export async function aiGatewaySessionSend(
           }
         }
         // `kind`/`tool` are real, additive fields on the wire protocol
-        // (apps/web's chat-stream.ts / assistant/chat route) mapping the
+        // (the assistant chat route) mapping the
         // backend's own `{ status: 'thinking' }` / `{ status: 'tool_call',
         // tool }` into the same canonical shape native harnesses' own
         // parsers produce, so a Gateway tool call's *activity log line*
@@ -1023,14 +1023,14 @@ export async function aiGatewaySessionSend(
     if (!reply) reply = gatewayNotice;
   }
   if (!reply) throw new Error('gateway AI response contained no text');
-  const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'clikdeploy-gateway', ...(session.model ? { model: session.model } : {}), at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
+  const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'gateway', ...(session.model ? { model: session.model } : {}), at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
   session.attachments = [];
   const answered = extractSessionTitle(reply);
   await checkpoint.complete(answered.text);
   await nameSession(session, { title: titleStream?.title ?? answered.title });
   if (wroteDelta) output.write('\n\n');
-  else if (!prompter) emitHarnessOutput({ session, text: answered.text, usage: { attributedBy: 'clikdeploy-gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
+  else if (!prompter) emitHarnessOutput({ session, text: answered.text, usage: { attributedBy: 'gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
   } finally {
     await checkpoint.flush();
   }

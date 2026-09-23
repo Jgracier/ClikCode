@@ -1252,7 +1252,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // Not in the conversation: a row there is anchored at the offset where
       // the tool STARTED, which pins every later paragraph into the repainted
       // region and parks the call above the composer for the whole turn --
-      // a regression the monorepo's live-tools test covers, and caught. The
+      // a regression the live-tools test covers, and caught. The
       // footer has no anchor, so this costs nothing structurally.
       //
       // The band below says only what KIND of work it is; the label lives
