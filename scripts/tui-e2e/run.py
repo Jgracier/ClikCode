@@ -55,6 +55,12 @@ SCENARIOS = {
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.',
                   'also look at the tests', 'Queued one answered now.'],
     },
+    'generic-json-two-blocks': {
+        'harness': 'cmdc', 'family': 'generic',
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 4)],
+        'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
+    },
     'model-changed-mid-answer': {
         'turns': [TWO_BLOCKS],
         'steps': [
@@ -71,13 +77,15 @@ def run(name, spec, entry, keep):
     root = tempfile.mkdtemp(prefix=f'clikcode-e2e-{name}-')
     home, state, fakebin, workspace = (os.path.join(root, part) for part in ('home', 'state', 'bin', 'work'))
     for path in (home, state, fakebin, workspace): os.makedirs(path)
-    shutil.copy(os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-grok.mjs'), os.path.join(fakebin, 'grok'))
-    os.chmod(os.path.join(fakebin, 'grok'), 0o755)
+    binary = spec.get('harness', 'grok')
+    shutil.copy(os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-grok.mjs'), os.path.join(fakebin, binary))
+    os.chmod(os.path.join(fakebin, binary), 0o755)
     node = os.path.realpath(shutil.which('node'))
     env = {
         'PATH': ':'.join([fakebin, os.path.dirname(node), '/usr/bin', '/bin']),
         'HOME': home, 'CLIKCODE_HOME': state, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
         'FAKE_TURNS': json.dumps(spec['turns']), 'FAKE_STATE': os.path.join(root, 'turn-counter'),
+        'FAKE_FAMILY': spec.get('family', 'claude'),
     }
     pid, fd = pty.fork()
     if pid == 0:

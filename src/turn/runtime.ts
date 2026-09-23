@@ -294,7 +294,7 @@ export class DurableTurnCheckpoint {
   async steer(submission: LiveTurnSubmission): Promise<void> {
     recordPendingSteer(
       this.session, submission.text, submission.submittedAt,
-      this.session.pendingTurn?.response?.length ?? 0, new Date().toISOString(),
+      this.session.pendingTurn?.response?.length ?? 0, new Date().toISOString(), submission.id,
     );
     await this.persistNow();
   }

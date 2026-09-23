@@ -191,7 +191,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         return;
       }
       try {
-        const result = await activeLiveInput.submit(command.text);
+        const result = await activeLiveInput.submit(command.text, command.id);
         answer(result.disposition === 'steered' ? 'steered' : 'queued');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

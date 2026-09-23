@@ -8,14 +8,23 @@ import { nativeUsageFromValue, type NativeTurnUsage } from '../protocol/turn-usa
 
 interface NativeResponseUpdate { text: string; mode: 'append' | 'replace' }
 type Json = Record<string, unknown>;
-type ResponseParser = (value: Json, harness: AiLocalHarnessDefinition) => NativeResponseUpdate | undefined;
+type ResponseParser = (value: Json, harness: AiLocalHarnessDefinition, turn?: StreamState) => NativeResponseUpdate | undefined;
 
 /** What the live region already holds for one running turn. Two vendor
  * behaviours cannot be handled one line at a time: Claude's text blocks arrive
  * with no separator across a tool call, and Cursor re-sends each streamed
- * segment as one full message. Keyed by harness + the stream's own session id,
- * reset by the stream's init record and dropped at its result record. */
-interface StreamState {
+ * segment as one full message.
+ *
+ * Owned by the TURN: the transport creates one per attempt (createStreamState)
+ * and hands it down with every line. It used to be a module-level map keyed by
+ * harness + the record's own `session_id` -- which vendors put on SOME records
+ * only. A generic harness whose text records carry none and whose `result`
+ * carries one had its state split in two, so the final result looked like the
+ * first text of a fresh stream and was appended again; and with no init record
+ * to reset it, one turn's state leaked into the next. The keyed map remains
+ * only as the fallback for a caller with no turn to give (a single line parsed
+ * on its own). */
+export interface StreamState {
   /** Any assistant text has been emitted this turn. */
   hasText: boolean;
   /** Real text deltas were seen, so whole-message records are repeats. */
@@ -25,6 +34,8 @@ interface StreamState {
   segmentChunks: number;
   /** A tool call happened since the last text; the next text starts a paragraph. */
   needsSeparator: boolean;
+  /** What has been shown so far already ends on a blank line. */
+  atParagraph?: boolean;
 }
 const streamStates = new Map<string, StreamState>();
 const MAX_STREAM_STATES = 32;
@@ -41,6 +52,16 @@ function streamState(harness: AiLocalHarnessDefinition, value: Json): StreamStat
   }
   if (value.type === 'result') streamStates.delete(key);
   return state;
+}
+
+/** A fresh state for one turn attempt. */
+export function createStreamState(): StreamState {
+  return { hasText: false, sawDeltas: false, segment: '', segmentChunks: 0, needsSeparator: false };
+}
+
+/** The turn's own state when there is one; the keyed fallback otherwise. */
+function stateFor(harness: AiLocalHarnessDefinition, value: Json, turn: StreamState | undefined): StreamState {
+  return turn ?? streamState(harness, value);
 }
 
 /** Forget all per-turn streaming state (tests; or before reusing a session id
@@ -72,10 +93,10 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
     return step?.step_type === 'agent_response' && typeof step.text_delta === 'string' && step.text_delta
       ? { text: step.text_delta, mode: 'append' } : undefined;
   },
-  claude: (value, harness) => {
+  claude: (value, harness, turn) => {
     // A subagent's words are its own, not the reply being written.
     if (typeof value.parent_tool_use_id === 'string' && value.parent_tool_use_id) return undefined;
-    const state = streamState(harness, value);
+    const state = stateFor(harness, value, turn);
     if (value.type === 'stream_event') {
       const event = object(value.event);
       const block = object(event?.content_block);
@@ -106,8 +127,8 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
   // -- before each tool call (timestamp_ms + model_call_id) and once more at
   // the end (no timestamp_ms). Appending those repeats printed every segment
   // twice. Without partial output only the full records exist.
-  cursor: (value, harness) => {
-    const state = streamState(harness, value);
+  cursor: (value, harness, turn) => {
+    const state = stateFor(harness, value, turn);
     if (value.type === 'tool_call') {
       if (state.hasText) state.needsSeparator = true;
       return undefined;
@@ -166,14 +187,22 @@ const stringValue = (...candidates: unknown[]): string | undefined =>
  * Streamed text is presentation only: the persisted answer is always
  * re-extracted from the complete stdout by nativeTurnResult, so a mismatch
  * here costs a blank live region, never a wrong transcript. */
-const genericParser: ResponseParser = (value, harness) => {
+const genericParser: ResponseParser = (value, harness, turn) => {
   const envelope = object(value.event) ?? value;
   const type = typeof envelope.type === 'string' ? envelope.type : '';
   if (NON_ASSISTANT_TYPE.test(type) || envelope.role === 'user') return undefined;
-  const state = streamState(harness, value);
+  const state = stateFor(harness, value, turn);
   const shown = (update: NativeResponseUpdate): NativeResponseUpdate => {
     if (update.text.trim()) state.hasText = true;
+    state.atParagraph = /\n\s*\n\s*$/.test(update.text);
     return update;
+  };
+  /** A whole message after earlier text is a new paragraph -- the same rule
+   * the Claude reader applies to a new text block. Joined bare, two messages
+   * either side of a tool call read "Checking first.The commit is live." */
+  const message = (text: string): NativeResponseUpdate => {
+    const separator = state.hasText && !state.atParagraph && !/^\s*\n/.test(text) ? '\n\n' : '';
+    return shown({ text: `${separator}${text}`, mode: 'append' });
   };
   const delta = object(envelope.delta);
   if (typeof delta?.text === 'string' && delta.text) return shown({ text: delta.text, mode: 'append' });
@@ -181,14 +210,14 @@ const genericParser: ResponseParser = (value, harness) => {
   if (item && ASSISTANT_TEXT_TYPE.test(String(item.type ?? '')) && typeof item.text === 'string' && item.text) {
     return shown({ text: `${item.text}\n\n`, mode: 'append' });
   }
-  const message = object(envelope.message);
-  if (message && (message.role === undefined || message.role === 'assistant')) {
-    const text = contentText(message.content) || stringValue(message.content, message.text);
-    if (text) return shown({ text, mode: 'append' });
+  const envelopeMessage = object(envelope.message);
+  if (envelopeMessage && (envelopeMessage.role === undefined || envelopeMessage.role === 'assistant')) {
+    const text = contentText(envelopeMessage.content) || stringValue(envelopeMessage.content, envelopeMessage.text);
+    if (text) return message(text);
   }
   if (ASSISTANT_TEXT_TYPE.test(type)) {
     const text = contentText(envelope.content) || stringValue(envelope.text, object(envelope.part)?.text, envelope.content);
-    if (text) return shown({ text, mode: 'append' });
+    if (text) return message(text);
   }
   if (TERMINAL_RESULT_TYPE.test(type)) {
     // The final report is the answer only when nothing else carried it. After
@@ -219,28 +248,28 @@ const genericParser: ResponseParser = (value, harness) => {
  * Declaring the family is now enough; no harness needs an entry of its own to
  * reuse a parser. */
 export const parsersByFamily: Readonly<Record<string, ResponseParser>> = {
-  'claude-stream-json': (value, harness) => parsers.claude!(value, harness),
-  'opencode-json': (value, harness) => parsers.opencode!(value, harness),
-  'cursor-stream-json': (value, harness) => parsers.cursor!(value, harness),
-  'cline-json': (value, harness) => parsers.cline!(value, harness),
-  'pi-json': (value, harness) => parsers.pi!(value, harness),
-  antigravity: (value, harness) => parsers.antigravity!(value, harness),
-  goose: (value, harness) => parsers.goose!(value, harness),
+  'claude-stream-json': (value, harness, turn) => parsers.claude!(value, harness, turn),
+  'opencode-json': (value, harness, turn) => parsers.opencode!(value, harness, turn),
+  'cursor-stream-json': (value, harness, turn) => parsers.cursor!(value, harness, turn),
+  'cline-json': (value, harness, turn) => parsers.cline!(value, harness, turn),
+  'pi-json': (value, harness, turn) => parsers.pi!(value, harness, turn),
+  antigravity: (value, harness, turn) => parsers.antigravity!(value, harness, turn),
+  goose: (value, harness, turn) => parsers.goose!(value, harness, turn),
 };
 
 /** The response update carried by one already-parsed record. */
-function nativeResponseUpdateFromValue(harness: AiLocalHarnessDefinition, value: unknown): NativeResponseUpdate | undefined {
+function nativeResponseUpdateFromValue(harness: AiLocalHarnessDefinition, value: unknown, turn?: StreamState): NativeResponseUpdate | undefined {
   const record = object(value);
   if (!record || Array.isArray(value)) return undefined;
   // Command first, so a harness can still have a parser of its very own.
   const parser = parsers[harness.command]
     ?? (harness.parser ? parsersByFamily[harness.parser] : undefined)
     ?? genericParser;
-  return parser(record, harness);
+  return parser(record, harness, turn);
 }
 
-export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText: string): NativeResponseUpdate | undefined {
-  return parseHarnessLine(harness, lineText).response;
+export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText: string, turn?: StreamState): NativeResponseUpdate | undefined {
+  return parseHarnessLine(harness, lineText, turn).response;
 }
 
 export interface HarnessLineError { message: string; statusCode?: number; kind?: string }
@@ -279,7 +308,7 @@ function lineError(value: Json): HarnessLineError | undefined {
  * loop used to parse each line once per question it asked of it (response,
  * phase, activity, usage): four parses of what can be a multi-megabyte tool
  * result record. */
-export function parseHarnessLine(harness: AiLocalHarnessDefinition, lineText: string): ParsedHarnessLine {
+export function parseHarnessLine(harness: AiLocalHarnessDefinition, lineText: string, turn?: StreamState): ParsedHarnessLine {
   // Plain-text harnesses print the answer itself and nativeTurnResult returns
   // that same stdout, so echoing each line live cannot diverge from what is
   // ultimately persisted. Without this they show nothing at all until the turn
@@ -298,12 +327,12 @@ export function parseHarnessLine(harness: AiLocalHarnessDefinition, lineText: st
     // is the answer rather than a swallowed failure.
     return {};
   }
-  return parseHarnessValue(harness, value);
+  return parseHarnessValue(harness, value, turn);
 }
 
 /** parseHarnessLine for a record the caller has already parsed. */
-function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Record<string, unknown>): ParsedHarnessLine {
-  const response = nativeResponseUpdateFromValue(harness, value);
+function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Record<string, unknown>, turn?: StreamState): ParsedHarnessLine {
+  const response = nativeResponseUpdateFromValue(harness, value, turn);
   const activities = parseNativeActivityEventsFromValue(harness, value);
   const phase = nativeActivityPhaseFromValue(harness, value);
   const usage = nativeUsageFromValue(value);

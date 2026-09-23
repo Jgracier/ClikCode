@@ -7,6 +7,7 @@
  * What differs is only where the reply comes from -- a local harness over one
  * of four transports, or the gateway.
  */
+import { createStreamState } from '../harness/events/adapters.js';
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
 import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice } from './failover.js';
@@ -315,6 +316,10 @@ export async function aiSessionSend(
           checkpoint.touch();
         };
         const idle = createTurnIdleController();
+        // One stream position per attempt: a retry is a new response, and
+        // a vendor's per-record session ids must not decide which records
+        // belong together (see adapters.ts StreamState).
+        const stream = createStreamState();
         turnOutput = await captureNativeHarnessTurn(cliHarness, argv, environment, {
           cwd: session.workspace,
           signal,
@@ -340,7 +345,7 @@ export async function aiSessionSend(
                 noteTurnActivityEvent(idle, event);
                 onActivity(event);
               },
-            });
+            }, stream);
             if (outcome.live) confirmNativeSession();
             if (outcome.error) streamError = outcome.error;
             // The harness reports its own quota on this stream. Reading it here
@@ -401,9 +406,11 @@ export async function aiSessionSend(
                 ...sharedObserver,
                 // Steering is genuinely codex-only: it is the one transport
                 // that accepts input mid-turn.
-                onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText) => {
+                onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
                   await handler(steerText);
-                  await checkpoint.steer({ id: randomUUID(), text: steerText, submittedAt: new Date().toISOString() });
+                  // Recorded under the id the composer shows it by, so the
+                  // durable steer matches its row by identity.
+                  await checkpoint.steer(submission);
                 } : undefined),
               };
               result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);

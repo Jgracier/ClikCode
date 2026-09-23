@@ -16,7 +16,7 @@ export interface LiveTurnInputResult {
 }
 
 type QueueHandler = (submission: LiveTurnSubmission) => Promise<void>;
-type SteerHandler = (text: string) => Promise<void>;
+type SteerHandler = (text: string, submission: LiveTurnSubmission) => Promise<void>;
 type LateSteerHandler = (submission: LiveTurnSubmission) => void;
 
 /** How long a native steer may take before the message is queued instead. */
@@ -73,10 +73,14 @@ export class LiveTurnInputBroker {
     }
   }
 
-  async submit(raw: string): Promise<LiveTurnInputResult> {
+  /** `id` is the one the composer already shows the message under, so the
+   * durable copy -- a queued turn, or a steer recorded on the turn -- can be
+   * matched to that row by identity instead of by its words. Two messages
+   * that say the same thing are still two messages. */
+  async submit(raw: string, id: string = randomUUID()): Promise<LiveTurnInputResult> {
     const text = raw.trim();
     if (!text) throw new Error('message is empty');
-    const submission = { id: randomUUID(), text, submittedAt: new Date().toISOString() };
+    const submission = { id, text, submittedAt: new Date().toISOString() };
     await this.queueReady;
     const steer = this.steerHandler;
     if (steer) {
@@ -85,7 +89,7 @@ export class LiveTurnInputBroker {
       // nobody settles: the composer has already cleared it. Race the steer,
       // and on timeout fall through to the durable queue.
       let timer: NodeJS.Timeout | undefined;
-      const attempt = Promise.resolve().then(() => steer(text));
+      const attempt = Promise.resolve().then(() => steer(text, submission));
       try {
         const outcome = await (this.steerTimeoutMs > 0
           ? Promise.race([attempt, new Promise<typeof STEER_TIMED_OUT>((resolve) => {

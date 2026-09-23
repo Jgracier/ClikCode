@@ -17,7 +17,7 @@
  * timers, session records, quota probes. Those are returned rather than
  * performed, because they belong to the turn loop and not to a line parser.
  */
-import { parseHarnessLine } from './adapters.js';
+import { parseHarnessLine, type StreamState } from './adapters.js';
 import { nativeSelfReportFromLine, type NativeSelfReport } from '../protocol/turn-usage.js';
 import type { HarnessTurnObserver } from './turn-observer.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
@@ -39,8 +39,10 @@ interface StructuredLineOutcome {
  * itself. */
 export function reportStructuredLine(
   harness: AiLocalHarnessDefinition, lineText: string, observer: HarnessTurnObserver,
+  /** This turn attempt's own stream position (adapters.ts createStreamState). */
+  turn?: StreamState,
 ): StructuredLineOutcome {
-  const parsed = parseHarnessLine(harness, lineText);
+  const parsed = parseHarnessLine(harness, lineText, turn);
   const outcome: StructuredLineOutcome = {
     live: Boolean(parsed.sessionId || parsed.response || parsed.activities?.length),
     ...(parsed.error ? { error: parsed.error } : {}),
