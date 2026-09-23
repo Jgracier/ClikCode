@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { providerImpliedBy } from './infer-provider.js';
+import { impliedHarnessCommand, providerImpliedBy } from './infer-provider.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 
 const account = (
@@ -67,5 +67,20 @@ describe('the provider a command already named', () => {
   it('derives nothing for a command whose argument says nothing about a provider', () => {
     expect(providerImpliedBy({ head: 'effort', args: 'high' }, ACCOUNTS)).toBeUndefined();
     expect(providerImpliedBy({ head: 'permissions', args: 'bypass' }, ACCOUNTS)).toBeUndefined();
+  });
+});
+
+describe('the harness a command implies', () => {
+  const harnesses: Record<string, { command: string }> = { anthropic: { command: 'claude' }, openai: { command: 'codex' } };
+  const lookup = (provider: string) => harnesses[provider];
+
+  it('is the harness of the one provider the command names', () => {
+    expect(impliedHarnessCommand({ head: 'model', args: 'claude-opus-5' }, ACCOUNTS, lookup)).toBe('claude');
+    expect(impliedHarnessCommand({ head: 'account', args: 'personal' }, ACCOUNTS, lookup)).toBe('codex');
+  });
+
+  it('is nothing when the provider is ambiguous, or has no harness', () => {
+    expect(impliedHarnessCommand({ head: 'model', args: 'shared-model' }, ACCOUNTS, lookup)).toBeUndefined();
+    expect(impliedHarnessCommand({ head: 'account', args: 'lab' }, ACCOUNTS, lookup)).toBeUndefined();
   });
 });

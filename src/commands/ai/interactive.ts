@@ -27,7 +27,7 @@ import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { commandDuringTurn, enqueueCommandLine } from '../../tui/slash/queue.js';
-import { providerImpliedBy } from '../../tui/slash/infer-provider.js';
+import { impliedHarnessCommand } from '../../tui/slash/infer-provider.js';
 import { aiHarnessSelect } from './harness.js';
 import { nativeUsageReading } from '../../harness/accounts/account-usage.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
@@ -484,8 +484,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             // its provider if exactly one configured account publishes that
             // model, and `/account work` always has. A picker there would ask
             // a question whose answer was in the question.
-            const implied = providerImpliedBy(route, commandState.accounts);
-            const impliedHarness = implied ? localHarnessForProvider(implied)?.command : undefined;
+            const impliedHarness = impliedHarnessCommand(route, commandState.accounts, localHarnessForProvider);
             if (impliedHarness) {
               await aiHarnessSelect(impliedHarness, id);
               await enqueueCommandLine(id, commandLine);

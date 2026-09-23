@@ -31,6 +31,7 @@ import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, setSess
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey } from './registry.js';
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
+import { impliedHarnessCommand } from './infer-provider.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
@@ -570,7 +571,7 @@ async function resolveLocalModelFor(
   return resolveNativeModel(harness, state.accounts.find((item) => item.id === account.id) as never);
 }
 
-export async function aiSessionCommand(id: string, input: string): Promise<string> {
+export async function aiSessionCommand(id: string, input: string, inferred = false): Promise<string> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -580,6 +581,17 @@ export async function aiSessionCommand(id: string, input: string): Promise<strin
   const route = routeSlashInput(text.startsWith('/') ? text : `/${text}`, slashRouteContextFor(session, harness));
   if (route.kind === 'command') {
     const availability = route.entry.availability(session, harness);
+    // Same as the interactive session: a command that names its provider --
+    // `/model claude-opus-5` when only one account publishes that model --
+    // selects it and runs, instead of refusing. Once only: a selection that
+    // still leaves the command unavailable is a real refusal.
+    if (!availability.available && availability.needs === 'provider' && !inferred) {
+      const implied = impliedHarnessCommand(route, state.accounts, localHarnessForProvider);
+      if (implied) {
+        await aiHarnessSelect(implied, id);
+        return aiSessionCommand(id, input, true);
+      }
+    }
     if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
     const moved = await HEADLESS_SLASH_HANDLERS[route.entry.handlerKey]({ id, state, session, head: route.entry.name, args: route.args, words: [...route.words] });
     return typeof moved === 'string' ? moved : id;
