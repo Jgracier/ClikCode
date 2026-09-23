@@ -20,7 +20,7 @@
  * observed output rather than source (the CLI ships minified), then checked
  * against three cwds chosen to pin the parts that could differ:
  *
- *   /home/justin-gracier/projects/clikcode -> home-justin-gracier-projects-clikcode
+ *   /home/user/projects/app         -> home-user-projects-app
  *   /tmp/probe/work.dir_x/A b              -> tmp-probe-work-dir-x-a-b
  *   /tmp/probe/x__y/z--w                   -> tmp-probe-x-y-z-w
  *
