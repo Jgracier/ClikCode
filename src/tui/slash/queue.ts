@@ -1,16 +1,25 @@
-/** A ClikCode slash command typed while a turn was still running.
+/** A ClikCode slash command typed while a turn is still streaming.
  *
- * It cannot simply run there and then: a picker takes the whole screen, and
- * several commands change what the turn in flight is doing. And it must not be
- * sent to the model either, which is what used to happen -- `/model` arrived
- * at the harness as the literal word "/model". So it is queued like a message
- * and dispatched by the interactive loop the moment the turn ends, as the
- * command it is, with the screen to itself.
+ * It applies at the earliest moment it can, with nothing announced:
  *
- * What counts as a command is decided HERE and not in the composer, because
- * only routeSlashInput can tell `/model` from `/etc/hosts explain this` -- it
- * needs the session, the harness and the filesystem. A line that turns out to
- * be conversation is queued as conversation, exactly as before.
+ *  - **now**, if its argument form is a pure state write -- `/model sonnet`,
+ *    `/effort high`, `/permissions plan`, `/account work`. These need no
+ *    picker and show no panel: their own handlers end in a `settings` payload,
+ *    which in the TUI is a status-line render and nothing else, so the change
+ *    simply appears where the model and mode are already shown. The running
+ *    turn keeps the model and permission mode it was spawned with -- those are
+ *    fixed in its argv and environment -- and the next turn uses the new ones.
+ *  - **at the turn boundary** for everything else, because a picker or a panel
+ *    needs the screen the answer is being written on. That is the next moment
+ *    it could run, and it runs there silently: no queued row, no notice.
+ *
+ * What it must never be is what it was: sent to the harness as the literal
+ * word "/model".
+ *
+ * What counts as a command is decided by routeSlashInput and not by the
+ * composer, because only it can tell `/model` from `/etc/hosts explain this`
+ * -- that needs the session, the harness and the filesystem. A line it calls
+ * conversation is queued as conversation, exactly as before.
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -19,12 +28,11 @@ import { writeState } from '../../session/state/write.js';
 import { enqueueSessionTurn } from '../../turn/checkpoint.js';
 import type { LiveTurnInputResult } from '../../turn/live-input.js';
 import { expandHomePath } from '../../session/attachments.js';
-import { routeSlashInput, type SlashRouteContext } from './registry.js';
+import { routeSlashInput, slashRouteAppliesDuringTurn, type SlashRouteContext } from './registry.js';
+import { aiSessionCommand } from './handlers.js';
 import { sessionHarness, slashRouteContextFor } from './context.js';
 
-/** Whether this line is ClikCode's own command, or words for the model. The
- * context is the caller's because building one needs the harness catalog;
- * the decision itself is just the router plus one rule.
+/** Whether this line is ClikCode's own command, or words for the model.
  *
  * 'native' is a line the harness itself answers as a prompt, and 'prompt' is
  * plain conversation (a real path, or something that only looked like a
@@ -36,17 +44,23 @@ export function slashLineIsCommand(line: string, context: SlashRouteContext): bo
   return route.kind !== 'prompt' && route.kind !== 'native';
 }
 
-export async function queueCommandDuringTurn(sessionId: string, line: string): Promise<LiveTurnInputResult> {
+export async function commandDuringTurn(sessionId: string, line: string): Promise<LiveTurnInputResult> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
-  const submission = {
-    id: randomUUID(), text: line, submittedAt: new Date().toISOString(),
-    ...(slashLineIsCommand(line, slashRouteContextFor(
-      session, sessionHarness(session), (path) => existsSync(expandHomePath(path)),
-    )) ? { kind: 'command' as const } : {}),
-  };
-  enqueueSessionTurn(session, submission, submission.submittedAt);
+  const route = routeSlashInput(line, slashRouteContextFor(
+    session, sessionHarness(session), (path) => existsSync(expandHomePath(path)),
+  ));
+  const submission = { id: randomUUID(), text: line, submittedAt: new Date().toISOString() };
+  if (slashRouteAppliesDuringTurn(route)) {
+    // Straight through to the same handler the composer would reach between
+    // turns. It reads state itself, so nothing here writes first.
+    await aiSessionCommand(sessionId, line);
+    return { disposition: 'command', submission };
+  }
+  const isCommand = route.kind !== 'prompt' && route.kind !== 'native';
+  const queued = { ...submission, ...(isCommand ? { kind: 'command' as const } : {}) };
+  enqueueSessionTurn(session, queued, queued.submittedAt);
   await writeState(state);
-  return { disposition: submission.kind === 'command' ? 'command' : 'queued', submission };
+  return { disposition: isCommand ? 'command' : 'queued', submission: queued };
 }

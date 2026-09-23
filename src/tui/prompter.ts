@@ -229,16 +229,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const text = this.waitingDraft.trim();
       if (!text || !this.waitingSubmit) return;
       // A slash line is ClikCode's own command and never text for the model.
-      // Handed to the caller to route (see waiting-slash.ts); a line the
-      // router decides is really conversation comes back as 'queued'.
-      const submit = commandLineTypedDuringTurn(text) && this.waitingCommand
-        ? this.waitingCommand : this.waitingSubmit;
+      // Handed to the caller to route (see waiting-slash.ts and slash/queue.ts);
+      // a line the router decides is really conversation comes back 'queued'.
+      const asCommand = Boolean(commandLineTypedDuringTurn(text)) && Boolean(this.waitingCommand);
+      const submit = asCommand ? this.waitingCommand! : this.waitingSubmit;
       this.waitingDraft = '';
       this.waitingCursor = 0;
       const localId = ++this.waitingSubmissionId;
-      this.waitingSubmissions.push({
-        localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
-      });
+      // A message gets a row, because the user needs to know where their words
+      // went. A command gets none: it either applies (and the status line it
+      // changed already shows that) or it runs at the turn boundary. A row
+      // saying so would be the announcement this is meant not to make.
+      if (!asCommand) {
+        this.waitingSubmissions.push({
+          localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
+        });
+      }
       this.updateWaiting();
       const write = submit(text).then((result) => {
         const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
@@ -474,10 +480,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.currentAccount = account;
     this.currentNotice = notice;
     // A render receives authoritative persisted state. Drop the transient
-    // stream so the just-saved assistant message is never painted twice.
-    if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
-    this.responsePaintTimer = undefined;
-    this.liveResponse = '';
+    // stream so the just-saved assistant message is never painted twice --
+    // but NOT while a turn is running, where the live answer is the one thing
+    // that is not persisted yet. A setting applied mid-turn renders the status
+    // line (see harness/output.ts), and clearing here would take the
+    // half-written answer off the screen with it.
+    if (!this.waitingLabel) {
+      if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
+      this.responsePaintTimer = undefined;
+      this.liveResponse = '';
+    }
     this.paint('', [], 0, '› ', 0);
   }
 
@@ -836,7 +848,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.paint(this.waitingDraft, matches, 0, '› ', this.waitingCursor, {
       capacity: Math.min(matches.length, 8) + 2,
-      hint: 'Enter runs it when the turn finishes · esc interrupts',
+      hint: '↵ apply · esc interrupts',
     });
   }
 
@@ -932,7 +944,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // are deduplicated against their durable copy the same way, just below.
     const storedQueuedTexts = new Set(storedQueued.map((item) => item.text));
     const queuedMessages = [
-      ...storedQueued.map((item) => ({ role: 'user' as const, content: item.text, queueState: item.kind === 'command' ? 'command' as const : 'queued' as const })),
+      // A queued COMMAND is not a message and gets no row: it runs when the
+      // turn ends and shows whatever it shows then.
+      ...storedQueued.filter((item) => item.kind !== 'command')
+        .map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
       ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedQueuedTexts.has(item.text))
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
     ];
@@ -1168,9 +1183,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // message the moment it is sent, and would then be written a second time.
       const status = message.queueState === 'steered' ? 'steered into active turn'
         : message.queueState === 'sending' ? 'submitting…'
-          : message.queueState === 'error' ? 'not sent · restored for editing'
-            : message.queueState === 'command' ? 'runs when the turn finishes'
-              : 'queued for next turn';
+          : message.queueState === 'error' ? 'not sent · restored for editing' : 'queued for next turn';
       // One row, the same separator the transcript gives every other message:
       // a message submitted mid-turn is still a message the user wrote.
       // The speaker changes once, where the queue begins: two rows there, the
