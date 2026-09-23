@@ -41,7 +41,17 @@ export const SLASH_HANDLER_KEYS = [
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
 
-interface SlashAvailability { available: boolean; reason?: string }
+interface SlashAvailability {
+  available: boolean;
+  reason?: string;
+  /** What is MISSING, when supplying it would make the command available. A
+   * caller that can ask for it should do that instead of refusing: the user
+   * typed `/model`, so wanting to choose a model is not in doubt, and
+   * "choose a provider first" is a smaller answer than the question. Absent
+   * where the answer is a real limit -- a vendor with no model selector, a
+   * gateway route whose policy is not the user's to set. */
+  needs?: 'provider';
+}
 
 interface SlashCommandEntry {
   /** Without the leading slash. */
@@ -67,7 +77,7 @@ const localOnly = (session: HarnessSession | undefined): SlashAvailability =>
 const needsHarness = (what: string) => (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
   const local = localOnly(session);
   if (!local.available) return local;
-  return harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.` };
+  return harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.`, needs: 'provider' };
 };
 /** Reads this machine's repository, which both routes can now do: the gateway
  * route runs ClikCode's own agent loop locally and asks the gateway only for
@@ -81,7 +91,7 @@ const bothRoutes = (what: string) => (
   session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined,
 ): SlashAvailability => (session?.route === 'gateway'
   ? { available: true }
-  : harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.` });
+  : harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.`, needs: 'provider' });
 
 function entry(
   name: string, group: SlashGroup, description: string,

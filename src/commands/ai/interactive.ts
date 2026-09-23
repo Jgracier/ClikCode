@@ -23,7 +23,7 @@ import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessFor
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
-import { commandDuringTurn } from '../../tui/slash/queue.js';
+import { commandDuringTurn, enqueueCommandLine } from '../../tui/slash/queue.js';
 import { nativeUsageReading } from '../../harness/accounts/account-usage.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
@@ -264,6 +264,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     while (true) {
       let line: string;
       let queuedTurnId: string | undefined;
+      /** This line was already handed to the loop once. Anything below that
+       * would hand it back must not, or a cancelled picker loops forever. */
+      let fromQueuedCommand = false;
       let activeWorkspace = process.cwd();
       // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
       // handoff, resume) closes the child it had.
@@ -287,6 +290,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         notice = undefined;
         const queued = latest.queuedTurns?.[0];
         if (queued?.kind === 'command') {
+          fromQueuedCommand = true;
           // A slash command typed while the turn was running. It runs as the
           // command it is, with the screen to itself -- which is why it waited
           // rather than running mid-stream. Consumed first: a command that
@@ -377,12 +381,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         rl.startWaiting(label);
         try { return await work(); } finally { rl.stopWaiting(); }
       };
-      const pause = async (): Promise<void> => { if (rl.render) await rl.question('Press Enter to return › '); };
-      /** The headless handler, with its output in a panel; pauses when one was shown. */
+      /** The headless handler, with its output in a panel.
+       *
+       * No "Press Enter to return" any more. A panel is part of the frame the
+       * composer is drawn in (see paint()'s panel rows) and survives every
+       * repaint until the next message is sent, so the keypress bought
+       * nothing: the panel was already staying, and the prompt was one more
+       * thing to dismiss before the user could type. */
       const viaHeadless = async (text: string): Promise<InteractiveSlashOutcome> => {
-        const before = TERMINAL.panelsShown;
         const resulting = await aiSessionCommand(id, text);
-        if (TERMINAL.panelsShown > before) await pause();
         return resulting !== id ? { id: resulting } : {};
       };
       try {
@@ -437,7 +444,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             const listing = await withWaiting(`loading ${manager.label}…`, () => nativeManagerListing(commandState, commandSession, route.name));
             rl.panel?.(listing.label, listing.text);
             if (!rl.panel) emitHarnessOutput({ panel: route.name, text: `${listing.label}\n\n${listing.text}` });
-            await pause();
           } else if (manager.manageArgv && rl instanceof TerminalHarnessPrompter) {
             const selectedAccount = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
             await rl.suspend();
@@ -449,6 +455,23 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // Availability is decided BEFORE any picker opens, so `/model` on a
           // harness without a model selector says so instead of offering a list.
           const availability = route.entry.availability(commandSession, commandHarness);
+          // The one refusal worth turning into a question: the command needs a
+          // provider and none is chosen. The user typed `/model`, so wanting
+          // to choose a model is not in doubt -- offering the provider picker
+          // and then carrying on with what they typed is a better answer than
+          // "Choose a provider before choosing a model." Handed back to the
+          // loop rather than run here, so it runs against the session the
+          // picker actually produced (choosing a provider can branch the
+          // conversation) instead of the stale copy read above.
+          if (!availability.available && availability.needs === 'provider' && !fromQueuedCommand && rl.select) {
+            const chosen = await interactiveEnginePicker(config, rl, id) ?? id;
+            const chosenState = await readState();
+            if (sessionHarness(chosenState.sessions.find((item) => item.id === chosen))) {
+              await enqueueCommandLine(chosen, `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`);
+            }
+            if (chosen !== id) id = chosen;
+            continue;
+          }
           if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
           const text = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
           const { args } = route;
@@ -467,7 +490,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');
               rl.panel?.(title, rest.join('\n'));
               if (!rl.panel) emitHarnessOutput({ panel: 'capabilities', text: [title, ...rest].join('\n') });
-              await pause();
             },
             settings: async () => args ? viaHeadless(text) : { id: await interactiveSettingsPicker(config, rl, id) ?? id },
             sessions: async () => {
@@ -539,7 +561,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               const report = await withWaiting('checking harnesses…', () => doctorSummary(commandState));
               rl.panel?.('ClikCode doctor', report);
               if (!rl.panel) emitHarnessOutput({ panel: 'doctor', text: report });
-              await pause();
             },
             login: async () => {
               if (!commandHarness) throw new Error('Choose a provider before signing in.');

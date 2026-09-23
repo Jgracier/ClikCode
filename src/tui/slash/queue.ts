@@ -44,6 +44,19 @@ export function slashLineIsCommand(line: string, context: SlashRouteContext): bo
   return route.kind !== 'prompt' && route.kind !== 'native';
 }
 
+/** Hand a command line to the interactive loop, which runs it on its next
+ * pass. Used for a command that cannot run where it was typed: mid-turn
+ * (the screen belongs to the answer) or before the provider it needs was
+ * chosen (the picker has to happen first). */
+export async function enqueueCommandLine(sessionId: string, line: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) throw new Error(`AI session "${sessionId}" was not found`);
+  const submission = { id: randomUUID(), text: line, submittedAt: new Date().toISOString(), kind: 'command' as const };
+  enqueueSessionTurn(session, submission, submission.submittedAt);
+  await writeState(state);
+}
+
 export async function commandDuringTurn(sessionId: string, line: string): Promise<LiveTurnInputResult> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);

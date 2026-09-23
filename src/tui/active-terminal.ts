@@ -12,7 +12,5 @@ import type { TerminalHarnessPrompter } from './prompter.js';
 export const TERMINAL: {
   /** The prompter on screen, or undefined when output is headless. */
   active?: TerminalHarnessPrompter;
-  /** Panels emitted through the TUI; the loop pauses after a command that showed one. */
-  panelsShown: number;
-} = { panelsShown: 0 };
+} = {};
 
