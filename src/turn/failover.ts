@@ -125,9 +125,7 @@ export function accountVerificationHint(label: string, error: unknown): string |
   const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
   if (!INELIGIBLE_TEXT.test(text)) return undefined;
   const url = /https:\/\/accounts\.google\.com\/[^\s"')]+/.exec(text)?.[0];
-  return url
-    ? `${label} needs verifying with Google before it can be used: ${url}`
-    : `${label} needs verifying with its provider before it can be used`;
+  return url ? `Google needs verification: ${url}` : 'Account needs verification with its provider';
 }
 
 /** One account switch, worded the same way wherever it happens.
