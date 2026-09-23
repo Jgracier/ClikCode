@@ -30,6 +30,8 @@ import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment 
 import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, setSessionHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey } from './registry.js';
 import { modelChoicesFor } from './model-choices.js';
+import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
@@ -224,6 +226,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
     session.model = model;
+    await keepEffortValidFor(session, harness, account);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
@@ -232,7 +235,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     const value = words.join(' ').trim().toLowerCase();
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness) throw new Error('Choose a provider before setting effort.');
-    setSessionHarnessOption(session, harness, 'effort', value);
+    const account = state.accounts.find((item) => item.id === session.accountId);
+    setSessionHarnessOption(session, harness, 'effort', value, (await effortChoicesFor(harness, account, session.model)).values);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
@@ -357,7 +361,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     } else if (setting === 'effort') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!harness) throw new Error('Choose a provider before setting effort.');
-      setSessionHarnessOption(session, harness, 'effort', value);
+      const effortAccount = state.accounts.find((item) => item.id === session.accountId);
+      setSessionHarnessOption(session, harness, 'effort', value, (await effortChoicesFor(harness, effortAccount, session.model)).values);
     } else if (setting === 'permissions' || setting === 'permission') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!harness) throw new Error('Choose a provider before setting permissions.');
@@ -533,6 +538,25 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   undo: async ({ session }) => { throw new Error(undoUnavailableMessage(session)); },
 };
+
+/** Moving to a model that does not accept the session's effort level adjusts
+ * the level rather than leaving a turn to be rejected. Codex publishes levels
+ * per model -- gpt-6-luna stops at `max` where gpt-6-sol has `ultra` -- so a
+ * model switch can make a valid setting invalid without the user touching it.
+ * The model's own published default is the assumption to make; where there is
+ * none, the level is dropped and the vendor applies its own default, rather
+ * than ClikCode guessing an order of levels it does not own. Never a question
+ * and never a notice: the status line shows the level in use. */
+async function keepEffortValidFor(
+  session: HarnessSession, harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined,
+): Promise<void> {
+  if (!session.effort || !harness.effortArgvPrefix) return;
+  const choices = await effortChoicesFor(harness, account, session.model);
+  if (!choices.values.length || choices.values.includes(session.effort)) return;
+  // An empty level sends no effort flag at all (every argv builder checks
+  // `input.effort &&`), which is exactly "the vendor's own default".
+  session.effort = choices.default ?? '';
+}
 
 /** A real model for a local account's harness, or undefined when its harness
  * publishes none. Shared by both leavingGateway branches so they cannot

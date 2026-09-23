@@ -151,9 +151,16 @@ export function parseHarnessOption(option: AiHarnessOptionDefinition, raw: strin
   return value;
 }
 
-export function setSessionHarnessOption(session: HarnessSession, harness: AiLocalHarnessDefinition, id: string, raw: string): void {
-  const option = optionForHarness(harness, id);
-  if (!option) throw new Error(`${harness.displayName} does not support option "${id}"`);
+export function setSessionHarnessOption(
+  session: HarnessSession, harness: AiLocalHarnessDefinition, id: string, raw: string,
+  /** The values the installed harness itself accepts, where it says -- see
+   * harness/accounts/effort-choices.ts. They replace the catalog's list, which
+   * is the fallback for harnesses that publish none, not the authority. */
+  choices?: readonly string[],
+): void {
+  const declared = optionForHarness(harness, id);
+  if (!declared) throw new Error(`${harness.displayName} does not support option "${id}"`);
+  const option = choices?.length && declared.kind === 'enum' ? { ...declared, values: [...choices] } : declared;
   const parsed = parseHarnessOption(option, raw);
   // Keyed by the option the harness actually publishes, never by the id the
   // caller asked for: a value stored under `add-dir` on a harness that spells

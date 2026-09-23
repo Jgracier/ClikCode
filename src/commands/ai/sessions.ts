@@ -1,6 +1,7 @@
 /** `clikcode session`: creating, listing, showing, closing and leaving a
  * session, and the policy each kind of session starts with. */
 
+import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { randomUUID } from 'node:crypto';
 import { emitJson } from '../../cli/structured-output.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -116,7 +117,8 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   if (options.effort && harness) {
     const effortOption = optionForHarness(harness, 'effort');
     if (!effortOption) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag.`);
-    parseHarnessOption(effortOption, options.effort);
+    const choices = (await effortChoicesFor(harness, account, model)).values;
+    parseHarnessOption(choices.length ? { ...effortOption, values: choices } : effortOption, options.effort);
   }
   const defaults = resolveDefaultSettings(state, provider);
   const now = new Date().toISOString();
@@ -329,7 +331,9 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (options.effort && selectedHarness) {
     const effortOption = optionForHarness(selectedHarness, 'effort');
     if (!effortOption) throw new Error(`${selectedHarness.displayName} does not publish a configurable reasoning-effort flag.`);
-    parseHarnessOption(effortOption, options.effort);
+    const effortAccount = account ?? state.accounts.find((item) => item.id === current.accountId);
+    const choices = (await effortChoicesFor(selectedHarness, effortAccount, model ?? current.model)).values;
+    parseHarnessOption(choices.length ? { ...effortOption, values: choices } : effortOption, options.effort);
   }
   if (options.permissions && (!selectedHarness || !harnessSupportsPermissionMode(selectedHarness, options.permissions))) {
     if (!selectedHarness) throw new Error('Choose a provider before setting permissions.');
