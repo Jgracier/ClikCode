@@ -10,6 +10,8 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } from '../definition.js';
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
+import { atomicWriteFile } from '../../session/store/files.js';
+import { stateDirectory } from '../../session/store/paths.js';
 
 /** Provider-specific model naming belongs to account metadata, not generic
  * session pickers or terminal renderers. Unknown models always pass through. */
@@ -39,6 +41,51 @@ export function nativeModelLabel(
  * The one input no file can witness is a vendor's `models` command, which
  * asks a server whose list can change on its own. Only harnesses that declare
  * one get a time limit, and only for that reason. */
+interface CatalogMemoEntry {
+  at: number;
+  fingerprint: string;
+  result: ModelCatalogResult;
+}
+
+interface ModelCatalogMemoFile {
+  v: 1;
+  entries: Record<string, CatalogMemoEntry>;
+}
+
+let memo: { path: string; data: ModelCatalogMemoFile; dirty: boolean } | undefined;
+
+function memoPath(): string | undefined {
+  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim() && !process.env.CLIKDEPLOY_AI_HOME?.trim()) return undefined;
+  const directory = stateDirectory();
+  return directory ? join(directory, 'model-catalog.json') : undefined;
+}
+
+async function loadMemo(): Promise<ModelCatalogMemoFile> {
+  const path = memoPath();
+  if (memo && memo.path === (path ?? '')) return memo.data;
+  let data: ModelCatalogMemoFile = { v: 1, entries: {} };
+  if (path) {
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as ModelCatalogMemoFile;
+      if (parsed?.v === 1 && parsed.entries && typeof parsed.entries === 'object') data = parsed;
+    } catch { /* fail-open-ok */ }
+  }
+  memo = { path: path ?? '', data, dirty: false };
+  return data;
+}
+
+async function saveMemo(): Promise<void> {
+  const path = memoPath();
+  if (!path || !memo?.dirty || memo.path !== path) return;
+  memo.dirty = false;
+  await atomicWriteFile(path, JSON.stringify(memo.data)).catch(() => undefined);
+}
+
+export function resetModelCatalogMemo(): void {
+  modelCatalogCache.clear();
+  memo = undefined;
+}
+
 const modelCatalogCache = new Map<string, { at: number; fingerprint: string; result: ModelCatalogResult }>();
 
 /** For `modelDiscoveryArgv` only: how long a server-sourced list is trusted. */
@@ -80,11 +127,25 @@ function cacheKey(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount)
 }
 
 /** The cached catalog, only if it still describes what is on disk now. */
-async function cachedCatalog(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): Promise<ModelCatalogResult | undefined> {
-  const cached = modelCatalogCache.get(cacheKey(harness, account));
+async function cachedCatalog(
+  harness: AiLocalHarnessDefinition,
+  account?: AiHarnessAccount,
+  options?: { allowStale?: boolean },
+): Promise<ModelCatalogResult | undefined> {
+  const key = cacheKey(harness, account);
+  let cached = modelCatalogCache.get(key);
+  if (!cached) {
+    const memoData = await loadMemo();
+    const entry = memoData.entries[key];
+    if (entry) {
+      cached = entry;
+      modelCatalogCache.set(key, entry);
+    }
+  }
   if (!cached) return undefined;
   if (cached.fingerprint !== await catalogFingerprint(harness, account)) return undefined;
-  if (harness.modelDiscoveryArgv && Date.now() - cached.at >= SERVER_LIST_TTL_MS) return undefined;
+  const isExpired = Boolean(harness.modelDiscoveryArgv && Date.now() - cached.at >= SERVER_LIST_TTL_MS);
+  if (isExpired && !options?.allowStale) return undefined;
   return cached.result;
 }
 
@@ -96,6 +157,17 @@ async function cachedCatalog(harness: AiLocalHarnessDefinition, account?: AiHarn
  * fire-and-forget path below was avoiding. Three seconds clears every
  * measured harness with room to spare and still bounds a bad one. */
 const MODEL_CATALOG_PICKER_WAIT_MS = 3_000;
+
+function defaultModelCatalogFallback(
+  harness: AiLocalHarnessDefinition,
+  account?: AiHarnessAccount,
+): ModelCatalogResult {
+  const models = new Set(account?.models ?? []);
+  if (harness.command === 'claude') {
+    ['opus', 'sonnet', 'haiku'].forEach((m) => models.add(m));
+  }
+  return { models: [...models] };
+}
 
 /** The model list for a picker that is about to open.
  *
@@ -110,9 +182,14 @@ export async function nativeModelCatalogForPicker(
   account?: AiHarnessAccount,
   waitMs = MODEL_CATALOG_PICKER_WAIT_MS,
 ): Promise<ModelCatalogResult> {
-  const cached = await cachedCatalog(harness, account);
-  if (cached) return cached;
-  const fallback = { models: [...new Set(account?.models ?? [])] };
+  const cached = await cachedCatalog(harness, account, { allowStale: true });
+  if (cached) {
+    if (harness.modelDiscoveryArgv && !(await cachedCatalog(harness, account))) {
+      nativeModelCatalog(harness, account).catch(() => undefined);
+    }
+    return cached;
+  }
+  const fallback = defaultModelCatalogFallback(harness, account);
   // The discovery promise is never abandoned, only outrun: it keeps going and
   // populates the cache whether or not this picker still cares.
   const discovery = nativeModelCatalog(harness, account).catch(() => undefined);
@@ -154,6 +231,23 @@ export async function resolveNativeModel(
   return catalog.models.find((model) => model.trim().length > 0);
 }
 
+async function syncAccountModels(accountId: string, models: readonly string[]): Promise<void> {
+  try {
+    const { readState } = await import('../../session/state/read.js');
+    const { writeState } = await import('../../session/state/write.js');
+    const state = await readState();
+    const account = state.accounts.find((item) => item.id === accountId);
+    if (!account) return;
+    const existing = new Set(account.models);
+    const added = models.filter((m) => !existing.has(m));
+    if (added.length === 0) return;
+    account.models = [...account.models, ...added];
+    await writeState(state);
+  } catch {
+    // Non-critical background sync
+  }
+}
+
 export async function nativeModelCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
@@ -164,7 +258,16 @@ export async function nativeModelCatalog(
   // entry that no longer matches rather than one that looks current.
   const fingerprint = await catalogFingerprint(harness, account);
   const result = await nativeModelCatalogUncached(harness, account);
-  modelCatalogCache.set(cacheKey(harness, account), { at: Date.now(), fingerprint, result });
+  const key = cacheKey(harness, account);
+  const entry: CatalogMemoEntry = { at: Date.now(), fingerprint, result };
+  modelCatalogCache.set(key, entry);
+  const memoData = await loadMemo();
+  memoData.entries[key] = entry;
+  if (memo) memo.dirty = true;
+  await saveMemo().catch(() => undefined);
+  if (account?.id && result.models.length) {
+    syncAccountModels(account.id, result.models).catch(() => undefined);
+  }
   return result;
 }
 

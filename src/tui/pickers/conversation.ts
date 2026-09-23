@@ -71,7 +71,12 @@ export async function selectProviderConversation(config: Conf, rl: HarnessPrompt
   const state = await readState();
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
-  if (!requiresProviderHandoff(current, selected) && !current.nativeHarness) {
+  // In place whenever there is nothing to branch. This required no harness
+  // at all as well, so switching an EMPTY chat from one provider to another
+  // made a whole new conversation and left the empty one behind in /resume.
+  // requiresProviderHandoff is the actual rule -- content, on a different
+  // provider -- and aiHarnessSelect enforces the same one.
+  if (!requiresProviderHandoff(current, selected)) {
     await aiHarnessSelect(selected, id);
     return id;
   }

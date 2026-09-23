@@ -328,6 +328,19 @@ export async function aiAccountLogout(labelOrId: string): Promise<void> {
   emitJson({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
 }
 
+const loginStatusCache = new Map<string, { at: number; needsLogin: boolean }>();
+const LOGIN_STATUS_TTL_MS = 60_000;
+
+export function clearLoginStatusCache(harnessCommand?: string): void {
+  if (harnessCommand) {
+    for (const key of loginStatusCache.keys()) {
+      if (key.startsWith(`${harnessCommand}:`)) loginStatusCache.delete(key);
+    }
+  } else {
+    loginStatusCache.clear();
+  }
+}
+
 /** No status command published: there is no reliable signal, so assume logged
  * in rather than force a prompt on a user who already authenticated outside
  * ClikCode. A non-zero exit is treated as logged-out unconditionally (true for
@@ -336,20 +349,29 @@ export async function aiAccountLogout(labelOrId: string): Promise<void> {
  * that report failure with exit 0 instead (Cursor Agent). */
 export async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>): Promise<boolean> {
   if (!harness.statusArgv) return false;
+  const envKey = Object.entries(environment).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(';');
+  const cacheKey = `${harness.command}:${envKey}`;
+  const cached = loginStatusCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < LOGIN_STATUS_TTL_MS) {
+    return cached.needsLogin;
+  }
   let stdout: string;
   try {
     stdout = await captureNativeHarnessOutput(harness, harness.statusArgv, environment, 8_000);
   } catch {
     // fail-open-ok: an unverified account must authenticate before it can be selected safely.
+    loginStatusCache.set(cacheKey, { at: Date.now(), needsLogin: true });
     return true;
   }
+  let needsLogin = false;
   try {
     const parsed = JSON.parse(stdout) as { loggedIn?: unknown; isAuthenticated?: unknown };
     if (parsed && typeof parsed === 'object') {
-      if (parsed.loggedIn === false || parsed.isAuthenticated === false) return true;
+      if (parsed.loggedIn === false || parsed.isAuthenticated === false) needsLogin = true;
     }
   } catch { /* not JSON; exit 0 with no verified false-signal means treat as logged in */ }
-  return false;
+  loginStatusCache.set(cacheKey, { at: Date.now(), needsLogin });
+  return needsLogin;
 }
 
 function requireAuthKind(value: string): AiHarnessAuthKind {
