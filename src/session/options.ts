@@ -311,13 +311,14 @@ function providerAccountPickerOptions(
       const actions = [
         ...(harness.loginArgv && account.authKind === 'vendor-cli' && account.status !== 'ready'
           ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
+        ...(account.verification ? [{ label: 'I’ve verified it', value: 'verified' }] : []),
       ];
       const deleteAction = harness.logoutArgv && account.authKind === 'vendor-cli' && account.status === 'ready'
         ? { label: 'Disconnect', value: 'disconnect' }
         : { label: 'Remove', value: 'remove' };
       return {
         label: account.label,
-        detail: `${usage ? `· ${usage} ` : usagePending ? '· checking usage… ' : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status === 'needs_login' ? `· ${chalk.yellow('needs reauthentication')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(Tab for options)')}` : ''}`.trim(),
+        detail: `${usage ? `· ${usage} ` : usagePending ? '· checking usage… ' : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status === 'needs_login' ? `· ${chalk.yellow('needs reauthentication')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.verification ? `· ${chalk.yellow('needs verification')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(Tab for options)')}` : ''}`.trim(),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
         actions,
         deleteAction,
