@@ -13,6 +13,17 @@ describe('ClikCode account failover', () => {
     expect(classifyAccountFailure(Object.assign(new Error('unauthorized'), { statusCode: 401 }))).toBe('authentication-required');
   });
 
+  it('classifies Qwen Code\'s own wording for a missing/unselected credential as auth-required', () => {
+    // Confirmed verbatim from a real unhandledRejection on this machine:
+    // "Qwen Code: No auth type is selected. Please configure an auth type
+    // (e.g. via settings or `--auth-type`) before running in
+    // non-interactive mode."
+    expect(classifyAccountFailure(
+      new Error('Qwen Code: No auth type is selected. Please configure an auth type (e.g. via settings or `--auth-type`) before running in non-interactive mode.'),
+      { isResultError: true },
+    )).toBe('authentication-required');
+  });
+
   it('routes around accounts whose live usage window is exhausted', () => {
     expect(usageLabelIsExhausted('5h 0% left · weekly 69% left')).toBe(true);
     expect(usageLabelIsExhausted('5h 58% left · weekly 0% left')).toBe(true);
@@ -173,6 +184,9 @@ describe('classifying what a vendor actually says when it runs out', () => {
     ['copilot', 'You have exceeded your monthly quota'],
     ['auggie', 'You have run out of usage for this month'],
     ['grok', 'API error (status 402 Payment Required): usage balance exhausted'],
+    // Confirmed from command-code@1.62.1's own installed dist: the status
+    // label constant SPEND_LIMIT_REACHED is literally "Spend limit reached".
+    ['command', 'Spend limit reached'],
   ] as const;
 
   it.each(quota)('reads %s running out as usage exhausted', (_vendor, text) => {
@@ -206,5 +220,17 @@ describe('accountVerificationHint', () => {
   });
   it('is silent for other failures', () => {
     expect(accountVerificationHint(new Error('RESOURCE_EXHAUSTED quota reached'))).toBeUndefined();
+  });
+  it('extracts a non-Google verification link too, not just accounts.google.com', () => {
+    const error = Object.assign(new Error('exit 1'), {
+      stderrTail: 'Eligibility check failed: Verify your account to continue.\nhttps://vendor.example.com/verify?token=abc\n',
+    });
+    expect(accountVerificationHint(error)).toBe('Verification needed: https://vendor.example.com/verify?token=abc');
+  });
+  it('prefers the accounts.google.com link when multiple URLs are present', () => {
+    const error = Object.assign(new Error('exit 1'), {
+      stderrTail: 'Eligibility check failed: Verify your account to continue.\nSee https://example.com/help first, then https://accounts.google.com/signin/continue?sarp=1&x=2\n',
+    });
+    expect(accountVerificationHint(error)).toBe('Google needs verification: https://accounts.google.com/signin/continue?sarp=1&x=2');
   });
 });
