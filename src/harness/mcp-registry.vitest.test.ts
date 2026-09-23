@@ -10,7 +10,9 @@ import { allLocalHarnesses, localHarnessCapabilityManifest } from '@clikcode/rou
 
 const grammarOf = (command: string) => {
   const harness = allLocalHarnesses().find((item) => item.command === command)!;
-  return (localHarnessCapabilityManifest(harness) as { managers?: { mcp?: { add?: never } } }).managers?.mcp?.add;
+  return (localHarnessCapabilityManifest(harness) as {
+    managers?: { mcp?: { add?: { confirmStdin?: string } } };
+  }).managers?.mcp?.add;
 };
 
 const local = { name: 'figma', target: 'npx', args: ['-y', 'figma-mcp'] };
@@ -134,17 +136,28 @@ describe('spelling "add this MCP server"', () => {
     expect(argv('kiro', remote)).toBe('mcp add --scope global --force --name sentry --url https://mcp.sentry.dev/mcp');
   });
 
+  it('answers the prompt Hermes asks before saving', () => {
+    // Hermes connects to the server first and asks "Save config anyway?
+    // [y/N]" when that fails. With stdin ignored the prompt read EOF and took
+    // No, which is why `mcp add` exited 0 having written nothing -- a server
+    // reported installed that was absent. Verified with the real CLI: piping
+    // y saves it, and `hermes mcp list` shows it (disabled, which is honest
+    // for a server that would not connect). A reachable one never asks.
+    expect(argv('hermes', local)).toBe('mcp add figma --command npx --args -y figma-mcp');
+    expect(grammarOf('hermes')!.confirmStdin).toBe('y\n');
+  });
+
+  it('asks nothing of the harnesses that do not prompt', () => {
+    for (const command of ['claude', 'codex', 'qwen', 'auggie', 'vibe']) {
+      expect(grammarOf(command)?.confirmStdin, command).toBeUndefined();
+    }
+  });
+
   it('offers nothing for a harness with no recorded grammar', () => {
     // Never guessed: a wrong argv writes a broken entry.
     expect(mcpAddArgv(grammarOf('aider'), local)).toBeUndefined();
-    expect(mcpAddArgv(grammarOf('kimi'), local)).toBeUndefined();
-    // Hermes DOES have `mcp add`, with a complete non-interactive flag set
-    // (--url / --command / --args). It is still excluded, and measuring why
-    // is the point: it connects to the server before saving and, when that
-    // fails, asks "Save config anyway? [y/N]". Run with stdin closed it
-    // EXITS 0 having written nothing -- so ClikCode would report a server
-    // installed that is absent. A false success is worse than no support.
-    expect(mcpAddArgv(grammarOf('hermes'), local)).toBeUndefined();
+    // aider and pi have no MCP surface at all -- zero mentions in --help.
+    expect(mcpAddArgv(grammarOf('pi'), local)).toBeUndefined();
   });
 
   it('knows a URL from an executable', () => {

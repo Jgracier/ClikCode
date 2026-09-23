@@ -17,8 +17,17 @@
  * one, Copilot/Amp/Cline take a URL positionally but insist on `--` before a
  * local command, and Hermes/Auggie name every part with a flag.
  *
- * A harness with an MCP manager but no recorded grammar is left out rather
- * than guessed at. Cursor is the instructive case: it has `mcp login`, `list`,
+ * Where a vendor has no usable `mcp add` at all, its config FILE is written
+ * instead -- but only when that file's shape has been observed, and only for
+ * JSON. Cursor has every mcp subcommand except add and Kimi has none, yet
+ * both read a plain `{ "mcpServers": { … } }` file; verified by writing one
+ * by hand and asking Cursor to list it back, which found all three servers
+ * including one already in the file. Hermes and Goose keep theirs in YAML,
+ * and rewriting a user's YAML would cost them comments and formatting for a
+ * gain that a new dependency does not justify.
+ *
+ * A harness with an MCP manager but no recorded grammar and no observed
+ * config file is left out rather than guessed at. Cursor is the instructive case: it has `mcp login`, `list`,
  * `list-tools`, `enable` and `disable` but no `add` at all, because it reads
  * servers from `.cursor/mcp.json` and `enable` only approves one that is
  * already written. Guessing an `add` for it would write nothing and report
@@ -29,6 +38,9 @@ import { nativeProfileEnvironment } from './transport/profile-environment.js';
 import { localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
 import { inspectNativeHarness } from './transport/native/inspect.js';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
 
 /** What a user asked ClikCode to make available, in the one shape both
@@ -58,7 +70,65 @@ type McpAddGrammar = {
   remoteOnly?: true;
   localTransport?: string;
   remoteExtraArgv?: readonly string[];
+  confirmStdin?: string;
 };
+
+/** Where a harness reads its servers from, for one with no usable add. */
+type McpConfigFile = {
+  rootEnv?: string;
+  homeRelativeDir: readonly string[];
+  file: string;
+  key: string;
+};
+
+export function mcpConfigFile(harness: AiLocalHarnessDefinition): McpConfigFile | undefined {
+  return (localHarnessCapabilityManifest(harness) as {
+    managers?: { mcp?: { configFile?: McpConfigFile } };
+  }).managers?.mcp?.configFile;
+}
+
+/** The absolute path of that file, under a GIVEN environment so an isolated
+ *  account profile resolves to its own copy. */
+export function mcpConfigPath(
+  config: McpConfigFile, environment: Readonly<Record<string, string>> = {},
+): string {
+  const root = (config.rootEnv ? environment[config.rootEnv]?.trim() : undefined)
+    || join(environment.HOME?.trim() || homedir(), ...config.homeRelativeDir);
+  return join(root, config.file);
+}
+
+/** One server as the `mcpServers` convention spells it. */
+export function mcpConfigEntry(entry: McpServerEntry): Record<string, unknown> {
+  return isRemoteTarget(entry.target)
+    ? { url: entry.target }
+    : { command: entry.target, ...(entry.args?.length ? { args: [...entry.args] } : {}) };
+}
+
+/** Merges one server into the file, preserving everything else in it --
+ *  other servers, and any key this does not know about. A vendor config is
+ *  the user's file; adding to it must never be rewriting it. */
+export async function writeMcpConfigEntry(
+  path: string, key: string, entry: McpServerEntry,
+): Promise<void> {
+  let root: Record<string, unknown> = {};
+  const existing = await readFile(path, 'utf8').catch(() => undefined);
+  if (existing?.trim()) {
+    const parsed: unknown = JSON.parse(existing);
+    // A file that is not an object is not something to merge into.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`${path} is not a JSON object`);
+    }
+    root = parsed as Record<string, unknown>;
+  }
+  const current = root[key];
+  const servers = current && typeof current === 'object' && !Array.isArray(current)
+    ? { ...current as Record<string, unknown> }
+    : {};
+  servers[entry.name] = mcpConfigEntry(entry);
+  root[key] = servers;
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
+}
 
 /** What the catalog says about this harness, or undefined when it records no
  * `mcp add` at all. */
@@ -139,7 +209,7 @@ function localArgsArgv(add: McpAddGrammar, entry: McpServerEntry): string[] {
  * grammar recorded. A harness with an MCP manager but no recorded grammar is
  * deliberately not guessed at: a wrong argv writes a broken server entry. */
 export async function harnessesAcceptingMcp(): Promise<AiLocalHarnessDefinition[]> {
-  const candidates = allLocalHarnesses().filter((harness) => mcpAddGrammar(harness));
+  const candidates = allLocalHarnesses().filter((harness) => mcpAddGrammar(harness) ?? mcpConfigFile(harness));
   const installed = await Promise.all(candidates.map(async (harness) => {
     const inspection = await inspectNativeHarness(harness, 800).catch(() => undefined);
     return inspection?.installed ? harness : undefined;
@@ -156,8 +226,19 @@ interface McpInstallResult { harness: string; account?: string; ok: boolean; det
 async function installMcpServer(
   harness: AiLocalHarnessDefinition, entry: McpServerEntry, account?: AiHarnessAccount,
 ): Promise<McpInstallResult> {
-  const argv = mcpAddArgv(mcpAddGrammar(harness), entry);
   const label = { harness: harness.command, ...(account?.label ? { account: account.label } : {}) };
+  const environment = nativeProfileEnvironment(account?.nativeProfile);
+  // Second-best route, used only where the vendor offers no add at all.
+  const config = mcpAddGrammar(harness) ? undefined : mcpConfigFile(harness);
+  if (config) {
+    try {
+      await writeMcpConfigEntry(mcpConfigPath(config, environment), config.key, entry);
+      return { ...label, ok: true };
+    } catch (error) {
+      return { ...label, ok: false, detail: error instanceof Error ? error.message : 'could not write config' };
+    }
+  }
+  const argv = mcpAddArgv(mcpAddGrammar(harness), entry);
   if (!argv) {
     const grammar = mcpAddGrammar(harness);
     return {
@@ -168,7 +249,7 @@ async function installMcpServer(
     };
   }
   try {
-    await captureNativeHarnessOutput(harness, argv, nativeProfileEnvironment(account?.nativeProfile), 20_000);
+    await captureNativeHarnessOutput(harness, argv, environment, 20_000, undefined, mcpAddGrammar(harness)?.confirmStdin);
     return { ...label, ok: true };
   } catch (error) {
     return { ...label, ok: false, detail: error instanceof Error ? error.message.split('\n')[0] : 'failed' };
