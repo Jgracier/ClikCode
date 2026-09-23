@@ -25,6 +25,7 @@ import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
+import { frameRowBudget } from './render/frame-budget.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
 import {
   firstUnwritten as seamFirstUnwritten, liveAssistantAt as seamLiveAssistantAt,
@@ -880,14 +881,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // maxLiveConversation below. The distinction is the point: a spinner and
     // an elapsed clock in a fixed place are status, while a sentence being
     // rewritten under the eye is the thing that made reading impossible.
-    const waitingRows = this.waitingLabel && targetHeight >= 5 ? 2 : 0;
-    let optionalRows = Math.max(0, targetHeight - 4 - waitingRows);
     const notice = this.transientNotice ?? this.currentNotice;
-    const noticeRows = notice && optionalRows > 0 ? 1 : 0;
-    optionalRows -= noticeRows;
-    const availablePaletteRows = Math.min(requestedPaletteCapacity, optionalRows);
-    const paletteCapacity = availablePaletteRows >= 3 ? availablePaletteRows : 0;
-    const paletteRows = paletteCapacity;
+    const budget = frameRowBudget({
+      targetHeight, waiting: Boolean(this.waitingLabel), notice: Boolean(notice), requestedPaletteCapacity,
+    });
+    const { waitingRows, noticeRows, paletteRows } = budget;
+    const paletteCapacity = paletteRows;
+    let optionalRows = budget.optionalRows;
     const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
     // The software keyboard can make a mobile SSH viewport dramatically
     // shorter between two keystrokes. Bound the composer by what remains in
