@@ -53,7 +53,10 @@ type McpAddGrammar = {
   urlPrefix?: readonly string[];
   commandPrefix?: readonly string[];
   argsPrefix?: readonly string[];
-  argsStyle?: 'list' | 'joined';
+  argsStyle?: 'list' | 'joined' | 'repeat-equals';
+  remoteOnly?: true;
+  localTransport?: string;
+  remoteExtraArgv?: readonly string[];
 };
 
 /** What the catalog says about this harness, or undefined when it records no
@@ -72,6 +75,11 @@ export function mcpAddArgv(
 ): readonly string[] | undefined {
   if (!add) return undefined;
   const remote = isRemoteTarget(entry.target);
+  // opencode and Kilo take a URL happily and have no flag at all for a local
+  // command: extra positionals are refused and they fall back to their
+  // interactive picker, which a headless install cannot answer. Declining is
+  // the honest answer -- see the caller, which reports the reason.
+  if (add.remoteOnly && !remote) return undefined;
   if (add.shape === 'url-or-doubledash') {
     // Codex: a URL is a flag, a command is everything after `--`. Passing a
     // command positionally here is accepted and then read as a URL.
@@ -92,17 +100,34 @@ export function mcpAddArgv(
     // `--args` as "must be the last option", which the name-first order below
     // satisfies for both.
     const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
-    if (remote) return [...add.argv, entry.name, ...transport, ...(add.urlPrefix ?? []), entry.target];
-    const args = entry.args ?? [];
-    const argsArgv = args.length && add.argsPrefix
-      // Auggie takes one pre-joined string; Hermes takes a list. Passing a
-      // list where a string is wanted silently registers only the first.
-      ? [...add.argsPrefix, ...(add.argsStyle === 'joined' ? [args.join(' ')] : args)]
-      : [];
-    return [...add.argv, entry.name, ...(add.commandPrefix ?? []), entry.target, ...argsArgv];
+    if (remote) return [...add.argv, entry.name, ...transport, ...(add.urlPrefix ?? []), entry.target, ...(add.remoteExtraArgv ?? [])];
+    return [
+      ...add.argv, entry.name, ...localTransportArgv(add),
+      ...(add.commandPrefix ?? []), entry.target, ...localArgsArgv(add, entry),
+    ];
   }
-  const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
-  return [...add.argv, ...transport, entry.name, entry.target, ...(entry.args ?? [])];
+  const transport = add.transportPrefix
+    ? (remote ? [...add.transportPrefix, 'http'] : localTransportArgv(add))
+    : [];
+  return [...add.argv, ...transport, entry.name, entry.target, ...(entry.args ?? []), ...(remote ? add.remoteExtraArgv ?? [] : [])];
+}
+
+/** The transport flag a LOCAL add needs, for the harnesses that demand one. */
+function localTransportArgv(add: McpAddGrammar): string[] {
+  return add.transportPrefix && add.localTransport ? [...add.transportPrefix, add.localTransport] : [];
+}
+
+/** A local server's arguments, spelled the way this harness parses them. */
+function localArgsArgv(add: McpAddGrammar, entry: McpServerEntry): string[] {
+  const args = entry.args ?? [];
+  if (!args.length || !add.argsPrefix) return [];
+  // repeat-equals uses `--arg=VALUE` deliberately: `--arg -y` makes Vibe's
+  // parser read -y as a flag of its own and fail. joined pre-joins into one
+  // string for Auggie; list passes them bare for Hermes. Getting this wrong
+  // fails at connect time rather than at add time.
+  if (add.argsStyle === 'repeat-equals') return args.flatMap((arg) => [`${add.argsPrefix![0]}=${arg}`]);
+  if (add.argsStyle === 'joined') return [...add.argsPrefix, args.join(' ')];
+  return [...add.argsPrefix, ...args];
 }
 
 /** Every harness that can take this entry -- installed, and with an `mcp add`
@@ -128,7 +153,15 @@ async function installMcpServer(
 ): Promise<McpInstallResult> {
   const argv = mcpAddArgv(mcpAddGrammar(harness), entry);
   const label = { harness: harness.command, ...(account?.label ? { account: account.label } : {}) };
-  if (!argv) return { ...label, ok: false, detail: 'no mcp add grammar recorded' };
+  if (!argv) {
+    const grammar = mcpAddGrammar(harness);
+    return {
+      ...label, ok: false,
+      detail: grammar?.remoteOnly
+        ? `${harness.displayName} can only be given a remote MCP server without prompting`
+        : 'no mcp add grammar recorded',
+    };
+  }
   try {
     await captureNativeHarnessOutput(harness, argv, nativeProfileEnvironment(account?.nativeProfile), 20_000);
     return { ...label, ok: true };
