@@ -60,7 +60,7 @@ import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
 import { interactiveHarnessOptionPicker } from '../../tui/pickers/options.js';
 import { interactiveModelPicker } from '../../tui/pickers/model.js';
 import { interactivePermissionPicker } from '../../tui/pickers/permissions.js';
-import { interactiveSessionManager, interactiveSessionPicker } from '../../tui/pickers/session.js';
+import { interactiveSessionPicker } from '../../tui/pickers/session.js';
 import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
@@ -522,11 +522,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             settings: async () => args ? viaHeadless(text) : { id: await interactiveSettingsPicker(config, rl, id) ?? id },
             sessions: async () => {
               if (args) return viaHeadless(text);
-              const action = await interactiveSessionManager(rl, id);
-              if (action === 'exit') return { exit: true };
-              if (action === 'new') return { id: await newConversation(id) };
-              if (action === 'resume') return { id: (await interactiveSessionPicker(rl, id))?.id ?? id };
-              return {};
+              // One list: pick a conversation, or manage any of them on its row.
+              const picked = await interactiveSessionPicker(rl, id, { manage: true });
+              if (picked && 'new' in picked) return { id: await newConversation(id) };
+              return { id: picked?.id ?? id };
             },
             // Resume means reopening the selected conversation at its source:
             // retain its account, harness, and exact native session identity.
@@ -537,7 +536,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             // list only when it does not.
             resume: async () => {
               const named = args ? chatNamed(commandState.sessions, args, id) : undefined;
-              return { id: named ?? (await interactiveSessionPicker(rl, id))?.id ?? id };
+              if (named) return { id: named };
+              const picked = await interactiveSessionPicker(rl, id);
+              return { id: picked && 'id' in picked ? picked.id : id };
             },
             rename: async () => {
               const name = args || (await rl.question('Conversation name › ')).trim();

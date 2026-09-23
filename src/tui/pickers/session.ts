@@ -1,6 +1,7 @@
 /** Choosing a session to resume, including sessions a vendor CLI started
  * outside ClikCode and that can be adopted. */
 
+import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { discoverNativeSessions } from '../../session/discovery/cli-listing.js';
@@ -126,8 +127,29 @@ function cachedAdoptableSessions(state: HarnessState, workspace: string): Promis
 
 /** Selected while discovery is still running: wait for it, then reopen. */
 const PENDING_DISCOVERY_VALUE = '__discovering__';
+const NEW_CONVERSATION_VALUE = '__new__';
+const MANAGE_ACTIONS = [
+  { label: 'Rename', value: 'rename' },
+  { label: 'Fork', value: 'fork' },
+  { label: 'Archive', value: 'archive' },
+] as const;
 
-export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string } | undefined> {
+/** One list for finding a conversation and managing it.
+ *
+ * `/sessions` used to be a menu -- Resume another / Start clean / Rename /
+ * Fork / Archive / Delete -- where "Resume" opened this list, and every other
+ * entry acted only on the chat already open. Managing is now done on the rows
+ * themselves: Tab on a conversation offers Rename, Fork and Archive, Del
+ * deletes it (the picker confirms, as it does for every delete), and the top
+ * row starts a new conversation. Any conversation can be managed, not just
+ * the current one, and there is one screen instead of two.
+ *
+ * `manage` is that mode; plain /resume stays a list to pick from, where Tab
+ * shows a conversation's provider history instead. */
+export async function interactiveSessionPicker(
+  rl: HarnessPrompter, currentId: string, options: { manage?: boolean } = {},
+): Promise<{ id: string } | { new: true } | undefined> {
+  const manageMode = Boolean(options.manage);
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
   // A session with no turns yet has nothing to resume into — showing it here is
@@ -205,6 +227,15 @@ export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: s
     // Conversation roots and unadopted native sessions share one recency order.
     // Provider hops stay behind each root row's Tab history.
     const options = optionBlocks.flatMap((block) => block.options);
+    if (manageMode) {
+      for (const option of options) {
+        if (option.value.startsWith('native:')) continue;
+        delete option.alternates;
+        option.actions = MANAGE_ACTIONS;
+        option.deleteAction = { label: 'Delete', value: 'delete' };
+      }
+      options.unshift({ label: 'New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
+    }
     if (discovering) {
       options.push({
         label: 'Looking for chats from other CLIs…',
@@ -215,12 +246,39 @@ export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: s
     return options;
   };
 
-  const selected = await chooseOption(rl, 'Resume a session', buildOptions(), undefined,
+  /** What a row action did to the chat that is open, so the loop can move off
+   * one that no longer exists (deleted) or is put away (archived). */
+  let replacement: string | undefined;
+  let actedOn = false;
+  const manage = async (targetId: string, action: string): Promise<void> => {
+    actedOn = true;
+    // Putting away the chat that is open lands on a fresh one with the same
+    // setup -- staying in ClikCode, not leaving it. Made BEFORE the action,
+    // because a deleted chat has no setup left to copy.
+    if (targetId === currentId && (action === 'archive' || action === 'delete')) {
+      replacement = await newConversation(currentId);
+    }
+    if (action === 'rename') {
+      const name = (await rl.question('Conversation name › ')).trim();
+      if (name) await aiSessionCommand(targetId, `/rename ${name}`);
+    } else if (action === 'fork') await aiSessionCommand(targetId, '/fork');
+    // Archive needs no confirmation -- resuming undoes it. Delete is confirmed
+    // by the picker itself before this runs.
+    else if (action === 'archive') await aiSessionCommand(targetId, '/archive');
+    else if (action === 'delete') await aiSessionCommand(targetId, '/delete confirm');
+  };
+  const selected = await chooseOption(rl, manageMode ? 'Conversations' : 'Resume a session', buildOptions(),
+    manageMode ? (value, action) => manage(value, action) : undefined,
     { refreshedOptions: buildOptions, refresh: discovery });
+  if (replacement) return { id: replacement };
+  // Any other action closes the list on purpose (the picker rebuilds from
+  // state rather than show a stale row), so it opens again on what changed.
+  if (!selected && manageMode && actedOn) return interactiveSessionPicker(rl, currentId, options);
   if (!selected) return undefined;
+  if (selected === NEW_CONVERSATION_VALUE) return { new: true };
   if (selected === PENDING_DISCOVERY_VALUE) {
     await discovery;
-    return interactiveSessionPicker(rl, currentId);
+    return interactiveSessionPicker(rl, currentId, options);
   }
   if (!selected.startsWith('native:')) return { id: selected };
   const match = discovered[Number.parseInt(selected.slice('native:'.length), 10)];
@@ -263,29 +321,4 @@ export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: s
   // (the same-conversation /resume behavior below) would immediately discard
   // the native session id just adopted, undoing the entire point of listing it.
   return { id: adopted.id };
-}
-
-export async function interactiveSessionManager(rl: HarnessPrompter, id: string): Promise<'resume' | 'new' | 'exit' | undefined> {
-  const action = await chooseOption(rl, 'Conversations', [
-    { label: 'Resume another…', value: 'resume' },
-    { label: 'Start clean', detail: 'reset provider context', value: 'new' },
-    { label: 'Rename', value: 'rename' },
-    { label: 'Fork', detail: 'copy transcript into a new conversation', value: 'fork' },
-    { label: 'Archive', value: 'archive' },
-    { label: 'Delete', detail: 'remove local ClikCode history', value: 'delete' },
-  ] as const);
-  if (!action) return undefined;
-  if (action === 'resume') return 'resume';
-  if (action === 'new') return 'new';
-  if (action === 'rename') {
-    const name = (await rl.question('Conversation name › ')).trim();
-    if (name) await aiSessionCommand(id, `/rename ${name}`);
-    return undefined;
-  }
-  if (action === 'fork') { await aiSessionCommand(id, '/fork'); return undefined; }
-  // Undone by resuming it, so it needs no confirmation; delete keeps its own.
-  if (action === 'archive') { await aiSessionCommand(id, '/archive'); return 'exit'; }
-  const answer = (await rl.question('Delete this conversation from ClikCode? Type delete › ')).trim().toLowerCase();
-  if (answer === 'delete') { await aiSessionCommand(id, '/delete confirm'); return 'exit'; }
-  return undefined;
 }
