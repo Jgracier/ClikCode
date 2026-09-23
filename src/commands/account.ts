@@ -13,6 +13,7 @@ import { emitJson } from '../cli/structured-output.js';
 import { captureNativeHarnessOutput, runNativeHarnessCommand } from '../harness/transport/native/command.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
+import { accountVerificationHint } from '../turn/failover.js';
 import { localHarnessForCommand, localHarnessForProvider, localRouter } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
 import { harnessStatePath } from '../session/state/paths.js';
@@ -258,6 +259,7 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
           await purgeAccountProfile({ nativeProfile: replacedProfile }, state.accounts).catch(() => undefined);
         }
         emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });
+        announceVerification(existingMatch.label, loginError);
         return existingMatch.label;
       }
       accountLabel = derived;
@@ -276,6 +278,7 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
     await writeState(state);
   }
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
+  announceVerification(accountLabel, loginError);
   return accountLabel;
 }
 
@@ -326,6 +329,15 @@ export async function aiAccountLogout(labelOrId: string): Promise<void> {
   account.status = 'needs_login';
   await writeState(state);
   emitJson({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
+}
+
+/** A login can succeed while the vendor still refuses to serve the account
+ * until it is verified (agy: "Verify your account to continue"). The sign-in
+ * is kept, but "connected" alone leaves the user to discover the block on the
+ * first turn, so say what to do about it now. */
+function announceVerification(label: string, loginError: unknown): void {
+  const hint = loginError ? accountVerificationHint(label, loginError) : undefined;
+  if (hint) emitHarnessOutput({ panel: 'error', message: hint });
 }
 
 const loginStatusCache = new Map<string, { at: number; needsLogin: boolean }>();

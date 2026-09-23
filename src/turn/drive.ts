@@ -9,7 +9,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountSwitchNotice, accountSwitchPhase } from './failover.js';
+import { accountSwitchNotice, accountSwitchPhase, accountVerificationHint } from './failover.js';
 import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir, open } from 'node:fs/promises';
@@ -593,6 +593,8 @@ export async function aiSessionSend(
         // Say why it moved. Switching happens for any failure now, so calling
         // every one of them "quota reached" would misreport a crash as a
         // spent plan.
+        const verifyHint = failureKind === 'account-ineligible' ? accountVerificationHint(account.label, failure) : undefined;
+        if (verifyHint) prompter?.activity(chalk.yellow(verifyHint));
         prompter?.activity(chalk.yellow(accountSwitchNotice(failureKind, fallback.label)));
         prompter?.phase(accountSwitchPhase(fallback.label));
         await closePersistentTransport(session.id);
