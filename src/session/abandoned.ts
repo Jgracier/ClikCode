@@ -32,10 +32,15 @@ import { hostname } from 'node:os';
 import type { HarnessSession, HarnessState } from './model.js';
 import { sessionClaimIsLive } from './claim.js';
 
-/** Matches IDLE_EXIT_MS in worker/session-worker.ts: a session cannot be
- *  judged abandoned sooner than the worker that owns it would have given up
- *  on it, or this would race a worker that is simply sitting idle. */
-export const ABANDONED_AFTER_MS = 30 * 60 * 1000;
+/** No attached client and no turn running, for this long: the worker exits on
+ *  its own, and a session untouched for at least as long is abandoned.
+ *
+ *  ONE definition on purpose. The worker imports it too, because a session
+ *  must never be judged abandoned sooner than the worker that owns it would
+ *  have given up -- otherwise the sweep races a worker that is merely idle.
+ *  Two constants that had to be kept in step would eventually drift, and the
+ *  drift would present as sessions closing out from under a live worker. */
+export const SESSION_IDLE_WINDOW_MS = 30 * 60 * 1000;
 
 export type WorkerLiveness = (sessionId: string) => boolean;
 
@@ -55,7 +60,7 @@ export function closeAbandonedSessions(
     if (workerIsLive(session.id)) continue;
     const touched = Date.parse(session.updatedAt ?? '');
     // An unparseable or missing timestamp is not evidence of abandonment.
-    if (!Number.isFinite(touched) || now - touched <= ABANDONED_AFTER_MS) continue;
+    if (!Number.isFinite(touched) || now - touched <= SESSION_IDLE_WINDOW_MS) continue;
     const at = new Date(now).toISOString();
     session.status = 'closed';
     session.closedAt = at;

@@ -80,21 +80,41 @@ export function createPendingWorkTracker(command: string): PendingWorkTracker {
   };
 }
 
-/** How many times one turn may be continued because work was still pending.
- *  Small on purpose: this is a repair for a harness that stopped early, not a
- *  polling loop, and every continuation costs a real model turn. */
-export const MAX_PENDING_CONTINUATIONS = 3;
+/** Two independent bounds on continuing a turn, whichever binds first.
+ *
+ *  A count alone was the original mistake here: three attempts at 2s/8s/20s
+ *  is a thirty-second budget, so a test suite or build that takes five
+ *  minutes still had its answer stranded -- the exact failure this is meant
+ *  to fix, merely made rarer. Antigravity's own system prompt tells the model
+ *  to "simply pause and end the turn to wait for the background task to
+ *  complete", so a wait is as long as the work is, and a budget has to be a
+ *  duration.
+ *
+ *  The count still matters, because every continuation is a real model turn:
+ *  it is what stops a backoff from becoming an unbounded polling loop. The
+ *  duration is what makes the feature actually work. For reference the idle
+ *  watchdog already allows a running tool a full hour of silence
+ *  (DEFAULT_TOOL_IDLE_TIMEOUT_MS), so ten minutes here is conservative. */
+export const MAX_PENDING_CONTINUATIONS = 6;
+export const PENDING_WORK_BUDGET_MS = 10 * 60 * 1000;
 
-/** Backoff before each continuation, so a command that needs a few more
- *  seconds has landed before the harness is asked to look at it. */
+/** Exponential backoff, capped, so a slow command is not hammered at a fixed
+ *  interval and the whole budget is not spent in the first few seconds. */
 export function pendingContinuationDelayMs(attempt: number): number {
-  return [2_000, 8_000, 20_000][attempt] ?? 20_000;
+  return Math.min(2_000 * 4 ** attempt, 120_000);
+}
+
+/** Whether a turn may be continued again: bounded in attempts AND in time. */
+export function mayContinuePendingWork(attempts: number, elapsedMs: number): boolean {
+  return attempts < MAX_PENDING_CONTINUATIONS && elapsedMs < PENDING_WORK_BUDGET_MS;
 }
 
 /** What the harness is told. Phrased as an instruction to go and look rather
  *  than an assertion that the work is done, because it may not be: the harness
- *  is the only thing that can actually tell. */
+ *  is the only thing that can actually tell. Antigravity exposes
+ *  `manage_task(Action="list")` for exactly this, and other harnesses have
+ *  their own, so this names the goal and lets each use whatever it has. */
 export const PENDING_CONTINUATION_PROMPT =
-  'The command you launched in the background is no longer being waited on by that turn. '
-  + 'Check its status and output now -- including any task log it wrote -- and report the result. '
-  + 'If it is still running, wait for it and then report.';
+  'A command you launched in the background is no longer being waited on by that turn. '
+  + 'List your background tasks and check that command now -- its status, its output, and any '
+  + 'task log it wrote -- then report the result. If it is still running, wait for it and then report.';
