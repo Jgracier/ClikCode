@@ -111,6 +111,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       return emitHarnessOutput({ panel: 'permissions', session, controls });
     }
     setSessionHarnessOption(session, harness, 'permissions', value);
+    // Same as /model: the reported mode described the previous request.
+    if (session.reported?.permissionMode) delete session.reported.permissionMode;
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
@@ -227,6 +229,11 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
     session.model = model;
+    // What the vendor reported running answered the PREVIOUS request. The
+    // status line prefers it (a vendor that substitutes a model says so), so
+    // left in place it kept naming the old model after this one was chosen,
+    // until the next turn happened to report again.
+    if (session.reported?.model) delete session.reported.model;
     await keepEffortValidFor(session, harness, account);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
