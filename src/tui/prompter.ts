@@ -30,6 +30,8 @@ import { runOptionPicker } from './option-picker.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
+import { highlightSelection, selectedText, selectionAction, selectionIsEmpty, type MouseAction, type Selection } from './render/selection.js';
+import { copyToClipboard } from '../session/attachments.js';
 import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
@@ -145,6 +147,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the footer starts, and the status line gets drawn at both rows. Guarded the
    * same way `selecting` already guards this for select() pickers. */
   private paletteActive = false;
+  /** A mouse selection in progress, in screen cells (render/selection.ts). */
+  private selection?: Selection;
+  /** The last frame's rows as drawn, before any selection highlight: what a
+   * selection copies from. */
+  private screenRows: string[] = [];
   /** What the composer's slash palette offers, remembered from the last
    * question() so a turn in flight can offer the same commands. A turn does
    * not change which commands exist; each is re-checked when it runs. */
@@ -1424,7 +1431,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const furthest = Math.max(0, this.alternateTranscript.length - above);
     this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
     const scrolled = this.alternateScrollback;
-    const rows = scrolled > 0
+    let rows = scrolled > 0
       ? [
         ...this.alternateTranscript.slice(
           Math.max(0, this.alternateTranscript.length - above - scrolled),
@@ -1434,6 +1441,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ]
       : [...this.alternateTranscript.slice(-above), ...live];
     while (rows.length < height) rows.unshift('');
+    // What is on screen, before the highlight: the text a selection copies.
+    this.screenRows = rows;
+    if (this.selection) rows = highlightSelection(rows, this.selection);
     // Only what changed. A keystroke changes the composer's row and nothing
     // else, and rewriting the whole screen for it costs kilobytes per key on
     // a phone link -- long enough for a client's own prediction popup to
@@ -1681,8 +1691,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * Returns whether the key was spent here. */
   private handleScrollKey(key: string): boolean {
     if (isMouseEvent(key)) {
-      // Every mouse report is consumed, wheel or not: a click belongs to the
-      // client's own selection, never to the composer.
+      // A left press, drag or release is a selection ClikCode makes itself:
+      // with mouse reporting on, the terminal's own selection never sees it.
+      const action = selectionAction(key);
+      if (action) { this.handleSelection(action); return true; }
+      // Every other mouse report is consumed too, wheel or not: none of them
+      // belongs to the composer.
       const rows = wheelScrollRows(key);
       // Queued and drained -- a flick is hundreds of notches in one read.
       if (rows) this.queueScroll(rows);
@@ -1698,6 +1712,40 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (key === '\u0002') { this.scrollTranscript(page); return true; }
     if (key === '\u0006') { if (!this.scrollTranscript(-page)) this.noteReadingDirection(); return true; }
     return false;
+  }
+
+  /** Press starts a selection, drag extends it, release copies it. A click
+   * that never moved selects nothing and copies nothing. No confirmation is
+   * shown: the highlight is what was selected, and it clears when the text is
+   * on the clipboard. Only a failure to copy says anything. */
+  private handleSelection(action: MouseAction): void {
+    if (action.kind === 'press') {
+      this.selection = { anchor: action.at, head: action.at };
+      return;
+    }
+    const selection = this.selection;
+    if (!selection) return;
+    selection.head = action.at;
+    if (action.kind === 'drag') {
+      this.redrawSelection();
+      return;
+    }
+    this.selection = undefined;
+    if (selectionIsEmpty(selection)) return;
+    const text = selectedText(this.screenRows, selection);
+    this.redrawSelection();
+    if (!text) return;
+    void copyToClipboard(text).catch((error: unknown) => {
+      this.showTransientNotice(`Could not copy: ${error instanceof Error ? error.message : String(error)}`, 4000, () => this.redrawSelection());
+      this.redrawSelection();
+    });
+  }
+
+  /** The current frame again, so the highlight follows the pointer. */
+  private redrawSelection(): void {
+    if (this.closed || this.suspended || this.selecting) return;
+    if (this.waitingLabel) this.paintWaiting();
+    else this.repaint();
   }
 
   /** Down at the live end moves nothing, and says so.

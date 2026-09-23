@@ -61,6 +61,15 @@ SCENARIOS = {
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 4)],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
     },
+    'select-and-copy': {
+        'turns': [TWO_BLOCKS],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 3),
+            ('select', 'final commit is live'), ('settle', 1),
+        ],
+        'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
+        'clipboard': 'final commit is live',
+    },
     'model-changed-mid-answer': {
         'turns': [TWO_BLOCKS],
         'steps': [
@@ -86,6 +95,10 @@ def run(name, spec, entry, keep):
         'HOME': home, 'CLIKCODE_HOME': state, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
         'FAKE_TURNS': json.dumps(spec['turns']), 'FAKE_STATE': os.path.join(root, 'turn-counter'),
         'FAKE_FAMILY': spec.get('family', 'claude'),
+        # Remote, so a copy goes to the terminal by OSC 52 -- which this
+        # harness can read back out of the output -- and never to a real
+        # clipboard binary on the machine running the test.
+        'SSH_CONNECTION': '127.0.0.1 1 127.0.0.1 22',
     }
     pid, fd = pty.fork()
     if pid == 0:
@@ -123,6 +136,19 @@ def run(name, spec, entry, keep):
             if not pump(step[2], step[1]): problems.append(f'timed out waiting for {step[1]!r}')
         elif step[0] == 'settle':
             pump(step[1])
+        elif step[0] == 'select':
+            # Press on the phrase's first cell, drag across it, release on its
+            # last -- the mouse reports a terminal sends with SGR reporting on.
+            where = [(row, line.find(step[1])) for row, line in enumerate(screen.display) if step[1] in line]
+            if not where:
+                problems.append(f'could not find {step[1]!r} on screen to select'); continue
+            row, col = where[-1]
+            first, last = col + 1, col + len(step[1])
+            os.write(fd, f'\x1b[<0;{first};{row + 1}M'.encode()); pump(0.05)
+            for x in range(first + 1, last + 1, 4):
+                os.write(fd, f'\x1b[<32;{x};{row + 1}M'.encode()); pump(0.03)
+            os.write(fd, f'\x1b[<32;{last};{row + 1}M'.encode()); pump(0.05)
+            os.write(fd, f'\x1b[<0;{last};{row + 1}m'.encode()); pump(0.3)
     final = frames[-1][1] if frames else ''
     for _ in range(2): os.write(fd, b'\x03'); pump(0.4)
     try: os.kill(pid, signal.SIGTERM)
@@ -141,6 +167,12 @@ def run(name, spec, entry, keep):
             if left + right.split()[0] in final: problems.append(f'jammed with no paragraph break: {left!r} / {right!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
+    if 'clipboard' in spec:
+        import base64, re as regex
+        copies = [base64.b64decode(m).decode('utf-8', 'replace') for m in regex.findall(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', bytes(raw))]
+        if not copies: problems.append('nothing reached the clipboard (no OSC 52 in the output)')
+        elif copies[-1] != spec['clipboard']: problems.append(f'clipboard got {copies[-1]!r}, expected {spec["clipboard"]!r}')
+
 
     open(os.path.join(root, 'capture.bin'), 'wb').write(bytes(raw))
     open(os.path.join(root, 'final.txt'), 'w').write(final)

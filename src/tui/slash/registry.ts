@@ -112,7 +112,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
   entry('undo', 'Conversation', 'revert the last turn (only where the vendor exposes it)'),
   entry('native', 'Conversation', 'send text to the harness verbatim (also: //text)', { argHint: '<text>', availability: needsHarness('sending native commands') }),
-  entry('select', 'Conversation', 'release the mouse so you can select and copy text'),
+  entry('select', 'Conversation', "hand the mouse to the terminal's own selection (drag-to-copy works without it)"),
   entry('redraw', 'Conversation', 'repaint the screen'),
   entry('exit', 'Conversation', 'save and leave', { aliases: ['quit'] }),
 
