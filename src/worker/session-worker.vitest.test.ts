@@ -10,7 +10,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { WorkerClient } from './client.js';
-import { readWorkerRecord } from './registry.js';
+import { readWorkerRecord, writeWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
@@ -118,6 +118,49 @@ describe('session worker (real spawned process, real socket)', () => {
     // Same worker process both times -- proven by the same pid still owning
     // the registry record, not a second one having overwritten it.
     expect(recordAfterSecond?.pid).toBe(recordAfterFirst?.pid);
+  });
+
+  it('retires a worker running a different build and spawns a replacement', async () => {
+    const session = await isolatedSession();
+    const first = await WorkerClient.attach(session.id);
+    spawnedClients.push(first);
+    await first.initialSnapshot;
+    const before = await readWorkerRecord(session.id);
+    expect(before?.build).toBeTruthy();
+
+    // What a reinstall looks like from the client's side: the worker is
+    // running code from a different build of the entry it loaded.
+    await writeWorkerRecord({ ...before!, build: 'a-different-build' });
+    const second = await WorkerClient.attach(session.id);
+    spawnedClients.push(second);
+    await second.initialSnapshot;
+    const after = await readWorkerRecord(session.id);
+
+    expect(after?.pid).not.toBe(before?.pid);
+    expect(after?.build).toBe(before?.build);
+  });
+
+  it('keeps a stale-build worker that is in the middle of a turn', async () => {
+    const session = await isolatedSession();
+    const first = await WorkerClient.attach(session.id);
+    spawnedClients.push(first);
+    await first.initialSnapshot;
+    const before = await readWorkerRecord(session.id);
+
+    const state = await readState();
+    const stored = state.sessions.find((item) => item.id === session.id)!;
+    const now = new Date().toISOString();
+    stored.pendingTurn = { prompt: 'mid answer', startedAt: now, updatedAt: now, outputStarted: true };
+    await writeState(state);
+    await writeWorkerRecord({ ...before!, build: 'a-different-build' });
+
+    const second = await WorkerClient.attach(session.id);
+    spawnedClients.push(second);
+    await second.initialSnapshot;
+
+    // The user is mid-answer. Finishing that beats this client's freshness;
+    // the next attach, once the turn is done, retires it.
+    expect((await readWorkerRecord(session.id))?.pid).toBe(before?.pid);
   });
 
   it('rejects an attach carrying the wrong token', async () => {

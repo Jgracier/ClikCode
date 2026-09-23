@@ -7,7 +7,8 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
-import { readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
+import { currentWorkerBuild, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
+import { readState } from '../session/state/read.js';
 import { decodeFrames, encodeFrame, type ClientCommand, type WorkerEvent } from './protocol.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
@@ -49,6 +50,58 @@ async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecor
     if (Date.now() > deadline) throw new Error(`session worker for "${sessionId}" did not start in time`);
     await delay(SPAWN_POLL_MS);
   }
+}
+
+/** How long to wait for a retired worker to actually let go of its socket.
+ * It shuts down gracefully on SIGTERM (session-worker.ts) -- telling its
+ * clients, removing its record, unlinking the socket -- and that is fast, but
+ * it is not instant and spawning a replacement onto a path still held is the
+ * one way this can go wrong. */
+const RETIRE_TIMEOUT_MS = 3_000;
+
+/** A worker running different code than this client is not reused.
+ *
+ * A worker loads its entry once, at spawn, and then outlives every client:
+ * reinstalling ClikCode and reopening the TUI left a new client talking to a
+ * worker still running the old build, and every fix looked like it had not
+ * landed. Restarting the terminal is the obvious thing to try and it does not
+ * help, which is what makes this worth enforcing here rather than documenting.
+ *
+ * A turn in flight is the exception, and it is not a compromise: the user is
+ * mid-answer, and finishing that matters more than this client's freshness.
+ * The stale worker is then reused, and retired the next time nothing is
+ * running -- which the next attach, after that turn, is. */
+async function retireWorker(record: WorkerRuntimeRecord): Promise<boolean> {
+  try { process.kill(record.pid, 'SIGTERM'); } catch { return true; }
+  const deadline = Date.now() + RETIRE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (!await workerIsReachable(record.socketPath, 200)) return true;
+    await delay(SPAWN_POLL_MS);
+  }
+  return false;
+}
+
+async function turnInFlight(sessionId: string): Promise<boolean> {
+  try {
+    const state = await readState();
+    return Boolean(state.sessions.find((item) => item.id === sessionId)?.pendingTurn);
+  } catch {
+    // Unreadable state is not evidence a turn is running, but it is not
+    // evidence one is not either. Keep the worker: reusing a stale worker is
+    // a wrong build, killing one mid-turn is a lost answer.
+    return true;
+  }
+}
+
+/** The worker to talk to, or undefined when one has to be started. */
+async function usableWorker(sessionId: string): Promise<WorkerRuntimeRecord | undefined> {
+  const record = await findRunningWorker(sessionId);
+  if (!record) return undefined;
+  const build = currentWorkerBuild();
+  // Unknown own build: nothing to compare, so nothing is retired.
+  if (!build || record.build === build) return record;
+  if (await turnInFlight(sessionId)) return record;
+  return (await retireWorker(record)) ? undefined : record;
 }
 
 /** An existing worker's record, only if it is genuinely still there --
@@ -105,7 +158,7 @@ export class WorkerClient extends EventEmitter {
   }
 
   static async attach(sessionId: string): Promise<WorkerClient> {
-    const record = (await findRunningWorker(sessionId)) ?? await spawnSessionWorker(sessionId);
+    const record = (await usableWorker(sessionId)) ?? await spawnSessionWorker(sessionId);
     const socket = await new Promise<Socket>((resolveSocket, rejectSocket) => {
       const candidate = connect(record.socketPath);
       candidate.once('connect', () => resolveSocket(candidate));

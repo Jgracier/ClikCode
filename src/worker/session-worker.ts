@@ -19,7 +19,7 @@ import { BroadcastObserver } from './broadcast-observer.js';
 import { decodeFrames, encodeFrame, type ClientCommand } from './protocol.js';
 import { disposeSessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socketPathFor, writeWorkerRecord } from './registry.js';
+import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socketPathFor, writeWorkerRecord, currentWorkerBuild } from './registry.js';
 
 /** No attached client and no turn running, for this long: the worker exits
  * on its own rather than living forever the way the process it replaces
@@ -220,6 +220,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   });
   await writeWorkerRecord({
     pid: process.pid, sessionId, socketPath, installationId: state.installationId, startedAt: new Date().toISOString(), token,
+    ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}),
   });
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT', () => { void shutdown('SIGINT'); });

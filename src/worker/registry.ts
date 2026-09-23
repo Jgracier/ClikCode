@@ -8,6 +8,7 @@
  * worker can crash without taking any other open conversation down with it.
  */
 import { createHash, randomBytes } from 'node:crypto';
+import { statSync } from 'node:fs';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { join } from 'node:path';
@@ -19,11 +20,45 @@ export interface WorkerRuntimeRecord {
   socketPath: string;
   installationId: string;
   startedAt: string;
+  /** The code this worker loaded. A worker reads dist/index.js once, at
+   * spawn, and then survives 30 idle minutes and any number of client
+   * restarts -- so reinstalling ClikCode and reopening the TUI left a client
+   * on the new build talking to a worker still running the old one, and every
+   * fix looked like it had not worked. This has caused three separate
+   * misdiagnoses (of the response duplication, of the failover wording, and
+   * of a vanishing message), which is what makes it worth recording rather
+   * than remembering. Absent on a record written before this existed, which
+   * reads as "not this build" -- correctly, since it cannot be known to be. */
+  build?: string;
   /** Random per-worker, checked on connect so a stale socket path recycled by
    * an unrelated later process (same pid reused by the OS, or a filesystem
    * left the path behind after an unclean exit) is never mistaken for this
    * session's own worker. */
   token: string;
+}
+
+/** What identifies a build: the entry file a worker actually loads, by
+ * modification time and size.
+ *
+ * Not the version string -- the whole problem is two processes running
+ * different code with the SAME version between two releases. Not a content
+ * hash either: this is checked on every attach, and mtime+size answers the
+ * only question being asked (is this the same file as the one I would spawn)
+ * without reading three megabytes to do it.
+ *
+ * Both sides stat the same path deliberately: the worker's own entry IS the
+ * script a client would spawn, so a test pointing CLIKCODE_WORKER_ENTRY at a
+ * real build still compares like with like. Undefined when the entry cannot
+ * be stat'd at all, and an unknown build never retires anything. */
+export function currentWorkerBuild(): string | undefined {
+  const entry = process.env.CLIKCODE_WORKER_ENTRY ?? process.argv[1];
+  if (!entry) return undefined;
+  try {
+    const stats = statSync(entry);
+    return `${Math.round(stats.mtimeMs)}:${stats.size}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function workersDirectory(): string {
