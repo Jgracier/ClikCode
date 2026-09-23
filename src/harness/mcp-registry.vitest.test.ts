@@ -1,9 +1,8 @@
 /** One MCP entry, spelled the way each harness demands.
  *
- * Two grammars exist, both read from real CLIs: most take the target as a
- * positional, while Codex needs --url for a remote server and `--` before a
- * local command. Getting this wrong writes a server entry that looks
- * installed and never connects.
+ * Four grammars exist, every one read off a real CLI. Getting this wrong
+ * writes a server entry that looks installed and never connects, which is why
+ * each case below is the literal argv the vendor's own --help documents.
  */
 import { describe, expect, it } from 'vitest';
 import { mcpAddArgv, isRemoteTarget } from './mcp-registry';
@@ -61,12 +60,46 @@ describe('spelling "add this MCP server"', () => {
     expect(argv('droid', remote)).toBe('mcp add --type http sentry https://mcp.sentry.dev/mcp');
   });
 
+  it('names every part with a flag where the CLI takes nothing positionally, pre-joining where wanted', () => {
+    // auggie mcp add <name> [-c path] [--args "a b"] [-t http -u url].
+    // Passing a list where a string is wanted registers only the first arg,
+    // and the server then fails at connect time rather than at add time.
+    expect(argv('auggie', local)).toBe('mcp add figma -c npx --args -y figma-mcp');
+    expect(argv('auggie', remote)).toBe('mcp add sentry -t http -u https://mcp.sentry.dev/mcp');
+  });
+
+  it('carries a scope flag where the CLI would otherwise write into the cwd', () => {
+    // cmdc defaults -s to "local", which is project-local -- wrong for a
+    // server ClikCode installs once per account profile. Verified on disk:
+    // the positional doubles as the stdio command and trailing args land as
+    // args, giving {command: "npx", args: ["-y", "..."]}.
+    expect(argv('command', local)).toBe('mcp add -s user figma npx -y figma-mcp');
+    expect(argv('command', remote)).toBe('mcp add -s user -t http sentry https://mcp.sentry.dev/mcp');
+  });
+
+  it('reuses the plain positional shape for Qwen, which spells it identically to Claude', () => {
+    expect(argv('qwen', local)).toBe('mcp add figma npx -y figma-mcp');
+    expect(argv('qwen', remote)).toBe('mcp add -t http sentry https://mcp.sentry.dev/mcp');
+  });
+
+  it('leaves Cursor out, because it has every mcp subcommand except add', () => {
+    // mcp login/list/list-tools/enable/disable, and no add: it reads servers
+    // from .cursor/mcp.json and `enable` only approves one already written.
+    // A guessed add would write nothing and report success.
+    expect(mcpAddArgv(grammarOf('cursor'), local)).toBeUndefined();
+  });
+
   it('offers nothing for a harness with no recorded grammar', () => {
     // Never guessed: a wrong argv writes a broken entry.
     expect(mcpAddArgv(grammarOf('opencode'), local)).toBeUndefined();
     expect(mcpAddArgv(grammarOf('aider'), local)).toBeUndefined();
-    // Kimi has no mcp subcommand at all; Hermes has one but it prompts.
     expect(mcpAddArgv(grammarOf('kimi'), local)).toBeUndefined();
+    // Hermes DOES have `mcp add`, with a complete non-interactive flag set
+    // (--url / --command / --args). It is still excluded, and measuring why
+    // is the point: it connects to the server before saving and, when that
+    // fails, asks "Save config anyway? [y/N]". Run with stdin closed it
+    // EXITS 0 having written nothing -- so ClikCode would report a server
+    // installed that is absent. A false success is worse than no support.
     expect(mcpAddArgv(grammarOf('hermes'), local)).toBeUndefined();
   });
 
