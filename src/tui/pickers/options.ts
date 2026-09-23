@@ -20,6 +20,32 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
   // /cwd and /add-dir were each listed here as a raw vendor row as well, so the
   // same setting had two interfaces that could disagree.
   const current = (item: { id: string }): unknown => session.harnessOptions?.[item.id];
+  const save = async (optionId: string, raw: string): Promise<void> => {
+    const fresh = await readState();
+    const target = fresh.sessions.find((item) => item.id === id);
+    if (!target) return;
+    setSessionHarnessOption(target, harness, optionId, raw);
+    target.updatedAt = new Date().toISOString();
+    await writeState(fresh);
+  };
+  // Few values: switched right in this list, the current one marked -- the
+  // same rule as the settings menu (settings.ts). A boolean is On/Off. The
+  // exception is one marked dangerous, which stays a row of its own so that
+  // turning it on still goes through a confirmation rather than one keypress.
+  const inlineFor = (item: (typeof manifest.options)[number]) => {
+    if (item.dangerous) return {};
+    const values = item.kind === 'boolean' ? ['on', 'off'] : item.values ?? [];
+    if (values.length < 2 || values.length > 4) return {};
+    const now = current(item);
+    const currentValue = item.kind === 'boolean' ? (now === true ? 'on' : 'off') : String(now ?? values[0]);
+    return {
+      inline: {
+        choices: values.map((value) => ({ label: value[0]!.toUpperCase() + value.slice(1), value })),
+        current: currentValue,
+        apply: (value: string) => save(item.id, value),
+      },
+    };
+  };
   const option = await chooseOption(rl, `${harness.displayName} options`, vendorFacingOptions(manifest.options).map((item) => ({
     label: item.label,
     detail: [
@@ -28,31 +54,24 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
       ...(item.dangerous ? [chalk.yellow('dangerous')] : []),
     ].join(' · '),
     value: item,
+    ...inlineFor(item),
   })));
   if (!option) return;
   let raw: string | undefined;
   if (option.kind === 'boolean') {
-    // A switch flips. Choosing the row and then choosing "On" was two steps
-    // for one bit, with the current state shown nowhere; the row now says
-    // which way it is, and choosing it turns it the other way. The one second
-    // step that stays is turning ON something marked dangerous -- that is
-    // the case a confirmation exists for.
+    // Reached only for a dangerous switch (the rest flip in the list): off
+    // goes straight through, on is confirmed.
     const turningOn = current(option) !== true;
-    if (turningOn && option.dangerous) {
-      raw = await chooseOption(rl, `Turn on ${option.label}?`, [
+    raw = turningOn
+      ? await chooseOption(rl, `Turn on ${option.label}?`, [
         { label: 'Turn on', detail: `· ${chalk.yellow('dangerous')}`, value: 'on' }, { label: 'Cancel', value: '' },
-      ]);
-    } else raw = turningOn ? 'on' : 'off';
+      ])
+      : 'off';
   } else if (option.values?.length) {
     raw = await chooseOption(rl, option.label, option.values.map((entry) => ({ label: entry, value: entry })));
   } else {
     raw = (await rl.question(`${option.label} › `)).trim();
   }
   if (raw === undefined || raw === '') return;
-  const fresh = await readState();
-  const target = fresh.sessions.find((item) => item.id === id);
-  if (!target) return;
-  setSessionHarnessOption(target, harness, option.id, raw);
-  target.updatedAt = new Date().toISOString();
-  await writeState(fresh);
+  await save(option.id, raw);
 }

@@ -13,6 +13,7 @@
  */
 
 import { stdin as input } from 'node:process';
+import chalk from 'chalk';
 import type { PickerOption } from '../harness/prompter.js';
 import { listenForTerminalKeys } from './input-decoder.js';
 import { setTerminalRawMode } from './modes.js';
@@ -40,6 +41,14 @@ export interface OptionPickerSettings {
   onEscape?: () => void;
   refreshedOptions?: () => readonly PickerOption<never>[];
   refresh?: Promise<unknown>;
+}
+
+/** The value an inline row moves to: the next one, wrapping. Two values is a
+ * flip; three or four cycle. A current value that is not among the choices
+ * (stale state, a level the vendor dropped) moves to the first. */
+export function nextInlineChoice<C extends { value: string }>(choices: readonly C[], current: string): C {
+  const at = choices.findIndex((choice) => choice.value === current);
+  return choices[(at + 1) % choices.length]!;
 }
 
 export function runOptionPicker<T>(
@@ -70,12 +79,28 @@ export function runOptionPicker<T>(
         option.label.toLowerCase().includes(needle)
         || (option.detail ?? '').toLowerCase().includes(needle));
     };
+    /** The value each inline row is on now -- flipped here, not by rebuilding
+     * the list, so the cursor stays on the row being changed. */
+    const inlineNow = new Map<PickerOption<T>, string>();
+    const inlineValue = (option: PickerOption<T>): string => inlineNow.get(option) ?? option.inline!.current;
+    const inlineDetail = (option: PickerOption<T>): string => option.inline!.choices.map((choice) => (
+      choice.value === inlineValue(option) ? chalk.bold.cyan(`● ${choice.label}`) : chalk.dim(`○ ${choice.label}`)
+    )).join('  ');
     const draw = (): void => {
       const visible = visibleOptions();
       if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
-      const renderOptions = visible.map((option) => ({ label: option.label, detail: option.detail, value: '' }));
+      const renderOptions = visible.map((option) => ({
+        label: option.label, detail: option.inline ? inlineDetail(option) : option.detail, value: '',
+      }));
       const confirmation = '\u2192/Enter';
       const selectedOption = visible[selected];
+      if (selectedOption?.inline) {
+        host.paint(title, renderOptions, selected, '', 0, {
+          capacity, hideCursor: true,
+          hint: `\u2192/Enter switch · \u2191\u2193 move · \u2190 back · Esc exit`,
+        });
+        return;
+      }
       const secondary = selectedOption?.alternates?.length ? ' · Tab history'
         : selectedOption?.actions?.length ? ' · Tab options' : '';
       const destructive = selectedOption?.deleteAction ? ` · Del ${selectedOption.deleteAction.label.toLowerCase()}` : '';
@@ -154,12 +179,37 @@ export function runOptionPicker<T>(
       stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
       draw();
     };
+    /** Move an inline row to its next value and apply it. The list stays
+     * open: flipping a setting is not leaving the menu. */
+    let flipping = false;
+    const flip = async (option: PickerOption<T>): Promise<void> => {
+      if (flipping) return;
+      const next = nextInlineChoice(option.inline!.choices, inlineValue(option));
+      const previous = inlineValue(option);
+      inlineNow.set(option, next.value);
+      draw();
+      flipping = true;
+      try {
+        await option.inline!.apply(next.value);
+      } catch {
+        // Not applied -- show what is actually in effect, not what was hoped.
+        inlineNow.set(option, previous);
+      } finally {
+        flipping = false;
+        if (!finished) draw();
+      }
+    };
     const handleKey = (key: string): void => {
       const visible = visibleOptions();
       if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
       else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
       else if (key === '\u001b[D') { settings?.onBack?.(); finish(undefined); return; }
-      else if (pickerConfirmsSelection(key)) { if (visible[selected]) finish(visible[selected].value); return; }
+      else if (pickerConfirmsSelection(key)) {
+        const option = visible[selected];
+        if (option?.inline) { void flip(option); return; }
+        if (option) finish(option.value);
+        return;
+      }
       else if (key === '\t') {
         const option = visible[selected];
         if (option?.alternates?.length) void openAlternates(option);

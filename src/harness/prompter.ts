@@ -86,4 +86,14 @@ export interface PickerOption<T> {
    * the row belongs to. Optional; a prompter that ignores them still works. */
   argHint?: string;
   group?: string;
+  /** A setting with only a few values, shown and changed IN the list rather
+   * than behind a second screen: the row shows every choice with the current
+   * one marked, and Enter or Right Arrow moves to the next, applied at once,
+   * with the list staying open. For a setting with more values than fit on a
+   * row, leave this out and let the row open its own list. */
+  inline?: {
+    choices: readonly { label: string; value: string }[];
+    current: string;
+    apply(value: string): Promise<void>;
+  };
 }

@@ -490,6 +490,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.responsePaintTimer = undefined;
       this.liveResponse = '';
     }
+    // A picker owns the screen while it is open. A setting flipped from inside
+    // one renders the status line (harness/output.ts), and painting the
+    // composer here would draw it over the list being used; the state is kept
+    // and the frame repaints with it when the picker closes.
+    if (this.selecting) return;
     this.paint('', [], 0, '› ', 0);
   }
 
