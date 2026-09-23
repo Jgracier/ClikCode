@@ -611,18 +611,29 @@ export async function aiSessionSend(
           // account would look for it, which is the difference between a
           // failover costing a 20KB prompt and costing nothing.
           turnText = INTERRUPTED_TURN_REQUEST;
+          // And the answer on screen stays. The thread already contains what
+          // the first account wrote, and the next one is told to carry on
+          // without repeating it -- so clearing it here made the first half of
+          // the answer vanish and a continuation appear in its place. The
+          // continuation starts a new paragraph instead of running into it.
+          const partial = session.pendingTurn?.response ?? '';
+          if (partial.trim() && !/\n\s*\n\s*$/.test(partial)) {
+            checkpoint.response('\n\n', 'append');
+            prompter?.response('\n\n', 'append');
+          }
         } else {
           session.nativeSessionId = undefined;
           session.nativeStartedAt = undefined;
           delete session.nativeSessionPreallocated;
           // Built while the interrupted attempt's touched-file hints are still
           // on the checkpoint; only then is the partial response cleared,
-          // because the retry is a new response attempt (the direct-API path
-          // does the same).
+          // because a fresh thread answers the whole request again and keeping
+          // the old half would show it twice (the direct-API path does the
+          // same).
           turnText = interruptedTurnFailoverPrompt(session);
+          checkpoint.response('', 'replace');
+          prompter?.response('', 'replace');
         }
-        checkpoint.response('', 'replace');
-        prompter?.response('', 'replace');
         continue;
       }
       session.nativeStartedAt ??= new Date().toISOString();
