@@ -13,8 +13,6 @@ import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
 import { aiGatewaySessionSend } from '../turn/drive.js';
 import { readState } from '../session/state/read.js';
-import { writeState } from '../session/state/write.js';
-import { SESSION_IDLE_WINDOW_MS } from '../session/abandoned.js';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/runtime.js';
 import { BroadcastObserver } from './broadcast-observer.js';
@@ -27,54 +25,8 @@ import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socket
  * problem this whole design fixes more robustly) has plenty of time to
  * happen without racing a shutdown; short enough that a genuinely abandoned
  * session does not sit as dead weight for days the way the zombie processes
- * that motivated this design did.
- *
- * Shared with the abandoned-session sweep rather than restated, so the sweep
- * can never judge a session dead sooner than this worker would. */
-const IDLE_EXIT_MS = SESSION_IDLE_WINDOW_MS;
-
-/** The reason string for the one shutdown that means the conversation is over
- *  rather than merely interrupted. Compared, not just logged, so keep it and
- *  the scheduleIdleExit call site in step. */
-const IDLE_EXIT_REASON = 'idle timeout';
-
-/** Closing the session RECORD, which is the other half of the worker exiting.
- *
- * Until this existed, `status = 'closed'` was set in exactly one place in the
- * whole codebase -- the manual `sessions close` command -- so a worker that
- * idled out tore down its socket, its registry record and its connections and
- * then left the session marked `active` forever. Found live: 75 of 83 sessions
- * `active` with three workers actually running, and claims whose pids had been
- * dead for twenty hours.
- *
- * Only on the idle exit, deliberately. SIGTERM/SIGINT is a machine shutting
- * down or someone killing the process, which says nothing about whether the
- * conversation is finished; thirty minutes with nobody attached and no turn
- * running does.
- *
- * Safe because closing is reversible and silent: both resume paths
- * (aiSessionResume and aiSessionInteractive) set a closed session back to
- * active themselves, so this costs the user nothing but stops `active` from
- * meaning "has ever existed".
- *
- * The claim is deliberately left alone. Claims are not part of the session
- * record -- they live in their own store and `session.claim` is only a view
- * projected on read, which writeState translates back ONLY for this
- * process's own claim. A claim belongs to a client, never to this worker, so
- * deleting it here would be a no-op dressed up as cleanup. It also does not
- * need doing: sessionClaimIsLive already treats a dead pid or a stale
- * heartbeat as unclaimed, which is what lets another terminal take the
- * session over. */
-export async function closeIdleSession(sessionId: string): Promise<void> {
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === sessionId);
-  if (!session || session.status !== 'active') return;
-  const now = new Date().toISOString();
-  session.status = 'closed';
-  session.closedAt = now;
-  session.updatedAt = now;
-  await writeState(state);
-}
+ * that motivated this design did. */
+const IDLE_EXIT_MS = 30 * 60 * 1000;
 
 interface ConnectionState {
   socket: Socket;
@@ -107,7 +59,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   const scheduleIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
     if (turnRunning || observer.attachedCount > 0) return;
-    idleTimer = setTimeout(() => { void shutdown(IDLE_EXIT_REASON); }, IDLE_EXIT_MS);
+    idleTimer = setTimeout(() => { void shutdown('idle timeout'); }, IDLE_EXIT_MS);
     idleTimer.unref();
   };
 
@@ -242,9 +194,6 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   });
 
   const shutdown = async (reason: string): Promise<void> => {
-    // Before the socket goes: a reader that saw the record still `active`
-    // would be right until this lands, and wrong after.
-    if (reason === IDLE_EXIT_REASON) await closeIdleSession(sessionId).catch(() => undefined);
     for (const connection of connections.keys()) {
       connection.write(encodeFrame({ type: 'shutdown', reason }));
       connection.end();

@@ -10,7 +10,6 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { WorkerClient } from './client.js';
-import { closeIdleSession } from './session-worker.js';
 import { readWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 
@@ -204,39 +203,4 @@ describe('session worker (real spawned process, real socket)', () => {
     await expect(nextEvent(client, 'snapshot')).resolves.toMatchObject({ session: { id: session.id } });
   });
 
-  describe('closing the session record when the worker idles out', () => {
-    // Until this existed, `status = 'closed'` was set in exactly one place in
-    // the codebase -- the manual `sessions close` command -- so a worker that
-    // idled out left its session `active` forever. Found live: 75 of 83
-    // sessions `active` with three workers actually running.
-    const reread = async (id: string): Promise<HarnessSession | undefined> =>
-      (await readState()).sessions.find((item) => item.id === id);
-
-    it('marks an idled-out session closed', async () => {
-      const session = await isolatedSession();
-      await closeIdleSession(session.id);
-      const after = await reread(session.id);
-      expect(after?.status).toBe('closed');
-      expect(after?.closedAt).toBeTruthy();
-    });
-
-    it('does not reopen or re-stamp a session that was already closed', async () => {
-      const session = await isolatedSession();
-      const state = await readState();
-      const found = state.sessions.find((item) => item.id === session.id)!;
-      found.status = 'closed';
-      found.closedAt = '2020-01-01T00:00:00.000Z';
-      await writeState(state);
-
-      await closeIdleSession(session.id);
-      const after = await reread(session.id);
-      expect(after?.status).toBe('closed');
-      expect(after?.closedAt).toBe('2020-01-01T00:00:00.000Z');
-    });
-
-    it('is a no-op for a session that no longer exists', async () => {
-      await isolatedSession();
-      await expect(closeIdleSession(randomUUID())).resolves.toBeUndefined();
-    });
-  });
 });
