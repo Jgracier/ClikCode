@@ -4,10 +4,14 @@ export interface LiveTurnSubmission {
   id: string;
   text: string;
   submittedAt: string;
+  /** A ClikCode slash command typed while the turn was running. It is queued
+   * like a message but is NOT one: it runs as the command it is when the turn
+   * ends, with the screen to itself. See tui/waiting-slash.ts. */
+  kind?: 'command';
 }
 
 export interface LiveTurnInputResult {
-  disposition: 'steered' | 'queued';
+  disposition: 'steered' | 'queued' | 'command';
   submission: LiveTurnSubmission;
 }
 

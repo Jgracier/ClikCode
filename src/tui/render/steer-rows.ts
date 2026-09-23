@@ -18,7 +18,7 @@
  *  drawn here; the rest are still in flight or failed. */
 export type LiveSubmission = {
   text: string; sequence: number; responseOffset: number;
-  state: 'sending' | 'queued' | 'steered' | 'error';
+  state: 'sending' | 'queued' | 'steered' | 'error' | 'command';
 };
 
 /** A steer already folded into the conversation by the transcript reader. */

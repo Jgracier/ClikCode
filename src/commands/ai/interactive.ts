@@ -22,6 +22,8 @@ import { compactPath, sessionProviderLabel } from '../../harness/protocol/labels
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
+import { consumeSessionTurn } from '../../turn/checkpoint.js';
+import { queueCommandDuringTurn } from '../../tui/slash/queue.js';
 import { nativeUsageReading } from '../../harness/accounts/account-usage.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
@@ -284,7 +286,14 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         refreshUsage(latest, latestState);
         notice = undefined;
         const queued = latest.queuedTurns?.[0];
-        if (queued) {
+        if (queued?.kind === 'command') {
+          // A slash command typed while the turn was running. It runs as the
+          // command it is, with the screen to itself -- which is why it waited
+          // rather than running mid-stream. Consumed first: a command that
+          // throws must not be retried forever on every later pass.
+          line = queued.text;
+          if (consumeSessionTurn(latest, queued.id)) await writeState(latestState);
+        } else if (queued) {
           // No notice: a queued message is echoed into the conversation as the
           // user message it is, and the waiting row underneath says a turn is
           // running. Announcing it a third time said nothing the screen did
@@ -349,7 +358,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           TERMINAL.active?.startWaiting('thinking', (restoreDraft) => {
             interruptedSubmission!.restoreOnEscape = restoreDraft && turn.echo;
             turnController.abort();
-          }, (text) => liveInput.submit(text));
+          }, (text) => liveInput.submit(text), (text) => queueCommandDuringTurn(targetId, text));
           try { await aiGatewaySessionSend(config, targetId, promptText, turnController.signal, { ...run, liveInput }); }
           finally {
             liveInput.close();
