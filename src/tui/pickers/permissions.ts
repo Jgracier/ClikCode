@@ -12,7 +12,7 @@ import { VALID_PERMISSION_MODES } from '../../session/options.js';
 import { aiSettingsSetGlobal } from '../../commands/ai/settings.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
-import { applySettingScope } from './setting-scope.js';
+import { applyToChat } from './setting-scope.js';
 
 /** Edit the active conversation's approval behavior from the top-level
  * `clikcode permissions` command. The same picker and provider capability
@@ -68,5 +68,5 @@ export async function interactivePermissionPicker(rl: HarnessPrompter, id: strin
   const selected = await chooseOption(rl, 'Choose permissions', supported.map((value) => ({
     label: value[0].toUpperCase() + value.slice(1), detail: `· ${descriptions[value]}${value === current ? ' · current' : ''}`, value,
   })));
-  if (selected) await applySettingScope(rl, id, 'permissions', selected);
+  if (selected) await applyToChat(id, 'permissions', selected);
 }

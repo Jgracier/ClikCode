@@ -6,7 +6,7 @@ import { readState } from '../../session/state/read.js';
 import { optionForHarness, VALID_EFFORTS } from '../../session/options.js';
 import { chooseOption } from './choose.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
-import { applySettingScope } from './setting-scope.js';
+import { applyToChat } from './setting-scope.js';
 
 export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const state = await readState();
@@ -25,5 +25,5 @@ export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): 
   const selected = await chooseOption(rl, 'Choose reasoning effort', efforts.map((value) => ({
     label: value, detail: value === session.effort ? '· current' : undefined, value,
   })));
-  if (selected) await applySettingScope(rl, id, 'effort', selected);
+  if (selected) await applyToChat(id, 'effort', selected);
 }

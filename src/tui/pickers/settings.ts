@@ -1,7 +1,7 @@
 /** The settings menu, and the scope (global or per-provider) a chosen
  * setting is written at. */
 
-import { applySettingScope } from './setting-scope.js';
+import { applyToChat } from './setting-scope.js';
 import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
@@ -25,7 +25,7 @@ async function interactiveFailoverPicker(rl: HarnessPrompter, id: string): Promi
     { label: 'Auto-switch accounts', detail: `· switch to another ready account of the same provider when quota runs out${current === 'on-quota-exhausted' ? ' · current' : ''}`, value: 'auto' },
     { label: 'Never', detail: `· stop and ask instead of switching${current === 'never' ? ' · current' : ''}`, value: 'never' },
   ]);
-  if (selected) await applySettingScope(rl, id, 'failover', selected);
+  if (selected) await applyToChat(id, 'failover', selected);
 }
 
 export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {

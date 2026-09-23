@@ -11,6 +11,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stateDirectory } from '../session/store/paths.js';
 
@@ -91,7 +92,9 @@ export async function ensureWorkersDirectory(): Promise<void> {
 }
 
 export function socketPathFor(sessionId: string): string {
-  return join(workersDirectory(), socketFileName(sessionId));
+  const standard = join(workersDirectory(), socketFileName(sessionId));
+  if (standard.length < 100) return standard;
+  return join(tmpdir(), `cc-${socketFileName(sessionId)}`);
 }
 
 export async function readWorkerRecord(sessionId: string): Promise<WorkerRuntimeRecord | undefined> {
