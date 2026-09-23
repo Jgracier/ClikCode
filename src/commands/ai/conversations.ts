@@ -11,7 +11,7 @@ import { writeState } from '../../session/state/write.js';
 import { createHandoffBranch, synchronizeNativeTranscript } from '../../turn/runtime.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { aiHarnessSelect } from './harness.js';
-import { preferredAccountId } from './sessions.js';
+import { preferredAccountId } from './preferred-account.js';
 
 /** `nativeHarness` is deliberately not carried forward here, unlike
  * `provider`/`accountId`/`route`/etc. It is the one field the empty-session

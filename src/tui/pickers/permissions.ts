@@ -12,7 +12,7 @@ import { VALID_PERMISSION_MODES } from '../../session/options.js';
 import { aiSettingsSetGlobal } from '../../commands/ai/settings.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
-import { applySettingScope } from './settings.js';
+import { applySettingScope } from './setting-scope.js';
 
 /** Edit the active conversation's approval behavior from the top-level
  * `clikcode permissions` command. The same picker and provider capability
