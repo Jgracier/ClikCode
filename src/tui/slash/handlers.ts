@@ -151,7 +151,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     }
     session.updatedAt = new Date().toISOString();
     await writeState(state);
-    return emitHarnessOutput({ panel: 'attachments', attachments: session.attachments ?? [] });
+    // `changed`: this is the confirmation of an attach or a clear, not the
+    // list someone asked to see (that is the no-argument form above).
+    return emitHarnessOutput({ panel: 'attachments', attachments: session.attachments ?? [], changed: true });
   },
   diff: async ({ session }) => {
     return emitHarnessOutput({ panel: 'diff', diff: await workspaceDiff(session.workspace ?? process.cwd()) });
@@ -525,7 +527,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   cwd: async ({ state, session, args }) => {
     if (!args) return emitHarnessOutput({ panel: 'cwd', text: compactPath(session.workspace ?? process.cwd()), workspace: session.workspace ?? process.cwd() });
     const notice = await changeSessionWorkspace(state, session, args);
-    return emitHarnessOutput({ panel: 'cwd', text: notice, workspace: session.workspace });
+    // The new directory is on the status line; this only confirms the change.
+    return emitHarnessOutput({ panel: 'cwd', text: notice, workspace: session.workspace, changed: true });
   },
   'add-dir': async ({ state, session, args }) => emitHarnessOutput({ panel: 'add-dir', text: await addSessionDirectory(state, session, args) }),
   memory: async ({ session, words }) => {
