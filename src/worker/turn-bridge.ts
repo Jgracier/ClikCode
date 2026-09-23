@@ -12,6 +12,7 @@
  * for why that is true by construction, not by care taken here).
  */
 import { randomUUID } from 'node:crypto';
+import { queueCommandDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { WorkerClient } from './client.js';
 import type { WorkerEvent } from './protocol.js';
@@ -159,6 +160,9 @@ export async function runTurnThroughWorker(
           // reverse: a genuinely queued one silently treated as delivered).
           return { disposition: 'queued', submission: { id: randomUUID(), text, submittedAt: new Date().toISOString() } };
         },
+        // A slash line is never the worker's business: it is ClikCode's own
+        // command, and it runs here when the turn ends.
+        (text) => queueCommandDuringTurn(sessionId, text),
       );
       client.send({ type: 'submit', text: promptText, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
     });

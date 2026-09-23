@@ -30,6 +30,7 @@ import { runOptionPicker } from './option-picker.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
+import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
@@ -91,7 +92,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingDraft = '';
   private waitingCursor = 0;
   private waitingSubmit?: (text: string) => Promise<LiveTurnInputResult>;
-  private waitingSubmissions: Array<{ localId: number; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' }> = [];
+  private waitingSubmissions: Array<{ localId: number; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command' }> = [];
   private waitingSubmissionId = 0;
   private timelineSequence = 0;
   private readonly waitingSubmissionWrites = new Set<Promise<void>>();
@@ -142,6 +143,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the footer starts, and the status line gets drawn at both rows. Guarded the
    * same way `selecting` already guards this for select() pickers. */
   private paletteActive = false;
+  /** What the composer's slash palette offers, remembered from the last
+   * question() so a turn in flight can offer the same commands. A turn does
+   * not change which commands exist; each is re-checked when it runs. */
+  private paletteCommands: readonly PaletteEntry[] = [];
+  private waitingCommand?: (text: string) => Promise<LiveTurnInputResult>;
   /** The prompt this client submitted, held from Enter until the turn ends.
    * See render/pending-prompt.ts: the snapshot alone cannot draw it for the
    * whole turn, so the client keeps its own copy of what it sent. */
@@ -222,6 +228,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       const text = this.waitingDraft.trim();
       if (!text || !this.waitingSubmit) return;
+      // A slash line is ClikCode's own command and never text for the model.
+      // Handed to the caller to route (see waiting-slash.ts); a line the
+      // router decides is really conversation comes back as 'queued'.
+      const submit = commandLineTypedDuringTurn(text) && this.waitingCommand
+        ? this.waitingCommand : this.waitingSubmit;
       this.waitingDraft = '';
       this.waitingCursor = 0;
       const localId = ++this.waitingSubmissionId;
@@ -229,7 +240,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
       });
       this.updateWaiting();
-      const write = this.waitingSubmit(text).then((result) => {
+      const write = submit(text).then((result) => {
         const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
         if (item) item.state = result.disposition;
         this.updateWaiting();
@@ -557,6 +568,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     message: string,
     onCancel?: (restoreDraft: boolean) => void,
     onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
+    onCommand?: (text: string) => Promise<LiveTurnInputResult>,
   ): void {
     this.stopWaiting(false);
     // A new turn is the reader rejoining the conversation.
@@ -575,6 +587,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingLabel = message;
     this.cancelWaiting = onCancel;
     this.waitingSubmit = onSubmit;
+    this.waitingCommand = onCommand;
     this.waitingDraft = '';
     this.waitingCursor = 0;
     this.waitingSubmissions = [];
@@ -632,6 +645,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.waitingLabel) this.resumeInput = undefined;
     this.cancelWaiting = undefined;
     this.waitingSubmit = undefined;
+    this.waitingCommand = undefined;
     this.waitingCancelled = false;
     this.settleApprovals();
     this.waitingLabel = '';
@@ -799,11 +813,31 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.responsePaintTimer = setTimeout(() => {
       this.responsePaintTimer = undefined;
       if (!this.closed && !this.selecting && !this.paletteActive) {
-        if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
+        if (this.waitingLabel) this.paintWaiting();
         else this.repaint();
       }
     }, delay);
     this.responsePaintTimer.unref();
+  }
+
+  /** The waiting frame, with the slash palette when one is being typed.
+   *
+   * A hint list, not a picker: during a turn Up/Down scroll the transcript
+   * (which is the point -- reading what went past is why they are bound
+   * there), so there is no selection to move and Enter runs what was typed.
+   * Without this a command was invisible AND unavailable while an answer
+   * streamed; `/model` went to the model as the word "/model". */
+  private paintWaiting(): void {
+    const matches = this.waitingCommand && !this.waitingDraft.includes(' ')
+      ? commandPaletteMatches(this.waitingDraft, this.paletteCommands) : [];
+    if (!matches.length) {
+      this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
+      return;
+    }
+    this.paint(this.waitingDraft, matches, 0, '› ', this.waitingCursor, {
+      capacity: Math.min(matches.length, 8) + 2,
+      hint: 'Enter runs it when the turn finishes · esc interrupts',
+    });
   }
 
   /** Every update is a complete atomic frame. Partial footer/composer paints
@@ -898,7 +932,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // are deduplicated against their durable copy the same way, just below.
     const storedQueuedTexts = new Set(storedQueued.map((item) => item.text));
     const queuedMessages = [
-      ...storedQueued.map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
+      ...storedQueued.map((item) => ({ role: 'user' as const, content: item.text, queueState: item.kind === 'command' ? 'command' as const : 'queued' as const })),
       ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedQueuedTexts.has(item.text))
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
     ];
@@ -1134,7 +1168,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // message the moment it is sent, and would then be written a second time.
       const status = message.queueState === 'steered' ? 'steered into active turn'
         : message.queueState === 'sending' ? 'submitting…'
-          : message.queueState === 'error' ? 'not sent · restored for editing' : 'queued for next turn';
+          : message.queueState === 'error' ? 'not sent · restored for editing'
+            : message.queueState === 'command' ? 'runs when the turn finishes'
+              : 'queued for next turn';
       // One row, the same separator the transcript gives every other message:
       // a message submitted mid-turn is still a message the user wrote.
       // The speaker changes once, where the queue begins: two rows there, the
@@ -1711,6 +1747,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     commands: readonly PaletteEntry[] = [],
     settings?: { cancellable?: boolean; rightArrowPalette?: boolean },
   ): Promise<string> {
+    // Kept for the turn this prompt's answer starts: a turn in flight offers
+    // the same commands, and this is where they are known.
+    this.paletteCommands = commands;
     if (!input.isTTY) {
       // A single check here used to end the whole session the instant it
       // failed once -- fatal specifically after a long suspend/resume

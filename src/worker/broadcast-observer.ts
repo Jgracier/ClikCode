@@ -114,7 +114,7 @@ export class BroadcastObserver implements TurnObserver {
    * observer at all. Accepted and ignored here rather than left off the
    * signature, so this still satisfies the one interface both a worker and
    * a real terminal are held to. */
-  startWaiting(message: string, _onCancel?: (restoreDraft: boolean) => void, _onSubmit?: (text: string) => Promise<LiveTurnInputResult>): void {
+  startWaiting(message: string, _onCancel?: (restoreDraft: boolean) => void, _onSubmit?: (text: string) => Promise<LiveTurnInputResult>, _onCommand?: (text: string) => Promise<LiveTurnInputResult>): void {
     this.liveText = '';
     this.waitingLabel = message;
     this.outputStarted = false;

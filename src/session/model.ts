@@ -81,7 +81,7 @@ export interface HarnessSession {
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */
-  queuedTurns?: Array<{ id: string; text: string; submittedAt: string }>;
+  queuedTurns?: Array<{ id: string; text: string; submittedAt: string; kind?: 'command' }>;
   attachments?: string[];
   /** Provider-native values validated against the selected harness manifest. */
   harnessOptions?: Record<string, unknown>;
