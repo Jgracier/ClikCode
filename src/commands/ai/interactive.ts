@@ -313,9 +313,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           ...(rl instanceof TerminalHarnessPrompter ? { prompter: rl } : {}),
         };
         if (active && rl.render) {
+          // The submitted prompt is the prompter's for the whole turn, not a
+          // message and not part of this snapshot: it is not a message yet, and
+          // put in `messages` it lived somewhere the worker's next snapshot
+          // overwrote -- which is what made the message the user had just sent
+          // appear and then vanish. See tui/render/pending-prompt.ts.
+          rl.submitted?.(turn.echo ? promptText : undefined);
           const pending: HarnessSession = {
             ...active,
-            messages: [...sessionTranscriptMessages(active), ...(turn.echo ? [{ role: 'user' as const, content: promptText }] : [])].slice(-40),
+            messages: sessionTranscriptMessages(active).slice(-40),
             pendingTurn: undefined,
             ...(turn.queuedTurnId
               ? { queuedTurns: active.queuedTurns?.filter((item) => item.id !== turn.queuedTurnId) }

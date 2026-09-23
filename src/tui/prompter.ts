@@ -29,6 +29,7 @@ import { frameRowBudget } from './render/frame-budget.js';
 import { runOptionPicker } from './option-picker.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
+import { pendingPromptText } from './render/pending-prompt.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
@@ -141,6 +142,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the footer starts, and the status line gets drawn at both rows. Guarded the
    * same way `selecting` already guards this for select() pickers. */
   private paletteActive = false;
+  /** The prompt this client submitted, held from Enter until the turn ends.
+   * See render/pending-prompt.ts: the snapshot alone cannot draw it for the
+   * whole turn, so the client keeps its own copy of what it sent. */
+  private submittedPrompt?: string;
   private cancelWaiting?: (restoreDraft: boolean) => void;
   private waitingCancelled = false;
   private pendingApproval?: ApprovalRequest & { shownAt: number; needsFocus: boolean; focused: boolean };
@@ -439,6 +444,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     installTerminalRestoreSignals();
   }
 
+  /** What this client just sent, from the moment Enter was pressed until the
+   * turn ends. The turn's own journal (`session.pendingTurn`) is the other
+   * source and arrives later; see render/pending-prompt.ts. */
+  submitted(prompt: string | undefined): void { this.submittedPrompt = prompt; }
+
   render(session: HarnessSession, account?: string, notice?: string): void {
     if (this.currentSession?.id !== session.id) {
       this.activityEntries = [];
@@ -637,6 +647,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.waitingDraft = '';
     this.waitingCursor = 0;
+    // The turn is over: its prompt is a real message now, and holding the
+    // client's copy any longer would draw it twice.
+    this.submittedPrompt = undefined;
     if (refresh && !this.closed) this.repaint({ keepPalette: false });
   }
 
@@ -859,14 +872,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const rule = '─'.repeat(rowWidth);
     const stableMessages = session.messages ?? [];
     const pending = this.waitingLabel ? session.pendingTurn : undefined;
-    const persistedMessages = pending
-      ? [...stableMessages, { role: 'user' as const, content: pending.prompt }]
+    const pendingPrompt = pendingPromptText({
+      ...(pending?.prompt ? { durable: pending.prompt } : {}),
+      ...(this.submittedPrompt ? { sticky: this.submittedPrompt } : {}),
+      lastMessage: stableMessages[stableMessages.length - 1],
+    });
+    const persistedMessages = pendingPrompt
+      ? [...stableMessages, { role: 'user' as const, content: pendingPrompt }]
       : sessionTranscriptMessages(session);
     // Tool events often arrive before the first prose token. They still belong
     // to the in-flight assistant message. Render an empty temporary assistant
     // anchor immediately; otherwise the tools remain invisible and then all
     // appear at once when the first sentence arrives.
-    const settledMessage = pending ? undefined : persistedMessages[persistedMessages.length - 1];
+    const settledMessage = pendingPrompt ? undefined : persistedMessages[persistedMessages.length - 1];
     const hasTransientAssistant = transientAssistantRequired(
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
       settledMessage?.role === 'assistant' ? settledMessage.content : undefined,
