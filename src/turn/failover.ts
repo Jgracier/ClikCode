@@ -48,7 +48,16 @@ interface AccountFailureSignals {
 }
 
 const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked))/i;
-const QUOTA_TEXT = /(?:quota (?:exceeded|exhausted)|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|out of credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
+// Both halves of "ran out" matter, because vendors write it either way
+// round. Captured verbatim from real refusals on this machine:
+//   antigravity  'RESOURCE_EXHAUSTED (code 429): Individual quota reached.
+//                 ... Resets in 76h57m39s.'
+//   copilot      'You have exceeded your monthly quota'
+// Neither matched before: the first says "quota reached" where the pattern
+// wanted exceeded/exhausted, and the second puts the verb BEFORE the noun.
+// Both were therefore classified 'other' and shown as "account failed …
+// retrying", which is how a spent plan came to read like a crash.
+const QUOTA_TEXT = /(?:quota (?:exceeded|exhausted|reached)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
 const THROTTLE_TEXT = /(?:rate limit|too many requests|temporar(?:y|ily) throttled)/i;
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
@@ -104,6 +113,30 @@ export function accountFailureReason(kind: AccountFailureKind): string {
     case 'native-thread-invalid': return 'thread expired';
     default: return 'account failed';
   }
+}
+
+/** One account switch, worded the same way wherever it happens.
+ *
+ * There are four switch sites -- native and api-key, each with a pre-turn
+ * check and a reactive one -- and every one of them had written this line for
+ * itself. They had drifted into two different wordings for the same event:
+ * the pre-turn pair said "quota exhausted … switching to X" while the
+ * reactive pair said "<reason> … retrying…". Running out of usage is not a
+ * retry, and saying so made a spent plan read like a flaky one.
+ *
+ * `from` is deliberately a LABEL. The api-key sites were passing an account
+ * ID into the same `accountSwitchedFrom` output field the native sites filled
+ * with a label, so a headless consumer got a UUID from one path and a name
+ * from the other. */
+export function accountSwitchNotice(kind: AccountFailureKind, to: string): string {
+  return kind === 'quota-exhausted'
+    ? `out of usage, switching to ${to}`
+    : `${accountFailureReason(kind)}, switching to ${to}`;
+}
+
+/** The status line while the switch happens. */
+export function accountSwitchPhase(to: string): string {
+  return `switching to ${to}`;
 }
 
 export function classifyAccountFailure(error: unknown, signals: AccountFailureSignals = {}): AccountFailureKind {
