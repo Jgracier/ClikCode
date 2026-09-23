@@ -221,24 +221,6 @@ export async function aiSessionShow(id: string): Promise<void> {
   emitJson({ session });
 }
 
-/** A session that never received a single turn AND was never linked to a real
- * vendor conversation has nothing to resume — keeping it clutters every list
- * with identical "Untitled chat" entries every time the app is opened and
- * left without typing anything. A set nativeSessionId is kept even with zero
- * ClikCode-tracked messages: it may be adopted from, or linked directly to, a
- * vendor's own conversation that has real content ClikCode just never routed
- * a turn through. gatewayConfirmed is the same signal for the one route
- * (Gateway) that doesn't otherwise have a reliable "was this deliberate"
- * field to check. nativeHarness is deliberately NOT part of this check: it
- * used to be, on the theory that it is only ever set by an explicit provider
- * selection (aiHarnessSelect, newProviderConversation) -- but
- * newConversationSession carries it forward to every fresh default session
- * too, same as `provider`/`accountId`/`route`, which made it indistinguishable
- * from an accidental blank launch and defeated this check for the overwhelming
- * majority of empty sessions. */
-function sessionIsEmpty(session: HarnessSession): boolean {
-  return !sessionTranscriptMessages(session).length && !session.nativeSessionId && !session.gatewayConfirmed;
-}
 
 /** Ending a session, both ways it can end.
  *
@@ -260,7 +242,8 @@ async function endSession(id: string, intent: 'close' | 'leave'): Promise<void> 
   const announce = (): void => {
     if (intent === 'close') emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
   };
-  if (sessionIsEmpty(session)) {
+  // Never started: not kept, by the same rule /resume hides it by.
+  if (isBlankConversation(session)) {
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
     return announce();

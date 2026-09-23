@@ -13,16 +13,17 @@ import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './preferred-account.js';
 
-/** `nativeHarness` is deliberately not carried forward here, unlike
- * `provider`/`accountId`/`route`/etc. It is the one field the empty-session
- * prune (sessionIsEmpty in sessions.ts) treats as proof that a provider was
- * explicitly chosen for THIS session (aiHarnessSelect, newProviderConversation
- * set it directly, bypassing this function) -- carrying it forward here would
- * make every fresh session look deliberately configured before a single turn
- * ran, the same way `provider` does not need to prove that. The first real
- * turn re-derives it from `provider` (localHarnessForProvider) regardless, so
- * nothing routes differently; only the false "this was set up on purpose"
- * signal on an untouched session goes away. */
+/** A fresh conversation on exactly the setup of the one it came from: same
+ * provider, same harness, same model, same effort, permissions and vendor
+ * options. /new means "clear the conversation", not "start configuring".
+ *
+ * `nativeHarness` used to be left out, so an empty session would not look
+ * deliberately configured to the old empty-session prune. That prune judges
+ * content now (session/blank.ts), and leaving the harness out had a real cost:
+ * every command that needs a harness saw "no provider chosen" on the new chat
+ * -- which offers the provider picker and, once one is selected,
+ * aiHarnessSelect resets the model. /new changed the model.
+ */
 export function newConversationSession(
   state: HarnessState, source: HarnessSession, now = new Date().toISOString(),
 ): HarnessSession {
@@ -32,6 +33,8 @@ export function newConversationSession(
     id, conversationId: id, route: source.route,
     accountId: source.route === 'gateway' ? null : source.accountId ?? null,
     provider: source.provider, model: source.model ?? null,
+    ...(source.route !== 'gateway' && source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
+    ...(source.harnessOptions ? { harnessOptions: { ...source.harnessOptions } } : {}),
     effort: source.effort ?? defaults.effort,
     ...(source.route === 'gateway' ? {} : { permissionMode: source.permissionMode ?? defaults.permissionMode }),
     accountFailover: source.accountFailover ?? defaults.accountFailover,
