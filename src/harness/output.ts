@@ -45,7 +45,6 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
     if (!TERMINAL.active) { output.write(text); return; }
     const [title = '', ...rest] = text.replace(/^\n+|\n+$/g, '').split('\n');
     TERMINAL.active.panel(title.replace(/\u001b\[[0-9;]*m/g, '').trim(), rest.join('\n').replace(/^\n+/, ''));
-    TERMINAL.panelsShown += 1;
   };
   if (TERMINAL.active) {
     // State-changing commands are reflected by the persistent status line. Raw

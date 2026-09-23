@@ -200,3 +200,29 @@ describe('path versus slash command', () => {
     expect(routeSlashInput('explain /etc/hosts')).toEqual({ kind: 'prompt', prompt: 'explain /etc/hosts' });
   });
 });
+
+/** A refusal that names something the user could supply is a question, not an
+ * answer. `needs` is how the caller knows which refusals those are. */
+describe('a command that is missing only its provider', () => {
+  const session = { route: 'local' } as unknown as HarnessSession;
+
+  it('says so, so the caller can ask instead of refusing', () => {
+    for (const name of ['model', 'effort', 'permissions', 'options', 'login']) {
+      const entry = resolveSlashCommand(name)!;
+      expect(entry.availability(session, undefined), name).toMatchObject({ available: false, needs: 'provider' });
+    }
+  });
+
+  it('does not say so for a real limit', () => {
+    // A harness with no model selector is not a missing provider, and asking
+    // for one would send the user round a loop that cannot end well.
+    const noModels = { command: 'x', displayName: 'X' } as AiLocalHarnessDefinition;
+    const model = resolveSlashCommand('model')!.availability(session, noModels);
+    expect(model.available).toBe(false);
+    expect(model.needs).toBeUndefined();
+  });
+
+  it('does not say so for a command that needs nothing', () => {
+    expect(resolveSlashCommand('help')!.availability(session, undefined)).toMatchObject({ available: true });
+  });
+});
