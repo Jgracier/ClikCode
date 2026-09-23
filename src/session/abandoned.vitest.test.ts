@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hostname } from 'node:os';
-import { ABANDONED_AFTER_MS, closeAbandonedSessions } from './abandoned';
+import { SESSION_IDLE_WINDOW_MS, closeAbandonedSessions } from './abandoned';
 import type { HarnessSession, HarnessState } from './model';
 
 const NOW = Date.parse('2026-09-22T18:00:00.000Z');
@@ -12,7 +12,7 @@ function session(overrides: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id: 'session-1', conversationId: 'c1', route: 'local', accountId: null, provider: null, model: null,
     effort: 'medium', permissionMode: 'ask', accountFailover: 'never',
-    createdAt: ago(ABANDONED_AFTER_MS * 2), updatedAt: ago(ABANDONED_AFTER_MS * 2),
+    createdAt: ago(SESSION_IDLE_WINDOW_MS * 2), updatedAt: ago(SESSION_IDLE_WINDOW_MS * 2),
     status: 'active', ...overrides,
   } as HarnessSession;
 }
@@ -47,7 +47,7 @@ describe('closing sessions nothing is running any more', () => {
 
   it('closes a session whose claim is stale, which is the crashed-terminal case', () => {
     const state = stateWith(session({
-      claim: { pid: 1, host: HOST, startedAt: ago(ABANDONED_AFTER_MS), heartbeatAt: ago(ABANDONED_AFTER_MS) },
+      claim: { pid: 1, host: HOST, startedAt: ago(SESSION_IDLE_WINDOW_MS), heartbeatAt: ago(SESSION_IDLE_WINDOW_MS) },
     }));
     expect(closeAbandonedSessions(state, noWorkers, NOW, HOST)).toEqual(['session-1']);
   });
@@ -62,7 +62,7 @@ describe('closing sessions nothing is running any more', () => {
 
   it('does not touch sessions that are already closed or archived', () => {
     const state = stateWith(
-      session({ id: 'a', status: 'closed', closedAt: ago(ABANDONED_AFTER_MS * 3) }),
+      session({ id: 'a', status: 'closed', closedAt: ago(SESSION_IDLE_WINDOW_MS * 3) }),
       session({ id: 'b', status: 'archived' }),
     );
     expect(closeAbandonedSessions(state, noWorkers, NOW, HOST)).toEqual([]);
@@ -80,9 +80,9 @@ describe('closing sessions nothing is running any more', () => {
   it('will not judge a session abandoned sooner than its worker would have', () => {
     // Exactly at the boundary is still alive: the worker has only just then
     // decided to give up, and it closes its own session when it does.
-    const state = stateWith(session({ updatedAt: ago(ABANDONED_AFTER_MS) }));
+    const state = stateWith(session({ updatedAt: ago(SESSION_IDLE_WINDOW_MS) }));
     expect(closeAbandonedSessions(state, noWorkers, NOW, HOST)).toEqual([]);
-    const past = stateWith(session({ updatedAt: ago(ABANDONED_AFTER_MS + 1) }));
+    const past = stateWith(session({ updatedAt: ago(SESSION_IDLE_WINDOW_MS + 1) }));
     expect(closeAbandonedSessions(past, noWorkers, NOW, HOST)).toEqual(['session-1']);
   });
 

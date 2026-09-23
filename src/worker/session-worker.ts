@@ -14,6 +14,7 @@ import Conf from 'conf';
 import { aiGatewaySessionSend } from '../turn/drive.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
+import { SESSION_IDLE_WINDOW_MS } from '../session/abandoned.js';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/runtime.js';
 import { BroadcastObserver } from './broadcast-observer.js';
@@ -26,8 +27,11 @@ import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socket
  * problem this whole design fixes more robustly) has plenty of time to
  * happen without racing a shutdown; short enough that a genuinely abandoned
  * session does not sit as dead weight for days the way the zombie processes
- * that motivated this design did. */
-const IDLE_EXIT_MS = 30 * 60 * 1000;
+ * that motivated this design did.
+ *
+ * Shared with the abandoned-session sweep rather than restated, so the sweep
+ * can never judge a session dead sooner than this worker would. */
+const IDLE_EXIT_MS = SESSION_IDLE_WINDOW_MS;
 
 /** The reason string for the one shutdown that means the conversation is over
  *  rather than merely interrupted. Compared, not just logged, so keep it and

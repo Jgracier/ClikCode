@@ -24,7 +24,7 @@ import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
-import { createPendingWorkTracker, MAX_PENDING_CONTINUATIONS, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
+import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, withTitleRequest } from '../session/title.js';
@@ -204,6 +204,7 @@ export async function aiSessionSend(
     };
     const pendingWork = createPendingWorkTracker(harness.command);
     let pendingContinuations = 0;
+    const pendingWorkStartedAt = Date.now();
     const onActivity = (event: HarnessActivityEvent): void => {
       pendingWork.note(event);
       checkpoint.activity(event);
@@ -648,7 +649,8 @@ export async function aiSessionSend(
       // backgrounded a command and stopped. Re-drive it so it goes and reads
       // the result, instead of leaving the answer stranded in a task log and
       // the session looking finished. See pending-work.ts.
-      if (pendingWork.outstanding > 0 && pendingContinuations < MAX_PENDING_CONTINUATIONS) {
+      if (pendingWork.outstanding > 0
+        && mayContinuePendingWork(pendingContinuations, Date.now() - pendingWorkStartedAt)) {
         const waited = pendingContinuationDelayMs(pendingContinuations);
         pendingContinuations += 1;
         prompter?.phase('waiting on background command');

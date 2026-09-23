@@ -3,7 +3,8 @@ import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { parseNativeActivityEvent } from '../harness/protocol/activity-events';
 import {
   createPendingWorkTracker, forgetToolPairingEvidence,
-  MAX_PENDING_CONTINUATIONS, pendingContinuationDelayMs,
+  MAX_PENDING_CONTINUATIONS, mayContinuePendingWork,
+  PENDING_WORK_BUDGET_MS, pendingContinuationDelayMs,
 } from './pending-work';
 
 describe('pending work tracker', () => {
@@ -68,12 +69,37 @@ describe('pending work tracker', () => {
     expect(tracker.outstanding).toBe(0);
   });
 
-  it('backs off between continuations and stays bounded', () => {
-    expect(MAX_PENDING_CONTINUATIONS).toBe(3);
+  it('bounds continuing by DURATION and not only by attempt count', () => {
+    // The original mistake: three attempts at 2s/8s/20s is a thirty-second
+    // budget, so a five-minute build still had its answer stranded -- the
+    // exact failure this feature exists to fix, merely made rarer.
+    let elapsed = 0;
+    let attempts = 0;
+    while (mayContinuePendingWork(attempts, elapsed)) {
+      elapsed += pendingContinuationDelayMs(attempts);
+      attempts += 1;
+    }
+    expect(attempts).toBe(MAX_PENDING_CONTINUATIONS);
+    // Long enough to cover a real test suite or build, not thirty seconds.
+    expect(elapsed).toBeGreaterThan(5 * 60 * 1000);
+  });
+
+  it('stops on the time budget even when attempts remain', () => {
+    expect(mayContinuePendingWork(0, PENDING_WORK_BUDGET_MS)).toBe(false);
+    expect(mayContinuePendingWork(0, PENDING_WORK_BUDGET_MS - 1)).toBe(true);
+  });
+
+  it('stops on the attempt count even when time remains, so it is not an unbounded poll', () => {
+    // Every continuation is a real model turn; the count is what caps cost.
+    expect(mayContinuePendingWork(MAX_PENDING_CONTINUATIONS, 0)).toBe(false);
+    expect(mayContinuePendingWork(MAX_PENDING_CONTINUATIONS - 1, 0)).toBe(true);
+  });
+
+  it('backs off exponentially and caps the wait', () => {
     const delays = Array.from({ length: MAX_PENDING_CONTINUATIONS }, (_, i) => pendingContinuationDelayMs(i));
-    expect(delays).toEqual([2_000, 8_000, 20_000]);
-    // Monotonic, so a slow command is not hammered at a fixed interval.
     expect([...delays].sort((a, b) => a - b)).toEqual(delays);
+    expect(delays[0]).toBe(2_000);
+    expect(Math.max(...delays)).toBe(120_000);
   });
 
   it('detects a backgrounded antigravity command from its real stream lines', () => {
