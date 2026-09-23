@@ -5,7 +5,7 @@
 import chalk from 'chalk';
 import { pastedText } from './keys.js';
 import { backslashNewline, composerVerticalMove, editComposer, editWaitingComposer } from './composer-edit.js';
-import { commandPaletteMatches, composerRightArrowValue, exactPaletteCommand, paletteDisplayRows, pickerConfirmsSelection, pickerDeletesSelection, type PaletteEntry } from './command-palette.js';
+import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, paletteDisplayRows, pickerConfirmsSelection, pickerDeletesSelection, type PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { composerLayout } from './render/composer-layout.js';
 import { closeOpenHyperlink } from './render/hyperlinks.js';
@@ -233,6 +233,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // a line the router decides is really conversation comes back 'queued'.
       const asCommand = Boolean(commandLineTypedDuringTurn(text)) && Boolean(this.waitingCommand);
       const submit = asCommand ? this.waitingCommand! : this.waitingSubmit;
+      // No selection mid-turn -- the arrows scroll the answer -- so a partly
+      // typed value means the best match: `/model op` applies opus.
+      const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
       this.waitingDraft = '';
       this.waitingCursor = 0;
       const localId = ++this.waitingSubmissionId;
@@ -246,7 +249,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         });
       }
       this.updateWaiting();
-      const write = submit(text).then((result) => {
+      const write = submit(line).then((result) => {
         const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
         if (item) item.state = result.disposition;
         this.updateWaiting();
@@ -845,8 +848,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * Without this a command was invisible AND unavailable while an answer
    * streamed; `/model` went to the model as the word "/model". */
   private paintWaiting(): void {
-    const matches = this.waitingCommand && !this.waitingDraft.includes(' ')
-      ? commandPaletteMatches(this.waitingDraft, this.paletteCommands) : [];
+    const found = this.waitingCommand ? commandPaletteMatches(this.waitingDraft, this.paletteCommands) : [];
+    // Commands while nothing has been typed past the name; the argument's
+    // own values once it has. A bare hint row is not worth the space mid-turn.
+    const matches = !this.waitingDraft.includes(' ') || found[0]?.completes ? found : [];
     if (!matches.length) {
       this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
       return;
@@ -1809,8 +1814,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const options = commandPaletteMatches(value, commands);
         if (selected >= options.length) selected = 0;
         if (options.length) {
-          // After a space the palette is that one command's argument hint.
-          const hint = value.includes(' ') ? 'Enter run · Esc clear' : undefined;
+          // After a space the palette is that command's own values to choose
+          // from, or -- for a free-text argument -- just its hint.
+          const hint = options[0]?.completes ? '↑↓ choose · Tab fill in · Enter apply · Esc clear'
+            : value.includes(' ') ? 'Enter run · Esc clear' : undefined;
           this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, ...(hint ? { hint } : {}) });
           this.paletteActive = true;
           return;
@@ -1852,8 +1859,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const handleKey = (key: string): void => {
         const matched = matches();
         // `options` drives selection keys. While an argument is being typed the
-        // palette is only a hint, and every key edits the draft as usual.
-        const options = value.includes(' ') ? [] : matched;
+        // palette is only a hint -- unless it is listing the argument's own
+        // values, which are chosen exactly like commands are.
+        const completing = Boolean(matched[0]?.completes);
+        const options = value.includes(' ') && !completing ? [] : matched;
         const pasted = pastedText(key);
         if (pasted !== undefined) {
           // Pasted newlines are content, not Enter. Splitting on them is what
@@ -1888,6 +1897,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\r') {
           const continued = options.length ? undefined : backslashNewline(value, cursor);
           if (continued) { value = continued.value; cursor = continued.cursor; return draw(); }
+          // A value from the command's own list: what was typed wins when it
+          // IS a value, otherwise the highlighted one.
+          if (completing) return finish(completedCommandLine(value, commands, selected));
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
             // What was typed wins when it names a command outright: `/new`
             // must run /new even while a better-ranked row is highlighted.
@@ -1902,8 +1914,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           return finish(value);
         }
         if (key === '\t' && options.length) {
-          // A command that takes an argument completes ready for it.
-          value = `${options[selected].value}${options[selected].argHint ? ' ' : ''}`;
+          // A value fills in as it is, ready to run or to keep editing; a
+          // command that takes an argument completes ready for it.
+          value = completing ? options[selected].value
+            : `${options[selected].value}${options[selected].argHint ? ' ' : ''}`;
           cursor = value.length;
           selected = 0;
           return draw();
@@ -1941,11 +1955,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\u0010' && !options.length) { historyStep(-1); return draw(); }
         if (key === '\u000e' && !options.length) { historyStep(1); return draw(); }
         if (key === '\u001b[D') {
-          if (options.length) { value = ''; cursor = 0; selected = 0; }
+          // Backing out of the command list clears it; inside an argument the
+          // arrow edits, as it does in any line.
+          if (options.length && !completing) { value = ''; cursor = 0; selected = 0; }
           else cursor = previousCharacterIndex(value, cursor);
           return draw();
         }
         if (key === '\u001b[C') {
+          if (completing && cursor >= value.length) return finish(completedCommandLine(value, commands, selected));
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
             // Right Arrow is deliberately identical to Enter, including the
             // decision above not to blank the region while the command runs.

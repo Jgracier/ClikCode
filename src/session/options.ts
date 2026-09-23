@@ -51,6 +51,20 @@ export function isBlankConversation(session: HarnessSession): boolean {
     && session.nameSource !== 'user';
 }
 
+/** The one conversation a typed name picks out: an exact name (ignoring
+ * case), or else the only name containing it. Two candidates is a real choice
+ * and gets the list, never a guess. Blank chats and the current one are not
+ * candidates -- there is nothing to go back to in either. */
+export function chatNamed(sessions: readonly HarnessSession[], typed: string, currentId: string): string | undefined {
+  const query = typed.trim().toLowerCase();
+  if (!query) return undefined;
+  const candidates = sessions.filter((session) => session.id !== currentId && session.name && !isBlankConversation(session));
+  const exact = candidates.filter((session) => session.name!.toLowerCase() === query);
+  if (exact.length) return [...exact].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]!.id;
+  const partial = candidates.filter((session) => session.name!.toLowerCase().includes(query));
+  return partial.length === 1 ? partial[0]!.id : undefined;
+}
+
 export function requiresProviderHandoff(session: HarnessSession, targetHarness: string): boolean {
   return hasConversationContent(session) && (session.route !== 'local' || session.nativeHarness !== targetHarness);
 }

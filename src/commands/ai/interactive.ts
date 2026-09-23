@@ -7,6 +7,8 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import { chatNamed } from '../../session/options.js';
+import { withArgValues } from '../../tui/slash/arg-values.js';
 import { discardIfBlank } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
 import type Conf from 'conf';
@@ -172,9 +174,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // manager commands, whatever an ACP agent advertised, and the `/<harness>`
   // switch rows -- so what the palette shows is ClikCode's own commands plus
   // the user's custom templates, never the terminal CLI's list mixed in.
+  let paletteState: Pick<HarnessState, 'accounts' | 'sessions'> = state;
   const slashCommandsFor = (target: HarnessSession): PickerOption<string>[] => {
     const harness = sessionHarness(target);
-    return slashPalette(target, harness, slashExtrasFor(target, harness));
+    return withArgValues(slashPalette(target, harness, slashExtrasFor(target, harness)), target, harness, paletteState);
   };
   // Created before auto-select so a first-ever install/sign-in — the most
   // common time either is actually needed — has somewhere to show its
@@ -288,6 +291,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           synchronizedSessionId = id;
         }
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
+        paletteState = latestState;
         rl.render?.(latest, account, notice);
         refreshUsage(latest, latestState);
         notice = undefined;
@@ -520,7 +524,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             // retain its account, harness, and exact native session identity.
             // Moving a transcript to another provider remains an explicit
             // /provider action, never a side effect of choosing history.
-            resume: async () => ({ id: (await interactiveSessionPicker(rl, id))?.id ?? id }),
+            // `/resume <name>` goes straight there when the name picks out one
+            // conversation -- the palette offers the names -- and opens the
+            // list only when it does not.
+            resume: async () => {
+              const named = args ? chatNamed(commandState.sessions, args, id) : undefined;
+              return { id: named ?? (await interactiveSessionPicker(rl, id))?.id ?? id };
+            },
             rename: async () => {
               const name = args || (await rl.question('Conversation name › ')).trim();
               if (name) await aiSessionCommand(id, `/rename ${name}`);
