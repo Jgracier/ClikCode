@@ -318,14 +318,14 @@ function providerAccountPickerOptions(
         : { label: 'Remove', value: 'remove' };
       return {
         label: account.label,
+        // One state per row: a problem outranks usage, so the eye lands on
+        // the single thing that matters. Provider/auth kind is not shown.
         detail: [
-          usage ? `· ${usage}` : usagePending ? '· checking…' : '',
-          account.authKind === 'api-key' ? '· API' : '',
-          account.status === 'needs_login' ? `· ${chalk.yellow('reauth')}` : '',
-          account.quotaState === 'exhausted' ? `· ${chalk.yellow('out of usage')}` : '',
-          account.verification ? `· ${chalk.yellow('verify')}` : '',
+          account.verification ? chalk.yellow('verify')
+            : account.status === 'needs_login' ? chalk.yellow('reauth')
+              : account.quotaState === 'exhausted' ? chalk.yellow('out of usage')
+                : usage ?? (usagePending ? '…' : ''),
           account.id === session.accountId ? '· current' : '',
-          actions.length ? chalk.dim('(Tab)') : '',
         ].filter(Boolean).join(' '),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
         actions,
