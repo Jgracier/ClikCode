@@ -3,6 +3,7 @@
  * ask the user to choose. Implemented by tui/prompter.ts, and by nothing
  * else -- a headless run passes a prompter that answers without drawing. */
 
+import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessSession } from '../session/model.js';
 
 /** What a tool call DOES, as against what state it is in. Deliberately small:
@@ -52,7 +53,7 @@ export interface HarnessPrompter {
   ): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
   response?(text: string, mode?: 'append' | 'replace'): void;
-  approval?(title: string, detail?: string): Promise<boolean>;
+  approval?(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'>;
   activityEvent?(event: HarnessActivityEvent): void;
   panel?(title: string, body: string): void;
   close(): void;

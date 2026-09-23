@@ -183,13 +183,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // The draft is never edited from here: every key is either an answer or
       // dropped, so the composer is exactly as the user left it afterwards.
       const pending = this.pendingApproval;
-      const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused);
+      const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused, Boolean(pending.rule));
       if (action === 'focus') {
         pending.focused = true;
         this.updateWaiting();
-      } else if (action === 'allow' || action === 'deny') {
+      } else if (action === 'allow' || action === 'always' || action === 'deny') {
         this.pendingApproval = undefined;
-        pending.resolve(action === 'allow');
+        pending.resolve(action === 'deny' ? false : action === 'always' ? 'always' : true);
         if (!this.presentNextApproval()) {
           this.waitingLabel = this.approvalRestoreLabel || 'thinking';
           this.approvalRestoreLabel = undefined;
@@ -649,11 +649,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
-  approval(title: string, detail?: string, preview?: ApprovalPreview): Promise<boolean> {
-    return new Promise((resolveApproval) => {
+  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'> {
+    return new Promise<boolean | 'always'>((resolveApproval) => {
       if (!this.pendingApproval) this.approvalRestoreLabel = this.waitingLabel;
       this.approvalQueue.push({
-        title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }), resolve: resolveApproval,
+        title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }),
+        ...(rule === undefined ? {} : { rule }), resolve: resolveApproval,
       });
       if (!this.pendingApproval) this.presentNextApproval();
     });

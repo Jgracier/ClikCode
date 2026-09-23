@@ -88,7 +88,9 @@ export async function runGatewayHarnessSessionTurn(
     onPlan: (entries) => prompter?.setPlan(entries),
     // No prompter means a headless run; a turn that cannot ask must not
     // silently act, so an unattended approval is a refusal.
-    onApproval: async (title, detail) => (await prompter?.approval(title, detail)) ?? false,
+    // The gateway path runs ClikCode's OWN agent, so a rule can be
+    // remembered here: the third answer is passed straight through.
+    onApproval: async (title, detail, rule) => (await prompter?.approval(title, detail, undefined, rule)) ?? false,
   });
 }
 

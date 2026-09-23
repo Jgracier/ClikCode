@@ -20,7 +20,7 @@ export interface TurnObserver {
   activity(message: string): void;
   activityEvent(event: HarnessActivityEvent): void;
   phase(message: string): void;
-  approval(title: string, detail?: string, preview?: ApprovalPreview): Promise<boolean>;
+  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'>;
   setPlan(entries: readonly PlanEntry[]): void;
   setTurnUsage(usage: { inputTokens?: number; outputTokens?: number }): void;
   startWaiting(

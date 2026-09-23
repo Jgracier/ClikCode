@@ -26,7 +26,7 @@ export type ClientCommand =
   | { type: 'submit'; text: string; echo: boolean; queuedTurnId?: string }
   | { type: 'steer'; text: string }
   | { type: 'cancel'; restoreDraft: boolean }
-  | { type: 'approval-response'; id: string; approved: boolean }
+  | { type: 'approval-response'; id: string; approved: boolean | 'always' }
   /** The client made a change the worker did not: an account swap from a
    * local-only login flow, a manual edit to state. Re-read rather than
    * synchronize field-by-field -- the source of truth is the state file
@@ -47,7 +47,7 @@ export type WorkerEvent =
   | { type: 'phase'; message: string }
   | { type: 'plan'; entries: readonly PlanEntry[] }
   | { type: 'usage'; usage: { inputTokens?: number; outputTokens?: number } }
-  | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview }
+  | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string }
   | { type: 'waiting-start'; message: string }
   | { type: 'waiting-stop' }
   | { type: 'suspend' }

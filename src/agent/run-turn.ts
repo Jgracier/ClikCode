@@ -5,7 +5,7 @@ import path from 'node:path';
 import { ConversationStore } from './conversation.js';
 import { buildSystemPrompt, compactConversation, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, COMPACTION_THRESHOLD } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
-import { buildApprovalPrompt, decidePermission, loadPermissionRules, visibleTools, type PermissionRules } from './permissions.js';
+import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, suggestPermissionRule, visibleTools, type PermissionRules } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
 import { sessionState } from './session-state.js';
@@ -148,15 +148,26 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     if (verdict.decision === 'deny') return finish({ output: `Permission denied: ${verdict.reason}. Do not retry this call; choose another approach or tell the user what you need.`, isError: true });
     if (verdict.decision === 'ask') {
       // One prompt at a time: parallel reads must not stack dialogs.
+      // The rule this call could be answered with once and for all, e.g.
+      // `Bash(npm test:*)`. Absent where no honest rule can be formed -- a
+      // compound shell line, or a tool with no path or host to key on -- and
+      // the approver then simply does not offer "always".
+      const rule = suggestPermissionRule(tool, call.args, scope);
       const ask = approvalChain.then(async () => {
         throwIfAborted();
         const prompt = await buildApprovalPrompt(tool, call.args, ctx, verdict.reason);
         input.onPhase?.('waiting for approval');
-        return input.onApproval!(prompt.title, prompt.detail);
+        return input.onApproval!(prompt.title, prompt.detail, rule);
       });
       approvalChain = ask.catch(() => undefined);
       const approved = await abortable(ask, signal);
       if (!approved) return finish({ output: 'The user declined this action. Do not retry it; ask what they would prefer or take a different approach.', isError: true });
+      // Persisted BEFORE the tool runs, so a rule the user just agreed to is
+      // already in force if this same call asks again -- and a failed write
+      // only costs the remembering, never the approval they already gave.
+      if (approved === 'always' && rule) {
+        rulesNow = await addPermissionAllowRule(ctx.cwd, rule).catch(() => rulesNow);
+      }
     }
 
     const wasPlanning = session.plan.active;

@@ -250,7 +250,11 @@ export async function aiSessionSend(
       onResponseDelta: emitResponseDelta,
       onPhase: (phase: string) => prompter?.phase(phase),
       onPlan: (entries: readonly HarnessPlanEntry[]) => prompter?.setPlan(entries),
-      onApproval: (title: string, detail?: string) => prompter?.approval(title, detail) ?? Promise.resolve(false),
+      // A native harness runs its OWN tools, so ClikCode has no rule to
+      // remember on its behalf -- and with no rule offered the prompter never
+      // returns 'always' anyway. Collapsed to a boolean here so that boundary
+      // is stated rather than implied.
+      onApproval: async (title: string, detail?: string) => (await prompter?.approval(title, detail)) === true,
       onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
     } satisfies HarnessTurnObserver;
     for (;;) {
