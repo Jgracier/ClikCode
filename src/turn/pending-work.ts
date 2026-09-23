@@ -118,3 +118,32 @@ export const PENDING_CONTINUATION_PROMPT =
   'A command you launched in the background is no longer being waited on by that turn. '
   + 'List your background tasks and check that command now -- its status, its output, and any '
   + 'task log it wrote -- then report the result. If it is still running, wait for it and then report.';
+
+/** Token counts across the attempts of ONE continued turn.
+ *
+ *  Needed because a continuation reuses the failover loop, and that loop
+ *  clears the per-attempt usage on every pass -- correct for a failover, where
+ *  the abandoned attempt belongs to the account that failed, and wrong here,
+ *  where every attempt ran on the same account as part of the same turn. Left
+ *  alone it undercounted a continued turn, and usage-learning fits its learned
+ *  limits from exactly these invocation records.
+ *
+ *  Summed rather than merged: within one attempt a later usage report is
+ *  cumulative and replacing the field is right, but across attempts each
+ *  report covers its own attempt only. A field absent from both stays absent,
+ *  so an unreported count is never invented as a zero. */
+export function addTurnUsage<T extends object>(
+  carried: T | undefined, latest: T | undefined,
+): T | undefined {
+  if (!carried) return latest;
+  if (!latest) return carried;
+  const summed = { ...carried } as Record<string, number | undefined>;
+  for (const [key, value] of Object.entries(latest as Record<string, unknown>)) {
+    if (typeof value !== 'number') continue;
+    const before = summed[key];
+    // contextWindow is a capacity, not a count: two attempts do not add up to
+    // a bigger window, so the latest reading simply wins.
+    summed[key] = key === 'contextWindow' || before === undefined ? value : before + value;
+  }
+  return summed as T;
+}

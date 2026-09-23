@@ -24,7 +24,7 @@ import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
-import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
+import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, withTitleRequest } from '../session/title.js';
@@ -205,6 +205,10 @@ export async function aiSessionSend(
     const pendingWork = createPendingWorkTracker(harness.command);
     let pendingContinuations = 0;
     const pendingWorkStartedAt = Date.now();
+    /** Tokens from earlier attempts of this same continued turn; the loop
+     *  clears turnUsage on every pass, which is right for a failover and
+     *  wrong for a continuation. */
+    let carriedPendingUsage: NormalizedTurnUsage | undefined;
     const onActivity = (event: HarnessActivityEvent): void => {
       pendingWork.note(event);
       checkpoint.activity(event);
@@ -617,7 +621,7 @@ export async function aiSessionSend(
       }
       session.nativeStartedAt ??= new Date().toISOString();
       delete session.nativeSessionPreallocated;
-      const usage = turnUsage as NormalizedTurnUsage | undefined;
+      const usage = addTurnUsage(carriedPendingUsage, turnUsage as NormalizedTurnUsage | undefined);
       const invocation = {
         id: randomUUID(), accountId: account.id, provider: harness.provider, ...(model ? { model } : {}),
         at: new Date().toISOString(), sessionId: session.id,
@@ -657,6 +661,7 @@ export async function aiSessionSend(
         await new Promise((resolve) => setTimeout(resolve, waited));
         if (signal?.aborted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
         prompter?.activity(chalk.dim('continuing after background command'));
+        carriedPendingUsage = addTurnUsage(carriedPendingUsage, turnUsage);
         turnText = PENDING_CONTINUATION_PROMPT;
         continue;
       }
