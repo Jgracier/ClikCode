@@ -89,9 +89,39 @@ describe('spelling "add this MCP server"', () => {
     expect(mcpAddArgv(grammarOf('cursor'), local)).toBeUndefined();
   });
 
+  it('takes a remote server for the harnesses that can only accept one', () => {
+    // Verified against the real CLI: `opencode mcp add <name> --url <url>`
+    // wrote {"type":"remote","url":...} into its own opencode.jsonc.
+    expect(argv('opencode', remote)).toBe('mcp add sentry --url https://mcp.sentry.dev/mcp');
+    expect(argv('kilo', remote)).toBe('mcp add sentry --url https://mcp.sentry.dev/mcp');
+  });
+
+  it('declines a LOCAL server for those same harnesses rather than half-writing one', () => {
+    // They have no flag for a local command at all: an extra positional is
+    // refused and they fall back to an interactive picker, which a headless
+    // install cannot answer. The caller turns this into a stated reason.
+    expect(mcpAddArgv(grammarOf('opencode'), local)).toBeUndefined();
+    expect(mcpAddArgv(grammarOf('kilo'), local)).toBeUndefined();
+  });
+
+  it('states the transport for a LOCAL server where the CLI demands one', () => {
+    // openhands makes --transport mandatory, so omitting it for stdio fails
+    // outright. Verified on disk: this exact argv wrote
+    // {command:"npx", args:["-y","figma-mcp"]} into its own mcp.json.
+    expect(argv('openhands', local)).toBe('mcp add --transport stdio figma npx -y figma-mcp');
+    expect(argv('openhands', remote)).toBe('mcp add --transport http sentry https://mcp.sentry.dev/mcp');
+  });
+
+  it('repeats the arg flag as --arg=VALUE where a bare value would be read as a flag', () => {
+    // `--arg -y` makes Vibe's parser read -y as a flag of its own and fail
+    // with "expected one argument" -- found by running it. --no-login rides
+    // only on the remote form, which is the only one Vibe accepts it with.
+    expect(argv('vibe', local)).toBe('mcp add figma --transport stdio --command npx --arg=-y --arg=figma-mcp');
+    expect(argv('vibe', remote)).toBe('mcp add sentry --transport http --url https://mcp.sentry.dev/mcp --no-login');
+  });
+
   it('offers nothing for a harness with no recorded grammar', () => {
     // Never guessed: a wrong argv writes a broken entry.
-    expect(mcpAddArgv(grammarOf('opencode'), local)).toBeUndefined();
     expect(mcpAddArgv(grammarOf('aider'), local)).toBeUndefined();
     expect(mcpAddArgv(grammarOf('kimi'), local)).toBeUndefined();
     // Hermes DOES have `mcp add`, with a complete non-interactive flag set

@@ -105,7 +105,26 @@ export interface AiHarnessManagerDefinition {
      *  pre-joined string. Getting this backwards hands the server a single
      *  argument that merely contains spaces, which fails at connect time
      *  rather than at add time. */
-    argsStyle?: 'list' | 'joined';
+    /** How a local server's arguments are spelled. `list` passes them bare,
+     *  `joined` pre-joins them into one string, and `repeat-equals` repeats
+     *  the flag as `--arg=VALUE` -- which Vibe needs, because plain
+     *  `--arg -y` makes its parser read -y as a flag of its own and fail. */
+    argsStyle?: 'list' | 'joined' | 'repeat-equals';
+    /** The harness can only be handed a REMOTE server without a prompt.
+     *  opencode and Kilo take `mcp add <name> --url <url>` happily but have
+     *  no flag at all for a local command -- extra positionals are refused
+     *  and they fall back to their interactive picker, which a headless
+     *  install cannot answer. A local entry is therefore declined with a
+     *  reason rather than half-written. */
+    remoteOnly?: true;
+    /** Transport value to state for a LOCAL server. Absent means the harness
+     *  only wants the flag for a remote one (or infers it). OpenHands makes
+     *  --transport mandatory, so omitting it for stdio fails outright. */
+    localTransport?: string;
+    /** Extra argv only a REMOTE add takes. Vibe's --no-login belongs here: it
+     *  stops a headless install blocking on an OAuth round trip, and Vibe
+     *  refuses the flag outright alongside --transport stdio. */
+    remoteExtraArgv?: readonly string[];
   };
 }
 
@@ -596,7 +615,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('fork-native-session', 'Fork native session', 'Fork before continuing the selected session', 'session', ['--fork'], { appliesTo: 'resume', requiresNewSession: true }),
       flag('share', 'Share session', 'Publish the native session through OpenCode', 'session', ['--share']),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, agents: { label: 'Agents', manageArgv: ['agent'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], remoteOnly: true } }, agents: { label: 'Agents', manageArgv: ['agent'] } },
     features: ['plugins', 'commands', 'remote server attachment'],
   },
   copilot: {
@@ -671,7 +690,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   },
   openhands: {
     options: [],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--transport'], localTransport: 'stdio' } } },
     features: ['ACP', 'web UI'],
   },
   // Amp is the only harness of the 25 that reports a CREDIT BALANCE rather
@@ -806,7 +825,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('cloud-fork', 'Fork cloud session', 'Fetch and fork the selected cloud session locally', 'session', ['--cloud-fork'], { appliesTo: 'resume', requiresNewSession: true }),
       flag('share', 'Share session', 'Publish the native session through Kilo', 'session', ['--share']),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], remoteOnly: true } }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['skills', 'architect/ask/debug/orchestrator modes', 'custom agents'],
   },
   cursor: {
@@ -831,6 +850,10 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   auggie: {
     options: [],
     managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', transportPrefix: ['-t'], urlPrefix: ['-u'], commandPrefix: ['-c'], argsPrefix: ['--args'], argsStyle: 'joined' } } },
+  },
+  vibe: {
+    options: [],
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', transportPrefix: ['--transport'], localTransport: 'stdio', urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--arg'], argsStyle: 'repeat-equals', remoteExtraArgv: ['--no-login'] } } },
   },
   hermes: {
     options: [
