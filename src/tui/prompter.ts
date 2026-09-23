@@ -798,12 +798,25 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * screen and became invalid when slow terminals dropped intermediate work. */
   /** Repaint with the composer exactly as the last paint left it.
    *
-   * This spread appeared nine times. Four of those omitted the palette, and
-   * an omitted palette does not merely go unmentioned -- paint() reads absent
-   * as "there is none" and clears the saved one. So a deliberate dismissal
-   * (a panel opening, a turn ending) and an accidental one looked identical
-   * at the call site. The flag states which is meant; the behaviour of every
-   * existing caller is unchanged. */
+   * This spread appeared nine times, and three of those omitted the palette
+   * -- which does not merely go unmentioned, because paint() reads absent as
+   * "there is none" and clears the saved one. The flag states which is meant.
+   *
+   * The rule the nine call sites follow, which is worth writing down because
+   * the omission made it invisible:
+   *
+   *  - KEEP the palette for an incremental repaint of an edit still in
+   *    progress -- a resize, a coalesced paint, a scroll, a reading-direction
+   *    change. The user is mid-`/command`; taking their palette away as the
+   *    terminal reflows would be the bug.
+   *  - CLEAR it where the composer is being re-established fresh and a stale
+   *    palette would be wrong: a panel opening (paint() draws a panel only
+   *    when no palette is up, so they are mutually exclusive), a turn ending,
+   *    and resume() after a vendor has had the TTY. In all three the palette
+   *    belongs to a command that has already run.
+   *
+   * resume() looked like an oversight next to the six that keep it, and it is
+   * not: the composer it repaints is a new one. */
   private repaint(options: { keepPalette: boolean } = { keepPalette: true }): void {
     if (options.keepPalette) {
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
