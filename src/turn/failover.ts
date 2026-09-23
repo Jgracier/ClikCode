@@ -47,7 +47,14 @@ interface AccountFailureSignals {
   stderrText?: string;
 }
 
-const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked))/i;
+// 'no auth type is selected' is Qwen Code's own wording (captured verbatim
+// from a real unhandledRejection on this machine: "Qwen Code: No auth type
+// is selected. Please configure an auth type (e.g. via settings or
+// `--auth-type`) before running in non-interactive mode."). It names a
+// missing/unselected credential rather than an expired or rejected one, so
+// none of the other AUTH_TEXT wordings matched it and it fell through as
+// 'other'.
+const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected)/i;
 // Both halves of "ran out" matter, because vendors write it either way
 // round. Captured verbatim from real refusals on this machine:
 //   antigravity  'RESOURCE_EXHAUSTED (code 429): Individual quota reached.
@@ -57,7 +64,13 @@ const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)
 // wanted exceeded/exhausted, and the second puts the verb BEFORE the noun.
 // Both were therefore classified 'other' and shown as "account failed …
 // retrying", which is how a spent plan came to read like a crash.
-const QUOTA_TEXT = /(?:quota (?:exceeded|exhausted|reached)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
+// 'spend limit' is Command Code's own wording, confirmed from the CLI's own
+// installed dist (command-code@1.62.1, the status label constant
+// SPEND_LIMIT_REACHED: "Spend limit reached"). It names a configured spend
+// cap rather than a usage/plan/quota window, so it did not match the
+// existing "…limit" alternation, which only covers usage/session/plan/
+// weekly/monthly/daily.
+const QUOTA_TEXT = /(?:quota (?:exceeded|exhausted|reached)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
 const THROTTLE_TEXT = /(?:rate limit|too many requests|temporar(?:y|ily) throttled)/i;
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
@@ -119,17 +132,29 @@ export function accountFailureReason(kind: AccountFailureKind): string {
  * own error carries the fix -- agy prints the Google verification link -- but
  * it was only ever read for classification, so the user saw "account not
  * eligible" with nothing to act on. Undefined for any other failure; `url` is
- * absent when the vendor printed none. */
+ * absent when the vendor printed none.
+ *
+ * The link is not always Google's: only Antigravity's eligibility error is
+ * confirmed so far, but any vendor's ineligible-account error is just as
+ * likely to carry its own verification URL, not necessarily
+ * accounts.google.com. Extract whichever https:// URL the vendor printed,
+ * preferring an accounts.google.com one when several appear in the same
+ * text (mixed error text can otherwise surface a doc/help link ahead of the
+ * actual verification step). */
 export function accountVerification(error: unknown): { url?: string } | undefined {
   const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
   const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
   if (!INELIGIBLE_TEXT.test(text)) return undefined;
-  const url = /https:\/\/accounts\.google\.com\/[^\s"')]+/.exec(text)?.[0];
+  const urls = [...text.matchAll(/https:\/\/[^\s"')]+/g)].map((match) => match[0]);
+  const url = urls.find((candidate) => /^https:\/\/accounts\.google\.com\//.test(candidate)) ?? urls[0];
   return url ? { url } : {};
 }
 
 export function verificationNotice(verification: { url?: string }): string {
-  return verification.url ? `Google needs verification: ${verification.url}` : 'Account needs verification with its provider';
+  if (!verification.url) return 'Account needs verification with its provider';
+  return /^https:\/\/accounts\.google\.com\//.test(verification.url)
+    ? `Google needs verification: ${verification.url}`
+    : `Verification needed: ${verification.url}`;
 }
 
 export function accountVerificationHint(error: unknown): string | undefined {
