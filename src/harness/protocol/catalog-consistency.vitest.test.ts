@@ -38,3 +38,17 @@ describe('every stream format the catalog declares', () => {
     }
   });
 });
+
+describe('Cline', () => {
+  it('always runs over ACP, where its answer arrives as appended chunks', async () => {
+    // Its `--json` records (`say`) REPLACE the displayed text -- right for
+    // updates to one message, wrong across messages. That parser is only
+    // reached if Cline falls back to its structured CLI, which it never does
+    // while ACP is its stable, preferred transport. If that changes, this
+    // fails, and the `say` shape has to be verified before it ships.
+    const { harnessTurnTransport } = await import('../transport/select.js');
+    const cline = AI_LOCAL_HARNESSES.find((harness) => harness.command === 'cline')!;
+    expect(harnessTurnTransport(cline)).toBe('acp');
+    expect(harnessTurnTransport(cline, true, { acpImages: true })).toBe('acp');
+  });
+});
