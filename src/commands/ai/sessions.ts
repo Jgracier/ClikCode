@@ -7,7 +7,7 @@ import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocal
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
-import { closeAbandonedSessions } from '../../session/abandoned.js';
+import { sessionIsLive } from '../../session/liveness.js';
 import { pruneSessionClaims } from '../../session/claims.js';
 import { readWorkerRecord } from '../../worker/registry.js';
 import { readState } from '../../session/state/read.js';
@@ -138,24 +138,24 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
 
 export async function aiSessionsList(): Promise<void> {
   const state = await readState();
-  // Reconciled on the way out rather than reported as-is. A worker closes its
-  // own session when it idles out, but a worker that was SIGKILLed, crashed or
-  // lost to a reboot never ran that path, so `active` accumulates sessions
-  // nothing is running. This is the moment someone is actually looking, which
-  // makes it the cheapest honest place to settle it. See session/abandoned.ts.
-  if (closeAbandonedSessions(state, await liveWorkerSessions(state.sessions)).length) await writeState(state);
-  // Claim FILES outlive the processes that wrote them when a terminal is
-  // killed rather than exited. pruneSessionClaims was written and tested for
-  // exactly this and had no caller anywhere, so dead claim files accumulated
-  // -- fourteen of twenty-seven were held by pids dead for up to twenty hours.
-  // Harmless to correctness, since claimIsHeld already judges them dead, but
-  // it made this listing report sessions as claimed that nothing was running.
+  // `live` is computed here rather than read off the record, because nothing
+  // stores it: a session is live when a claim or a worker says so, and both
+  // expire on their own. This replaced a `status` the worker wrote and a sweep
+  // that corrected it -- see session/liveness.ts for why caching it was the
+  // bug rather than the sweep being in the wrong place.
+  const workerIsLive = await liveWorkerSessions(state.sessions);
+  const sessions = state.sessions.map((session) => ({ ...session, live: sessionIsLive(session, workerIsLive) }));
+  // Claim FILES are the one thing that does need collecting: a killed process
+  // cannot delete its own, and no amount of correct logic makes that untrue.
+  // This is disk housekeeping, NOT state reconciliation -- a leftover claim
+  // file has never made a session look live, because claimIsHeld judges the
+  // heartbeat and the pid instead of trusting the file's existence.
   await pruneSessionClaims(new Set(state.sessions.map((session) => session.id))).catch(() => 0);
-  emitJson({ sessions: state.sessions });
+  emitJson({ sessions });
 }
 
-/** Which sessions still have a worker process behind them. Read once per
- *  sweep, so the decision below is made against one consistent snapshot. */
+/** Which sessions still have a worker process behind them: one directory pass
+ *  for the whole list, so every session is judged against one snapshot. */
 async function liveWorkerSessions(
   sessions: readonly HarnessSession[],
 ): Promise<(sessionId: string) => boolean> {
