@@ -99,6 +99,9 @@ export interface AiHarnessManagerDefinition {
     transportPrefix?: readonly string[];
     /** named-flags only: where the URL, the command, and its arguments go. */
     urlPrefix?: readonly string[];
+    /** named-flags only. Kiro takes even the NAME as a flag, so nothing about
+     *  its add is positional. Absent means the name leads, positionally. */
+    namePrefix?: readonly string[];
     commandPrefix?: readonly string[];
     argsPrefix?: readonly string[];
     /** named-flags only. Hermes takes `--args a b c`; Auggie takes one
@@ -109,7 +112,7 @@ export interface AiHarnessManagerDefinition {
      *  `joined` pre-joins them into one string, and `repeat-equals` repeats
      *  the flag as `--arg=VALUE` -- which Vibe needs, because plain
      *  `--arg -y` makes its parser read -y as a flag of its own and fail. */
-    argsStyle?: 'list' | 'joined' | 'repeat-equals';
+    argsStyle?: 'list' | 'joined' | 'repeat-equals' | 'json-array';
     /** The harness can only be handed a REMOTE server without a prompt.
      *  opencode and Kilo take `mcp add <name> --url <url>` happily but have
      *  no flag at all for a local command -- extra positionals are refused
@@ -767,7 +770,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('trusted-tools', 'Trusted tools', 'Tool categories approved in advance', 'permissions', ['--trust-tools'], 'string-list', { argvStyle: 'csv' }),
       flag('require-mcp-startup', 'Require MCP startup', 'Fail the run if any MCP server cannot start', 'tools', ['--require-mcp-startup']),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add', '--scope', 'global', '--force'], shape: 'named-flags', namePrefix: ['--name'], urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--args'], argsStyle: 'json-array' } } },
     features: ['skills', 'custom agents', 'hooks', 'steering', 'powers', 'plan mode'],
   },
   // Every flag here read from `gemini --help` on a real install. --safe-mode

@@ -53,7 +53,8 @@ type McpAddGrammar = {
   urlPrefix?: readonly string[];
   commandPrefix?: readonly string[];
   argsPrefix?: readonly string[];
-  argsStyle?: 'list' | 'joined' | 'repeat-equals';
+  argsStyle?: 'list' | 'joined' | 'repeat-equals' | 'json-array';
+  namePrefix?: readonly string[];
   remoteOnly?: true;
   localTransport?: string;
   remoteExtraArgv?: readonly string[];
@@ -100,9 +101,10 @@ export function mcpAddArgv(
     // `--args` as "must be the last option", which the name-first order below
     // satisfies for both.
     const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
-    if (remote) return [...add.argv, entry.name, ...transport, ...(add.urlPrefix ?? []), entry.target, ...(add.remoteExtraArgv ?? [])];
+    const name = [...(add.namePrefix ?? []), entry.name];
+    if (remote) return [...add.argv, ...name, ...transport, ...(add.urlPrefix ?? []), entry.target, ...(add.remoteExtraArgv ?? [])];
     return [
-      ...add.argv, entry.name, ...localTransportArgv(add),
+      ...add.argv, ...name, ...localTransportArgv(add),
       ...(add.commandPrefix ?? []), entry.target, ...localArgsArgv(add, entry),
     ];
   }
@@ -125,6 +127,9 @@ function localArgsArgv(add: McpAddGrammar, entry: McpServerEntry): string[] {
   // parser read -y as a flag of its own and fail. joined pre-joins into one
   // string for Auggie; list passes them bare for Hermes. Getting this wrong
   // fails at connect time rather than at add time.
+    // A JSON list is unambiguous for arguments containing dashes or commas,
+  // which is exactly why Kiro documents it alongside the repeated form.
+  if (add.argsStyle === 'json-array') return [...add.argsPrefix, JSON.stringify(args)];
   if (add.argsStyle === 'repeat-equals') return args.flatMap((arg) => [`${add.argsPrefix![0]}=${arg}`]);
   if (add.argsStyle === 'joined') return [...add.argsPrefix, args.join(' ')];
   return [...add.argsPrefix, ...args];
