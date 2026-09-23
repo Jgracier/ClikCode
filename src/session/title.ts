@@ -40,6 +40,15 @@ export function shouldRequestTitle(session: Pick<HarnessSession, 'name' | 'title
   return !session.name && (session.titleAttempts ?? 0) < TITLE_REQUEST_ATTEMPTS;
 }
 
+/** Give back the request this turn spent, because the turn stopped being the
+ * one that asked. An account switch mid-turn re-drives the vendor's own
+ * thread with "carry on" and no longer carries the title request, so no title
+ * can arrive -- and a chat that is still unnamed deserves to be asked again
+ * on its next turn rather than quietly losing one of its two chances. */
+export function refundTitleRequest(session: Pick<HarnessSession, 'titleAttempts'>): void {
+  session.titleAttempts = Math.max(0, (session.titleAttempts ?? 1) - 1);
+}
+
 const OPEN = '<clikcode-title>';
 const CLOSE = '</clikcode-title>';
 
@@ -111,6 +120,18 @@ export class StreamingTitle {
       return extracted.text;
     }
     return mode === 'replace' ? '' : undefined;
+  }
+
+  /** A new reply attempt for the SAME request: an account switch that
+   * re-sends the prompt, or a transport fallback. Whatever the abandoned
+   * attempt held back, and whatever title it had begun, belongs to a reply
+   * nobody will ever see -- and a stream left settled would hand the NEW
+   * reply's title marker straight to the screen, because a settled stream
+   * passes append deltas through verbatim. */
+  restart(): void {
+    this.buffer = '';
+    this.settled = false;
+    this.found = undefined;
   }
 
   /** The stream ended: whatever was held back is owed to the caller. */
