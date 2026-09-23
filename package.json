@@ -1,0 +1,59 @@
+{
+  "name": "clikcode",
+  "version": "1.0.0",
+  "description": "One place to run every AI coding tool you have — all your accounts, one list of conversations, and no stopping when an account hits its limit.",
+  "type": "module",
+  "bin": {
+    "clikcode": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:analyze": "node scripts/build.mjs --analyze",
+    "build:strict": "node scripts/build.mjs --analyze --strict",
+    "build:no-strict": "node scripts/build.mjs --analyze --no-strict",
+    "type-check": "tsc --noEmit -p tsconfig.json && pnpm --filter @clikcode/router type-check",
+    "test": "vitest run",
+    "test:router": "pnpm --filter @clikcode/router test",
+    "test:all": "pnpm run test && pnpm run test:router",
+    "test:smoke": "pnpm run build && node dist/index.js --help && node dist/index.js --human doctor",
+    "test:pack": "node scripts/test-pack.mjs",
+    "test:display": "node scripts/build.mjs && uv run --quiet --with pyte scripts/tui-e2e/run.py --repeat 3",
+    "prepack": "node scripts/build.mjs"
+  },
+  "//dependencies": [
+    "EMPTY ON PURPOSE, and verified by the build: `dependencies` holds only what dist/",
+    "imports at RUNTIME, and scripts/build.mjs fails if one is missing and warns about",
+    "extras. chalk, commander, conf, cross-spawn and marked are inlined into dist/index.js,",
+    "and @clikcode/router (a private, source-only workspace package) is bundled into",
+    "dist/*.cjs, so all of those are devDependencies. @basetenlabs/performance-client is a",
+    "native addon that must never be bundled (FORCE_EXTERNAL in the build); @ai-sdk/baseten",
+    "no longer imports it, so it is a devDependency pinned for the day it comes back — at",
+    "which point build:strict fails until it is moved here."
+  ],
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@basetenlabs/performance-client": "0.0.10",
+    "@clikcode/router": "workspace:*",
+    "@types/cross-spawn": "6.0.6",
+    "@types/node": "26.1.2",
+    "chalk": "^6.0.0",
+    "commander": "^15.0.0",
+    "conf": "^15.1.0",
+    "cross-spawn": "7.0.6",
+    "esbuild": "0.28.1",
+    "marked": "15.0.12",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "license": "MIT"
+}
