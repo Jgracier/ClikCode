@@ -1,6 +1,7 @@
 /** `clikcode session`: creating, listing, showing, closing and leaving a
  * session, and the policy each kind of session starts with. */
 
+import { isBlankConversation } from '../../session/options.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { randomUUID } from 'node:crypto';
 import { emitJson } from '../../cli/structured-output.js';
@@ -146,7 +147,10 @@ export async function aiSessionsList(): Promise<void> {
   // that corrected it -- see session/liveness.ts for why caching it was the
   // bug rather than the sweep being in the wrong place.
   const workerIsLive = await liveWorkerSessions(state.sessions);
-  const sessions = state.sessions.map((session) => ({ ...session, live: sessionIsLive(session, workerIsLive) }));
+  // Blank chats are not listed: a launch that was closed without typing is
+  // not a conversation anyone can go back to (session/blank.ts).
+  const sessions = state.sessions.filter((session) => !isBlankConversation(session))
+    .map((session) => ({ ...session, live: sessionIsLive(session, workerIsLive) }));
   // Claim FILES are the one thing that does need collecting: a killed process
   // cannot delete its own, and no amount of correct logic makes that untrue.
   // This is disk housekeeping, NOT state reconciliation -- a leftover claim
