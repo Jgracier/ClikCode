@@ -1,8 +1,7 @@
 /**
  * The public ClikCode command surface.
  *
- * The `gateway` group is the only part that talks to a remote platform, and it
- * is registered only when the optional gateway is enabled — see constants.ts.
+ * The `gateway` group is the only part that talks to a remote platform.
  */
 import type { Command } from 'commander';
 import { mcpAdd, mcpTargets } from '../commands/mcp.js';
@@ -16,7 +15,6 @@ import { aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSession
 import { aiGatewayStatus, aiModelsList, aiUsage } from '../commands/ai/status.js';
 import { aiStart, aiStatus, aiStop } from '../daemon/server.js';
 import { gatewayLogin } from '../commands/gateway.js';
-import { isGatewayEnabled } from '../constants.js';
 import { runSessionWorker } from '../worker/session-worker.js';
 
 export function registerClikCodeCommands(program: Command, config: Conf): void {
@@ -63,13 +61,11 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   mcp.command('targets')
     .description('Show which harnesses would receive it, and how each spells the request')
     .action(mcpTargets);
-  if (isGatewayEnabled()) {
-    const gateway = program.command('gateway').description('Optionally connect a hosted gateway for remote models');
-    gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));
-    gateway.command('login').description('Sign in to the configured gateway for optional remote model access')
-      .option('--github', 'Use GitHub OAuth instead of Google OAuth')
-      .action(async (options) => { await gatewayLogin(config, { google: !options.github, github: Boolean(options.github) }); });
-  }
+  const gateway = program.command('gateway').description('Connect the gateway for remote models');
+  gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));
+  gateway.command('login').description('Sign in to the gateway')
+    .option('--github', 'Use GitHub OAuth instead of Google OAuth')
+    .action(async (options) => { await gatewayLogin(config, { google: !options.github, github: Boolean(options.github) }); });
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(aiSessionsList);
   sessions.command('show <id>').description('Show a saved session').action(aiSessionShow);

@@ -218,7 +218,7 @@ when you would rather type than pick.
 | `clikcode models`, `clikcode usage` | Models you can pick, and how much each account has left |
 | `clikcode sessions list` / `create` / `open` / `resume` / `set` / `close` | Your conversations, including ones a tool started on its own |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
-| `clikcode gateway login [--github]` / `gateway status` | Optional gateway sign-in (Google by default); absent when `CLIKCODE_GATEWAY=off` |
+| `clikcode gateway login [--github]` / `gateway status` | Gateway sign-in (Google by default) |
 
 Output is JSON by default, so ClikCode scripts cleanly. `--human` gives you
 readable output; `--debug` adds the stack and HTTP detail when something
@@ -282,7 +282,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/accounts [use\|login\|add\|remove\|failover …]` | list and manage accounts |
 | `/login` | sign in to the current provider |
 | `/logout` | sign the current account out |
-| `/gateway` | route this conversation through the optional gateway |
+| `/gateway` | route this conversation through the gateway |
 
 **Settings**
 
@@ -342,9 +342,8 @@ Everything above assumes the tools are on your machine. When they are not,
 sign in to a gateway instead: it supplies the model, and ClikCode runs
 the coding agent itself — same conversations, same commands, no vendor CLI.
 
-Optional, and off until you sign in. `CLIKCODE_GATEWAY=off` removes the
-commands entirely. ClikDeploy Gateway is the one supported gateway today and
-the default endpoint; `CLIKCODE_GATEWAY_URL` points ClikCode at another.
+Nothing is routed through it until you sign in with `clikcode gateway login`.
+The gateway is ClikDeploy Gateway.
 
 ## What ClikCode keeps, and where
 
@@ -391,7 +390,6 @@ streams at full speed.
 | `NO_MOTION` | Same as `CLIKCODE_REDUCED_MOTION`, used when that is unset |
 | `CLIKCODE_SCREEN_READER` | Any value other than empty, `0` or `false` switches to the append-only, line-oriented renderer so output is announced once, in order |
 | `FORCE_COLOR` | `0` disables color; `1`–`3` force a color level |
-| `CLIKCODE_GATEWAY` | `off`, `0`, `false` or `no` removes the optional gateway commands entirely |
 | `CLIKCODE_GATEWAY_URL` | Gateway endpoint used by `gateway login` and the gateway route (defaults to ClikDeploy Gateway) |
 
 ## Development
@@ -416,7 +414,7 @@ Two packages, one lockfile:
   `commands/` (the verbs), `session/` and `turn/` (state and the turn loop),
   `agent/` (ClikCode's own coding agent: tools, permissions, checkpoints),
   `harness/` (driving the vendor CLIs over argv/ACP/app-server),
-  `gateway/` (the optional adapter), `tui/`, `daemon/`, `runtime/`.
+  `gateway/` (the gateway adapter), `tui/`, `daemon/`, `runtime/`.
 - `packages/clikrouter` (`@clikcode/router`) — provider-agnostic request
   normalization and router selection across ~40 providers, consumed as source
   and bundled into `dist/*.cjs`.
