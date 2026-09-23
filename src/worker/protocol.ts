@@ -24,7 +24,9 @@ export type ClientCommand =
    * some other process's connection happened to land on. */
   | { type: 'attach'; token: string }
   | { type: 'submit'; text: string; echo: boolean; queuedTurnId?: string }
-  | { type: 'steer'; text: string }
+  /** A message typed while a turn runs. `id` is echoed back on the
+   * `submission` event that says what actually happened to it. */
+  | { type: 'steer'; text: string; id?: string }
   | { type: 'cancel'; restoreDraft: boolean }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
   /** The client made a change the worker did not: an account swap from a
@@ -61,6 +63,11 @@ export type WorkerEvent =
    * `cancel` asked for it (restoreDraft: true) and there truly was nothing
    * to preserve as an interrupted turn instead. */
   | { type: 'restore-draft'; text: string }
+  /** What happened to a message typed during a turn -- the worker's answer,
+   * not the client's guess. The client used to assume "queued" for every one
+   * and never learn otherwise, so a message steered straight into the answer
+   * said "queued for next turn" for the rest of the turn. */
+  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'error'; message?: string }
   /** The worker is exiting (idle timeout, explicit stop, an unrecoverable
    * error) -- told, not just disconnected, so a client can say why instead
    * of a bare "connection closed". */

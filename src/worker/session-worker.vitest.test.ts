@@ -163,6 +163,20 @@ describe('session worker (real spawned process, real socket)', () => {
     expect((await readWorkerRecord(session.id))?.pid).toBe(before?.pid);
   });
 
+  it('keeps a message typed as the turn ended, instead of dropping it', async () => {
+    // The race: Enter during the last moment of a turn, and the steer lands
+    // after the worker has stopped. It used to be silently discarded.
+    const session = await isolatedSession();
+    const client = await WorkerClient.attach(session.id);
+    spawnedClients.push(client);
+    await client.initialSnapshot;
+    const answer = nextEvent(client, 'submission');
+    client.send({ type: 'steer', text: 'also check the tests', id: 'msg-1' });
+    expect(await answer).toMatchObject({ type: 'submission', id: 'msg-1', disposition: 'queued' });
+    const stored = (await readState()).sessions.find((item) => item.id === session.id);
+    expect(stored?.queuedTurns?.map((item) => item.text)).toEqual(['also check the tests']);
+  });
+
   it('rejects an attach carrying the wrong token', async () => {
     const session = await isolatedSession();
     const legitimate = await WorkerClient.attach(session.id);

@@ -13,6 +13,9 @@ import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
 import { aiGatewaySessionSend } from '../turn/drive.js';
 import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
+import { enqueueSessionTurn } from '../turn/checkpoint.js';
+import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/runtime.js';
 import { BroadcastObserver } from './broadcast-observer.js';
@@ -166,14 +169,34 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       return;
     }
     if (command.type === 'steer') {
-      if (!activeLiveInput) return;
-      // Best-effort: a steer that fails (the turn finished between the
-      // client sending it and this running) has nothing left to steer into
-      // -- the broker's own submit() already falls back to the durable
-      // queue for the more common races; only report what neither of those
-      // paths can recover from.
-      try { await activeLiveInput.submit(command.text); } catch (error) {
-        broadcastNotice(`Could not send: ${error instanceof Error ? error.message : String(error)}`);
+      const answer = (disposition: 'steered' | 'queued' | 'error', message?: string): void => {
+        if (command.id) socket.write(encodeFrame({ type: 'submission', id: command.id, disposition, ...(message ? { message } : {}) }));
+      };
+      // The turn ended between the client's Enter and this arriving. This used
+      // to `return` -- and the message was simply gone. Nothing is running to
+      // steer into, so it is queued durably and the interactive loop sends it
+      // as the next turn, exactly as a queued message always is.
+      if (!activeLiveInput) {
+        try {
+          const state = await readState();
+          const session = state.sessions.find((item) => item.id === sessionId);
+          if (!session) throw new Error('conversation not found');
+          const submittedAt = new Date().toISOString();
+          enqueueSessionTurn(session, { id: command.id ?? randomUUID(), text: command.text.trim(), submittedAt }, submittedAt);
+          await writeState(state);
+          answer('queued');
+        } catch (error) {
+          answer('error', error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
+      try {
+        const result = await activeLiveInput.submit(command.text);
+        answer(result.disposition === 'steered' ? 'steered' : 'queued');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        answer('error', message);
+        if (!command.id) broadcastNotice(`Could not send: ${message}`);
       }
       return;
     }
