@@ -135,8 +135,11 @@ describe('model catalog persistence and stale-while-revalidate', () => {
     } finally {
       delete process.env.CLIKCODE_HOME;
       resetModelCatalogMemo();
-      await rm(stateHome, { recursive: true, force: true });
-      await rm(profile, { recursive: true, force: true });
+      // The picker's discovery keeps running after it returns, by design, and
+      // can still be writing its memo into stateHome here. Retrying the rm is
+      // Node's own answer to exactly that ENOTEMPTY race.
+      await rm(stateHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+      await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     }
   });
 
