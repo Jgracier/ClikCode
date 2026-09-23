@@ -52,6 +52,10 @@ export interface HarnessPrompter {
     },
   ): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
+  /** The prompt this client has just submitted, or undefined for a synthetic
+   * turn that shows none. Held until the turn ends: see
+   * tui/render/pending-prompt.ts for why a snapshot cannot carry it. */
+  submitted?(prompt: string | undefined): void;
   response?(text: string, mode?: 'append' | 'replace'): void;
   approval?(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'>;
   activityEvent?(event: HarnessActivityEvent): void;
