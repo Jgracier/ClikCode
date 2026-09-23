@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SESSION_TITLE_MAX, StreamingTitle, extractSessionTitle, normalizeSessionTitle, sessionTitleSource, withTitleRequest,
+  SESSION_TITLE_MAX, StreamingTitle, TITLE_REQUEST_ATTEMPTS, extractSessionTitle, normalizeSessionTitle,
+  refundTitleRequest, sessionTitleSource, shouldRequestTitle, withTitleRequest,
 } from './title.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition';
 
@@ -122,5 +123,49 @@ describe('a replace-mode stream never shows the title tag', () => {
     expect(shown([ANSWER], 'append')).toBe('BANANA');
     expect(shown(ANSWER.match(/.{1,7}/gs) ?? [], 'append')).toBe('BANANA');
     expect(shown([...ANSWER], 'append').trim()).toBe('BANANA');
+  });
+});
+
+/** An account switch abandons one reply and starts another. Naming belongs to
+ * a new chat's own reply, so nothing about the name may cross that seam. */
+describe('an account switch mid-turn', () => {
+  it('keeps no title from the attempt it abandoned', () => {
+    const stream = new StreamingTitle();
+    // The exhausted account got as far as opening a title and died there.
+    stream.push('<clikcode-title>Half a na', 'append');
+    stream.restart();
+    stream.push('<clikcode-title>Prod Disk Cleanup</clikcode-title>\nOn it.', 'append');
+    expect(stream.title).toBe('Prod Disk Cleanup');
+  });
+
+  it('strips the new reply\'s marker instead of passing it through settled', () => {
+    const stream = new StreamingTitle();
+    stream.push('Looking at the workspace now', 'append');
+    expect(stream.title).toBeUndefined();
+    stream.restart();
+    // Without the restart this returns the delta verbatim, tag included.
+    const shown = stream.push('<clikcode-title>Prod Disk Cleanup</clikcode-title>\nOn it.', 'append');
+    expect(shown).toBe('On it.');
+    expect(shown).not.toContain('<clikcode-title>');
+  });
+
+  it('gives back the attempt when the retry no longer asks for a name', () => {
+    // The vendor-CLI failover re-drives the carried thread with "carry on",
+    // which carries no title request: this turn cannot produce a name, so it
+    // must not have spent the chat's chance at one.
+    const session = { name: undefined, titleAttempts: 1 };
+    expect(shouldRequestTitle(session)).toBe(true);
+    refundTitleRequest(session);
+    expect(session.titleAttempts).toBe(0);
+    expect(shouldRequestTitle(session)).toBe(true);
+  });
+
+  it('never refunds below zero, and never re-asks a named chat', () => {
+    const fresh = { name: undefined, titleAttempts: 0 };
+    refundTitleRequest(fresh);
+    expect(fresh.titleAttempts).toBe(0);
+    const named = { name: 'Prod Disk Cleanup', titleAttempts: TITLE_REQUEST_ATTEMPTS };
+    refundTitleRequest(named);
+    expect(shouldRequestTitle(named)).toBe(false);
   });
 });

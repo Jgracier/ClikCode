@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
 import { nativeResponseUpdate } from './adapters';
+import { StreamingTitle } from '../../session/title';
 
 const harnessFor = (command: string) => allLocalHarnesses().find((item) => item.command === command)!;
 
@@ -76,5 +77,46 @@ describe('every harness that speaks claude-stream-json', () => {
     expect(out).not.toBe('Let me check.Found it.');
     expect(out).toContain('Let me check.');
     expect(out).toContain('Found it.');
+  });
+
+  it('leaves no paragraph jammed against the next, and no title tag on screen', () => {
+    // The three symptoms of the one bug, from two real screenshots:
+    //   1. every block printed twice
+    //   2. blocks jammed together -- "…workspace first.The final commit…"
+    //   3. the raw <clikcode-title> tag visible in the reply
+    // The third is the subtlest: the DELTAS settle the title and strip it,
+    // then the completed message re-sends the whole block including the tag,
+    // and StreamingTitle -- already settled, mode 'append' -- hands it back
+    // verbatim. Fixing the parser fixes all three, because there is only one
+    // bug: the same block arriving twice.
+    const harness = harnessFor('grok');
+    const title = new StreamingTitle();
+    const session = 'three-symptoms';
+    let shown = '';
+    const feed = (record: unknown) => {
+      const update = nativeResponseUpdate(harness, JSON.stringify(record));
+      if (!update?.text) return;
+      const visible = title.push(update.text, update.mode);
+      if (visible !== undefined) shown += visible;
+    };
+    const blocks = [
+      "<clikcode-title>Prod Disk Cleanup</clikcode-title> I'm checking the workspace first.",
+      'The final commit is live and all core containers are healthy.',
+    ];
+    feed({ type: 'system', subtype: 'init', session_id: session });
+    for (const block of blocks) {
+      feed({ type: 'stream_event', session_id: session, event: { type: 'content_block_start', content_block: { type: 'text' } } });
+      for (const [index, word] of block.split(' ').entries()) {
+        feed({ type: 'stream_event', session_id: session, event: { type: 'content_block_delta', delta: { text: index === 0 ? word : ` ${word}` } } });
+      }
+      feed({ type: 'assistant', session_id: session, message: { role: 'assistant', content: [{ type: 'text', text: block }] } });
+    }
+    const tail = title.flush();
+    if (tail) shown += tail;
+
+    expect(title.title).toBe('Prod Disk Cleanup');
+    expect(shown, 'the title tag must never reach the screen').not.toContain('<clikcode-title>');
+    expect(shown.match(/checking the workspace/g), 'each block once').toHaveLength(1);
+    expect(shown, 'a change of block is a paragraph, not a run-on').not.toContain('first.The final');
   });
 });

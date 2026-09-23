@@ -27,7 +27,7 @@ import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEve
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
-import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, withTitleRequest } from '../session/title.js';
+import { extractSessionTitle, refundTitleRequest, sessionTitleSource, shouldRequestTitle, StreamingTitle, withTitleRequest } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -125,7 +125,7 @@ export async function aiSessionSend(
     // later turn forever would keep editing prompts the user can see the
     // effect of.
     const askingForTitle = titleSource === 'ask' && shouldRequestTitle(session);
-    const titleStream = askingForTitle ? new StreamingTitle() : undefined;
+    let titleStream = askingForTitle ? new StreamingTitle() : undefined;
     if (askingForTitle) {
       turnText = withTitleRequest(turnText);
       session.titleAttempts = (session.titleAttempts ?? 0) + 1;
@@ -619,6 +619,18 @@ export async function aiSessionSend(
           // does the same).
           turnText = interruptedTurnFailoverPrompt(session);
         }
+        // Naming is for a new chat, and only from the reply that was actually
+        // asked for a name. Neither prompt above carries the title request any
+        // more -- one asks the carried thread to carry on, the other retells
+        // the interrupted turn -- so no title is coming, and the half-formed
+        // one the abandoned attempt may have started is not this chat's name.
+        // Drop the stream (a settled one would also pass the next reply
+        // through verbatim, marker and all) and give the attempt back, so a
+        // chat that is still unnamed gets asked again on its next turn.
+        if (titleStream) {
+          titleStream = undefined;
+          refundTitleRequest(session);
+        }
         checkpoint.response('', 'replace');
         prompter?.response('', 'replace');
         continue;
@@ -696,7 +708,7 @@ export async function aiSessionSend(
   const baseMessages = sessionTranscriptMessages(session);
   // No harness on this path writes its own titles, so the first turns of a
   // conversation ask the model for one and the answer is stripped of it.
-  const titleStream = shouldRequestTitle(session) ? new StreamingTitle() : undefined;
+  let titleStream = shouldRequestTitle(session) ? new StreamingTitle() : undefined;
   if (titleStream) {
     turnText = withTitleRequest(turnText);
     session.titleAttempts = (session.titleAttempts ?? 0) + 1;
@@ -794,6 +806,12 @@ export async function aiSessionSend(
       prompter?.phase(accountSwitchPhase(fallback.label));
       account = fallback;
       session.accountId = fallback.id;
+      // Unlike the vendor-CLI failover, this re-sends the whole prompt --
+      // title request included -- so the next account is genuinely asked
+      // again. The stream has to start over with it: left settled from the
+      // abandoned attempt it would keep that attempt's title and hand the new
+      // reply's marker to the screen unstripped.
+      titleStream?.restart();
     }
   }
   const invocation = {
@@ -858,7 +876,7 @@ export async function aiGatewaySessionSend(
   // The first turns of a conversation carry the title request here too: the
   // gateway's coding agent and the platform assistant both answer as a
   // model, and neither writes a title of its own anywhere ClikCode can read.
-  const titleStream = shouldRequestTitle(session) ? new StreamingTitle() : undefined;
+  let titleStream = shouldRequestTitle(session) ? new StreamingTitle() : undefined;
   const turnText = titleStream ? withTitleRequest(`${text}${prepared.textContext}`) : `${text}${prepared.textContext}`;
   if (titleStream) session.titleAttempts = (session.titleAttempts ?? 0) + 1;
   const baseUrl = getApiUrl(config).replace(/\/$/, '');
@@ -900,6 +918,10 @@ export async function aiGatewaySessionSend(
   } catch (error) {
     if (!gatewayHarnessUnavailable(error)) { await checkpoint.flush(); throw error; }
     const notice = gatewayHarnessFallbackNotice(error);
+    // The assistant below answers the same prompt, title request and all, so
+    // this is another attempt at one reply rather than a continuation of the
+    // abandoned one.
+    titleStream?.restart();
     if (prompter) prompter.activity(chalk.dim(notice));
     else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('Gateway:')} ${notice}\n`);
   }
