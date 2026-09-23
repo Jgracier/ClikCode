@@ -66,3 +66,15 @@ export function providerImpliedBy(
   }
   return undefined;
 }
+
+/** The harness command a command's implied provider runs on, or undefined
+ * when nothing is implied. The one place both the interactive loop and the
+ * headless path ask, so they cannot come to different answers. */
+export function impliedHarnessCommand(
+  route: { head: string; args: string },
+  accounts: readonly Evidence[],
+  harnessForProvider: (provider: string) => { command: string } | undefined,
+): string | undefined {
+  const provider = providerImpliedBy(route, accounts);
+  return provider ? harnessForProvider(provider)?.command : undefined;
+}
