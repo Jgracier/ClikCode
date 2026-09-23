@@ -55,5 +55,23 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jgracier/ClikCode.git"
+  },
+  "homepage": "https://github.com/Jgracier/ClikCode#readme",
+  "bugs": {
+    "url": "https://github.com/Jgracier/ClikCode/issues"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "gemini",
+    "copilot",
+    "terminal"
+  ]
 }
