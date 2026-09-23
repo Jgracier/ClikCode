@@ -25,7 +25,8 @@ import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
-import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, usageLabelRemainingPercent } from './failover.js';
+import { noteStoredQuota } from './account-switch.js';
+import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, titleStreamForAttempt, withTitleRequest } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
@@ -39,7 +40,6 @@ import { harnessSupportsImages, localHarnessCapabilityManifest, localHarnessForC
 import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { accountUsageLabel } from '../harness/accounts/account-usage.js';
 import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
@@ -148,29 +148,25 @@ export async function aiSessionSend(
     let exhaustedAnyAccount = false;
     const attemptedAccounts = new Set<string>();
     try {
-    if (session.accountFailover === 'on-quota-exhausted' && account.quotaState === 'exhausted') {
-      const currentRemaining = usageLabelRemainingPercent(await accountUsageLabel(account, state));
-      if (currentRemaining !== undefined && currentRemaining > 0) account.quotaState = 'available';
-      else {
-        attemptedAccounts.add(account.id);
-        const fallback = await nextUsableFailoverAccount(
-          state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
-        );
-        if (!fallback) {
-          await writeState(state);
-          throw new Error(usageExhaustedMessage(
-          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
-        ));
-        }
-        switchedFrom = account.label;
-        prompter?.activity(chalk.yellow(accountSwitchNotice('quota-exhausted', fallback.label)));
-        prompter?.phase(accountSwitchPhase(fallback.label));
-        account = fallback;
-        session.accountId = fallback.id;
-        session.nativeSessionId = undefined;
-        session.nativeStartedAt = undefined;
-        await checkpoint.persistNow();
+    if (session.accountFailover === 'on-quota-exhausted' && noteStoredQuota(account, state) === 0) {
+      attemptedAccounts.add(account.id);
+      const fallback = nextUsableFailoverAccount(
+        state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
+      );
+      if (!fallback) {
+        await writeState(state);
+        throw new Error(usageExhaustedMessage(
+        state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
+      ));
       }
+      switchedFrom = account.label;
+      prompter?.activity(chalk.yellow(accountSwitchNotice('quota-exhausted', fallback.label)));
+      prompter?.phase(accountSwitchPhase(fallback.label));
+      account = fallback;
+      session.accountId = fallback.id;
+      session.nativeSessionId = undefined;
+      session.nativeStartedAt = undefined;
+      await checkpoint.persistNow();
     }
     // A fresh native thread (no nativeSessionId yet) with prior ClikCode
     // messages already on the session means this conversation is continuing
@@ -717,7 +713,7 @@ export async function aiSessionSend(
   let switchedFrom: string | undefined;
   const attemptedAccounts = new Set<string>();
   try {
-  if (session.accountFailover === 'on-quota-exhausted' && account.quotaState === 'exhausted') {
+  if (session.accountFailover === 'on-quota-exhausted' && noteStoredQuota(account, state) === 0) {
     attemptedAccounts.add(account.id);
     const fallback = await nextUsableFailoverAccount(
       state, account, (item) => item.authKind === 'api-key' && item.models.includes(model), attemptedAccounts,
@@ -868,7 +864,14 @@ export async function aiGatewaySessionSend(
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
   const prepared = await prepareAttachments(session.attachments ?? []);
-  if (prepared.images.length) throw new Error('ClikDeploy Gateway does not accept image attachments. Switch to a local provider with /provider or clear them with /attachments clear.');
+  // No image refusal here any more, and it was not a limit: the gateway route
+  // runs ClikCode's own agent loop on this machine, runGatewayHarnessSessionTurn
+  // takes `images`, and run-turn.ts names the attached files for the agent to
+  // read with its own file tools. This threw twenty lines above the call that
+  // passes them, so the capability the code below implements was unreachable.
+  // (The platform-assistant fallback further down cannot read local files at
+  // all -- it says so in its own notice -- so images are simply not part of
+  // that request, exactly as before.)
   // The first turns of a conversation carry the title request here too: the
   // gateway's coding agent and the platform assistant both answer as a
   // model, and neither writes a title of its own anywhere ClikCode can read.

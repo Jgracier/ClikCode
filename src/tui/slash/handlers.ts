@@ -193,7 +193,19 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   model: async ({ state, session, words }) => {
     const value = words.join(' ').trim();
-    if (!value) throw new Error('Choose a model from /model or use /model <name>.');
+    // No value: show what there is to choose from, which is what
+    // /permissions with no value already does. The interactive session opens
+    // a picker before reaching here, so this is the headless answer -- and
+    // there, listing the models is strictly more useful than a sentence
+    // telling the user to go and list the models.
+    if (!value) {
+      return emitHarnessOutput({
+        panel: 'models',
+        models: state.accounts.filter((item) => !session.accountId || item.id === session.accountId)
+          .flatMap((account) => account.models.map((model) => ({ account: account.label, provider: account.provider, model }))),
+        selected: session.model,
+      });
+    }
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
     const account = state.accounts.find((item) => item.id === session.accountId);
@@ -376,7 +388,18 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       if (leavingGateway) applyFreshLocalSessionPolicy(state, session);
       if (session.nativeHarness) {
         const selectedHarness = localHarnessForCommand(session.nativeHarness);
-        if (selectedHarness && selectedHarness.provider !== account.provider) throw new Error(`account "${account.label}" belongs to ${account.provider}; select /${localHarnessForProvider(account.provider)?.command ?? account.provider} first`);
+        const accountCommand = localHarnessForProvider(account.provider)?.command ?? account.provider;
+        // Naming an account of another provider names the provider too, and
+        // the switch below already knows how to follow it. The refusal is
+        // only right where the move would take a conversation with real
+        // content to a different provider -- that always branches, and
+        // branching is /<harness>'s decision to make, not a side effect of
+        // choosing an account. An empty conversation has nothing to branch,
+        // so it simply moves.
+        if (selectedHarness && selectedHarness.provider !== account.provider
+          && requiresProviderHandoff(session, accountCommand)) {
+          throw new Error(`account "${account.label}" belongs to ${account.provider}; use /${accountCommand} to hand this conversation off -- a provider change always branches.`);
+        }
       }
       const accountHarness = localHarnessForProvider(account.provider);
       if (accountHarness && harnessCanRunTurns(accountHarness) && session.nativeHarness !== accountHarness.command) {

@@ -283,7 +283,7 @@ function providerAccountPickerOptions(
         : { label: 'Remove', value: 'remove' };
       return {
         label: account.label,
-        detail: `${usage ? `· ${usage} ` : usagePending ? '· checking usage… ' : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status !== 'ready' ? `· ${chalk.yellow('needs sign-in')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(Tab for options)')}` : ''}`.trim(),
+        detail: `${usage ? `· ${usage} ` : usagePending ? '· checking usage… ' : '· usage unavailable '}${account.authKind === 'api-key' ? '· direct API ' : '· native CLI '}${account.status === 'needs_login' ? `· ${chalk.yellow('needs reauthentication')} ` : ''}${account.quotaState === 'exhausted' ? `· ${chalk.yellow('quota exhausted')} ` : ''}${account.id === session.accountId ? '· current' : ''}${actions.length ? ` ${chalk.dim('(Tab for options)')}` : ''}`.trim(),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
         actions,
         deleteAction,
