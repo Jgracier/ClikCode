@@ -73,12 +73,15 @@ export function paintLabeledRule(
   return `${rule.slice(0, at)}${paint(label)}`;
 }
 
-/** The chat's name is the one thing on the frame that identifies THIS
- * conversation rather than describing its state, so it keeps a colour of its
- * own. Magenta rather than cyan, which belongs to ClikCode's own chrome, and
- * rather than yellow, which reads muddy on a dark terminal and fights
- * whatever theme the user chose. */
-const RULE_LABEL = (text: string): string => chalk.magenta(text);
+/** The chat's name, in the terminal's own foreground -- the same white as the
+ * rule it sits on, the composer's text between the rules, and the usage
+ * figure on the rule above. It used to be magenta, on the theory that the one
+ * thing naming THIS conversation deserved a colour of its own; on screen it
+ * read as the frame shouting in a second colour. Unstyled rather than an
+ * explicit white, so a light-background theme still gets its own foreground.
+ * The one colour the frame keeps is red for spent usage, because that one
+ * asks for something to be done. */
+const RULE_LABEL = (text: string): string => text;
 
 /** Usage reads by state, but only one state is worth shouting about.
  *

@@ -57,10 +57,10 @@ describe('usage reads by state, not as furniture', () => {
     expect(colourOf(paintUsageRule(40, '0% left'), '0% left')).toBe('31');
   });
 
-  it('keeps a colour for the chat title, which names rather than measures', () => {
-    // The title identifies THIS conversation; usage describes its state. Only
-    // the first gets a colour of its own.
-    expect(colourOf(paintTitleRule(40, 'refactor the parser'), 'refactor the parser')).toBe('35');
+  it('draws the chat title in the same white as the rules and usage', () => {
+    // The title is drawn like the rule it sits on and the composer's text:
+    // the terminal's own foreground, no colour of its own.
+    expect(colourOf(paintTitleRule(40, 'refactor the parser'), 'refactor the parser')).toBe('');
   });
 
   it('draws the rule in the terminal\'s own foreground, and says nothing with no label', () => {
