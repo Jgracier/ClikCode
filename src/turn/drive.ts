@@ -868,7 +868,7 @@ function gatewayResultNotice(data: unknown): string | undefined {
     return [record.name, record.tool, record.toolName].find((value): value is string => typeof value === 'string');
   }).filter((name): name is string => Boolean(name));
   const what = pending.length ? `${pending.length} action${pending.length === 1 ? '' : 's'}${names.length ? ` (${[...new Set(names)].slice(0, 5).join(', ')})` : ''}` : 'an action';
-  return `The platform is holding ${what} for your confirmation and has NOT run ${pending.length === 1 || !pending.length ? 'it' : 'them'}. ClikCode cannot confirm Gateway actions yet — approve ${pending.length === 1 || !pending.length ? 'it' : 'them'} in the ClikDeploy dashboard assistant.`;
+  return `The platform is holding ${what} for your confirmation and has NOT run ${pending.length === 1 || !pending.length ? 'it' : 'them'}. ClikCode cannot confirm ClikDeploy Gateway actions yet — approve ${pending.length === 1 || !pending.length ? 'it' : 'them'} in the ClikDeploy dashboard assistant.`;
 }
 
 /** Send a gateway session through the existing authenticated platform assistant stream. */
@@ -899,7 +899,7 @@ export async function aiGatewaySessionSend(
   if (titleStream) session.titleAttempts = (session.titleAttempts ?? 0) + 1;
   const baseUrl = getApiUrl(config).replace(/\/$/, '');
   const apiKey = getApiKeyForUrl(config, baseUrl);
-  if (!apiKey) throw new Error(`Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
+  if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
@@ -940,7 +940,7 @@ export async function aiGatewaySessionSend(
     // continuation of the abandoned one.
     titleStream = titleStreamForAttempt(titleStream, turnText, session);
     if (prompter) prompter.activity(chalk.dim(notice));
-    else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('Gateway:')} ${notice}\n`);
+    else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('ClikDeploy Gateway:')} ${notice}\n`);
   }
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
@@ -1019,7 +1019,7 @@ export async function aiGatewaySessionSend(
   }
   if (gatewayNotice) {
     if (prompter) prompter.activity(`${chalk.yellow('gateway')} ${chalk.dim(gatewayNotice)}`);
-    else if (!isJsonDefaultMode()) output.write(`${wroteDelta ? '\n' : ''}${chalk.yellow('Gateway:')} ${gatewayNotice}\n`);
+    else if (!isJsonDefaultMode()) output.write(`${wroteDelta ? '\n' : ''}${chalk.yellow('ClikDeploy Gateway:')} ${gatewayNotice}\n`);
     if (!reply) reply = gatewayNotice;
   }
   if (!reply) throw new Error('gateway AI response contained no text');

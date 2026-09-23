@@ -20,18 +20,18 @@ import { chooseOption } from './choose.js';
 async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<void> {
   const apiUrl = getApiUrl(config);
   if (getApiKeyForUrl(config, apiUrl)) return;
-  const provider = await chooseOption(rl, 'Sign in to Gateway', [
+  const provider = await chooseOption(rl, 'Sign in to ClikDeploy Gateway', [
     { label: 'Continue with Google', value: 'google' as const },
     { label: 'Continue with GitHub', value: 'github' as const },
   ]);
-  if (!provider) throw new Error('Gateway sign-in was cancelled.');
+  if (!provider) throw new Error('ClikDeploy Gateway sign-in was cancelled.');
   if (rl instanceof TerminalHarnessPrompter) await rl.suspend();
   try {
     await gatewayLogin(config, { google: provider === 'google', github: provider === 'github', embedded: true });
   } finally {
     if (rl instanceof TerminalHarnessPrompter) rl.resume();
   }
-  if (!getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a Gateway credential.');
+  if (!getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a ClikDeploy Gateway credential.');
 }
 
 async function newGatewayConversation(config: Conf, rl: HarnessPrompter, currentId: string): Promise<string> {

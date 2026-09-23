@@ -61,9 +61,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   mcp.command('targets')
     .description('Show which harnesses would receive it, and how each spells the request')
     .action(mcpTargets);
-  const gateway = program.command('gateway').description('Connect the gateway for remote models');
+  const gateway = program.command('gateway').description('Connect ClikDeploy Gateway for remote models');
   gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));
-  gateway.command('login').description('Sign in to the gateway')
+  gateway.command('login').description('Sign in to ClikDeploy Gateway')
     .option('--github', 'Use GitHub OAuth instead of Google OAuth')
     .action(async (options) => { await gatewayLogin(config, { google: !options.github, github: Boolean(options.github) }); });
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');

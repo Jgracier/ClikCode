@@ -218,7 +218,7 @@ when you would rather type than pick.
 | `clikcode models`, `clikcode usage` | Models you can pick, and how much each account has left |
 | `clikcode sessions list` / `create` / `open` / `resume` / `set` / `close` | Your conversations, including ones a tool started on its own |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
-| `clikcode gateway login [--github]` / `gateway status` | Gateway sign-in (Google by default) |
+| `clikcode gateway login [--github]` / `gateway status` | ClikDeploy Gateway sign-in (Google by default) |
 
 Output is JSON by default, so ClikCode scripts cleanly. `--human` gives you
 readable output; `--debug` adds the stack and HTTP detail when something
@@ -282,7 +282,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/accounts [use\|login\|add\|remove\|failover …]` | list and manage accounts |
 | `/login` | sign in to the current provider |
 | `/logout` | sign the current account out |
-| `/gateway` | route this conversation through the gateway |
+| `/gateway` | route this conversation through ClikDeploy Gateway |
 
 **Settings**
 
@@ -319,7 +319,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/help` (also `/?`) | all commands |
 
 A command that doesn't apply right now — no provider chosen yet, or a
-Gateway-managed setting on the Gateway route — stays listed with a reason
+Gateway-managed setting on the ClikDeploy Gateway route — stays listed with a reason
 (`unavailable · …`) instead of disappearing, so the palette always explains
 itself.
 
@@ -339,11 +339,11 @@ named after the file.
 ## Running without a vendor tool
 
 Everything above assumes the tools are on your machine. When they are not,
-sign in to a gateway instead: it supplies the model, and ClikCode runs
+sign in to ClikDeploy Gateway instead: it supplies the model, and ClikCode runs
 the coding agent itself — same conversations, same commands, no vendor CLI.
 
 Nothing is routed through it until you sign in with `clikcode gateway login`.
-The gateway is ClikDeploy Gateway.
+The gateway is ClikDeploy Gateway, and it is listed with your other providers.
 
 ## What ClikCode keeps, and where
 
@@ -390,7 +390,7 @@ streams at full speed.
 | `NO_MOTION` | Same as `CLIKCODE_REDUCED_MOTION`, used when that is unset |
 | `CLIKCODE_SCREEN_READER` | Any value other than empty, `0` or `false` switches to the append-only, line-oriented renderer so output is announced once, in order |
 | `FORCE_COLOR` | `0` disables color; `1`–`3` force a color level |
-| `CLIKCODE_GATEWAY_URL` | Gateway endpoint used by `gateway login` and the gateway route (defaults to ClikDeploy Gateway) |
+| `CLIKCODE_GATEWAY_URL` | ClikDeploy Gateway endpoint used by `gateway login` and the gateway route |
 
 ## Development
 
