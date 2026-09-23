@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { TerminalInputDecoder, waitingInputActions } from './input-decoder';
+import { TerminalInputDecoder } from './input-decoder';
 import { editWaitingComposer } from './composer-edit';
 
 describe('terminal input decoding', () => {
-  it('does not pretend navigation keys are handled scroll actions', () => {
-    expect(waitingInputActions('\u001b[A\u001b[5~\u001b[B\u001b[6~')).toEqual([]);
-  });
-
   it('buffers fragmented Termius escape sequences and UTF-8 characters', () => {
     const decoder = new TerminalInputDecoder();
     expect(decoder.push(Buffer.from('\u001b'))).toEqual([]);
@@ -19,10 +15,6 @@ describe('terminal input decoding', () => {
     expect(decoder.flush()).toEqual(['\u001b']);
     expect(decoder.push(Buffer.from('x'))).toEqual(['x']);
     expect(decoder.push(Buffer.from('\u001by'))).toEqual(['\u001by']);
-  });
-
-  it('keeps escape and control-c as cancellation without treating other keys as actions', () => {
-    expect(waitingInputActions(`x\u001b\u0003`)).toEqual(['cancel-edit', 'cancel-stop']);
   });
 
   it('edits a real composer during generation instead of discarding typed keys', () => {

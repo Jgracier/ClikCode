@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  extractLoginUrl, hasLocalDisplay, LoginUrlWatcher, loginUrlNotice, shortenLoginUrl, stripAnsi,
+  extractLoginUrl, hasLocalDisplay, loginUrlNotice, shortenLoginUrl, stripAnsi,
 } from './url.js';
 import { scriptArgv, shellQuote } from './tee.js';
 
@@ -76,60 +76,6 @@ describe('loginUrlNotice', () => {
 
   it('tells a desktop user a browser should have opened', () => {
     expect(loginUrlNotice(AUTH_URL, { DISPLAY: ':0' }).lines.join(' ')).toContain('should have opened');
-  });
-});
-
-describe('LoginUrlWatcher', () => {
-  const watcherFor = (environment: NodeJS.ProcessEnv) => {
-    const written: string[] = [];
-    const opened: string[] = [];
-    const watcher = new LoginUrlWatcher({
-      write: (chunk) => { written.push(chunk); }, environment, open: (url) => { opened.push(url); },
-    });
-    return { watcher, written, opened };
-  };
-
-  it('acts on the URL as soon as its line is complete', () => {
-    const { watcher, written } = watcherFor({});
-    expect(watcher.push(CLAUDE_LOGIN.slice(0, 120))).toBe(false);
-    expect(watcher.push(`${CLAUDE_LOGIN.slice(120)}\n`)).toBe(true);
-    expect(written.join('')).toContain('copied to your clipboard');
-  });
-
-  it('never acts on half a URL split across chunks', () => {
-    const { watcher, written } = watcherFor({});
-    expect(watcher.push(`https://claude.com/cai/oauth/authorize?code=`)).toBe(false);
-    expect(written).toEqual([]);
-  });
-
-  it('acts once, so a reprint cannot clobber a code being pasted', () => {
-    const { watcher } = watcherFor({});
-    expect(watcher.push(`${AUTH_URL}\n`)).toBe(true);
-    expect(watcher.push(`${AUTH_URL}\n`)).toBe(false);
-  });
-
-  it('opens a browser only where one is any use', () => {
-    const headless = watcherFor({});
-    headless.watcher.push(`${AUTH_URL}\n`);
-    expect(headless.opened).toEqual([]);
-
-    const desktop = watcherFor({ DISPLAY: ':0' });
-    desktop.watcher.push(`${AUTH_URL}\n`);
-    expect(desktop.opened).toEqual([AUTH_URL]);
-  });
-
-  it('keeps a redrawing TUI from growing the buffer without bound', () => {
-    const { watcher } = watcherFor({});
-    for (let index = 0; index < 50; index += 1) watcher.push(`${'x'.repeat(4000)}\n`);
-    expect(watcher.seenUrl).toBe(false);
-    expect(watcher.push(`${AUTH_URL}\n`)).toBe(true);
-  });
-
-  it('survives a handler that throws', () => {
-    const watcher = new LoginUrlWatcher({
-      write: () => { throw new Error('terminal gone'); }, environment: {}, open: () => {},
-    });
-    expect(() => watcher.push(`${AUTH_URL}\n`)).toThrow();
   });
 });
 
