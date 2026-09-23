@@ -7,6 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import { discardIfBlank } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
 import type Conf from 'conf';
 import { open } from 'node:fs/promises';
@@ -596,7 +597,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         }
         if (outcome.notice) notice = outcome.notice;
         if (outcome.exit) break;
-        if (outcome.id && outcome.id !== id) id = outcome.id;
+        if (outcome.id && outcome.id !== id) {
+          // Leaving a chat nothing happened in: it does not stay behind.
+          await discardIfBlank(id).catch(() => undefined);
+          id = outcome.id;
+        }
         if (outcome.prompt) await runInteractiveTurn(id, outcome.prompt, { echo: outcome.echo !== false });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -638,6 +643,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     // Hand the conversation back so the next terminal can resume it. Best
     // effort: a failure here only means the claim expires on its own TTL.
     await releaseSessionClaim(id).catch(() => undefined);
+    // Closed without ever being started: not stored. After the claim release,
+    // which reads the record it is releasing.
+    await discardIfBlank(id).catch(() => undefined);
     if (TERMINAL.active === rl) TERMINAL.active = undefined;
     rl.close();
   }

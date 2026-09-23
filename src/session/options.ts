@@ -41,6 +41,16 @@ export function hasConversationContent(session: HarnessSession): boolean {
   return Boolean(session.nativeSessionId || session.pendingTurn || (session.messages ?? []).length > 0);
 }
 
+/** Nothing has happened in this conversation: see session/blank.ts, which is
+ * where the rule is explained. Defined here, beside hasConversationContent,
+ * because the chat list below needs it and blank.ts needs state I/O. */
+export function isBlankConversation(session: HarnessSession): boolean {
+  return !hasConversationContent(session)
+    && !(session.queuedTurns?.length)
+    && !(session.attachments?.length)
+    && session.nameSource !== 'user';
+}
+
 export function requiresProviderHandoff(session: HarnessSession, targetHarness: string): boolean {
   return hasConversationContent(session) && (session.route !== 'local' || session.nativeHarness !== targetHarness);
 }
@@ -54,6 +64,9 @@ export function sessionPickerOptions(
 ): PickerOption<string>[] {
   const groups = new Map<string, HarnessSession[]>();
   for (const session of sessions) {
+    // A chat nothing happened in is not a conversation to go back to -- only
+    // the one open right now, which the user is looking at.
+    if (session.id !== currentId && isBlankConversation(session)) continue;
     const root = conversationIdFor(session);
     const group = groups.get(root) ?? [];
     group.push(session);
