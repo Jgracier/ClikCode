@@ -1,6 +1,6 @@
 # ClikCode
 
-**One place to run every AI coding tool you have.**
+**The terminal harness that logs in all your favorite AI coding providers.** Chats you can resume in any of them, and automatic account switching when you hit a usage limit.
 
 Claude Code for one thing, Codex for another, Copilot because it came with the
 editor, something you tried once and kept. Each has its own commands, its own
@@ -8,7 +8,7 @@ sign-in, its own idea of where your conversations live. None of them know the
 others exist, so picking one up means learning it again and leaving your work
 behind in the last one.
 
-ClikCode sits in front of all 24. One sign-in, one list of conversations, one
+ClikCode sits in front of 24 of them. One sign-in, one list of conversations, one
 set of controls, the same keystrokes whichever tool answers. It replaces
 nothing — your tools stay yours, the logins you already had keep working — and
 what it adds is this:
@@ -35,7 +35,7 @@ it. Nothing to click. You find out afterwards.
 ## Install
 
 ```sh
-npm install -g clikcode
+npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz
 ```
 
 Requires **Node.js 22.12 or newer**. Nothing to configure. You do not need any
@@ -92,8 +92,9 @@ Two keys do almost everything.
 command list. On a highlighted row it opens that row — a tool, an account, a
 conversation. You can go a long way without typing anything.
 
-**Left Arrow goes back**, always, and never confirms. That one rule is why you
-can explore a menu without worrying about setting something by accident.
+**Left Arrow goes back** out of any menu or picker, and never confirms. That
+one rule is why you can explore a menu without worrying about setting something
+by accident. (In the composer it moves the cursor, as you would expect.)
 
 | Key | What it does |
 | --- | --- |
@@ -102,8 +103,8 @@ can explore a menu without worrying about setting something by accident.
 | **↑ ↓** | Move through a list; in an empty composer, your previous messages |
 | **Enter** | Send, or confirm the highlighted row |
 | **Tab** | Complete the highlighted command |
-| **Delete** | The destructive action on a row — remove an account, delete a conversation |
-| **Esc** | Stop the current answer, keeping what you typed. Clears a draft otherwise |
+| **Delete** | In a picker, the destructive action on a row — remove an account, delete a conversation |
+| **Esc** | Stop the current answer, keeping what you typed (if you have scrolled back, the first press returns to the live end). Closes the command list and clears its filter |
 | **Ctrl+C** | Stop the answer. On a draft, clears it; twice within two seconds exits |
 | **Ctrl+D** | Exit, on an empty line |
 | **Ctrl+Z** | Drop to a shell; `fg` brings you back |
@@ -128,7 +129,8 @@ somewhere else to go.
 
 Each account gets its own directory under `~/.clikcode/profiles/`, and
 ClikCode points the tool at it using that vendor's own supported setting —
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `QWEN_HOME` and so on — for
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `GEMINI_CLI_HOME`,
+`QWEN_HOME` and so on — for
 one child process at a time. Nothing global changes, and the `~/.claude`,
 `~/.codex` logins you already had are untouched.
 
@@ -138,7 +140,7 @@ account each — usually an API key — added with `clikcode accounts add`.
 
 Two of the nine, Antigravity and Command Code, have no such setting, so
 ClikCode points `HOME` elsewhere for that one process instead. On its own that
-would also hide your git, npm, GitHub CLI, Docker, GnuPG, Cargo and ssh-agent
+would also hide your git, npm, GitHub CLI, Docker, GnuPG, Cargo, rustup and ssh-agent
 configuration from the agent, so ClikCode points those back at your real home.
 Turns still commit, push and install as you.
 
@@ -197,7 +199,7 @@ once and ClikCode installs it into all of them, in each one's spelling:
 
 ```sh
 clikcode mcp targets                        # who would receive it, and how
-clikcode mcp add postgres npx -y pg-mcp     # send it to all of them
+clikcode mcp add postgres -- npx -y pg-mcp  # send it to all of them
 ```
 
 ClikCode does not host or proxy these servers. Each tool talks to them
@@ -216,13 +218,13 @@ when you would rather type than pick.
 | `clikcode accounts login <tool> [--label <label>]` | Run that tool's own login, kept separate from your others |
 | `clikcode accounts list` / `status` / `logout` / `remove` | Your accounts: what they are called, and what is left on each |
 | `clikcode models`, `clikcode usage` | Models you can pick, and how much each account has left |
-| `clikcode sessions list` / `create` / `open` / `resume` / `set` / `close` | Your conversations, including ones a tool started on its own |
+| `clikcode sessions list` / `show` / `create` / `open` / `resume` / `send` / `set` / `close` | Your conversations, including ones a tool started on its own |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
 | `clikcode gateway login [--github]` / `gateway status` | ClikDeploy Gateway sign-in (Google by default) |
 
-Output is JSON by default, so ClikCode scripts cleanly. `--human` gives you
-readable output; `--debug` adds the stack and HTTP detail when something
-fails.
+Output is JSON when it is not going to a terminal, so ClikCode scripts
+cleanly, and readable text when it is. `--json` or `--human` forces one, and
+`--debug` adds the stack and HTTP detail when something fails.
 
 ## Inside a session
 
@@ -257,6 +259,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/export [path]` | write the transcript as markdown |
 | `/undo` | revert the last turn (only where the vendor exposes it) |
 | `/native <text>` (also `//text`) | send text straight to the tool, unchanged |
+| `/select` | release the mouse so you can select and copy text |
 | `/redraw` | repaint the screen |
 | `/exit` (also `/quit`) | save and leave |
 
@@ -279,7 +282,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | --- | --- |
 | `/provider` (also `/switch`, `/engine`) | choose a provider |
 | `/account [label]` | switch accounts |
-| `/accounts [use\|login\|add\|remove\|failover …]` | list and manage accounts |
+| `/accounts [use\|login\|add\|remove\|failover auto\|never]` | list and manage accounts |
 | `/login` | sign in to the current provider |
 | `/logout` | sign the current account out |
 | `/gateway` | route this conversation through ClikDeploy Gateway |
@@ -350,16 +353,18 @@ The gateway is ClikDeploy Gateway, and it is listed with your other providers.
 Everything it owns is under `~/.clikcode`, readable only by you (directories
 `0700`, files `0600`):
 
-- `harness-state.json` — accounts (labels and credential *references*), session
-  index, usage records, the installation id
-- `sessions/` — session history
+- `index.json` — accounts (labels and credential *references*), the session
+  index, usage records and the installation id
+- `secrets.json` — the local control API token and this device's key
+- `sessions/` — session records and history
 - `profiles/<harness>/<account-id>/` — per-account vendor configuration roots
 - `runtime.json`, `runtime.lock` — present only while the control API is running
 - `crash.log` — uncaught errors
 
-Set `CLIKCODE_HOME` to relocate all of it (tests, portable installs). A gateway
-credential, if you sign in, is stored separately in `~/.config/clikcode/auth.json`
-and `~/.clikcode/api-key`.
+Set `CLIKCODE_HOME` to relocate the state directory (tests, portable installs).
+`crash.log` and a gateway credential, if you sign in, always live outside it:
+`~/.clikcode/crash.log`, `~/.config/clikcode/auth.json` (or under
+`$XDG_CONFIG_HOME`) and `~/.clikcode/api-key`.
 
 ## Letting other programs drive it
 
@@ -372,7 +377,7 @@ stop it. It stays off until you start it.
 - `GET /v1/health` is unauthenticated. Every other route (`/v1/accounts`,
   `/v1/device`, `/v1/models`, `/v1/sessions`, `/v1/usage`, `/v1/chat`) requires
   `Authorization: Bearer <token>`, a per-installation token kept in
-  `harness-state.json`.
+  `secrets.json`. Requests whose `Host` is not loopback are refused.
 - Responses never contain credential material.
 
 ## Tuning and accessibility
@@ -390,6 +395,8 @@ streams at full speed.
 | `NO_MOTION` | Same as `CLIKCODE_REDUCED_MOTION`, used when that is unset |
 | `CLIKCODE_SCREEN_READER` | Any value other than empty, `0` or `false` switches to the append-only, line-oriented renderer so output is announced once, in order |
 | `FORCE_COLOR` | `0` disables color; `1`–`3` force a color level |
+| `CLIKCODE_OUTPUT_MODE` | `json` or `human`, the same as `--json` / `--human` |
+| `CLIKCODE_DEBUG` | `1` is the same as `--debug` |
 | `CLIKCODE_GATEWAY_URL` | ClikDeploy Gateway endpoint used by `gateway login` and the gateway route |
 
 ## Development

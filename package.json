@@ -1,7 +1,7 @@
 {
   "name": "clikcode",
   "version": "1.0.0",
-  "description": "One place to run every AI coding tool you have — all your accounts, one list of conversations, and no stopping when an account hits its limit.",
+  "description": "The terminal harness that logs in all your favorite AI coding providers. Chats you can resume in any of them, and automatic account switching when you hit a usage limit.",
   "type": "module",
   "bin": {
     "clikcode": "./dist/index.js"
@@ -55,5 +55,23 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jgracier/ClikCode.git"
+  },
+  "homepage": "https://github.com/Jgracier/ClikCode#readme",
+  "bugs": {
+    "url": "https://github.com/Jgracier/ClikCode/issues"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "gemini",
+    "copilot",
+    "terminal"
+  ]
 }
