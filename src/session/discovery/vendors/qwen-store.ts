@@ -1,7 +1,7 @@
 /** Qwen Code: `<QWEN_HOME>/projects/<cwd-as-name>/chats/<id>.jsonl`.
  *
  * Directly observed: a turn driven against an OpenAI-compatible endpoint wrote
- * `projects/-home-justin-gracier-projects-clikcode/chats/<uuid>.jsonl`, whose
+ * `projects/-home-user-projects-app/chats/<uuid>.jsonl`, whose
  * every line carries `sessionId` equal to that uuid -- the same id ClikCode
  * stores as nativeSessionId. The lines are uuid/parentUuid/sessionId/cwd
  * records, so the format is Claude Code's; the path is not, because of the

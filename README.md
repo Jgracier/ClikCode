@@ -400,7 +400,7 @@ If you want to work on ClikCode itself:
 pnpm install
 pnpm build          # dist/index.js, dist/harness-catalog.cjs, dist/ai-router-runtime.cjs
 pnpm build:analyze  # + bundle report: top inputs by bytes, runtime packages
-pnpm build:strict   # + fail if a deployment-shaped source lands in dist/index.js
+pnpm build:strict   # + fail on a missing or extra runtime dependency
 pnpm type-check     # tsc over src/ and over packages/clikrouter
 pnpm test           # the ClikCode suite
 pnpm test:router    # the router package's suite
@@ -416,13 +416,13 @@ Two packages, one lockfile:
   `harness/` (driving the vendor CLIs over argv/ACP/app-server),
   `gateway/` (the gateway adapter), `tui/`, `daemon/`, `runtime/`.
 - `packages/clikrouter` (`@clikcode/router`) — provider-agnostic request
-  normalization and router selection across ~40 providers, consumed as source
+  normalization and router selection across dozens of providers, consumed as source
   and bundled into `dist/*.cjs`.
 
 `dist/index.js` inlines the small pure-JS dependencies (chalk, commander, conf,
 cross-spawn, marked) so startup is a single file read, which is why the
-published package declares **no runtime dependencies at all** — a property the
-build asserts rather than assumes. The version reported by `--version` is
+published package declares a single runtime dependency (`yaml`) — a property
+the build asserts rather than assumes. The version reported by `--version` is
 injected at build time from `package.json`.
 
 ## License
