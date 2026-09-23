@@ -37,6 +37,14 @@ function renderSessionCard(session: HarnessSession, account?: string): string {
   ].join('\n');
 }
 
+/** Panels whose whole content is "that worked". Panels that answer a
+ * question -- /help, /history, /diff, /cost, a list of accounts or
+ * attachments, /cwd with nothing to change -- are not here, and are shown. */
+const CONFIRMATION_PANELS: ReadonlySet<string> = new Set([
+  'session-renamed', 'session-archived', 'session-deleted', 'session-closed', 'session-forked',
+  'settings-updated', 'conversation-reset', 'account-removed', 'add-dir', 'copied',
+]);
+
 export function emitHarnessOutput(payload: Record<string, unknown>): void {
   if (isJsonDefaultMode()) return emitJson(payload);
   // In the TUI nothing may be written at the composer cursor: every human
@@ -57,6 +65,13 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
       return;
     }
     if (payload.panel === 'provider-selected' || (payload.panel === 'accounts' && payload.selected) || payload.status === 'connected') return;
+    // A panel that only CONFIRMS something just done is noise: "Conversation
+    // renamed to X · esc to close" asked for a keypress to be told what the
+    // title on the rule already says. Done means done -- the result is on
+    // screen (the title, the status line, the chat moved to), or the action
+    // has nothing to show and silence is its success. Only the TUI drops
+    // them; a headless caller still gets the payload, which is its answer.
+    if (typeof payload.panel === 'string' && (CONFIRMATION_PANELS.has(payload.panel) || payload.changed === true)) return;
   }
   if (payload.status === 'ready') {
     const session = payload.session as HarnessSession;

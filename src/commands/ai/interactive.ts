@@ -568,9 +568,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             },
             compact: async () => {
               const compacted = await compactConversation(id, commandSession, args, (targetId, promptText) => runInteractiveTurn(targetId, promptText, { echo: false }));
-              return typeof compacted === 'string'
-                ? { id: compacted, notice: 'Conversation compacted · the full transcript stays available in /resume' }
-                : { notice: 'Compacted by the provider' };
+              // No confirmation line: the compacted conversation is what is on
+              // screen now, and that is the confirmation.
+              return typeof compacted === 'string' ? { id: compacted } : {};
             },
             export: async () => {
               const path = await exportTranscript(commandSession, args, async (existing) =>
@@ -590,7 +590,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
                   child.once('exit', () => resolveEdit());
                 });
               } finally { if (rl instanceof TerminalHarnessPrompter) rl.resume(); }
-              return { notice: `Edited ${compactPath(memory.path)}` };
+              return {};
             },
             doctor: async () => {
               const report = await withWaiting('checking harnesses…', () => doctorSummary(commandState));
@@ -601,13 +601,14 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               if (!commandHarness) throw new Error('Choose a provider before signing in.');
               if (commandSession.accountId) await manageAccountAction(rl, commandSession.accountId, 'reauthenticate');
               else await addAccountForHarness(rl, commandHarness);
-              return { notice: `Signed in to ${commandHarness.displayName}` };
+              // The account is on the status line; a failed sign-in throws.
+              return {};
             },
             logout: async () => {
               if (!commandSession.accountId) throw new Error('This conversation has no account to sign out.');
               await closePersistentTransport(id);
               await withWaiting('signing out…', () => manageAccountAction(rl, commandSession.accountId!, 'disconnect'));
-              return { notice: 'Signed out' };
+              return {};
             },
           };
           const handler = (interactive as Partial<Record<SlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>>>)[route.entry.handlerKey];
