@@ -15,7 +15,7 @@ import { CLIKCODE_VERSION } from './version.js';
 const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
 const program = buildBaseProgram(config, { banner: CLIKCODE_BANNER, version: CLIKCODE_VERSION })
   .name('clikcode')
-  .description('One place to run every AI coding tool you have. Keep all your accounts, keep one list of conversations, and keep working when an account hits its limit.')
+  .description('The terminal harness that logs in all your favorite AI coding providers. Chats you can resume in any of them, and automatic account switching when you hit a usage limit.')
   .action(() => aiSessionOpenDefault(config));
 
 registerClikCodeCommands(program, config);
