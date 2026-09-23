@@ -2,7 +2,7 @@
  * cached, because a picker asks this about every harness at once. */
 
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
-import { binaryFingerprint, rememberVersion, rememberedVersion, resetVersionMemo, saveVersionMemo } from './version-memo.js';
+import { binaryFingerprint, harnessBinaryIdentity, rememberVersion, rememberedVersion, resetVersionMemo, saveVersionMemo } from './version-memo.js';
 import { resolveBinaryPath } from './binary.js';
 import { installFailureTail, runCaptured, startSpinner } from '../../install-progress.js';
 import { installInstructions } from '../../install-hints.js';
@@ -14,20 +14,19 @@ interface NativeHarnessInspection {
   error?: string;
 }
 
-// Installation status barely ever changes mid-session -- a user isn't
-// installing/uninstalling a CLI between one /provider open and the next --
-// but every call here spawns a real subprocess per harness with its own
-// timeout, and every /provider open queries all ~20 of them at once. With
-// no cache, that meant however long the single slowest one took (up to its
-// timeout) on *every single open* -- the concrete "a slash option takes a
-// few seconds to render" report, since /provider is one of the most common
-// commands. 60s is long enough to make repeated opens near-instant without
-// meaningfully delaying noticing a harness someone actually just installed.
-const inspectionCache = new Map<string, { at: number; result: NativeHarnessInspection }>();
+/** Keyed on the binary's identity, not on a clock.
+ *
+ * This was 60 seconds: long enough that a harness installed or updated in
+ * another terminal kept reporting its old state (or its old version) for a
+ * minute, and short enough that an unchanged machine re-inspected on every
+ * other /provider open. The answer is a fact about a file -- whether it is on
+ * PATH, and what it says its version is -- and the file's identity is a PATH
+ * walk and a stat away, so that is what decides. `undefined` identity is the
+ * "not installed" answer, and it is re-checked the same way: the moment the
+ * binary appears, the identity stops matching. */
+const inspectionCache = new Map<string, { identity: string | undefined; result: NativeHarnessInspection }>();
 
-const pickerInspectionCache = new Map<string, { at: number; result: NativeHarnessInspection }>();
-
-const INSPECTION_CACHE_TTL_MS = 60_000;
+const pickerInspectionCache = new Map<string, { identity: string | undefined; result: NativeHarnessInspection }>();
 
 /** Picker-safe inspection: PATH lookup returns quickly. Do not start version
  * probes here: opening /provider can cover ~20 harnesses, and a burst of that
@@ -35,16 +34,17 @@ const INSPECTION_CACHE_TTL_MS = 60_000;
  * though the picker no longer awaits them. */
 export async function inspectNativeHarnessForPicker(spec: NativeHarnessSpec): Promise<NativeHarnessInspection> {
   if (spec.surface === 'editor-extension') return { installed: false, error: 'editor-extension-only' };
+  const identity = await harnessBinaryIdentity(spec.binary);
   const cached = inspectionCache.get(spec.command);
-  if (cached && Date.now() - cached.at < INSPECTION_CACHE_TTL_MS) return cached.result;
+  if (cached && cached.identity === identity) return cached.result;
   const pickerCached = pickerInspectionCache.get(spec.command);
-  if (pickerCached && Date.now() - pickerCached.at < INSPECTION_CACHE_TTL_MS) return pickerCached.result;
-  const result: NativeHarnessInspection = { installed: await binaryOnPath(spec.binary) };
+  if (pickerCached && pickerCached.identity === identity) return pickerCached.result;
+  const result: NativeHarnessInspection = { installed: identity !== undefined };
   // A PATH-only answer must not masquerade as a full inspection (it has no
   // version), so an installed result stays in the picker's own cache. "Not
   // installed" is the same answer for both, so it can serve both.
-  pickerInspectionCache.set(spec.command, { at: Date.now(), result });
-  if (!result.installed) inspectionCache.set(spec.command, { at: Date.now(), result });
+  pickerInspectionCache.set(spec.command, { identity, result });
+  if (!result.installed) inspectionCache.set(spec.command, { identity, result });
   return result;
 }
 
@@ -66,12 +66,13 @@ function clearNativeHarnessInspectionCache(command?: string): void {
 /** Inspect availability without installing, logging in, or entering a vendor TUI. */
 export async function inspectNativeHarness(spec: NativeHarnessSpec, timeoutMs = 5_000): Promise<NativeHarnessInspection> {
   if (spec.surface === 'editor-extension') return { installed: false, error: 'editor-extension-only' };
-  const cached = inspectionCache.get(spec.command);
-  if (cached && Date.now() - cached.at < INSPECTION_CACHE_TTL_MS) return cached.result;
   // What the binary is, before deciding whether it needs running. A version
   // string is a fact about a file: same path, mtime and size means the same
   // answer, however long ago it was learned.
   const fingerprint = await binaryFingerprint(await resolveBinaryPath(spec.binary));
+  const identity = fingerprint ? `${fingerprint.path}:${fingerprint.mtimeMs}:${fingerprint.size}` : undefined;
+  const cached = inspectionCache.get(spec.command);
+  if (cached && cached.identity === identity) return cached.result;
   const remembered = await rememberedVersion(spec.command, fingerprint);
   if (remembered) {
     const result: NativeHarnessInspection = {
@@ -79,13 +80,17 @@ export async function inspectNativeHarness(spec: NativeHarnessSpec, timeoutMs = 
       ...(remembered.version ? { version: remembered.version } : {}),
       ...(remembered.error ? { error: remembered.error } : {}),
     };
-    inspectionCache.set(spec.command, { at: Date.now(), result });
-    pickerInspectionCache.set(spec.command, { at: Date.now(), result });
+    inspectionCache.set(spec.command, { identity, result });
+    pickerInspectionCache.set(spec.command, { identity, result });
     return result;
   }
   const result = await inspectNativeHarnessUncached(spec, timeoutMs, fingerprint);
-  inspectionCache.set(spec.command, { at: Date.now(), result });
-  pickerInspectionCache.set(spec.command, { at: Date.now(), result });
+  // A timed-out probe says nothing durable about the binary, so it is not
+  // cached at all -- the next ask probes again instead of repeating a guess.
+  if (result.error !== 'version probe timed out') {
+    inspectionCache.set(spec.command, { identity, result });
+    pickerInspectionCache.set(spec.command, { identity, result });
+  }
   // Only a completed probe is written down. A timeout says nothing durable
   // about the binary, and remembering it would make one slow run permanent.
   if (fingerprint && result.installed && result.error !== 'version probe timed out') {

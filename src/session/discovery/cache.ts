@@ -25,7 +25,16 @@ interface CachedDirectory { mtimeMs: number; files: Record<string, CachedSession
  * Only empty results are memoized. A harness that found something is asked
  * again every time: the cost is already justified, and a stale list is worse
  * than a slow one. */
-interface CachedListing { at: number; empty: true }
+interface CachedListing {
+  at: number;
+  empty: true;
+  /** The vendor binary that said "nothing here". An update is exactly when a
+   * CLI may start finding sessions it could not see before -- a new store
+   * layout, a fixed filter -- so a memo from another build is not believed,
+   * however recent. The clock remains for the one change no file shows: a
+   * session started in another terminal. */
+  build?: string;
+}
 
 interface DiscoveryCacheFile {
   v: 1;
@@ -119,11 +128,11 @@ export async function cachedDirectory(directory: string, suffix: string): Promis
 
 /** Whether this harness is known to have found nothing here recently. */
 export async function listingKnownEmpty(
-  command: string, workspace: string | undefined, profile: string | undefined, now = Date.now(),
+  command: string, workspace: string | undefined, profile: string | undefined, now = Date.now(), build?: string,
 ): Promise<boolean> {
   const cache = await loadDiscoveryCache();
   const entry = cache.listings?.[listingKey(command, workspace, profile)];
-  return Boolean(entry && now - entry.at < EMPTY_LISTING_TTL_MS);
+  return Boolean(entry && entry.build === build && now - entry.at < EMPTY_LISTING_TTL_MS);
 }
 
 /** Keyed by profile as well as workspace: two accounts of the same provider
@@ -138,7 +147,7 @@ function listingKey(command: string, workspace: string | undefined, profile: str
  * next /resume can skip the subprocess; a non-empty one forgets any memo, so a
  * harness that starts having sessions is never held back by an old "nothing". */
 export async function rememberListing(
-  command: string, workspace: string | undefined, profile: string | undefined, found: number, now = Date.now(),
+  command: string, workspace: string | undefined, profile: string | undefined, found: number, now = Date.now(), build?: string,
 ): Promise<void> {
   const cache = await loadDiscoveryCache();
   cache.listings ??= {};
@@ -147,6 +156,6 @@ export async function rememberListing(
     if (cache.listings[key]) { delete cache.listings[key]; discoveryCache!.dirty = true; }
     return;
   }
-  cache.listings[key] = { at: now, empty: true };
+  cache.listings[key] = { at: now, empty: true, ...(build ? { build } : {}) };
   discoveryCache!.dirty = true;
 }

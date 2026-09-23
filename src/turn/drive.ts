@@ -43,7 +43,7 @@ import { writeState } from '../session/state/write.js';
 import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
-import { closePersistentTransport, DurableTurnCheckpoint, fallbackTurnHarnesses, nameSession, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
+import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
@@ -273,7 +273,7 @@ export async function aiSessionSend(
       // all five instead of the ones someone remembered.
       titleStream = titleStreamForAttempt(titleStream, turnText, session);
       const runStructuredCliTurn = async (): Promise<NativeTurnResult> => {
-        const cliHarness: AiLocalHarnessDefinition = fallbackTurnHarnesses.has(harness.command) && harness.fallbackTurn
+        const cliHarness: AiLocalHarnessDefinition = harness.fallbackTurn && await usesFallbackTurn(harness)
           ? { ...harness, turn: harness.fallbackTurn } : harness;
         const turn = cliHarness.turn;
         if (!turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
@@ -464,8 +464,8 @@ export async function aiSessionSend(
         // An `experimental` structured contract an older vendor build rejects
         // outright: retry once on the proven fallback contract, and remember it.
         if (failureKind === 'other' && !cliOutputStarted && harness.experimental && harness.fallbackTurn
-          && !fallbackTurnHarnesses.has(harness.command) && (transport === 'structured-cli' || transport === 'text-cli')) {
-          fallbackTurnHarnesses.add(harness.command);
+          && (transport === 'structured-cli' || transport === 'text-cli') && !await usesFallbackTurn(harness)) {
+          await rememberFallbackTurn(harness);
           prompter?.phase('using compatibility turn');
           continue;
         }

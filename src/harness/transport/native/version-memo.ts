@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { atomicWriteFile } from '../../../session/store/files.js';
 import { stateDirectory } from '../../../session/store/paths.js';
 import { readFile } from 'node:fs/promises';
+import { resolveBinaryPath } from './binary.js';
 
 /** One harness's last inspection, tied to the file it described. */
 export interface MemoizedVersion {
@@ -64,6 +65,17 @@ export async function binaryFingerprint(path: string | undefined): Promise<{ pat
     const info = await stat(path);
     return { path, mtimeMs: info.mtimeMs, size: info.size };
   } catch { return undefined; }
+}
+
+/** The installed harness binary as one comparable string, or undefined when
+ * it is not installed. What every per-harness cache is keyed on, so that an
+ * update to the vendor CLI invalidates everything learned from the old one at
+ * once -- and nothing learned from an unchanged one is thrown away on a clock.
+ * A PATH walk and one stat: cheap enough to check on every lookup, which is
+ * what makes a time limit unnecessary for anything derived from the binary. */
+export async function harnessBinaryIdentity(binary: string): Promise<string | undefined> {
+  const fingerprint = await binaryFingerprint(await resolveBinaryPath(binary));
+  return fingerprint ? `${fingerprint.path}:${fingerprint.mtimeMs}:${fingerprint.size}` : undefined;
 }
 
 /** The remembered inspection for this harness, if it still describes the file

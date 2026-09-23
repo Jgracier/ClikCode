@@ -3,6 +3,7 @@
 
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
 import { listingKnownEmpty, rememberListing } from './cache.js';
+import { harnessBinaryIdentity } from '../../harness/transport/native/version-memo.js';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { DiscoveredNativeSession } from './discovered-session.js';
@@ -129,12 +130,13 @@ export async function discoverNativeSessions(
   // spent 2.5s spawning six CLIs here, of which two took 2.16s between them
   // to return zero. A harness that had nothing in this workspace a moment ago
   // is not asked again until the memo expires.
-  if (await listingKnownEmpty(harness.command, workspace, profile)) return [];
+  const build = await harnessBinaryIdentity(harness.binary);
+  if (await listingKnownEmpty(harness.command, workspace, profile, Date.now(), build)) return [];
   try {
     const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
     const format = harness.session.discoverFormat ?? 'json';
     const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
-    await rememberListing(harness.command, workspace, profile, found.length);
+    await rememberListing(harness.command, workspace, profile, found.length, Date.now(), build);
     return found;
   } catch {
     // fail-open-ok: passive discovery must not break the picker when an
