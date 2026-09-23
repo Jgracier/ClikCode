@@ -66,7 +66,7 @@ function isWideCodePoint(code: number): boolean {
  * stays whole (slicing one strands a dangling joiner or combining mark, which
  * renders as a broken glyph). Everything that truncates or hard-wraps shares
  * this so no caller has to rediscover either rule. */
-function displayTokens(value: string): string[] {
+export function displayTokens(value: string): string[] {
   const tokens: string[] = [];
   const pushText = (text: string): void => {
     for (const { segment } of graphemes.segment(text)) tokens.push(segment);
