@@ -115,6 +115,21 @@ export function accountFailureReason(kind: AccountFailureKind): string {
   }
 }
 
+/** What to do about an account the vendor will not serve until it is verified.
+ * The vendor's own error carries the fix -- agy prints the Google verification
+ * link -- but it was only ever read for classification, so the user saw
+ * "account not eligible" with nothing to act on. Returns undefined for any
+ * other failure, and names no link when the vendor printed none. */
+export function accountVerificationHint(label: string, error: unknown): string | undefined {
+  const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
+  const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
+  if (!INELIGIBLE_TEXT.test(text)) return undefined;
+  const url = /https:\/\/accounts\.google\.com\/[^\s"')]+/.exec(text)?.[0];
+  return url
+    ? `${label} needs verifying with Google before it can be used: ${url}`
+    : `${label} needs verifying with its provider before it can be used`;
+}
+
 /** One account switch, worded the same way wherever it happens.
  *
  * There are four switch sites -- native and api-key, each with a pre-turn

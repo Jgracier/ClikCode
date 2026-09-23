@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './failover';
+import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './failover';
 
 describe('ClikCode account failover', () => {
   it('does not confuse temporary throttling with exhausted quota', () => {
@@ -194,5 +194,17 @@ describe('classifying what a vendor actually says when it runs out', () => {
     // Saying it ran out when it did not would invent a reason, and would mark
     // a perfectly good account exhausted.
     expect(classifyAccountFailure(new Error('Error: spawn ENOENT'), { isResultError: true })).toBe('other');
+  });
+});
+
+describe('accountVerificationHint', () => {
+  it('surfaces the vendor verification link for an ineligible account', () => {
+    const error = Object.assign(new Error('exit 1'), {
+      stderrTail: 'Eligibility check failed: Verify your account to continue.\nhttps://accounts.google.com/signin/continue?sarp=1&x=2\n',
+    });
+    expect(accountVerificationHint('a@b.com', error)).toBe('a@b.com needs verifying with Google before it can be used: https://accounts.google.com/signin/continue?sarp=1&x=2');
+  });
+  it('is silent for other failures', () => {
+    expect(accountVerificationHint('a@b.com', new Error('RESOURCE_EXHAUSTED quota reached'))).toBeUndefined();
   });
 });
