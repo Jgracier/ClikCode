@@ -54,11 +54,22 @@ describe('installInstructions', () => {
       .toContain('ClikCode will not run an installer for you');
   });
 
-  it('points at the docs where no command was verified', () => {
-    // Kiro publishes downloads rather than a scriptable installer, so there
-    // is no command to quote and none is invented.
+  it('points at the docs AND quotes the command, now that Kiro has one', () => {
+    // This test used to assert the opposite, on the belief that Kiro
+    // "publishes downloads rather than a scriptable installer". It does have
+    // one -- `curl -fsSL https://cli.kiro.dev/install | bash`, which is how
+    // kiro-cli got onto the machine this was corrected on. The docs link
+    // stays; what changed is that the user is no longer sent to read it.
     const text = installInstructions('Kiro CLI', 'kiro', 'kiro-cli');
     expect(text).toContain('https://kiro.dev');
+    expect(text).toContain('curl -fsSL https://cli.kiro.dev/install');
+  });
+
+  it('falls back to a plain instruction for a harness with no hint at all', () => {
+    // The case the assertion above used to stand in for. No real harness is
+    // in it any more, so it is exercised directly.
+    const text = installInstructions('Imaginary CLI', 'imaginary', 'imag');
+    expect(text).toContain('imag');
     expect(text).not.toContain('curl');
   });
 
