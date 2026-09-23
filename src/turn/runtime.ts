@@ -13,7 +13,7 @@ import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { stdin as input } from 'node:process';
-import { usageLabelIsExhausted, usageLabelRemainingPercent } from './failover.js';
+import { noteStoredQuota } from './account-switch.js';
 import { normalizeSessionTitle } from '../session/title.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
@@ -26,7 +26,6 @@ import { nativeProfileEnvironment } from '../harness/transport/profile-environme
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { accountUsageLabel } from '../harness/accounts/account-usage.js';
 import { createCodexSession } from '../harness/transport/codex-app-server.js';
 import { createAcpSession } from '../harness/transport/acp-client.js';
 import { homeRedirectEnvironment } from '../runtime/lazy-bridge.js';
@@ -134,34 +133,27 @@ export async function nameSession(
 
 
 
-export async function nextUsableFailoverAccount(
+export function nextUsableFailoverAccount(
   state: HarnessState,
   current: AiHarnessAccount,
   matchesTransport: (candidate: AiHarnessAccount) => boolean,
   attempted: ReadonlySet<string>,
-): Promise<AiHarnessAccount | undefined> {
+): AiHarnessAccount | undefined {
   const candidates = state.accounts.filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
     && candidate.provider === current.provider && candidate.status === 'ready'
     && matchesTransport(candidate));
   const usable: Array<{ account: AiHarnessAccount; remaining?: number }> = [];
   for (const candidate of candidates) {
-    // Native Codex/Claude profiles expose real usage windows. Do not launch a
-    // doomed retry merely because the last turn has not yet marked the local
-    // account record exhausted. Providers without a probe stay eligible and
-    // are classified reactively if their turn rejects for quota.
-    const usage = await accountUsageLabel(candidate, state);
-    if (usageLabelIsExhausted(usage)) {
-      candidate.quotaState = 'exhausted';
-      candidate.quotaRetryAt = undefined;
-      continue;
-    }
-    const remaining = usageLabelRemainingPercent(usage);
-    if (remaining !== undefined) candidate.quotaState = 'available';
-    else if (candidate.quotaState === 'exhausted') continue;
+    // Stored usage only. Asking the vendor here ran a probe per account
+    // before the retry, which is the multi-minute switch. An account whose
+    // figure says it is empty is skipped. One with no figure is still
+    // eligible and is classified when its own turn comes back.
+    const remaining = noteStoredQuota(candidate, state);
+    if (remaining === 0) continue;
     usable.push({ account: candidate, ...(remaining === undefined ? {} : { remaining }) });
   }
-  // Prefer measured headroom. Unknown providers remain valid fallbacks, but
-  // never outrank an account whose usage probe confirms capacity.
+  // Measured room first. An account with no figure never outranks one that
+  // has some, and it is not treated as empty either.
   return usable.sort((left, right) => (right.remaining ?? Number.NEGATIVE_INFINITY) - (left.remaining ?? Number.NEGATIVE_INFINITY))[0]?.account;
 }
 
