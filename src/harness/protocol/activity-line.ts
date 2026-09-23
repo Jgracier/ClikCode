@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import { previewLinesFor } from './activity-events.js';
-import { TOOL_CATEGORY_STYLE } from '../../tui/render/activity-log.js';
+import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
 import { CLAUDE_SHAPED, OPENCODE_SHAPED, asRecord } from './json-lines.js';
 
 export function renderActivityLine(event: HarnessActivityEvent): string[] {

@@ -7,6 +7,7 @@ import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../harness/prompter.js';
+import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
 
 /** Keep the persisted history window stable while transient assistant and
  * queued rows are appended. Applying the history cap to the combined array
@@ -105,17 +106,6 @@ export function rebaseActivityOffsets(
  * renders one at double width breaks every row beneath it, and a phone is
  * exactly where that happens. Colour alone carried the type before, which is
  * nothing at all on a NO_COLOR or piped transcript. */
-export const TOOL_CATEGORY_STYLE: Record<ToolCategory, {
-  paint: (text: string) => string; verb: string; glyph: string;
-  /** How a folded run of these reads once it has settled. */
-  folded: (count: number) => string;
-}> = {
-  read: { paint: (text) => chalk.blue(text), verb: 'reading', glyph: '◇', folded: (n) => `read ${n} files` },
-  edit: { paint: (text) => chalk.magenta(text), verb: 'editing', glyph: '◆', folded: (n) => `edited ${n} files` },
-  run: { paint: (text) => chalk.yellow(text), verb: 'running', glyph: '▸', folded: (n) => `ran ${n} commands` },
-  search: { paint: (text) => chalk.cyan(text), verb: 'searching', glyph: '◈', folded: (n) => `searched ${n} times` },
-  fetch: { paint: (text) => chalk.green(text), verb: 'fetching', glyph: '↓', folded: (n) => `fetched ${n} pages` },
-};
 
 export function activityLifecyclePhase(
   activeTools: ReadonlyMap<string, { label: string; category?: ToolCategory }>, event: HarnessActivityEvent,

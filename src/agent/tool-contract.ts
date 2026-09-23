@@ -3,7 +3,7 @@
 
 import type { FileCheckpointStore } from './file-checkpoints.js';
 import type { HarnessSessionState } from './session-state.js';
-import { NetworkSeams, PlanEntry } from './model-client.js';
+import type { NetworkSeams, PlanEntry } from './model-client.js';
 
 export interface ToolContext {
   cwd: string;

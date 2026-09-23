@@ -4,7 +4,7 @@
 
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
-import { ToolDefinition, ToolRunResult } from './tool-contract.js';
+import type { ToolDefinition, ToolRunResult } from './tool-contract.js';
 
 export interface TokenUsage {
   input?: number;

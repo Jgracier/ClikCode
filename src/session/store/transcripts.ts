@@ -4,7 +4,7 @@
 import type { HarnessSession } from '../model.js';
 import { cloneData, sameData } from './data.js';
 import { withSessionLock, withStateLock } from './locks.js';
-import { SessionFile, listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile } from './records.js';
+import { listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile, type SessionFile } from './records.js';
 
 type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
 
