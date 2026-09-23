@@ -29,6 +29,12 @@ export interface WorkerTurnRequest {
  * closeAllWorkerClients() when the interactive loop ends. */
 const clients = new Map<string, WorkerClient>();
 
+/** Messages typed during a turn, waiting for the worker to say what happened
+ * to them. Longer than the broker's own 5s steer timeout, so a slow steer is
+ * answered rather than guessed. */
+const pendingSubmissions = new Map<string, (event: Extract<WorkerEvent, { type: 'submission' }>) => void>();
+const SUBMISSION_ANSWER_MS = 8_000;
+
 async function clientFor(sessionId: string): Promise<WorkerClient> {
   const existing = clients.get(sessionId);
   if (existing) return existing;
@@ -118,6 +124,9 @@ export async function runTurnThroughWorker(
           case 'notice':
             notice = event.message;
             return;
+          case 'submission':
+            pendingSubmissions.get(event.id)?.(event);
+            return;
           case 'turn-error':
             pendingError = new Error(event.message);
             return;
@@ -151,14 +160,28 @@ export async function runTurnThroughWorker(
         'thinking',
         (restoreDraft) => client.send({ type: 'cancel', restoreDraft }),
         async (text) => {
-          client.send({ type: 'steer', text });
-          // The worker, not this client, decides steered vs. queued (it owns
-          // the LiveTurnInputBroker submit() raced against). Queued is the
-          // safe default a caller not told otherwise should assume -- it is
-          // livelier to under- than over-promise here (a message the worker
-          // actually steered live reads as "queued" for one turn, never the
-          // reverse: a genuinely queued one silently treated as delivered).
-          return { disposition: 'queued', submission: { id: randomUUID(), text, submittedAt: new Date().toISOString() } };
+          // The worker decides steered vs. queued -- it owns the broker the
+          // steer races -- and now says which, on a `submission` event
+          // carrying this id. The client used to assume "queued" and never
+          // learn otherwise, so a message steered into the answer read
+          // "queued for next turn" for the rest of the turn.
+          const id = randomUUID();
+          const submission = { id, text, submittedAt: new Date().toISOString() };
+          const answered = new Promise<Extract<WorkerEvent, { type: 'submission' }>>((resolveAnswer) => {
+            pendingSubmissions.set(id, resolveAnswer);
+          });
+          client.send({ type: 'steer', text, id });
+          // A worker too old to answer (the one still running when this
+          // client updated) is the only reason no answer comes. Queued is the
+          // safe assumption for that: it never claims a delivery that did not
+          // happen.
+          const outcome = await Promise.race([
+            answered,
+            new Promise<undefined>((resolveLate) => { setTimeout(() => resolveLate(undefined), SUBMISSION_ANSWER_MS).unref(); }),
+          ]);
+          pendingSubmissions.delete(id);
+          if (outcome?.disposition === 'error') throw new Error(outcome.message ?? 'message not sent');
+          return { disposition: outcome?.disposition ?? 'queued', submission };
         },
         // A slash line is never the worker's business: it is ClikCode's own
         // command, and it runs here when the turn ends.
