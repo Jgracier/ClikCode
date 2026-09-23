@@ -26,6 +26,10 @@ import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivity
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
+import {
+  firstUnwritten as seamFirstUnwritten, liveAssistantAt as seamLiveAssistantAt,
+  materializedPendingTurn as seamMaterializedPendingTurn, messageKey,
+} from './render/transcript-seam.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
@@ -1044,20 +1048,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The last message actually written identifies the seam wherever it sits,
     // window or not. Searching from the end keeps a repeated sentence from
     // rewinding the transcript to its first occurrence.
-    const messageKey = (message: { role: string; content: string }): string => `${message.role}:${message.content}`;
-    let firstUnwritten = Math.min(this.emittedMessages, persistedMessages.length);
-    if (this.lastEmittedMessage !== undefined) {
-      for (let index = persistedMessages.length - 1; index >= 0; index -= 1) {
-        if (messageKey(persistedMessages[index]!) === this.lastEmittedMessage) { firstUnwritten = index + 1; break; }
-      }
-    }
+    const firstUnwritten = seamFirstUnwritten(persistedMessages, this.emittedMessages, this.lastEmittedMessage);
     // More messages were retired than this turn's own list has, and none of
     // them is the seam, which is what a pending turn already materialized into
     // the transcript looks like from here: its steers are in scrollback as
     // real user messages, and scrollback cannot be unwritten, so the live
     // copies of them are the ones to drop.
-    const materializedPendingTurn = firstUnwritten >= persistedMessages.length
-      && this.emittedMessages > persistedMessages.length;
+    const materializedPendingTurn = seamMaterializedPendingTurn(firstUnwritten, persistedMessages.length, this.emittedMessages);
     // Where the live answer actually landed, which is not always where it was
     // expected to.
     //
@@ -1072,9 +1069,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     //
     // A turn ends with its assistant message, so the first assistant at or
     // after the recorded index is the one that was streamed.
-    let liveAssistant = this.liveAssistantIndex;
-    while (liveAssistant !== undefined && liveAssistant < persistedMessages.length
-      && persistedMessages[liveAssistant]!.role !== 'assistant') liveAssistant += 1;
+    // Cleared below once the live answer has been consumed, so it stays a let.
+    let liveAssistant = seamLiveAssistantAt(persistedMessages, this.liveAssistantIndex);
 
     emit(standaloneActivity(firstUnwritten));
     for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
