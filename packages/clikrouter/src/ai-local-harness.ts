@@ -128,6 +128,36 @@ export interface AiHarnessManagerDefinition {
      *  stops a headless install blocking on an OAuth round trip, and Vibe
      *  refuses the flag outright alongside --transport stdio. */
     remoteExtraArgv?: readonly string[];
+    /** Text to answer a confirmation prompt on stdin. Hermes connects to the
+     *  server before saving and asks "Save config anyway? [y/N]" when that
+     *  fails; with stdin ignored the prompt read EOF and took No, which is
+     *  how `mcp add` exited 0 having written nothing. A reachable server
+     *  connects and never asks, so this only ever decides the unreachable
+     *  case -- and saving it, which Hermes then marks disabled and offers to
+     *  test, is what the user asked for. */
+    confirmStdin?: string;
+  };
+  /** Where this harness READS its MCP servers from, for one that has no
+   *  usable `mcp add`.
+   *
+   *  Writing a vendor's config is a second-best route and is used only where
+   *  the first is absent: Cursor has every mcp subcommand except add, and
+   *  Kimi has no mcp subcommand at all, yet both read a plain JSON file whose
+   *  shape is the `mcpServers` convention. Verified by writing one by hand and
+   *  asking the vendor to list it back -- Cursor found all three servers,
+   *  including one already in the file.
+   *
+   *  Only JSON is written. Hermes and Goose keep their servers in YAML, and
+   *  rewriting a user's YAML would cost them their comments and formatting
+   *  for a gain a new dependency does not justify. */
+  configFile?: {
+    /** Directory env var the vendor honours, when it has one. */
+    rootEnv?: string;
+    /** Otherwise HOME plus these segments. */
+    homeRelativeDir: readonly string[];
+    file: string;
+    /** The object key holding the name -> server map. */
+    key: string;
   };
 }
 
@@ -688,7 +718,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     // No MCP here: `kimi --help` lists export/fork/provider/session/acp/web/
     // server/rc/login/doctor/vis/install-desktop and mentions mcp nowhere.
     // An earlier entry claimed one on a misreading of that list.
-    managers: {},
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'], configFile: { rootEnv: 'KIMI_CODE_HOME', homeRelativeDir: ['.kimi-code'], file: 'mcp.json', key: 'mcpServers' } },},
     features: ['skills', 'agents', 'ACP'],
   },
   openhands: {
@@ -843,7 +873,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('force', 'Force commands', 'Allow commands unless explicitly denied', 'permissions', ['--force'], { dangerous: true }),
       flag('worktree', 'Managed worktree', 'Start in an isolated Cursor worktree', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], configFile: { homeRelativeDir: ['.cursor'], file: 'mcp.json', key: 'mcpServers' } }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['plugins', 'rules', 'worktrees', 'plan/ask modes'],
   },
   // Hermes is deliberately absent from the `mcp add` grammars even though it
@@ -869,7 +899,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('ignore-rules', 'Ignore rules', 'Skip AGENTS.md, memory, and preloaded skills', 'safety', ['--ignore-rules']),
       flag('yolo', 'Bypass approvals', 'Bypass dangerous-command approvals', 'permissions', ['--yolo'], { dangerous: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, tools: { label: 'Tools', manageArgv: ['tools'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
+    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--args'], argsStyle: 'list', confirmStdin: 'y\n' } }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, tools: { label: 'Tools', manageArgv: ['tools'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
     features: ['skills', 'bundles', 'plugins', 'hooks', 'memory', 'fallback providers', 'toolsets'],
   },
   command: {

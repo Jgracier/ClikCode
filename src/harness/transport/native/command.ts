@@ -54,10 +54,17 @@ export async function captureNativeHarness(spec: NativeHarnessSpec, args: readon
 }
 
 /** Capture documented listing/helper output without invoking a shell. */
-export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs = 15_000, cwd?: string): Promise<string> {
+/** `stdinText` answers a vendor that asks a question. With stdin ignored a
+ *  prompt reads EOF and takes its default, which for Hermes' "Save config
+ *  anyway? [y/N]" is No -- so `mcp add` exited 0 having written nothing. */
+export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs = 15_000, cwd?: string, stdinText?: string): Promise<string> {
   await ensureNativeHarness(spec);
   return new Promise((resolve, reject) => {
-    const child = spawn(spec.binary, [...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...envOverrides }, ...(cwd ? { cwd } : {}) });
+    const child = spawn(spec.binary, [...args], { stdio: [stdinText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], env: { ...process.env, ...envOverrides }, ...(cwd ? { cwd } : {}) });
+    if (stdinText !== undefined) {
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.end(stdinText);
+    }
     let stdout = '';
     let stderr = '';
     let exceededLimit = false;
