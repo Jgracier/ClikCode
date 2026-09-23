@@ -58,9 +58,14 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // Was 73 until Antigravity's effort option was removed: that harness
     // encodes effort in the model id and rejects --effort outright, so the
     // row was not a duplicate control, it was one that could never work.
+    //
+    // Back to 73 when Goose gained a permission mapping. It carries its mode
+    // in GOOSE_MODE rather than argv, so ClikCode had offered no permission
+    // control for it at all while its raw vendor row sat exposed; now the
+    // normalized control owns that setting and the raw row folds into it.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(72);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(73);
     expect(kept.length).toBe(149);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     expect(emptied.map((h) => h.command)).toEqual(['grok', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']);

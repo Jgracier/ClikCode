@@ -174,6 +174,10 @@ export interface AiLocalHarnessDefinition {
     argv: readonly string[];
     placement?: 'root' | 'turn';
   }>>>;
+  /** Permission modes a vendor carries in its ENVIRONMENT rather than in
+   *  argv. Goose is the case: it has no per-run mode flag at all, and an
+   *  unset GOOSE_MODE auto-approves every tool call. See turnEnvironment. */
+  permissionEnv?: Readonly<Partial<Record<AiHarnessPermissionMode, Readonly<Record<string, string>>>>>;
   imageArgvPrefix?: readonly string[];
   imageArgvStyle?: 'separate' | 'concatenated';
   profileEnv?: string;

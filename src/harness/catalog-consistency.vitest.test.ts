@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allLocalHarnesses, harnessAcpLaunch, harnessSupportsEffort, harnessSupportsImages, localHarnessCapabilityManifest } from '@clikcode/router/ai-local-harness';
+import { harnessSupportsPermissionMode, allLocalHarnesses, harnessAcpLaunch, harnessSupportsEffort, harnessSupportsImages, localHarnessCapabilityManifest } from '@clikcode/router/ai-local-harness';
 
 /**
  * A declared capability must be a usable one.
@@ -69,21 +69,37 @@ describe('every declared capability is usable', () => {
     expect(offenders, 'enum options with no values').toEqual([]);
   });
 
-  it('maps every declared permission mode to real argv', () => {
+  it('carries every declared permission mode to the vendor somehow', () => {
+    // Either argv or environment -- a mode that reaches the vendor by neither
+    // route is a control that silently does nothing, which is the one outcome
+    // a permission setting must never have. Goose is why "somehow": it has no
+    // per-run mode flag at all, only GOOSE_MODE.
     const offenders: string[] = [];
     for (const h of harnesses) {
       for (const mode of h.permissionModes ?? []) {
-        if (!h.permissionArgv || !(mode in h.permissionArgv)) offenders.push(`${h.command}:${mode}`);
+        if (!h.permissionArgv?.[mode] && !h.permissionEnv?.[mode]) offenders.push(`${h.command}:${mode}`);
       }
     }
-    expect(offenders, 'permission modes with no argv mapping').toEqual([]);
+    expect(offenders, 'permission modes that reach the vendor by neither argv nor env').toEqual([]);
   });
 
-  it('never declares permission argv with no modes, or modes with no argv', () => {
+  it('never declares a mapping with no modes, or modes with no mapping', () => {
     for (const h of harnesses) {
       const modes = (h.permissionModes ?? []).length;
-      const argv = Object.keys(h.permissionArgv ?? {}).length;
-      expect(Boolean(modes) === Boolean(argv), `${h.command}: modes=${modes} argv=${argv}`).toBe(true);
+      const mapped = new Set([...Object.keys(h.permissionArgv ?? {}), ...Object.keys(h.permissionEnv ?? {})]).size;
+      expect(Boolean(modes) === Boolean(mapped), `${h.command}: modes=${modes} mapped=${mapped}`).toBe(true);
+    }
+  });
+
+  it('agrees with harnessSupportsPermissionMode, which is what the pickers offer', () => {
+    // The picker and the catalog must not disagree: a mode offered but not
+    // carried, or carried but not offered, both mislead.
+    for (const h of harnesses) {
+      for (const mode of ['ask', 'bypass', 'auto'] as const) {
+        const declared = Boolean(h.permissionModes?.includes(mode));
+        const carried = Boolean(h.permissionArgv?.[mode] ?? h.permissionEnv?.[mode]);
+        expect(harnessSupportsPermissionMode(h, mode), `${h.command}:${mode}`).toBe(declared && carried);
+      }
     }
   });
 

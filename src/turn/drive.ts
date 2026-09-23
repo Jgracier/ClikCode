@@ -254,7 +254,7 @@ export async function aiSessionSend(
       onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
     } satisfies HarnessTurnObserver;
     for (;;) {
-      const environment = turnEnvironment(harness, account);
+      const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
       const hasImages = images.length > 0;
       const transport = harnessTurnTransport(harness, hasImages, { acpImages: true });
       // A fresh native thread with prior ClikCode messages: see above. Also
