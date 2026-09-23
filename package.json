@@ -34,7 +34,9 @@
     "no longer imports it, so it is a devDependency pinned for the day it comes back — at",
     "which point build:strict fails until it is moved here."
   ],
-  "dependencies": {},
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
   "devDependencies": {
     "@basetenlabs/performance-client": "0.0.10",
     "@clikcode/router": "workspace:*",

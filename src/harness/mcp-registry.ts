@@ -79,6 +79,8 @@ type McpConfigFile = {
   homeRelativeDir: readonly string[];
   file: string;
   key: string;
+  format?: 'json' | 'yaml';
+  entryShape?: 'mcp-servers' | 'goose-extension';
 };
 
 export function mcpConfigFile(harness: AiLocalHarnessDefinition): McpConfigFile | undefined {
@@ -97,9 +99,26 @@ export function mcpConfigPath(
   return join(root, config.file);
 }
 
-/** One server as the `mcpServers` convention spells it. */
-export function mcpConfigEntry(entry: McpServerEntry): Record<string, unknown> {
-  return isRemoteTarget(entry.target)
+/** One server, spelled the way this vendor's file spells it.
+ *
+ *  `mcp-servers` is the common convention -- `{ command, args }` or `{ url }`
+ *  -- which Cursor and Kimi both read. `goose-extension` is Goose's own
+ *  shape, verified by writing it and reading it back with `goose info -v`:
+ *  it names the server inside the entry as well as keying on it, and calls
+ *  the command `cmd` and the URL `uri`. */
+export function mcpConfigEntry(
+  entry: McpServerEntry, shape: McpConfigFile['entryShape'] = 'mcp-servers',
+): Record<string, unknown> {
+  const remote = isRemoteTarget(entry.target);
+  if (shape === 'goose-extension') {
+    return {
+      name: entry.name,
+      type: remote ? 'streamable_http' : 'stdio',
+      ...(remote ? { uri: entry.target } : { cmd: entry.target, args: [...(entry.args ?? [])] }),
+      enabled: true,
+    };
+  }
+  return remote
     ? { url: entry.target }
     : { command: entry.target, ...(entry.args?.length ? { args: [...entry.args] } : {}) };
 }
@@ -108,8 +127,22 @@ export function mcpConfigEntry(entry: McpServerEntry): Record<string, unknown> {
  *  other servers, and any key this does not know about. A vendor config is
  *  the user's file; adding to it must never be rewriting it. */
 export async function writeMcpConfigEntry(
-  path: string, key: string, entry: McpServerEntry,
+  path: string, key: string, entry: McpServerEntry, config: Partial<McpConfigFile> = {},
 ): Promise<void> {
+  const value = mcpConfigEntry(entry, config.entryShape);
+  if (config.format === 'yaml') {
+    // Through a document parse, not a re-serialize: the user's comments and
+    // formatting survive, which is the whole reason this route is acceptable
+    // at all. Goose keeps its provider settings in this same file.
+    const { parseDocument } = await import('yaml');
+    const existing = await readFile(path, 'utf8').catch(() => '');
+    const document = parseDocument(existing);
+    if (existing.trim() && document.errors.length) throw new Error(`${path} is not valid YAML`);
+    document.setIn([key, entry.name], value);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, document.toString(), 'utf8');
+    return;
+  }
   let root: Record<string, unknown> = {};
   const existing = await readFile(path, 'utf8').catch(() => undefined);
   if (existing?.trim()) {
@@ -124,7 +157,7 @@ export async function writeMcpConfigEntry(
   const servers = current && typeof current === 'object' && !Array.isArray(current)
     ? { ...current as Record<string, unknown> }
     : {};
-  servers[entry.name] = mcpConfigEntry(entry);
+  servers[entry.name] = value;
   root[key] = servers;
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
@@ -232,7 +265,7 @@ async function installMcpServer(
   const config = mcpAddGrammar(harness) ? undefined : mcpConfigFile(harness);
   if (config) {
     try {
-      await writeMcpConfigEntry(mcpConfigPath(config, environment), config.key, entry);
+      await writeMcpConfigEntry(mcpConfigPath(config, environment), config.key, entry, config);
       return { ...label, ok: true };
     } catch (error) {
       return { ...label, ok: false, detail: error instanceof Error ? error.message : 'could not write config' };
