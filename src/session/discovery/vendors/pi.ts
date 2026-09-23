@@ -3,7 +3,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { newestFiles, readFilePrefix, walkFilesRecursive } from '../files.js';
-import { NativeSessionEnvironment } from '../locations.js';
+import { type NativeSessionEnvironment } from '../stores.js';
 import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Pi has no listing command at all (`-r`/`/resume` open an interactive

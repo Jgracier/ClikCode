@@ -153,29 +153,6 @@ function renderToolCallLine(item: Extract<ConversationItem, { type: 'tool_call' 
   return `[tool call ${item.id}] ${item.name}(${clip(JSON.stringify(item.args), maxArgsChars)})`;
 }
 
-/** String-threaded form for transports that only carry `{role, content}`.
- * Adjacent same-role fragments are merged so roles strictly alternate, and
- * the list always starts with a user message — both are hard requirements of
- * several provider APIs. */
-export function flattenForTransport(items: readonly ConversationItem[], options: FlattenOptions = {}): FlatMessage[] {
-  const maxResult = options.maxResultChars ?? 16_000;
-  const parts: FlatMessage[] = [];
-  for (const item of items) {
-    if (item.type === 'text') { if (item.text) parts.push({ role: item.role, content: item.text }); }
-    else if (item.type === 'summary') parts.push({ role: 'user', content: `Summary of the earlier conversation:\n${item.text}` });
-    else if (item.type === 'tool_call') parts.push({ role: 'assistant', content: renderToolCallLine(item, options.maxArgsChars) });
-    else parts.push({ role: 'user', content: `Tool result for ${item.name}(${item.id})${item.isError ? ' [error]' : ''}:\n${clip(item.output, maxResult) || '(no output)'}` });
-  }
-  const merged: FlatMessage[] = [];
-  for (const part of parts) {
-    const last = merged[merged.length - 1];
-    if (last && last.role === part.role) last.content = `${last.content}\n\n${part.content}`;
-    else merged.push({ ...part });
-  }
-  if (merged[0]?.role === 'assistant') merged.unshift({ role: 'user', content: '(conversation resumed)' });
-  return merged;
-}
-
 /** Future-proof structured form: one message per role run, with typed parts a
  * native tool-calling transport can map 1:1 onto its wire format. */
 type StructuredPart =

@@ -6,8 +6,8 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { cachedDirectory, discoveryCache, saveDiscoveryCache } from '../cache.js';
 import { newestFiles, readFilePrefix, readFileSuffix } from '../files.js';
-import { NativeSessionEnvironment, nativeDataRoot } from '../locations.js';
-import { conversationTitle } from '../titles.js';
+import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
+import { conversationTitle } from '../conversation-title.js';
 import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, visibleNativeUserText } from '../transcript.js';
 import { DiscoveredNativeSession } from '../discovered-session.js';
 
