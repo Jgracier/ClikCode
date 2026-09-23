@@ -68,6 +68,31 @@ describe('stored-usage account switch', () => {
     expect(stale.quotaState).toBe('exhausted');
   });
 
+  it('drops a positive percent once a later turn is already recorded, and does not prefer it', () => {
+    const stale = account('stale', {
+      usage: { at: earlier, label: 'weekly 80% left', windows: [{ name: 'weekly', usedPct: 20, resetsAt: later }] } as AiHarnessAccount['usage'],
+    });
+    const fresh = account('fresh', {
+      usage: { at: new Date().toISOString(), label: 'weekly 10% left', windows: [{ name: 'weekly', usedPct: 90, resetsAt: later }] } as AiHarnessAccount['usage'],
+    });
+    const invocations = [
+      { id: 'later-turn', accountId: 'stale', provider: 'anthropic', at: new Date().toISOString(), totalTokens: 50, latencyMs: 1 },
+    ];
+    const held = state([stale, fresh], invocations);
+    expect(noteStoredQuota(stale, held)).toBeUndefined();
+    expect(nextUsableFailoverAccount(held, account('current'), () => true, new Set())?.id).toBe('fresh');
+  });
+
+  it('still skips a spent window after a later turn; emptiness does not go stale', () => {
+    const spent = account('spent', {
+      usage: { at: earlier, label: 'weekly 0% left', windows: [{ name: 'weekly', usedPct: 100, resetsAt: later }] } as AiHarnessAccount['usage'],
+    });
+    const invocations = [
+      { id: 'later-turn', accountId: 'spent', provider: 'anthropic', at: new Date().toISOString(), totalTokens: 50, latencyMs: 1 },
+    ];
+    expect(noteStoredQuota(spent, state([spent], invocations))).toBe(0);
+  });
+
   it('lets a refused account back in once every spent window has reset', () => {
     const returned = account('returned', {
       quotaState: 'exhausted',
