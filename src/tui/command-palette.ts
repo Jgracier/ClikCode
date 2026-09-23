@@ -12,7 +12,16 @@ import type { PickerOption } from '../harness/prompter.js';
  * `argHint` (shown after the command, and kept on screen while its argument is
  * typed), `group` (rendered under a header, after every ungrouped command) and
  * `aliases` (matched like the command itself). */
-export type PaletteEntry = PickerOption<string> & { argHint?: string; group?: string; aliases?: readonly string[] };
+export type PaletteEntry = PickerOption<string> & {
+  argHint?: string; group?: string; aliases?: readonly string[];
+  /** The real values this command takes -- models, effort levels, accounts,
+   * chats -- so `/model op` lists the matching models instead of a hint and a
+   * second picker. A function, read on every keystroke, because the lists
+   * that come from a vendor arrive asynchronously and fill in as they do. */
+  argValues?: () => readonly { value: string; detail?: string }[];
+  /** Marks a row that completes an argument rather than names a command. */
+  completes?: true;
+};
 const SWITCH_HARNESS_GROUP = 'Switch harness';
 
 const paletteGroup = (entry: PaletteEntry): string | undefined =>
@@ -48,6 +57,46 @@ function paletteRank(entry: PaletteEntry, query: string): number | undefined {
   return best;
 }
 
+/** Matching values for an argument being typed, best first: exact, prefix,
+ * a word inside it, anywhere, then fuzzy. The rows carry the whole command
+ * line as their value, with the command spelled as it was typed. */
+function argumentCompletions(command: string, typed: string, entry: PaletteEntry): PaletteEntry[] {
+  const values = entry.argValues?.() ?? [];
+  if (!values.length) return [];
+  const query = typed.trim().toLowerCase();
+  const rank = (candidate: string): number | undefined => {
+    const name = candidate.toLowerCase();
+    if (!query) return 0;
+    if (name === query) return 0;
+    if (name.startsWith(query)) return 1;
+    if (new RegExp(`[-_:./ ]${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(name)) return 2;
+    if (name.includes(query)) return 3;
+    if (isSubsequence(query, name)) return 4;
+    return undefined;
+  };
+  return values.flatMap((item, index) => {
+    const at = rank(item.value) ?? (item.detail && query.length >= 2 && item.detail.toLowerCase().includes(query) ? 5 : undefined);
+    return at === undefined ? [] : [{ item, at, index }];
+  }).sort((left, right) => left.at - right.at || left.index - right.index)
+    .map(({ item }) => ({
+      label: item.value, value: `${command} ${item.value}`,
+      ...(item.detail ? { detail: item.detail } : {}), completes: true as const,
+    }));
+}
+
+/** What Enter should run for a command line: the draft itself when it names a
+ * value exactly (what was typed wins), otherwise the chosen completion. So
+ * `/model opus` runs opus even while `opus-plan` is highlighted, and `/model
+ * op` runs whichever model is highlighted -- the best match unless the user
+ * moved. A draft with no completions runs as typed. */
+export function completedCommandLine(draft: string, commands: readonly PaletteEntry[], selected = 0): string {
+  const rows = commandPaletteMatches(draft, commands);
+  if (!rows[0]?.completes) return draft;
+  const typed = draft.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (rows.some((row) => row.value.toLowerCase() === typed)) return draft.trim();
+  return (rows[selected] ?? rows[0]).value;
+}
+
 /** The exact command (or alias) the typed text names, case-insensitively. */
 export function exactPaletteCommand(value: string, commands: readonly PaletteEntry[]): string | undefined {
   const typed = value.trim().toLowerCase();
@@ -66,10 +115,14 @@ export function commandPaletteMatches(
   if (!value.startsWith('/')) return [];
   const space = value.indexOf(' ');
   if (space !== -1) {
-    // Typing an argument: keep just that command up so its hint stays visible.
     const name = value.slice(0, space).toLowerCase();
     const entry = commands.find((candidate) => candidate.value.toLowerCase() === name
       || candidate.aliases?.some((alias) => alias.toLowerCase() === name));
+    // The command's own values, narrowed by what has been typed of one.
+    const completions = entry ? argumentCompletions(value.slice(0, space), value.slice(space + 1), entry) : [];
+    if (completions.length) return completions;
+    // Nothing to offer (a free-text argument, or a list still loading): keep
+    // just that command up so its hint stays visible.
     return entry?.argHint ? [entry] : [];
   }
   const query = value.slice(1).toLowerCase();
