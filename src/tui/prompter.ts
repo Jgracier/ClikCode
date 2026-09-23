@@ -27,11 +27,8 @@ import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js'
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
 import { runOptionPicker } from './option-picker.js';
+import { EmittedTranscript } from './render/emitted-transcript.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
-import {
-  firstUnwritten as seamFirstUnwritten, liveAssistantAt as seamLiveAssistantAt,
-  materializedPendingTurn as seamMaterializedPendingTurn, messageKey,
-} from './render/transcript-seam.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
@@ -113,28 +110,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Persisted messages already in scrollback, and the standalone activity
    * rows already written. Everything before `emittedMessages` belongs to the
    * terminal now; this UI never addresses it again. */
-  private emittedMessages = 0;
   /** `role:content` of the last message written to the transcript -- the seam
    * the next frame carries on from, which a count cannot identify once the
    * caller hands a window of the conversation rather than all of it. */
-  private lastEmittedMessage?: string;
   /** Sequence numbers of the standalone activity rows already retired. One
    * number per activity event, alongside activityEntries itself, which is
    * deliberately never evicted -- some of it is immutable scrollback. */
-  private readonly emittedActivity = new Set<number>();
   /** User text already retired, so a steer materialized into the transcript by
    * an earlier frame is not drawn a second time as a live row. */
-  private readonly retiredThisSession = new Set<string>();
   /** Where the answer currently streaming will land once it is persisted, so
    * the persisted copy adds only what the stream had not already retired. */
-  private liveAssistantIndex?: number;
   private readonly turnTranscript = new TurnTranscript();
+  /** What is already in the terminal's scrollback. See emitted-transcript.ts:
+   *  every write there is irreversible, so the rules live in one place. */
+  private readonly emitted = new EmittedTranscript();
   /** Timeline sequence this turn started at, so activity left over from an
    * earlier turn at the same anchor is never adopted into it. */
-  private turnSequenceFloor = 0;
   /** Write the windowed history once: the first frame of the process, and the
    * first frame of a newly opened session. */
-  private reseedTranscript: false | 'first' | 'scroll-away' = 'first';
   private lastColumns = output.columns || 0;
   private usageLabel?: string;
   private usageResetLabel?: string;
@@ -453,7 +446,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.panelState = undefined;
       // The previous conversation is scrolled up into scrollback -- preserved,
       // not erased -- so the new one starts on a clean viewport.
-      this.reseedTranscript = this.emittedMessages ? 'scroll-away' : 'first';
+      this.emitted.requestReseed();
     }
     if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
@@ -586,8 +579,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Whatever the previous turn retired belongs to the terminal now. This one
     // starts owing everything it produces, and nothing from before it.
     this.turnTranscript.reset();
-    this.liveAssistantIndex = undefined;
-    this.turnSequenceFloor = this.timelineSequence;
+    this.emitted.liveAnswerSettled();
+    this.emitted.turnSequenceFloor = this.timelineSequence;
     this.streamingBlocks = createStreamingBlockParser();
     if (input.isTTY) {
       const listen = (): void => {
@@ -974,8 +967,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       for (const entry of collapseToolRuns(this.activityEntries)) {
         if (entry.anchor !== anchor || entry.responseOffset !== undefined) continue;
         const id = entry.sequence;
-        if (id === undefined || this.emittedActivity.has(id)) continue;
-        this.emittedActivity.add(id);
+        if (!this.emitted.claimActivity(id)) continue;
         rows.push(...activityRows(entry.lines, entry.event?.category));
       }
       return rows;
@@ -992,7 +984,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // index when the previous one was never persisted. The turn that
         // produced an entry is what decides whether it belongs to this one.
         .filter((entry) => entry.anchor === this.activityAnchor && entry.responseOffset !== undefined
-          && (entry.sequence ?? 0) > this.turnSequenceFloor)
+          && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor)
         .filter((entry) => ended || entry.event?.kind !== 'tool-start')
         .map((entry) => ({
           id: entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`,
@@ -1005,7 +997,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ];
       tools.push(...steerTranscriptRows({
         durable: pending?.steers ?? [], live: this.waitingSubmissions,
-        materializedPendingTurn, retiredThisSession: this.retiredThisSession, render: steerRows,
+        materializedPendingTurn, retiredThisSession: this.emitted.retiredTexts(), render: steerRows,
       }));
       return tools;
     };
@@ -1014,11 +1006,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const renderLive = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
       renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage, true);
 
-    if (this.reseedTranscript === 'scroll-away') {
+    if (this.emitted.pendingReseed() === 'scroll-away') {
       finished.push(...Array.from({ length: targetHeight }, () => ''));
       this.lastFinishedRow = '';
     }
-    if (this.reseedTranscript) {
+    if (this.emitted.pendingReseed()) {
       // The first frame of the process, or of a newly opened session, writes
       // the conversation once -- ALL of it. Everything already in scrollback
       // (the shell's own output, the previous conversation) stays where it is.
@@ -1028,50 +1020,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // written, so there was nothing above the fold to find. On the main
       // screen the terminal's scrollback is where a conversation lives, and a
       // window here truncated it at the one moment it is filled.
-      this.emittedMessages = 0;
-      this.lastEmittedMessage = undefined;
-      this.emittedActivity.clear();
-      this.retiredThisSession.clear();
-      this.liveAssistantIndex = undefined;
+      this.emitted.reseeded();
       this.turnTranscript.reset();
-      this.reseedTranscript = false;
     }
-    // Where this list carries on from what has already been written.
-    //
-    // A count alone cannot answer that: the interactive loop hands the turn's
-    // own view of the conversation as `messages.slice(-40)`, so the array that
-    // arrives mid-turn is a WINDOW, not the whole transcript. Counting
-    // absolutely, a long conversation had already emitted more messages than
-    // the window contains, so the loop below started past its end and wrote
-    // nothing -- the message the user had just submitted included. It vanished
-    // as the answer to it streamed in underneath.
-    //
-    // The last message actually written identifies the seam wherever it sits,
-    // window or not. Searching from the end keeps a repeated sentence from
-    // rewinding the transcript to its first occurrence.
-    const firstUnwritten = seamFirstUnwritten(persistedMessages, this.emittedMessages, this.lastEmittedMessage);
-    // More messages were retired than this turn's own list has, and none of
-    // them is the seam, which is what a pending turn already materialized into
-    // the transcript looks like from here: its steers are in scrollback as
-    // real user messages, and scrollback cannot be unwritten, so the live
-    // copies of them are the ones to drop.
-    const materializedPendingTurn = seamMaterializedPendingTurn(firstUnwritten, persistedMessages.length, this.emittedMessages);
-    // Where the live answer actually landed, which is not always where it was
-    // expected to.
-    //
-    // While the answer streams, its index is recorded as the length of the
-    // list at that moment. By the time the turn is persisted the user's own
-    // message may have been materialized into that same list -- it is not
-    // always echoed into the pre-turn render -- which shifts the assistant
-    // down by one. The recorded index then points at the USER message, the
-    // role check below fails, and the answer is emitted a second time
-    // underneath the copy already on screen: the transcript jumps a screen and
-    // the same response is sitting there again.
-    //
-    // A turn ends with its assistant message, so the first assistant at or
-    // after the recorded index is the one that was streamed.
+    // Where this list carries on from, whether the pending turn is already
+    // in it, and where the live answer landed. All three are stated -- with
+    // the failures each one prevents -- in render/transcript-seam.ts.
+    const resume = this.emitted.resume(persistedMessages);
+    const { firstUnwritten, materializedPendingTurn } = resume;
     // Cleared below once the live answer has been consumed, so it stays a let.
-    let liveAssistant = seamLiveAssistantAt(persistedMessages, this.liveAssistantIndex);
+    let liveAssistant = resume.liveAssistant;
 
     emit(standaloneActivity(firstUnwritten));
     for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
@@ -1095,25 +1053,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // there is nothing to separate from.
         if (message.role === 'user' && index > 0) emit(['']);
         emit(messageRows(message.content, message.role === 'assistant' ? '·' : userMarker));
-        if (message.role === 'user') this.retiredThisSession.add(message.content);
       }
       if (index === liveAssistant) {
-        this.liveAssistantIndex = undefined;
+        this.emitted.liveAnswerSettled();
         liveAssistant = undefined;
         this.turnTranscript.reset();
       }
-      this.lastEmittedMessage = messageKey(message);
+      this.emitted.wrote(message);
       emit(['']);
       emit(standaloneActivity(index + 1));
     }
-    // Monotonic: a row in scrollback cannot be un-emitted, so a list that
-    // comes back shorter -- sessionTranscriptMessages() materializes a pending
-    // turn, the live form of the same turn does not -- must not lower this.
-    this.emittedMessages = Math.max(this.emittedMessages, persistedMessages.length);
+    this.emitted.settle(persistedMessages.length);
 
     const liveConversation: string[] = [];
     if (hasTransientAssistant) {
-      this.liveAssistantIndex = persistedMessages.length;
+      this.emitted.liveAssistantIndex = persistedMessages.length;
       const content = sanitizeTerminalText(this.liveResponse);
       const step = this.turnTranscript.advance({
         content,
