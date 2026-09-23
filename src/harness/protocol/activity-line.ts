@@ -6,7 +6,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import { previewLinesFor } from './activity-events.js';
 import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
-import { CLAUDE_SHAPED, OPENCODE_SHAPED, asRecord } from './json-lines.js';
+import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
   if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
@@ -73,12 +73,12 @@ export function nativeActivityPhaseFromValue(harness: AiLocalHarnessDefinition, 
   if (type === 'assistant') {
     // A Claude-shaped assistant record that only carries tool calls (or belongs
     // to a subagent) is not the reply being written.
-    if (!CLAUDE_SHAPED.has(harness.command)) return 'generating response';
+    if (!claudeShaped(harness)) return 'generating response';
     if (typeof value.parent_tool_use_id === 'string' && value.parent_tool_use_id) return undefined;
     const content = asRecord(value.message)?.content;
     return !Array.isArray(content) || content.some((part) => asRecord(part)?.type === 'text') ? 'generating response' : undefined;
   }
-  if (OPENCODE_SHAPED.has(harness.command) && type === 'text') return 'generating response';
+  if (opencodeShaped(harness) && type === 'text') return 'generating response';
   return undefined;
 }
 

@@ -199,12 +199,43 @@ export function consumeSessionTurn(session: HarnessSession, id: string): boolean
   return true;
 }
 
+/** The answer that is kept: what the user watched arrive, unless the vendor's
+ * final report genuinely has more.
+ *
+ * A turn's text has two sources. The stream is what was on screen; the
+ * vendor's final record (`result`, `response`, ...) is what it reports at the
+ * end. They are often NOT the same text: Claude-shaped CLIs report only the
+ * LAST text block in `result`, dropping everything said before the final tool
+ * call. Saving that report replaced the streamed answer at the end of the
+ * turn, and every paragraph before the last tool call flashed on screen and
+ * vanished.
+ *
+ * So the stream wins, and the report is used only where it is strictly
+ * better: nothing streamed at all (a text-mode CLI, a transport with no
+ * deltas), or it contains everything that streamed and more (a trailing chunk
+ * never arrived). When they simply differ, what the user watched is kept --
+ * a saved answer that differs from the one on screen is exactly the flash.
+ * Compared with whitespace collapsed, since streams and reports rarely agree
+ * on where the blank lines go. */
+export function durableAnswer(streamed: string, reported: string): string {
+  const stream = streamed.trim();
+  const report = reported.trim();
+  if (!stream) return report;
+  if (!report) return stream;
+  const flat = (text: string): string => text.replace(/\s+/g, ' ').trim();
+  const flatStream = flat(stream);
+  const flatReport = flat(report);
+  // Everything that was on screen, and more: nothing the user saw is lost.
+  if (flatReport.length > flatStream.length && flatReport.includes(flatStream)) return report;
+  return stream;
+}
+
 export function finishPendingTurn(session: HarnessSession, response: string | undefined, now: string): void {
   if (!session.pendingTurn) return;
-  if (response?.trim()) {
+  if (response?.trim() || session.pendingTurn.response?.trim()) {
     const pending = session.pendingTurn;
     const streamed = pending.response ?? '';
-    const final = response.trim();
+    const final = durableAnswer(streamed, response ?? '');
     if (pending.steers?.length && streamed !== final) {
       pending.steers = pending.steers.map((steer) => ({ ...steer, responseOffset: remapSteerOffset(streamed, final, steer.responseOffset ?? 0) }));
     }

@@ -5,7 +5,7 @@
 import { visibleSlice } from '../../tui/render/width.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
-import { CLAUDE_SHAPED, JsonRecord, OPENCODE_SHAPED, asRecord } from './json-lines.js';
+import { claudeShaped, JsonRecord, opencodeShaped, asRecord } from './json-lines.js';
 import { categoryOf, formatToolRow, toolCategory, toolLabel } from './tools.js';
 
 /** Line-capped, not byte-capped: a diff that's still readable at a glance
@@ -111,7 +111,7 @@ function claudeToolStart(tool: JsonRecord, command: string): NativeActivityEvent
 export function parseNativeActivityEventsFromValue(harness: AiLocalHarnessDefinition, parsed: unknown): NativeActivityEvent[] {
   const value = asRecord(parsed);
   if (!value) return [];
-  if (CLAUDE_SHAPED.has(harness.command)) {
+  if (claudeShaped(harness)) {
     const claude = claudeShapedActivity(value, harness.command);
     if (claude) return claude;
   }
@@ -314,7 +314,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   // that actually called a tool — `part.tool` is the tool name and
   // `part.state.status` tracks completion.
   // Kilo Code CLI is an OpenCode fork and emits the same envelope.
-  if (OPENCODE_SHAPED.has(harness.command) && type === 'tool_use') {
+  if (opencodeShaped(harness) && type === 'tool_use') {
     const part = asRecord(value.part);
     const state = asRecord(part?.state);
     const name = String(part?.tool ?? 'tool');

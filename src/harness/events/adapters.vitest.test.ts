@@ -33,15 +33,17 @@ describe('generic streaming fallback', () => {
   it('streams Claude-style stream-json from a harness with no vendor parser', () => {
     expect(update('kiro', { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] } }))
       .toEqual({ text: 'partial', mode: 'append' });
-    expect(update('kiro', { type: 'result', result: 'final answer' }))
-      .toEqual({ text: 'final answer', mode: 'replace' });
+    // The final report after text has streamed is a repeat at best, and often
+    // only the last part. It used to REPLACE the streamed answer, which wiped
+    // everything before it off the screen as the turn ended.
+    expect(update('kiro', { type: 'result', result: 'final answer' })).toBeUndefined();
   });
 
-  it('accepts a single terminal result envelope', () => {
+  it('shows a terminal result when it is the only thing that carried the answer', () => {
     expect(update('command', { type: 'result', result: 'done', session_id: 'x' }))
-      .toEqual({ text: 'done', mode: 'replace' });
-    expect(update('command', { type: 'turn.completed', response: 'done' }))
-      .toEqual({ text: 'done', mode: 'replace' });
+      .toEqual({ text: 'done', mode: 'append' });
+    expect(update('command', { type: 'turn.completed', response: 'done', session_id: 'y' }))
+      .toEqual({ text: 'done', mode: 'append' });
   });
 
   it('reads deltas, completed agent items, and bare assistant text', () => {

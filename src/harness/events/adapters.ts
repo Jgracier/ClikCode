@@ -166,28 +166,37 @@ const stringValue = (...candidates: unknown[]): string | undefined =>
  * Streamed text is presentation only: the persisted answer is always
  * re-extracted from the complete stdout by nativeTurnResult, so a mismatch
  * here costs a blank live region, never a wrong transcript. */
-const genericParser: ResponseParser = (value) => {
+const genericParser: ResponseParser = (value, harness) => {
   const envelope = object(value.event) ?? value;
   const type = typeof envelope.type === 'string' ? envelope.type : '';
   if (NON_ASSISTANT_TYPE.test(type) || envelope.role === 'user') return undefined;
+  const state = streamState(harness, value);
+  const shown = (update: NativeResponseUpdate): NativeResponseUpdate => {
+    if (update.text.trim()) state.hasText = true;
+    return update;
+  };
   const delta = object(envelope.delta);
-  if (typeof delta?.text === 'string' && delta.text) return { text: delta.text, mode: 'append' };
+  if (typeof delta?.text === 'string' && delta.text) return shown({ text: delta.text, mode: 'append' });
   const item = object(envelope.item);
   if (item && ASSISTANT_TEXT_TYPE.test(String(item.type ?? '')) && typeof item.text === 'string' && item.text) {
-    return { text: `${item.text}\n\n`, mode: 'append' };
+    return shown({ text: `${item.text}\n\n`, mode: 'append' });
   }
   const message = object(envelope.message);
   if (message && (message.role === undefined || message.role === 'assistant')) {
     const text = contentText(message.content) || stringValue(message.content, message.text);
-    if (text) return { text, mode: 'append' };
+    if (text) return shown({ text, mode: 'append' });
   }
   if (ASSISTANT_TEXT_TYPE.test(type)) {
     const text = contentText(envelope.content) || stringValue(envelope.text, object(envelope.part)?.text, envelope.content);
-    if (text) return { text, mode: 'append' };
+    if (text) return shown({ text, mode: 'append' });
   }
   if (TERMINAL_RESULT_TYPE.test(type)) {
+    // The final report is the answer only when nothing else carried it. After
+    // text has streamed it is at best a repeat and often just the last part
+    // -- and as a `replace` it wiped the streamed answer off the screen at the
+    // very end of the turn. See durableAnswer() for the saved copy.
     const text = stringValue(envelope.result, envelope.response);
-    if (text?.trim()) return { text, mode: 'replace' };
+    if (text?.trim() && !state.hasText) return shown({ text, mode: 'append' });
   }
   return undefined;
 };

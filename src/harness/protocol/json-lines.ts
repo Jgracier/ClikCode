@@ -18,10 +18,29 @@ function recordsOf(parsed: unknown): JsonRecord[] {
   return out;
 }
 
-/** Harnesses whose stream is Claude Code's stream-json, or OpenCode's. */
-export const CLAUDE_SHAPED = new Set(['claude', 'qwen']);
+/** Harnesses whose stream is Claude Code's stream-json, or OpenCode's -- by
+ * the stream format the catalog DECLARES (`parser`), not by name.
+ *
+ * These were sets of command names, `claude` and `qwen`. Grok Build, Gemini
+ * CLI and Amp declare the same `claude-stream-json` stream and were missed in
+ * every place that asked -- the same mistake, in the same shape, as the
+ * response parser that doubled their output: the final answer was saved as
+ * `result` alone (the last text block, so every paragraph before the final
+ * tool call vanished when the turn ended), and their tool calls were not read
+ * as tool rows at all. The names stay only for a harness that speaks the
+ * shape without declaring it. */
+const CLAUDE_SHAPED_NAMES = new Set(['claude', 'qwen']);
+const OPENCODE_SHAPED_NAMES = new Set(['opencode', 'kilo']);
 
-export const OPENCODE_SHAPED = new Set(['opencode', 'kilo']);
+type Shaped = { command: string; parser?: string };
+
+export function claudeShaped(harness: Shaped): boolean {
+  return harness.parser === 'claude-stream-json' || CLAUDE_SHAPED_NAMES.has(harness.command);
+}
+
+export function opencodeShaped(harness: Shaped): boolean {
+  return harness.parser === 'opencode-json' || OPENCODE_SHAPED_NAMES.has(harness.command);
+}
 
 /** Vendors interleave banners, deprecation warnings and progress chatter with
  * their JSON records. The streaming adapter has always skipped such lines; the

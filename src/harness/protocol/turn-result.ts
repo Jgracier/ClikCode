@@ -3,7 +3,7 @@
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { parseNativeActivityEventsFromValue } from './activity-events.js';
 import { nativeSessionIdsFromValues } from './session-ids.js';
-import { CLAUDE_SHAPED, JsonRecord, asRecord, parseJsonDocument, parseJsonLines } from './json-lines.js';
+import { claudeShaped, JsonRecord, asRecord, parseJsonDocument, parseJsonLines } from './json-lines.js';
 import { NativeTurnUsage, nativeTurnUsage } from './turn-usage.js';
 
 export interface NativeTurnResult {
@@ -143,7 +143,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   // A failed Claude-shaped turn reports its reason in `result`; a successful
   // one reports only the LAST text block there, dropping everything the model
   // said before its final tool call -- text the user already watched stream.
-  const claudeText = !isError && CLAUDE_SHAPED.has(harness.command) ? claudeShapedText(values) : '';
+  const claudeText = !isError && claudeShaped(harness) ? claudeShapedText(values) : '';
   // errorMessage only as a fallback, never preferred over real assistant
   // text -- a turn that produced actual output before failing partway
   // through should still show that output, not the failure reason instead

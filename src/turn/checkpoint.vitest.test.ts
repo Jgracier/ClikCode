@@ -36,13 +36,31 @@ describe('durable turn checkpoints', () => {
     const target = session();
     beginPendingTurn(target, 'Continue', '2026-01-02T00:00:00.000Z');
     updatePendingResponse(target, 'Partial', 'append', '2026-01-02T00:00:01.000Z');
-    finishPendingTurn(target, 'Final answer', '2026-01-02T00:00:02.000Z');
+    // The report contains everything that streamed, and more.
+    finishPendingTurn(target, 'Partial -- and the final answer', '2026-01-02T00:00:02.000Z');
 
     expect(target.pendingTurn).toBeUndefined();
     expect(target.messages?.slice(-2)).toEqual([
       { role: 'user', content: 'Continue' },
-      { role: 'assistant', content: 'Final answer' },
+      { role: 'assistant', content: 'Partial -- and the final answer' },
     ]);
+  });
+
+  it('keeps what streamed when the report is only its last part', () => {
+    // Claude-shaped CLIs put only the LAST text block in `result`. Saving it
+    // is what made everything before the final tool call vanish at turn end.
+    const target = session();
+    beginPendingTurn(target, 'Fix it', '2026-01-02T00:00:00.000Z');
+    updatePendingResponse(target, "I'm checking the workspace first.\n\nFound it: the fix is live.", 'append', '2026-01-02T00:00:01.000Z');
+    finishPendingTurn(target, 'Found it: the fix is live.', '2026-01-02T00:00:02.000Z');
+    expect(target.messages?.at(-1)?.content).toBe("I'm checking the workspace first.\n\nFound it: the fix is live.");
+  });
+
+  it('uses the report when nothing streamed', () => {
+    const target = session();
+    beginPendingTurn(target, 'Hi', '2026-01-02T00:00:00.000Z');
+    finishPendingTurn(target, 'Hello.', '2026-01-02T00:00:01.000Z');
+    expect(target.messages?.at(-1)?.content).toBe('Hello.');
   });
 
   it('clears a failed attempt before a failover response starts', () => {
