@@ -66,13 +66,11 @@ export const AI_PROVIDERS = [
     // answers the same bearer with 403 on chat — measured). That proxy gates on
     // the CLI's own `x-grok-client-version` (+ identifier/mode/User-Agent
     // grok-cli/<v>, read off the decompressed binary) and admits only a current
-    // build: this row dispatched DIRECT onto it from 2026-08-31 (7d04a37a1) and
-    // every real turn was refused 426 "Your Grok CLI version (none) is outdated"
-    // (prod, 2026-09-05). Sending that header from a server that is not the CLI
+    // build: this row dispatched DIRECT onto it and
+    // every real turn was refused 426 "Your Grok CLI version (none) is outdated". Sending that header from a server that is not the CLI
     // would be spoofing a client identity to get past a vendor control, so it
-    // is not done; instead the CLI itself is the transport, BAKED into the
-    // worker image beside Claude Code (apps/web/Dockerfile.worker
-    // `ARG GROK_CLI_VERSION`) and driven as a subprocess by the harness row in
+    // is not done; instead the CLI itself is the transport, installed
+    // beside Claude Code and driven as a subprocess by the harness row in
     // ai-harness-registry.ts — which sends its own version header legitimately.
     //
     // ONE LOGIN, NOT TWO — same shape as anthropic below. The platform's xai
@@ -1751,7 +1749,7 @@ export const AI_PROVIDERS = [
     },
     catalogFreeModelBooleanField: "is_free",
     // The successful response's billing envelope contains the settled charge
-    // as a fixed-precision USD string. Preserve it so ClikDeploy's credit debit
+    // as a fixed-precision USD string. Preserve it so the caller's credit debit
     // uses the real marketplace bill instead of a catalog estimate.
     responseCostUsdPath: ["cheaper_inference", "billing", "billed_cost_usd"],
     openAiCompatible: true,
@@ -1834,7 +1832,7 @@ export const AI_PROVIDERS = [
     // DELIBERATELY NEVER RESOLVED FROM ENV: there is no single endpoint or
     // key — each candidate is one live ModelDeployment, and its base URL is
     // attached per-candidate at the candidates layer
-    // (platform-domains ai-self-hosted-candidates.ts) and dispatched via
+    // (the calling application's candidates layer) and dispatched via
     // streamAiChatTurn's per-call `baseUrl` override. The envKey below is a
     // naming placeholder that keeps this row invisible to the normal
     // credential walk (never set ⇒ hasApiKeyCredential is false ⇒ the

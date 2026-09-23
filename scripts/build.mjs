@@ -50,12 +50,6 @@ const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 const INLINE_PACKAGES = new Set(['chalk', 'commander', 'conf', 'cross-spawn', 'marked']);
 /** Never inline, even transitively. */
 const FORCE_EXTERNAL = new Set(['@basetenlabs/performance-client']);
-/**
- * The ClikDeploy CLI this repo was split out of named its deployment-only
- * modules with these prefixes. Nothing matching one should ever exist here
- * again; the guard stays as a tripwire against re-importing that tree.
- */
-const FORBIDDEN_SOURCE = /^(server-|deploy|docker|admin-)/;
 const builtins = new Set(builtinModules);
 
 function packageName(specifier) {
@@ -162,18 +156,6 @@ if (runtimeExternals(catalog.metafile, 'dist/harness-catalog.cjs').length) failu
   }
 }
 
-const indexInputs = Object.entries(index.metafile.outputs['dist/index.js'].inputs);
-
-const forbidden = indexInputs
-  .filter(([path]) => !path.includes('node_modules/') && FORBIDDEN_SOURCE.test(path.split('/').pop() ?? ''))
-  .map(([path, info]) => ({ path: display(path), bytes: info.bytesInOutput }))
-  .sort((a, b) => b.bytes - a.bytes);
-if (forbidden.length) {
-  const total = forbidden.reduce((sum, item) => sum + item.bytes, 0);
-  const message = `${forbidden.length} deployment-CLI source file(s) are in index.js (${kb(total)}): ${forbidden.slice(0, 6).map((item) => item.path.split('/').pop()).join(', ')}${forbidden.length > 6 ? ', …' : ''}`;
-  (strict ? failures : warnings).push(message);
-}
-
 // ---------------------------------------------------------------- report ----
 
 function kb(bytes) { return `${(bytes / 1024).toFixed(1)} kB`; }
@@ -201,10 +183,6 @@ if (analyze) {
   }
   console.log(`\nindex.js runtime packages: ${indexExternals.join(', ') || '(none)'}`);
   console.log(`ai-router-runtime.cjs runtime packages: ${routerExternals.join(', ') || '(none)'}`);
-  if (forbidden.length) {
-    console.log('\nDeployment-CLI sources in index.js:');
-    for (const item of forbidden) console.log(`  ${kb(item.bytes).padStart(10)}  ${item.path}`);
-  }
   // Outside dist/ on purpose: everything in dist/ is published.
   await mkdir('node_modules/.cache/clikcode', { recursive: true });
   await writeFile('node_modules/.cache/clikcode/meta.index.json', JSON.stringify(index.metafile));

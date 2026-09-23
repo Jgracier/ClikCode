@@ -339,13 +339,12 @@ named after the file.
 ## Running without a vendor tool
 
 Everything above assumes the tools are on your machine. When they are not,
-sign in to a hosted service instead: it supplies the model, and ClikCode runs
+sign in to a gateway instead: it supplies the model, and ClikCode runs
 the coding agent itself — same conversations, same commands, no vendor CLI.
 
 Optional, and off until you sign in. `CLIKCODE_GATEWAY=off` removes the
-commands entirely. The default endpoint is ClikDeploy Gateway
-(`https://clikdeploy.com`), the only one that exists today;
-`CLIKCODE_GATEWAY_URL` points it anywhere else.
+commands entirely. ClikDeploy Gateway is the one supported gateway today and
+the default endpoint; `CLIKCODE_GATEWAY_URL` points ClikCode at another.
 
 ## What ClikCode keeps, and where
 
@@ -361,9 +360,7 @@ Everything it owns is under `~/.clikcode`, readable only by you (directories
 
 Set `CLIKCODE_HOME` to relocate all of it (tests, portable installs). A gateway
 credential, if you sign in, is stored separately in `~/.config/clikcode/auth.json`
-and `~/.clikcode/api-key`. A credential left behind by the ClikDeploy CLI
-(`~/.config/clikdeploy/auth.json`, `~/.clikdeploy/api-key`) is still read, so an
-existing sign-in keeps working; the next write moves it.
+and `~/.clikcode/api-key`.
 
 ## Letting other programs drive it
 
@@ -395,7 +392,7 @@ streams at full speed.
 | `CLIKCODE_SCREEN_READER` | Any value other than empty, `0` or `false` switches to the append-only, line-oriented renderer so output is announced once, in order |
 | `FORCE_COLOR` | `0` disables color; `1`–`3` force a color level |
 | `CLIKCODE_GATEWAY` | `off`, `0`, `false` or `no` removes the optional gateway commands entirely |
-| `CLIKCODE_GATEWAY_URL` | Gateway endpoint used by `gateway login` and the gateway route (default `https://clikdeploy.com`). `CLIKDEPLOY_API_URL` is still honoured |
+| `CLIKCODE_GATEWAY_URL` | Gateway endpoint used by `gateway login` and the gateway route (defaults to ClikDeploy Gateway) |
 
 ## Development
 
@@ -429,14 +426,6 @@ cross-spawn, marked) so startup is a single file read, which is why the
 published package declares **no runtime dependencies at all** — a property the
 build asserts rather than assumes. The version reported by `--version` is
 injected at build time from `package.json`.
-
-### Provenance
-
-This repository was split out of the ClikDeploy monorepo with
-`git filter-repo`, so `git log` on any file predates the split. `build:strict`
-still fails on a source named the way that monorepo named its deployment-only
-modules (`server-*`, `deploy*`, `docker*`, `admin-*`); nothing matching one
-exists here, and the check stays as a tripwire.
 
 ## License
 

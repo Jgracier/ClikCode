@@ -27,9 +27,7 @@ export function harnessSecretsPath(): string {
 }
 
 export function harnessCommand(): string {
-  return process.argv[1]?.includes('clikcode') || process.argv[1]?.includes('index-clikcode')
-    ? 'clikcode'
-    : 'clikdeploy ai';
+  return 'clikcode';
 }
 
 // ---------------------------------------------------------------------------

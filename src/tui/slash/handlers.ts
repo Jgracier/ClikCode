@@ -50,7 +50,7 @@ import { addSessionDirectory, changeSessionWorkspace, workspaceDiff } from './wo
 
 function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
-  const who = session.route === 'gateway' ? 'ClikDeploy Gateway' : harness?.displayName ?? 'This provider';
+  const who = session.route === 'gateway' ? 'Gateway' : harness?.displayName ?? 'This provider';
   return `${who} does not expose an undo/rewind operation to ClikCode, so /undo is not available here. ClikCode will not fake it: use /diff to see what changed and git to revert it${harness?.nativeSlashPassthrough ? `, or send the vendor's own command with //rewind` : ''}.`;
 }
 
@@ -101,7 +101,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     return created.id;
   },
   permissions: async ({ state, session, words }) => {
-    if (session.route === 'gateway') throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy; Ask, Bypass, and Auto apply only to local harnesses.');
+    if (session.route === 'gateway') throw new Error('Gateway permissions are enforced by authenticated platform policy; Ask, Bypass, and Auto apply only to local harnesses.');
     const value = words.shift()?.toLowerCase();
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness) throw new Error('Choose a provider before setting permissions.');
@@ -491,12 +491,12 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   gateway: async ({ state, session }) => {
     if (sessionTranscriptMessages(session).length || session.nativeSessionId) {
-      throw new Error('Use the interactive /provider menu to hand off an existing conversation to ClikDeploy Gateway.');
+      throw new Error('Use the interactive /provider menu to hand off an existing conversation to Gateway.');
     }
     applyGatewaySessionPolicy(session);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
-    return emitHarnessOutput({ panel: 'provider-selected', harness: 'gateway', displayName: 'ClikDeploy Gateway', provider: 'clikdeploy-gateway', account: null, model: 'platform', centralized: true });
+    return emitHarnessOutput({ panel: 'provider-selected', harness: 'gateway', displayName: 'Gateway', provider: 'gateway', account: null, model: 'platform', centralized: true });
   },
   attachments: (context) => HEADLESS_SLASH_HANDLERS.mention(context),
   init: (context) => HEADLESS_SLASH_HANDLERS.review(context),

@@ -18,7 +18,7 @@ export interface AiHarnessGatewayDeviceManifest {
   models: Array<{ accountId: string; provider: string; model: string; status: AiHarnessAccount['status'] }>;
 }
 
-/** Device metadata registered through an authenticated ClikDeploy account. */
+/** Device metadata registered through an authenticated gateway account. */
 export interface AiHarnessDeviceRegistration {
   protocol: typeof AI_HARNESS_GATEWAY_PROTOCOL;
   installationId: string;

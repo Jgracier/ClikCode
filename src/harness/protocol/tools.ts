@@ -91,7 +91,7 @@ export const CLAUDE_TOOL_NAMES: Readonly<Record<string, ToolCategory>> = {
  * It is not a vendor CLI and so not in the catalog, but it is a harness that
  * emits tool events, and leaving it out of the map would be the same silent
  * absence the map exists to prevent. */
-export const GATEWAY_HARNESS_COMMAND = 'clikdeploy-gateway';
+export const GATEWAY_HARNESS_COMMAND = 'gateway';
 
 export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>> = {
   claude: { stream: 'structured', names: CLAUDE_TOOL_NAMES, note: 'tool_use blocks carry name and input; Edit/Write also carry a diff, which settles them outright.' },

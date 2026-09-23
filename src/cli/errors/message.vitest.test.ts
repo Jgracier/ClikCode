@@ -4,16 +4,16 @@ import { ERROR_CATALOG } from './catalog.js';
 
 /**
  * A real production problem+json 404, byte-for-byte as
- * `toProblemJson(catalogError('APP_NOT_FOUND'), traceId)` emits it with
+ * `toProblemJson(catalogError('NOT_FOUND'), traceId)` emits it with
  * NODE_ENV=production: no `detail`, no `error`, no `message`.
  */
 const PROD_404_BODY = {
-  type: 'https://errors.clikdeploy.com/APP_NOT_FOUND',
-  title: 'The requested app was not found.',
+  type: 'urn:clikcode:error:NOT_FOUND',
+  title: 'The requested resource was not found.',
   status: 404,
-  code: 'APP_NOT_FOUND',
+  code: 'NOT_FOUND',
   traceId: 'a1b2c3d4e5f60718',
-  remediation: 'Verify the app id/name and that it belongs to your account.',
+  remediation: 'Verify the identifier and that the resource belongs to your account.',
 };
 
 /** What axios hands the CLI for that response. */
@@ -29,8 +29,8 @@ describe('problem+json reaches the CLI user', () => {
     const rendered = toCliErrorMessage(AXIOS_404);
 
     expect(rendered).not.toContain('Request failed with status code 404');
-    expect(rendered).toContain('The requested app was not found.');
-    expect(rendered).toContain(ERROR_CATALOG.APP_NOT_FOUND!.remediation!);
+    expect(rendered).toContain('The requested resource was not found.');
+    expect(rendered).toContain(ERROR_CATALOG.NOT_FOUND!.remediation!);
     expect(rendered).toContain('trace a1b2c3d4e5f60718');
   });
 

@@ -1,11 +1,6 @@
 /**
  * The process-level pieces of the ClikCode program: the root command, the
  * global flags, the first-run banner, crash capture and the error renderer.
- *
- * Extracted from the ClikDeploy CLI, where this file was shared with the
- * deployment entrypoints. Nothing platform-specific survives that move: the
- * lifecycle lock, the `--local` platform-URL shorthand and the ClikDeploy
- * banner were all deployment-only and were dropped here.
  */
 
 import { createRequire } from 'node:module';

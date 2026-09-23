@@ -166,7 +166,7 @@ export const webFetchTool = defineTool<WebFetchArgs>({
         const { url, pinned } = await vetUrl(target, ctx.net);
         const response = await (ctx.net?.request ?? defaultRequest)(url, pinned, {
           signal: timeout.signal,
-          headers: { 'user-agent': 'ClikCode/1 (+https://clikdeploy.com)', accept: 'text/html,text/plain,application/json,*/*;q=0.5', 'accept-encoding': 'identity' },
+          headers: { 'user-agent': 'ClikCode/1', accept: 'text/html,text/plain,application/json,*/*;q=0.5', 'accept-encoding': 'identity' },
         });
         if (response.status >= 300 && response.status < 400 && response.headers.location) {
           for await (const _chunk of response.body) { /* drain */ }

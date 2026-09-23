@@ -44,7 +44,7 @@ export async function assertRealModel(harness: AiLocalHarnessDefinition | undefi
 export function applyGatewaySessionPolicy(session: HarnessSession): void {
   session.route = 'gateway';
   session.accountId = null;
-  session.provider = 'clikdeploy-gateway';
+  session.provider = 'gateway';
   session.model = null;
   session.effort = 'platform-managed';
   session.accountFailover = 'never';
@@ -97,7 +97,7 @@ function findAccount(
 export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
   if (options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
   if (options.route === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
-    throw new Error('Gateway account, provider, model, effort, and failover are selected by ClikDeploy platform routing and cannot be overridden per session.');
+    throw new Error('Gateway account, provider, model, effort, and failover are selected by platform routing and cannot be overridden per session.');
   }
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   const state = await readState();
@@ -126,7 +126,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const id = randomUUID();
   const session: HarnessSession = {
     id, conversationId: id, route: options.route, accountId: options.route === 'gateway' ? null : account?.id ?? null,
-    provider: options.route === 'gateway' ? 'clikdeploy-gateway' : provider,
+    provider: options.route === 'gateway' ? 'gateway' : provider,
     model: options.route === 'gateway' ? null : model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
     effort: options.route === 'gateway' ? 'platform-managed' : options.effort ?? defaults.effort,
     ...(options.route === 'local' ? { permissionMode: defaults.permissionMode } : {}),
@@ -281,7 +281,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   const current = state.sessions[index];
   const effectiveRoute = options.route ?? current.route;
   if (effectiveRoute === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
-    throw new Error('Gateway account, provider, model, effort, failover, and native sessions are selected by ClikDeploy platform routing and cannot be overridden per session.');
+    throw new Error('Gateway account, provider, model, effort, failover, and native sessions are selected by platform routing and cannot be overridden per session.');
   }
   const account = options.account === undefined
     ? undefined

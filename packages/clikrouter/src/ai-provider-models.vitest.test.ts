@@ -937,7 +937,7 @@ describe('openAiCompatible rows: probe and chat derive from the SAME base URL', 
   });
 
   it('aws-bedrock no longer reads a stored base URL — the region is the only input', () => {
-    // The migration in apps/web platform-secrets.ts converts a stored
+    // The calling application's migration converts a stored
     // AWS_BEDROCK_BASE_URL into a region before the first hydrate. This pins
     // the reason that migration is REQUIRED rather than optional: with the
     // field gone from the row, a stored base URL has nothing to substitute

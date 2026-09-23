@@ -404,7 +404,7 @@ describe('buildAiChatRequest', () => {
 
   // xAI's subscription has NO HTTP surface this platform may drive: its CLI proxy
   // (cli-chat-proxy.grok.com) answered every bare-client turn 426 `Grok CLI version (none) is
-  // outdated` (prod, 2026-09-05) because it gates on the CLI's own version header, and api.x.ai
+  // outdated` because it gates on the CLI's own version header, and api.x.ai
   // 403s the bearer on chat. The row is therefore 'harness' (the vendor's own CLI is the transport,
   // baked into the worker image), and the chokepoint REFUSES an OAuth credential the same way it
   // refuses Anthropic's — pointing the lane at runHarnessChat. An API key for the same provider is

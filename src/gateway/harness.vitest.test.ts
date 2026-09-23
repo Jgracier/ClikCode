@@ -16,7 +16,7 @@ const workspace = (): string => {
 
 const session = (cwd: string): HarnessSession => ({
   id: 'gw-1', conversationId: 'gw-1', route: 'gateway', accountId: null,
-  provider: 'clikdeploy-gateway', model: null, effort: 'platform-managed',
+  provider: 'gateway', model: null, effort: 'platform-managed',
   accountFailover: 'never', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   status: 'active', workspace: cwd, messages: [],
 } as unknown as HarnessSession);

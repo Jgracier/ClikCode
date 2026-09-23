@@ -71,7 +71,7 @@ interface SlashCommandEntry {
 }
 
 const always = (): SlashAvailability => ({ available: true });
-const GATEWAY_MANAGED = 'ClikDeploy Gateway selects this by platform policy; it applies only to local harnesses.';
+const GATEWAY_MANAGED = 'Gateway selects this by platform policy; it applies only to local harnesses.';
 const localOnly = (session: HarnessSession | undefined): SlashAvailability =>
   session?.route === 'gateway' ? { available: false, reason: GATEWAY_MANAGED } : { available: true };
 const needsHarness = (what: string) => (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
@@ -130,7 +130,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('accounts', 'Provider', 'list and manage accounts', { argHint: '[use|login|add|remove|failover …]' }),
   entry('login', 'Provider', 'sign in to the current provider', { availability: needsHarness('signing in') }),
   entry('logout', 'Provider', 'sign the current account out', { availability: needsHarness('signing out') }),
-  entry('gateway', 'Provider', 'route this conversation through ClikDeploy Gateway'),
+  entry('gateway', 'Provider', 'route this conversation through Gateway'),
 
   entry('model', 'Settings', 'choose or set a model', {
     argHint: '[name]',

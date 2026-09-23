@@ -1082,7 +1082,7 @@ function usageCount(value: unknown): number | undefined {
  * Every field is mapped only when the body carries it — absent, not invented.
  * Other dialects return {} here: their real dispatch runs through the AI SDK
  * (which reports usage itself), and the remaining hand-rolled chat callers
- * already parse usage via parseAiProviderTokenUsage in platform-domains.
+ * already parse usage via parseAiProviderTokenUsage in the calling application.
  */
 export function extractUsage(
   dialect: BuiltChatRequest["dialect"],
