@@ -283,11 +283,8 @@ export async function interactiveSessionManager(rl: HarnessPrompter, id: string)
     return undefined;
   }
   if (action === 'fork') { await aiSessionCommand(id, '/fork'); return undefined; }
-  if (action === 'archive') {
-    const answer = (await rl.question('Archive this conversation? [y/N] › ')).trim().toLowerCase();
-    if (answer === 'y' || answer === 'yes') { await aiSessionCommand(id, '/archive'); return 'exit'; }
-    return undefined;
-  }
+  // Undone by resuming it, so it needs no confirmation; delete keeps its own.
+  if (action === 'archive') { await aiSessionCommand(id, '/archive'); return 'exit'; }
   const answer = (await rl.question('Delete this conversation from ClikCode? Type delete › ')).trim().toLowerCase();
   if (answer === 'delete') { await aiSessionCommand(id, '/delete confirm'); return 'exit'; }
   return undefined;

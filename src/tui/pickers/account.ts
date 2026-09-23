@@ -121,12 +121,18 @@ const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
 
 async function addApiKeyAccount(rl: HarnessPrompter, harness: AiLocalHarnessDefinition): Promise<string | undefined> {
   const suggested = PROVIDER_API_KEY_ENV[harness.provider] ?? `${harness.provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
-  let entered: string;
-  try {
-    entered = (await rl.question(`Environment variable holding the key ${chalk.dim(`[${suggested}]`)} › `, [], { cancellable: true })).trim();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_CANCELLED') return undefined;
-    throw error;
+  let entered = '';
+  // The provider's standard variable is already set in this shell: that is
+  // the key, and asking the user to confirm the name printed in the prompt's
+  // own default was a keypress that could only ever say yes. Asked only when
+  // the obvious variable is absent and the key must be somewhere else.
+  if (!process.env[suggested]) {
+    try {
+      entered = (await rl.question(`Environment variable holding the key ${chalk.dim(`[${suggested}]`)} › `, [], { cancellable: true })).trim();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_CANCELLED') return undefined;
+      throw error;
+    }
   }
   const envName = (entered || suggested).toUpperCase();
   if (!/^[A-Z][A-Z0-9_]*$/.test(envName)) throw new Error('environment variable name must be letters, numbers, and underscores only');

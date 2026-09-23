@@ -10,8 +10,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectNativeHarness, inspectNativeHarnessForPicker } from './transport/native/inspect.js';
 import { rememberFallbackTurn, usesFallbackTurn } from '../turn/runtime.js';
-import { nativeModelCatalog, nativeModelLabel } from './accounts/model-catalog.js';
+import { nativeModelCatalog, nativeModelLabel, nativeModelCatalogForPicker, resetModelCatalogMemo } from './accounts/model-catalog.js';
+import { clearLoginStatusCache, harnessNeedsLogin } from '../commands/account.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
+import { readFile } from 'node:fs/promises';
 
 let dir: string;
 const previousPath = process.env.PATH;
@@ -99,3 +101,57 @@ describe('Claude\'s models', () => {
     }
   });
 });
+
+describe('model catalog persistence and stale-while-revalidate', () => {
+  it('persists discovered models to disk and reloads on fresh memory state', async () => {
+    const stateHome = await mkdtemp(join(tmpdir(), 'clikcode-test-state-'));
+    process.env.CLIKCODE_HOME = stateHome;
+    const profile = await mkdtemp(join(tmpdir(), 'clikcode-test-profile-'));
+    const harness = { command: 'claude', binary: 'claude', displayName: 'Claude Code' } as AiLocalHarnessDefinition;
+    const account = { id: 'test-account', provider: 'anthropic', label: 'test', models: [], status: 'ready', nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path: profile } } as unknown as AiHarnessAccount;
+
+    try {
+      await install('claude', '2.1.285', '{id:"claude-sonnet-5",family:"sonnet",display_name:"Sonnet 5",provider_ids:{}}');
+      resetModelCatalogMemo();
+
+      const first = await nativeModelCatalog(harness, account);
+      expect(first.models).toContain('sonnet');
+
+      // Verify model-catalog.json was written to disk
+      const memoFile = join(stateHome, 'model-catalog.json');
+      const raw = await readFile(memoFile, 'utf8');
+      expect(raw).toContain('claude:');
+
+      // Clear in-memory cache to simulate fresh process
+      resetModelCatalogMemo();
+
+      // Read again - should hit disk memo and match
+      const second = await nativeModelCatalog(harness, account);
+      expect(second.models).toContain('sonnet');
+
+      // Test picker with stale-while-revalidate
+      const pickerResult = await nativeModelCatalogForPicker(harness, account);
+      expect(pickerResult.models).toContain('sonnet');
+    } finally {
+      delete process.env.CLIKCODE_HOME;
+      resetModelCatalogMemo();
+      await rm(stateHome, { recursive: true, force: true });
+      await rm(profile, { recursive: true, force: true });
+    }
+  });
+
+  it('caches harnessNeedsLogin and clears via clearLoginStatusCache', async () => {
+    clearLoginStatusCache();
+    const harness = { command: 'noharness', statusArgv: ['login', 'status'] } as unknown as AiLocalHarnessDefinition;
+    // Calling with non-existent command fails to open/runs and returns true (fail-open)
+    const result1 = await harnessNeedsLogin(harness, {});
+    expect(result1).toBe(true);
+
+    // Second call should return cached result
+    const result2 = await harnessNeedsLogin(harness, {});
+    expect(result2).toBe(true);
+
+    clearLoginStatusCache('noharness');
+  });
+});
+

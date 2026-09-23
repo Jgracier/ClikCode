@@ -19,17 +19,30 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
   // Only what no ClikCode command already owns. /model, /permissions, /effort,
   // /cwd and /add-dir were each listed here as a raw vendor row as well, so the
   // same setting had two interfaces that could disagree.
+  const current = (item: { id: string }): unknown => session.harnessOptions?.[item.id];
   const option = await chooseOption(rl, `${harness.displayName} options`, vendorFacingOptions(manifest.options).map((item) => ({
     label: item.label,
-    detail: `· ${item.description}${item.dangerous ? ` · ${chalk.yellow('dangerous')}` : ''}`,
+    detail: [
+      `· ${item.description}`,
+      ...(item.kind === 'boolean' ? [current(item) === true ? 'on' : 'off'] : []),
+      ...(item.dangerous ? [chalk.yellow('dangerous')] : []),
+    ].join(' · '),
     value: item,
   })));
   if (!option) return;
   let raw: string | undefined;
   if (option.kind === 'boolean') {
-    raw = await chooseOption(rl, option.label, [
-      { label: 'On', value: 'on' }, { label: 'Off', value: 'off' },
-    ]);
+    // A switch flips. Choosing the row and then choosing "On" was two steps
+    // for one bit, with the current state shown nowhere; the row now says
+    // which way it is, and choosing it turns it the other way. The one second
+    // step that stays is turning ON something marked dangerous -- that is
+    // the case a confirmation exists for.
+    const turningOn = current(option) !== true;
+    if (turningOn && option.dangerous) {
+      raw = await chooseOption(rl, `Turn on ${option.label}?`, [
+        { label: 'Turn on', detail: `· ${chalk.yellow('dangerous')}`, value: 'on' }, { label: 'Cancel', value: '' },
+      ]);
+    } else raw = turningOn ? 'on' : 'off';
   } else if (option.values?.length) {
     raw = await chooseOption(rl, option.label, option.values.map((entry) => ({ label: entry, value: entry })));
   } else {

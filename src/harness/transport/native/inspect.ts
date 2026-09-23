@@ -98,6 +98,7 @@ export async function inspectNativeHarness(spec: NativeHarnessSpec, timeoutMs = 
       ...(result.version ? { version: result.version } : {}),
       ...(result.error ? { error: result.error } : {}),
     });
+    await saveVersionMemo().catch(() => undefined);
   }
   return result;
 }

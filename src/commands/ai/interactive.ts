@@ -524,9 +524,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               const name = args || (await rl.question('Conversation name › ')).trim();
               if (name) await aiSessionCommand(id, `/rename ${name}`);
             },
+            // No "[y/N]": archiving is undone by resuming it, which is where
+            // an archived chat still is. A confirmation earns its keypress
+            // only for what cannot be taken back -- /delete keeps its own.
             archive: async () => {
-              const answer = (await rl.question('Archive this conversation? [y/N] › ')).trim().toLowerCase();
-              if (!['y', 'yes'].includes(answer)) return {};
               await aiSessionCommand(id, '/archive');
               return { exit: true };
             },

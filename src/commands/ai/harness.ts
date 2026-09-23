@@ -106,7 +106,11 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   let account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   if (TERMINAL.active && harness.loginArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
-    if (freshInstall || (accountJustCreated && !harness.statusArgv) || await harnessNeedsLogin(harness, environment)) {
+    const shouldCheckLogin = freshInstall
+      || (accountJustCreated && !harness.statusArgv)
+      || account?.status !== 'ready'
+      || (accountJustCreated && await harnessNeedsLogin(harness, environment));
+    if (shouldCheckLogin) {
       if (harness.loginCapturable) {
         TERMINAL.active.startWaiting(`signing in to ${harness.displayName}…`);
         try { await loginNativeHarness(harness, environment); } finally { TERMINAL.active.stopWaiting(); }
@@ -132,7 +136,11 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     }
   }
   // Always a real model, never a placeholder -- see resolveNativeModel.
-  if (!session.model) session.model = await resolveNativeModel(harness, account) ?? null;
+  if (!session.model) {
+    session.model = state.providerSettings[harness.provider]?.model
+      ?? await resolveNativeModel(harness, account)
+      ?? null;
+  }
   session.updatedAt = new Date().toISOString();
   await writeState(state);
   const compatible = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
