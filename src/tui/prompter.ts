@@ -323,7 +323,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.resizePaintTimer = setTimeout(() => {
       this.resizePaintTimer = undefined;
       if (this.closed || this.suspended) return;
-      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+      this.repaint();
     }, RESIZE_SETTLE_MS);
     this.resizePaintTimer.unref();
   }
@@ -523,7 +523,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     while (lines.length && !lines[0]) lines.shift();
     while (lines.length && !lines[lines.length - 1]) lines.pop();
     this.panelState = { title: sanitizeTerminalText(title, { keepSgr: true, singleLine: true }), lines, offset: 0, page: 1, total: lines.length };
-    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    this.repaint({ keepPalette: false });
   }
 
   /** True when the key was a panel command. Only consulted on an empty draft,
@@ -637,7 +637,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.waitingDraft = '';
     this.waitingCursor = 0;
-    if (refresh && !this.closed) this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    if (refresh && !this.closed) this.repaint({ keepPalette: false });
   }
 
   phase(message: string): void {
@@ -787,7 +787,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.responsePaintTimer = undefined;
       if (!this.closed && !this.selecting && !this.paletteActive) {
         if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
-        else this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+        else this.repaint();
       }
     }, delay);
     this.responsePaintTimer.unref();
@@ -796,6 +796,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Every update is a complete atomic frame. Partial footer/composer paints
    * were smaller, but depended on a particular older frame already being on
    * screen and became invalid when slow terminals dropped intermediate work. */
+  /** Repaint with the composer exactly as the last paint left it.
+   *
+   * This spread appeared nine times. Four of those omitted the palette, and
+   * an omitted palette does not merely go unmentioned -- paint() reads absent
+   * as "there is none" and clears the saved one. So a deliberate dismissal
+   * (a panel opening, a turn ending) and an accidental one looked identical
+   * at the call site. The flag states which is meant; the behaviour of every
+   * existing caller is unchanged. */
+  private repaint(options: { keepPalette: boolean } = { keepPalette: true }): void {
+    if (options.keepPalette) {
+      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+      return;
+    }
+    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+  }
+
   private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; hint?: string; hideCursor?: boolean }): void {
     const session = this.currentSession;
     if (!session || this.suspended) return;
@@ -1530,7 +1546,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const draw = (): void => {
       this.scrollPaintQueued = false;
       if (this.closed || this.suspended) return;
-      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+      this.repaint();
     };
     // Inside a batch the frame waits for the end of the chunk; outside one --
     // a page key, an arrow, a test pressing a single key -- it draws at once.
@@ -1584,9 +1600,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.showTransientNotice(
       '↑ or Ctrl+B to read earlier messages',
       2000,
-      () => this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette),
+      () => this.repaint(),
     );
-    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    this.repaint();
     return true;
   }
 
@@ -1648,7 +1664,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.forgetScreenPosition();
     this.resumeInput?.();
     if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
-    else this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
+    else this.repaint();
   };
 
 
@@ -2001,6 +2017,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // UI's own on screen, so the next frame begins wherever the cursor is.
     this.lastColumns = output.columns || 0;
     if (input.isTTY) input.resume();
-    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    this.repaint({ keepPalette: false });
   }
 }
