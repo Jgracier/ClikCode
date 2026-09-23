@@ -218,7 +218,7 @@ const genericParser: ResponseParser = (value, harness) => {
  *
  * Declaring the family is now enough; no harness needs an entry of its own to
  * reuse a parser. */
-const parsersByFamily: Readonly<Record<string, ResponseParser>> = {
+export const parsersByFamily: Readonly<Record<string, ResponseParser>> = {
   'claude-stream-json': (value, harness) => parsers.claude!(value, harness),
   'opencode-json': (value, harness) => parsers.opencode!(value, harness),
   'cursor-stream-json': (value, harness) => parsers.cursor!(value, harness),
