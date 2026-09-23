@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { cloneData } from './data.js';
 import { atomicWriteFile } from './files.js';
 import { sessionFilePath, sessionsDirectory } from './paths.js';
-import { SessionTranscript, TranscriptRef } from './transcripts.js';
+import type { SessionTranscript, TranscriptRef } from './transcripts.js';
 
 export interface SessionFile extends SessionTranscript {
   v: 1;

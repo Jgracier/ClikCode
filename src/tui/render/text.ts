@@ -1,7 +1,7 @@
 /** Terminal text as bytes: the escape sequences that may appear in it, and
  * making a string safe to print. */
 
-import { terminalCellWidth } from './width.js';
+import { OSC8_SEQUENCE, TAB_WIDTH, terminalCellWidth, ZERO_WIDTH_SEQUENCES } from './width.js';
 
 /** Every escape sequence a terminal acts on. OSC and DCS/SOS/PM/APC bodies end
  * at their terminator or, failing that, at the end of the line: a model that
@@ -18,9 +18,6 @@ const SGR_SEQUENCE = /^\u001b\[[0-9;]*m$/;
 /** The two zero-width sequences this UI writes inside a row: SGR styling and
  * OSC 8 hyperlink open/close. Everything that measures, slices or sanitizes a
  * styled row treats exactly these as atomic and invisible. */
-export const OSC8_SEQUENCE = /^\u001b\]8;[^\u0007\u001b\n]*\u001b\\$/;
-
-export const ZERO_WIDTH_SEQUENCES = /\u001b\[[0-9;]*m|\u001b\]8;[^\u0007\u001b\n]*\u001b\\/g;
 
 export const SAFE_LINK = /^(?:https?:\/\/|mailto:)[^\s\u0000-\u001f\u007f-\u009f]+$/i;
 
@@ -29,8 +26,6 @@ const NEEDS_SANITIZING = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\t]/;
 const UNSAFE_IN_STYLED_TEXT = /[\u0000-\u0009\u000b-\u001a\u001c-\u001f\u007f-\u009f]|\u001b(?!\[[0-9;]*m|\]8;[^\u0007\u001b\n]*\u001b\\)/;
 
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
-
-export const TAB_WIDTH = 4;
 
 /** Advance each tab to the next tab stop measured from the start of its own
  * line, which is what keeps tab-aligned code aligned. */

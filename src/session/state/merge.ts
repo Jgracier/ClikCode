@@ -5,10 +5,10 @@
 import { randomUUID } from 'node:crypto';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../model.js';
-import { cloneData, sameData } from '../store/data.js';
+import { cloneData, hidden, sameData } from '../store/data.js';
 import { transcriptOf, type SessionTranscript } from '../store/transcripts.js';
-import { StateIndex } from './index-file.js';
-import { Invocation, invocationRollups } from './invocations.js';
+import type { StateIndex } from './index-file.js';
+import { invocationRollups, type Invocation } from './invocations.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 
 export type SessionMeta = Omit<HarnessSession, 'messages' | 'pendingTurn' | 'claim'>;
@@ -76,7 +76,6 @@ export function splitSession(session: HarnessSession): { meta: SessionMeta; tran
   return { meta, transcript: transcriptOf(session), claim };
 }
 
-
 // ---------------------------------------------------------------------------
 // Baseline
 // ---------------------------------------------------------------------------
@@ -100,13 +99,6 @@ export interface StateBaselineData {
 export const STATE_BASELINE = Symbol('clikcode.stateBaseline');
 
 export type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineData };
-
-export function hidden<T extends object>(target: T, key: PropertyKey, value: unknown): T {
-  // Non-enumerable so it never reaches JSON.stringify, spreads, equality
-  // checks, or any panel that prints state.
-  Object.defineProperty(target, key, { value, configurable: true, writable: true, enumerable: false });
-  return target;
-}
 
 /** `reuse` carries over entries for sessions known to be unchanged, so the
  * per-checkpoint cost follows what changed rather than total history. */

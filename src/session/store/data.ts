@@ -46,3 +46,10 @@ export function sameData(left: unknown, right: unknown): boolean {
   for (const key of Object.keys(b)) if (b[key] !== undefined) otherDefined += 1;
   return defined === otherDefined;
 }
+
+export function hidden<T extends object>(target: T, key: PropertyKey, value: unknown): T {
+  // Non-enumerable so it never reaches JSON.stringify, spreads, equality
+  // checks, or any panel that prints state.
+  Object.defineProperty(target, key, { value, configurable: true, writable: true, enumerable: false });
+  return target;
+}

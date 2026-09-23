@@ -2,8 +2,8 @@
  * rollups and totals derived from them are not. */
 
 import type { HarnessState } from '../model.js';
-import { StateIndex } from './index-file.js';
-import { hidden } from './merge.js';
+import type { StateIndex } from './index-file.js';
+import { hidden } from '../store/data.js';
 
 /** Individual invocation records kept; older ones fold into per-day totals. */
 const INVOCATION_KEEP = 1000;
