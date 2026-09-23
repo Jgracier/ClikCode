@@ -24,6 +24,8 @@ import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { commandDuringTurn, enqueueCommandLine } from '../../tui/slash/queue.js';
+import { providerImpliedBy } from '../../tui/slash/infer-provider.js';
+import { aiHarnessSelect } from './harness.js';
 import { nativeUsageReading } from '../../harness/accounts/account-usage.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
@@ -463,11 +465,24 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // loop rather than run here, so it runs against the session the
           // picker actually produced (choosing a provider can branch the
           // conversation) instead of the stale copy read above.
-          if (!availability.available && availability.needs === 'provider' && !fromQueuedCommand && rl.select) {
+          if (!availability.available && availability.needs === 'provider' && !fromQueuedCommand) {
+            const commandLine = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
+            // Derived before asked: `/model claude-opus-5` has already named
+            // its provider if exactly one configured account publishes that
+            // model, and `/account work` always has. A picker there would ask
+            // a question whose answer was in the question.
+            const implied = providerImpliedBy(route, commandState.accounts);
+            const impliedHarness = implied ? localHarnessForProvider(implied)?.command : undefined;
+            if (impliedHarness) {
+              await aiHarnessSelect(impliedHarness, id);
+              await enqueueCommandLine(id, commandLine);
+              continue;
+            }
+            if (!rl.select) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
             const chosen = await interactiveEnginePicker(config, rl, id) ?? id;
             const chosenState = await readState();
             if (sessionHarness(chosenState.sessions.find((item) => item.id === chosen))) {
-              await enqueueCommandLine(chosen, `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`);
+              await enqueueCommandLine(chosen, commandLine);
             }
             if (chosen !== id) id = chosen;
             continue;
