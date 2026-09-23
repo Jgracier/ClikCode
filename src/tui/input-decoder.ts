@@ -267,13 +267,3 @@ export function listenForTerminalKeys(onKey: (key: string) => void): () => void 
   };
 }
 
-/** Decode only keys that remain meaningful while a provider turn owns the
- * composer. Keeping this separate from cancellation prevents arrow/page keys
- * from being swallowed during generation. */
-export function waitingInputActions(chunk: Buffer | string): WaitingInputAction[] {
-  const decoder = new TerminalInputDecoder();
-  return [...decoder.push(chunk), ...decoder.flush()].flatMap((key) => {
-    const action = waitingInputAction(key);
-    return action ? [action] : [];
-  });
-}

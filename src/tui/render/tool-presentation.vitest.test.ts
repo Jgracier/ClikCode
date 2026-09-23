@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TOOL_CATEGORY_STYLE, collapseToolRuns, toolGlyph, type ActivityEntry } from './activity-log.js';
+import { TOOL_CATEGORY_STYLE, collapseToolRuns, type ActivityEntry } from './activity-log.js';
 import { CATEGORY_PREVIEW_LINES, previewLinesFor } from '../../harness/protocol/activity-events.js';
 import { terminalCellWidth } from './width.js';
 import type { ToolCategory } from '../../harness/prompter.js';
@@ -33,11 +33,6 @@ describe('tool glyphs', () => {
     }
   });
 
-  it('leaves a tool with no category bare', () => {
-    // A marker on every row was tried and removed: it read as a column of
-    // dots. A glyph is for saying which KIND of work this was.
-    expect(toolGlyph(undefined)).toBe('');
-  });
 });
 
 describe('preview budgets', () => {

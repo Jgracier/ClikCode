@@ -79,15 +79,6 @@ export function resolvePath(input: string, scope: PathScope): ResolvedPath {
   return { absolute, real, confined: root !== undefined, ...(root ? { root } : {}) };
 }
 
-/** Resolve and REQUIRE the path to stay inside cwd/addDirs after symlinks. */
-export function resolveConfined(input: string, scope: PathScope): ResolvedPath {
-  const resolved = resolvePath(input, scope);
-  if (!resolved.confined) {
-    throw new ConfinementError(`${input} resolves to ${resolved.real}, which is outside the workspace (${[scope.cwd, ...scope.addDirs].join(', ')})`);
-  }
-  return resolved;
-}
-
 const SHELL_RC_FILES = new Set([
   '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin',
   '.kshrc', '.cshrc', '.tcshrc', '.inputrc', '.gitconfig', '.npmrc', '.netrc',

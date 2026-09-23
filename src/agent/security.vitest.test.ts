@@ -6,7 +6,7 @@ import { matchGlob } from './glob-match.js';
 import { diffLines, eventDiff, renderDiffPreview } from './line-diff.js';
 import { validateAgainstSchema } from './schema-validate.js';
 import {
-  capHeadTail, classifyCommand, ConfinementError, eventOutputPreview, readDenyReason, redactSecrets, resolveConfined, resolvePath,
+  capHeadTail, classifyCommand, ConfinementError, eventOutputPreview, readDenyReason, redactSecrets, resolvePath,
   scrubEnvironment, toolOutputDir, writeDenyReason, type PathScope,
 } from './security.js';
 
@@ -22,16 +22,23 @@ afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
 describe('path confinement', () => {
   it('accepts workspace and added directories, including files that do not exist yet', () => {
-    expect(resolveConfined('src/new/file.ts', scope).real).toBe(path.join(scope.cwd, 'src/new/file.ts'));
-    expect(resolveConfined(path.join(root, 'extra', 'x.txt'), scope).root).toBe(path.join(root, 'extra'));
+    // resolvePath + .confined is what production actually checks, in all six
+    // places that enforce confinement; it is asserted directly here rather
+    // than through a wrapper nothing shipped.
+    expect(resolvePath('src/new/file.ts', scope).real).toBe(path.join(scope.cwd, 'src/new/file.ts'));
+    expect(resolvePath('src/new/file.ts', scope).confined).toBe(true);
+    expect(resolvePath(path.join(root, 'extra', 'x.txt'), scope).root).toBe(path.join(root, 'extra'));
+    expect(resolvePath(path.join(root, 'extra', 'x.txt'), scope).confined).toBe(true);
   });
 
   it('rejects .. traversal and absolute paths outside', () => {
-    expect(() => resolveConfined('../outside/x', scope)).toThrow(ConfinementError);
-    expect(() => resolveConfined('src/../../outside/x', scope)).toThrow(ConfinementError);
-    expect(() => resolveConfined('/etc/passwd', scope)).toThrow(ConfinementError);
-    expect(() => resolveConfined('~/notes.txt', scope)).toThrow(ConfinementError);
-    expect(() => resolveConfined('a\0b', scope)).toThrow(ConfinementError);
+    expect(resolvePath('../outside/x', scope).confined, '../outside/x').toBe(false);
+    expect(resolvePath('src/../../outside/x', scope).confined, 'src/../../outside/x').toBe(false);
+    expect(resolvePath('/etc/passwd', scope).confined, '/etc/passwd').toBe(false);
+    expect(resolvePath('~/notes.txt', scope).confined, '~/notes.txt').toBe(false);
+    // A NUL byte is rejected by resolvePath itself, before confinement is
+            // even considered -- so this one is a throw, not an unconfined result.
+    expect(() => resolvePath('a\0b', scope)).toThrow(ConfinementError);
     // A sibling whose name merely starts with the workspace name is outside.
     expect(resolvePath(`${scope.cwd}-evil/x`, scope).confined).toBe(false);
   });
@@ -41,7 +48,6 @@ describe('path confinement', () => {
     const resolved = resolvePath('link/new/deep.txt', scope);
     expect(resolved.real).toBe(path.join(root, 'outside', 'new', 'deep.txt'));
     expect(resolved.confined).toBe(false);
-    expect(() => resolveConfined('link/new/deep.txt', scope)).toThrow(/outside the workspace/);
   });
 
   it('rejects a file symlink and a dangling symlink that point outside', async () => {
@@ -55,7 +61,9 @@ describe('path confinement', () => {
   it('allows a symlink that stays inside', async () => {
     await fs.mkdir(path.join(scope.cwd, 'real'));
     await fs.symlink(path.join(scope.cwd, 'real'), path.join(scope.cwd, 'alias'));
-    expect(resolveConfined('alias/a.txt', scope).real).toBe(path.join(scope.cwd, 'real', 'a.txt'));
+    const resolved = resolvePath('alias/a.txt', scope);
+    expect(resolved.real).toBe(path.join(scope.cwd, 'real', 'a.txt'));
+    expect(resolved.confined).toBe(true);
   });
 });
 
