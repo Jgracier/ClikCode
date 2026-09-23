@@ -38,7 +38,7 @@ import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput, line } from '../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
-import { expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
+import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
 import { claimSession, releaseSession, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
 import { existsSync } from 'node:fs';
 import { routeSlashInput, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../../tui/slash/registry.js';
@@ -426,7 +426,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // `/etc/hosts explain this` is a request about a file, not a command.
         const route = routeSlashInput(line, slashRouteContextFor(commandSession, commandHarness, (path) => existsSync(expandHomePath(path))));
         let outcome: InteractiveSlashOutcome = {};
-        if (route.kind === 'prompt') outcome = { prompt: route.prompt, echo: true };
+        if (route.kind === 'prompt') {
+          // An image named in the message goes with the message.
+          const images = await embeddedImagePaths(route.prompt, activeWorkspace);
+          if (images.length) {
+            for (const image of images) await queueAttachment(commandSession, image).catch(() => undefined);
+            await writeState(commandState);
+          }
+          outcome = { prompt: route.prompt, echo: true };
+        }
         else if (route.kind === 'native') {
           if (commandSession.route === 'gateway') throw new Error('Native harness commands apply only to local harnesses.');
           outcome = { prompt: route.prompt, echo: true };

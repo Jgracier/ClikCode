@@ -110,11 +110,44 @@ export async function resolveStandaloneAttachment(
   }
 }
 
+/** Images to a harness are a PATH -- the vendor reads the file and applies its
+ * own limits -- so the ceiling that protects a prompt from a huge pasted text
+ * file is the wrong one for them: a retina screenshot is routinely 2-5 MiB,
+ * and the 1 MiB rule refused exactly the file people most want to attach. */
+const IMAGE_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+
 export async function queueAttachment(session: HarnessSession, path: string): Promise<void> {
   const info = await stat(path);
   if (!info.isFile()) throw new Error('Attachments must be files.');
-  if (info.size > 1024 * 1024) throw new Error('Attachments are limited to 1 MiB each.');
+  const image = IMAGE_EXTENSIONS.has(extname(path).toLowerCase());
+  if (image && info.size > IMAGE_ATTACHMENT_MAX_BYTES) throw new Error('Image attachments are limited to 20 MiB each.');
+  if (!image && info.size > 1024 * 1024) throw new Error('Attachments are limited to 1 MiB each.');
   session.attachments = [...new Set([...(session.attachments ?? []), path])].slice(-10);
+}
+
+/** Image files named inside a message -- a screenshot dragged into the middle
+ * of a sentence -- so they go with that message.
+ *
+ * A path on a line of its own was already attached, but only for the NEXT
+ * message: "drop the screenshot, then ask about it" took two sends, and a path
+ * dropped mid-sentence was not attached at all. Only images, and only files
+ * that exist: a text path in a message is something to talk about, and the
+ * harness can open it with its own tools; an image it cannot see unless it is
+ * given it. Terminal drag-and-drop quotes or backslash-escapes spaces, and
+ * both are understood. The text is left exactly as typed. */
+export async function embeddedImagePaths(text: string, workspace: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const [token] of text.matchAll(/"[^"\n]+"|'[^'\n]+'|(?:\\.|[^\s])+/g)) {
+    const bare = token.replace(/[,;:!?)\]}>]+$/, '').replace(/\.$/, '');
+    const decoded = decodeAttachmentPath(bare);
+    if (!IMAGE_EXTENSIONS.has(extname(decoded).toLowerCase())) continue;
+    const expanded = expandHomePath(decoded);
+    const path = isAbsolute(expanded) ? resolve(expanded) : resolve(workspace, expanded);
+    try {
+      if ((await stat(path)).isFile() && !found.includes(path)) found.push(path);
+    } catch { /* fail-open-ok: a word ending in .png that is not a file is just a word. */ }
+  }
+  return found;
 }
 
 export async function prepareAttachments(paths: readonly string[]): Promise<{ textContext: string; images: string[] }> {
