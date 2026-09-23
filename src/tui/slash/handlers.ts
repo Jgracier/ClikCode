@@ -29,6 +29,7 @@ import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../session/attachments.js';
 import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, setSessionHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey } from './registry.js';
+import { modelChoicesFor } from './model-choices.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
@@ -193,20 +194,24 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   model: async ({ state, session, words }) => {
     const value = words.join(' ').trim();
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     // No value: show what there is to choose from, which is what
     // /permissions with no value already does. The interactive session opens
     // a picker before reaching here, so this is the headless answer -- and
     // there, listing the models is strictly more useful than a sentence
     // telling the user to go and list the models.
+    //
+    // THIS session's provider only, and its own account where it has one.
+    // `/model` on a chosen provider is not a question about providers: the
+    // conversation runs on one, and a model belonging to another is not a
+    // thing this command could set. /models is the cross-provider list.
     if (!value) {
       return emitHarnessOutput({
         panel: 'models',
-        models: state.accounts.filter((item) => !session.accountId || item.id === session.accountId)
-          .flatMap((account) => account.models.map((model) => ({ account: account.label, provider: account.provider, model }))),
+        models: modelChoicesFor({ ...session, provider: harness?.provider ?? session.provider }, state.accounts),
         selected: session.model,
       });
     }
-    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
     const account = state.accounts.find((item) => item.id === session.accountId);
     // `/model auto` and `/model default` mean "stop overriding", not "store a
