@@ -120,6 +120,20 @@ describe('spelling "add this MCP server"', () => {
     expect(argv('vibe', remote)).toBe('mcp add sentry --transport http --url https://mcp.sentry.dev/mcp --no-login');
   });
 
+  it('puts even the NAME behind a flag, and args in a JSON list, where the CLI wants that', () => {
+    // kiro-cli mcp add --name N --command C --args '["-y","x"]' | --url U.
+    // A JSON list is unambiguous for arguments containing dashes, which is
+    // why Kiro documents it alongside the repeated form. Read off its own
+    // --help; NOT round-tripped to disk, because `mcp add` refuses to run at
+    // all until the CLI is logged in -- and its login check comes BEFORE
+    // argument validation, so even a bogus flag reports only "not logged in".
+    // Safe to declare anyway: a wrong argv there fails LOUDLY rather than
+    // writing nothing and reporting success, which is why hermes is excluded
+    // and this is not.
+    expect(argv('kiro', local)).toBe('mcp add --scope global --force --name figma --command npx --args ["-y","figma-mcp"]');
+    expect(argv('kiro', remote)).toBe('mcp add --scope global --force --name sentry --url https://mcp.sentry.dev/mcp');
+  });
+
   it('offers nothing for a harness with no recorded grammar', () => {
     // Never guessed: a wrong argv writes a broken entry.
     expect(mcpAddArgv(grammarOf('aider'), local)).toBeUndefined();
