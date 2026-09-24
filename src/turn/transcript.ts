@@ -134,17 +134,18 @@ export class TurnTranscript {
     renderLive?: BlockRenderer;
   }): { finished: string[]; live: string[] } {
     // A tool that began at or after the end of the prose proves the prose is
-    // final: the model stopped writing to call it.
-    const closedByTool = input.tools.some((tool) => (tool.done || input.turnEnded)
-      && tool.responseOffset !== undefined && tool.responseOffset >= input.content.length
-      && input.content.length > 0);
+    // final: the model stopped writing to call it. A call that is still
+    // running closes that prose too, so its row can sit directly under it
+    // instead of under whatever sentence arrives next.
+    const closedByTool = input.tools.some((tool) => tool.responseOffset !== undefined
+      && tool.responseOffset >= input.content.length && input.content.length > 0);
     const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded, input.blocks, closedByTool);
     // Same rule as settledToolRows, kept grouped so a tool's rows can be
     // placed at the offset it started at rather than after all of the prose.
     const isSettled = (tool: SettlingTool): boolean => tool.done || input.turnEnded;
     const owing = input.tools.filter((tool) => !this.emittedTools.has(tool.id));
     const settledTools = owing.filter(isSettled);
-    const liveToolLines = owing.filter((tool) => !isSettled(tool)).flatMap((tool) => [...tool.lines]);
+    const liveTools = owing.filter((tool) => !isSettled(tool));
     const renderLive = input.renderLive ?? input.renderBlocks;
 
     // The head of an open fence was already retired line by line; only the
@@ -212,7 +213,21 @@ export class TurnTranscript {
     } else if (answer.live.length) {
       live = renderLive(answer.live, !this.started);
     }
-    live.push(...liveToolLines);
+    // A running call stays where it started. One whose offset is already
+    // behind the live prose sits at the top of this region, directly under
+    // the scrollback it will join when it finishes. One still ahead of the
+    // text sits at the end. Appending every running call after the text is
+    // what made the row jump up the page when the checkmark was written.
+    const blocks = input.blocks ?? splitIntoBlocks(input.content);
+    const liveSourceStart = answer.emitted === 0 ? 0 : (blocks[answer.emitted - 1]?.sourceEnd ?? 0);
+    const before: string[] = [];
+    const after: string[] = [];
+    for (const tool of [...liveTools].sort((left, right) => (left.responseOffset ?? Number.POSITIVE_INFINITY) - (right.responseOffset ?? Number.POSITIVE_INFINITY))) {
+      const offset = tool.responseOffset ?? Number.POSITIVE_INFINITY;
+      if (offset <= liveSourceStart) before.push(...tool.lines);
+      else after.push(...tool.lines);
+    }
+    live = [...before, ...live, ...after];
     return { finished, live };
   }
 

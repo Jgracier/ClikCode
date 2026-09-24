@@ -257,4 +257,34 @@ describe('a tool call closes the prose before it', () => {
     expect(second.live.join('\n'), 'the sentence still being written is live').toContain('They pass, still writing');
     expect(second.finished.join('\n')).not.toContain('They pass, still writing');
   });
+
+  it('keeps a running call where the settled row will be', () => {
+    const transcript = new TurnTranscript();
+    const offset = 'Checking the tests.'.length;
+    const running = { id: 't1', done: false, lines: ['  spinner Bash'], responseOffset: offset };
+    const first = transcript.advance({
+      content: 'Checking the tests.', tools: [running], turnEnded: false, renderBlocks: text,
+    });
+    expect(first.finished.join('\n')).toContain('Checking the tests.');
+    expect(first.live.join('\n')).toContain('spinner Bash');
+    expect(first.finished.join('\n')).not.toContain('spinner');
+
+    const second = transcript.advance({
+      content: 'Checking the tests.\n\nThey pass, still writing',
+      tools: [running], turnEnded: false, renderBlocks: text,
+    });
+    const live = second.live.join('\n');
+    expect(live.indexOf('spinner Bash')).toBeGreaterThanOrEqual(0);
+    expect(live.indexOf('spinner Bash')).toBeLessThan(live.indexOf('They pass'));
+
+    const third = transcript.advance({
+      content: 'Checking the tests.\n\nThey pass, still writing',
+      tools: [{ ...running, done: true, lines: ['  done Bash'] }],
+      turnEnded: false, renderBlocks: text,
+    });
+    expect(third.finished.join('\n')).toContain('done Bash');
+    expect(third.live.join('\n')).toContain('They pass');
+    expect(third.live.join('\n')).not.toContain('spinner');
+    expect(third.live.join('\n')).not.toContain('done Bash');
+  });
 });
