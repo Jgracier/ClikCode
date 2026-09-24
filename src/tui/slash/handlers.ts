@@ -2,7 +2,7 @@
  * What each slash command does, with no terminal involved.
  *
  * Every command has a headless body here that returns text, so the same
- * `/cost` or `/export` works typed into the chat, piped through the control
+ * `/usage` or `/export` works typed into the chat, piped through the control
  * API, or run as an argv subcommand. The implementations the longer ones
  * need live beside this file, one concern each.
  */
@@ -42,7 +42,7 @@ import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } f
 import { capabilitiesText } from './capabilities-text.js';
 import { compactConversation } from './compact.js';
 import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from './context.js';
-import { contextUsageText, costReport } from './cost.js';
+import { contextUsageText } from './cost.js';
 import { usageReport } from './usage-report.js';
 import { exportTranscript } from './export-transcript.js';
 import { nativeManagerListing } from './native-manager.js';
@@ -286,7 +286,10 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     });
   },
   usage: async ({ state, session }) => {
-    const report = usageReport(state, session, { providerName: sessionHarness(session)?.displayName });
+    const harness = sessionHarness(session);
+    const report = usageReport(state, session, {
+      ...(harness ? { providerName: harness.displayName, providerId: harness.provider } : {}),
+    });
     return emitHarnessOutput({ panel: 'usage', text: report.text, totals: report.totals });
   },
   settings: async ({ id, state, session, words }) => {
@@ -513,10 +516,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   compact: async ({ id, session, args }) => compactConversation(id, session, args, sendSessionTurn),
   context: async ({ session }) => emitHarnessOutput({ panel: 'context', text: contextUsageText(session), usage: session.lastUsage ?? null }),
-  cost: async ({ state, session }) => {
-    const report = costReport(state, session);
-    return emitHarnessOutput({ panel: 'cost', text: report.text, totals: report.totals });
-  },
   export: async ({ session, words }) => {
     const force = words.includes('--force');
     const path = await exportTranscript(session, words.filter((word) => word !== '--force').join(' '), async () => force);

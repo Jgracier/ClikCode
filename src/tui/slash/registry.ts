@@ -32,7 +32,7 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
  * tables are typed `Record<SlashHandlerKey, …>` and a missing or extra handler
  * is a compile error as well as a parity-test failure. */
 export const SLASH_HANDLER_KEYS = [
-  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'cost', 'export', 'history', 'copy', 'select', 'undo',
+  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'undo',
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention', 'attachments',
   'provider', 'account', 'accounts', 'login', 'logout', 'gateway',
   'model', 'models', 'effort', 'permissions', 'options', 'capabilities', 'settings',
@@ -157,8 +157,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 
   entry('status', 'Info', 'current configuration'),
   entry('context', 'Info', 'context window and token usage reported by the harness'),
-  entry('cost', 'Info', 'tokens and cost for this conversation'),
-  entry('usage', 'Info', 'quota, tokens, and cost for this provider'),
+  entry('usage', 'Info', 'quota, tokens, and cost for this provider', { aliases: ['cost'] }),
   entry('doctor', 'Info', 'check installed harnesses and accounts'),
   entry('help', 'Info', 'all commands', { aliases: ['?'] }),
 ];
