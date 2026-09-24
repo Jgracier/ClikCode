@@ -18,10 +18,6 @@ export interface UsageReportTotals {
   costKnown: boolean;
 }
 
-function formatTokens(value: number): string {
-  return value.toLocaleString('en-US');
-}
-
 function tokenCount(invocation: Invocation): number {
   if (invocation.totalTokens !== undefined) return invocation.totalTokens;
   return (invocation.inputTokens ?? 0) + (invocation.outputTokens ?? 0);
@@ -40,8 +36,25 @@ function sumInvocations(invocations: readonly Invocation[]): UsageReportTotals {
   }), { accounts: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0, costUsd: 0, costKnown: false });
 }
 
-function costLine(totals: UsageReportTotals): string {
-  return totals.costKnown ? `$${totals.costUsd.toFixed(4)}` : 'not reported';
+function money(value: number): string {
+  if (value !== 0 && Math.abs(value) < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+/** 7,166,839 becomes 7.2M. A full comma-separated count is what wrapped
+ * mid-number on a phone. */
+function compact(value: number): string {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '-' : '';
+  if (abs >= 1_000_000) {
+    const scaled = abs / 1_000_000;
+    return `${sign}${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '')}M`;
+  }
+  if (abs >= 1_000) {
+    const scaled = abs / 1_000;
+    return `${sign}${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(scaled >= 10 ? 0 : 1).replace(/\.0$/, '')}k`;
+  }
+  return value.toLocaleString('en-US');
 }
 
 function allowance(account: AiHarnessAccount, state: HarnessState, now: number): { label: string; reset?: string } {
@@ -62,22 +75,25 @@ function allowance(account: AiHarnessAccount, state: HarnessState, now: number):
   return { label: 'not reported yet' };
 }
 
-const NAME_W = 22;
-const ALLOW_W = 32;
-const TOKEN_W = 10;
-const COST_W = 10;
-
-function cell(text: string, width: number, align: 'left' | 'right' = 'left'): string {
-  const value = text.length > width ? `${text.slice(0, width - 1)}…` : text;
-  return align === 'right' ? value.padStart(width) : value.padEnd(width);
-}
-
-function accountRow(account: AiHarnessAccount, state: HarnessState, session: HarnessSession, now: number): string {
+function accountLines(account: AiHarnessAccount, state: HarnessState, session: HarnessSession, now: number): string[] {
   const totals = sumInvocations(state.invocations.filter((item) => item.accountId === account.id));
   const quota = allowance(account, state, now);
-  const allowanceText = quota.label === 'not reported yet' ? '—' : quota.reset ? `${quota.label} · ${quota.reset}` : quota.label;
   const name = account.id === session.accountId ? `${account.label} · current` : account.label;
-  return `  ${cell(name, NAME_W)}  ${cell(allowanceText, ALLOW_W)}  ${cell(formatTokens(totals.totalTokens), TOKEN_W, 'right')}  ${cell(totals.costKnown ? costLine(totals) : '—', COST_W, 'right')}`;
+  const figures = [compact(totals.totalTokens)];
+  if (totals.costKnown) figures.push(money(totals.costUsd));
+  return [
+    `  ${name}`,
+    ...(quota.label === 'not reported yet' ? [] : [`  ${quota.label}`]),
+    ...(quota.reset ? [`  ${quota.reset}`] : []),
+    `  ${figures.join(' · ')}`,
+  ];
+}
+
+function splitLines(totals: UsageReportTotals): string[] {
+  const flow = [`${compact(totals.inputTokens)} in`, `${compact(totals.outputTokens)} out`];
+  const lines = [`  ${flow.join(' · ')}`];
+  if (totals.cacheReadTokens > 0) lines.push(`  ${compact(totals.cacheReadTokens)} cached`);
+  return lines;
 }
 
 /** Ids that name this chat's provider. A session stores the catalog id
@@ -102,28 +118,18 @@ export function usageReport(
   const providerInvocations = state.invocations.filter((item) => accountIds.has(item.accountId) || ids.has(item.provider));
   const totals = { ...sumInvocations(providerInvocations), accounts: accounts.length };
   const conversation = sumInvocations(state.invocations.filter((item) => item.sessionId === session.id));
-  const header = `  ${cell('Account', NAME_W)}  ${cell('Allowance', ALLOW_W)}  ${cell('Tokens', TOKEN_W, 'right')}  ${cell('Cost', COST_W, 'right')}`;
-  const providerLine = [
-    `${totals.accounts} ${totals.accounts === 1 ? 'account' : 'accounts'}`,
-    `${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`,
-    `${formatTokens(totals.inputTokens)} in`,
-    `${formatTokens(totals.cacheReadTokens)} cached`,
-    `${formatTokens(totals.outputTokens)} out`,
-    totals.costKnown ? costLine(totals) : null,
-  ].filter((part): part is string => Boolean(part)).join(' · ');
-  const chatLine = [
-    `${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`,
-    `${formatTokens(conversation.totalTokens)} tokens`,
-    conversation.costKnown ? costLine(conversation) : null,
-  ].filter((part): part is string => Boolean(part)).join(' · ');
+  const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, compact(conversation.totalTokens)];
+  if (conversation.costKnown) chatBits.push(money(conversation.costUsd));
   const lines = [
     providerName,
     '',
-    header,
-    ...(accounts.length ? accounts.map((account) => accountRow(account, state, session, now)) : ['  No accounts on this provider']),
+    ...(accounts.length ? accounts.flatMap((account, index) => [...(index ? [''] : []), ...accountLines(account, state, session, now)]) : ['  No accounts on this provider']),
     '',
-    `  ${providerLine}`,
-    `  This chat · ${chatLine}`,
+    ...(accounts.length === 1 ? [] : [`  ${totals.accounts} accounts · ${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`]),
+    ...splitLines(totals),
+    ...(totals.costKnown && accounts.length !== 1 ? [`  ${money(totals.costUsd)}`] : []),
+    '',
+    `  This chat · ${chatBits.join(' · ')}`,
   ];
   return { text: lines.join('\n'), totals };
 }

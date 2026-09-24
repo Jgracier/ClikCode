@@ -50,7 +50,7 @@ describe('/usage report', () => {
     expect(report.totals.outputTokens).toBe(50);
     expect(report.totals.costUsd).toBeCloseTo(0.01);
     expect(report.text).toContain('This chat');
-    expect(report.text).toContain('$0.0100');
+    expect(report.text).toContain('$0.01');
   });
 
   it('follows the harness the chat is on, even when the session has no provider id', () => {
