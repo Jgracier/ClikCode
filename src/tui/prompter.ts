@@ -84,6 +84,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingStartedAt = 0;
   private activityEntries: ActivityEntry[] = [];
   private activeTools = new Map<string, { label: string; category?: ToolCategory; agent?: boolean }>();
+  /** The latest call inside a running sub-agent, keyed by the parent tool id.
+   * Shown as one line under that agent, never as its own row. */
+  private childActivity = new Map<string, string>();
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
@@ -562,6 +565,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   activityEvent(event: HarnessActivityEvent): void {
+    if (event.parentId) {
+      // A sub-agent's own calls stay inside the agent row. They are not
+      // separate messages, and they do not move the status line.
+      if (event.kind === 'tool-start') this.childActivity.set(event.parentId, event.label);
+      else if (event.kind === 'tool-done' || event.kind === 'tool-error') this.childActivity.delete(event.parentId);
+      this.schedulePaint();
+      return;
+    }
     if (event.kind === 'thinking') {
       // Collapsed to the most recent thought, on one live row, never in the
       // transcript. A bare "thinking" label says nothing the spinner does not.
@@ -643,6 +654,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingCursor = 0;
     this.waitingSubmissions = [];
     this.activeTools.clear();
+    this.childActivity.clear();
     this.waitingCancelled = false;
     this.waitingFrame = 0;
     this.waitingStartedAt = Date.now();
@@ -1108,22 +1120,36 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return rows;
     };
     /** The in-flight turn's tools and steering messages, as rows that settle.
-     * A running command or sub-agent is drawn in the live chat (see below),
-     * not here: its row is still mutable, and a mutable row can never enter
-     * scrollback. At the end of the turn a tool that never reported
-     * completion settles anyway, rather than being lost. */
+     * A call that is still running is `done: false`: the same slot in the
+     * live region, spinner instead of the settled glyph, so finishing it
+     * changes the glyph rather than moving the row. At the end of the turn
+     * a tool that never reported completion settles anyway. */
     const turnTools = (ended: boolean): SettlingTool[] => {
+      const frame = this.reducedMotion ? 0 : this.waitingFrame;
       const tools: SettlingTool[] = this.activityEntries
         // An anchor is reused: the next turn's assistant occupies the same
         // index when the previous one was never persisted. The turn that
         // produced an entry is what decides whether it belongs to this one.
         .filter((entry) => entry.anchor === this.activityAnchor && entry.responseOffset !== undefined
           && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor)
-        .filter((entry) => ended || entry.event?.kind !== 'tool-start')
-        .map((entry) => ({
-          id: entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`,
-          done: true, responseOffset: entry.responseOffset, lines: activityRows(entry.lines, entry.event?.category),
-        }));
+        .filter((entry) => !entry.event?.parentId)
+        .map((entry) => {
+          const id = entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`;
+          const running = !ended && entry.event?.kind === 'tool-start';
+          if (!running) {
+            return {
+              id, done: true, responseOffset: entry.responseOffset,
+              lines: activityRows(entry.lines, entry.event?.category),
+            };
+          }
+          const kind = liveWaitKind(entry.event!) ?? 'tool';
+          const child = entry.event?.id ? this.childActivity.get(entry.event.id) : undefined;
+          const row = runningChatLine(entry.event?.label ?? '', frame, kind).trim();
+          return {
+            id, done: false, responseOffset: entry.responseOffset,
+            lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(child)}`] : []), ''],
+          };
+        });
       // One row on each side, matching every other message: a steer is a
       // message the user wrote mid-answer.
       const steerRows = (text: string): string[] => [
@@ -1215,20 +1241,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       });
       emit(step.finished);
       liveConversation.push(...step.live);
-    }
-    // One row per open call, redrawn in place. It sits under the answer that
-    // is still streaming, and it leaves when the call settles into the
-    // transcript. The status line above the composer is not this row.
-    if (this.waitingLabel) {
-      const frame = this.reducedMotion ? 0 : this.waitingFrame;
-      for (const tool of this.activeTools.values()) {
-        const kind = liveWaitKind({
-          kind: 'tool-start', label: tool.label,
-          ...(tool.category ? { category: tool.category } : {}),
-          ...(tool.agent ? { agent: true } : {}),
-        }) ?? 'tool';
-        liveConversation.push('', runningChatLine(tool.label, frame, kind));
-      }
     }
     for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user
