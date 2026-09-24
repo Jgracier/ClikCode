@@ -49,7 +49,7 @@ describe('/usage report', () => {
     expect(report.totals.inputTokens).toBe(150);
     expect(report.totals.outputTokens).toBe(50);
     expect(report.totals.costUsd).toBeCloseTo(0.01);
-    expect(report.text).toContain('This conversation');
+    expect(report.text).toContain('This chat');
     expect(report.text).toContain('$0.0100');
   });
 
