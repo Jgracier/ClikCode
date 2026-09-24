@@ -48,6 +48,6 @@ export function auggieUsageLabel(raw: string): string | undefined {
   const remaining = amount(parsed.amountRemaining);
   if (remaining === undefined) return undefined;
   const unit = typeof parsed.usageUnit === 'string' ? parsed.usageUnit : undefined;
-  if (remaining <= 0) return 'Credits Exhausted';
+  if (remaining <= 0) return 'Out Of Credits';
   return `${money(remaining, unit)} credits left`;
 }
