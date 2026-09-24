@@ -558,7 +558,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // permission mode -- it means "retrieval and non-editing tools only", which
   // is read-only, not approval-prompting, so mapping it would quietly make
   // the harness unable to edit whenever someone chose Ask.
-  { command: 'auggie', provider: 'augment', displayName: 'Augment Auggie', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.augment/commands', '~/.augment/commands'], acp: { argv: ['--acp'], experimental: true }, experimental: true, localAuth: ['oauth', 'vendor-cli'], binary: 'auggie', npmPackage: '@augmentcode/auggie', statusArgv: ['account', 'status'], loginArgv: ['login'], logoutArgv: ['logout'], modelDiscoveryArgv: ['model', 'list'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace-root'], effortValues: ['low', 'medium', 'high'], effortArgvPrefix: ['--reasoning-effort'], turn: { startArgv: ['--print', '--output-format', 'json'], output: 'json', responseFields: ['result', 'response', 'text'], quotaSignals: ['You have run out of usage for', 'run out of usage'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'auggie', provider: 'augment', displayName: 'Augment Auggie', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.augment/commands', '~/.augment/commands'], acp: { argv: ['--acp'], experimental: true }, experimental: true, localAuth: ['oauth', 'vendor-cli'], binary: 'auggie', npmPackage: '@augmentcode/auggie', statusArgv: ['account', 'status'], loginArgv: ['login'], logoutArgv: ['logout'], modelDiscoveryArgv: ['model', 'list'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace-root'], effortValues: ['low', 'medium', 'high'], effortArgvPrefix: ['--reasoning-effort'], imageArgvPrefix: ['--image'], turn: { startArgv: ['--print', '--output-format', 'json'], output: 'json', responseFields: ['result', 'response', 'text'], quotaSignals: ['You have run out of usage for', 'run out of usage'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // Mistral Vibe ships ACP as a SEPARATE executable, `vibe-acp`, with no argv.
   // `vibe --prompt` is its documented programmatic mode (plain text).
   // Read from mistral-vibe on a real install (pip/uv, not npm, so there is no
@@ -738,13 +738,45 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   // MCP surfaces read from each CLI's own --help on a real install. These
   // three support MCP and had no capability entry at all, so ClikCode offered
   // them no /mcp even though the harness has one.
+  //
+  // Options read from `grok --help`: --allow/--deny are permission RULES (the
+  // --allowedTools/--disallowedTools aliases sit beside them), while
+  // --disallowed-tools removes built-in tools outright. --always-approve is
+  // deliberately absent: it is a bypass-permission spelling the permission
+  // selector already owns, and a raw row beside it would disagree with Ask.
   grok: {
-    options: [],
+    options: [
+      value('agent', 'Agent', 'Agent name or definition file used for the session', 'mode', ['--agent']),
+      value('allow', 'Allowed tools', 'Permission allow rules for tools', 'permissions', ['--allow'], 'string-list', { argvStyle: 'repeat' }),
+      value('deny', 'Denied tools', 'Permission deny rules for tools', 'permissions', ['--deny'], 'string-list', { argvStyle: 'repeat' }),
+      value('disallowed-tools', 'Removed built-in tools', 'Built-in tools to remove, comma-separated', 'tools', ['--disallowed-tools'], 'string-list', { argvStyle: 'csv' }),
+      flag('disable-web-search', 'Disable web search', 'Disable web search and web fetch tools', 'tools', ['--disable-web-search']),
+      flag('no-subagents', 'Disable subagents', 'Disable subagent spawning', 'mode', ['--no-subagents']),
+      flag('no-plan', 'Disable plan mode', 'Skip the plan phase before execution', 'mode', ['--no-plan']),
+      value('rules', 'Rules', 'Extra rules appended to the system prompt', 'context', ['--rules'], 'path'),
+      value('sandbox', 'Sandbox', 'Sandbox profile for filesystem and network access', 'safety', ['--sandbox']),
+      value('system-prompt', 'System prompt', 'Override the agent system prompt', 'context', ['--system-prompt-override']),
+      value('tools', 'Built-in tools', 'Built-in tools to allow, comma-separated', 'tools', ['--tools'], 'string-list', { argvStyle: 'csv' }),
+      flag('verbatim', 'Verbatim prompt', 'Send the prompt exactly as given', 'output', ['--verbatim']),
+      value('json-schema', 'Output schema', 'JSON schema constraining the final response', 'output', ['--json-schema']),
+      value('max-turns', 'Maximum turns', 'Maximum number of agent turns', 'safety', ['--max-turns'], 'number'),
+      flag('worktree', 'Managed worktree', 'Start the session in a new Git worktree', 'session', ['--worktree'], { requiresNewSession: true }),
+      flag('fork-session', 'Fork on resume', 'Create a new session id when resuming', 'session', ['--fork-session'], { appliesTo: 'resume', requiresNewSession: true }),
+    ],
     managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , add: { argv: ['mcp', 'add'], shape: 'positional' }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['skills', 'plugins', 'subagents', 'plan mode', 'memory'],
   },
   kimi: {
-    options: [],
+    options: [
+      value('agent', 'Agent', 'Agent profile starting the new session', 'mode', ['--agent'], 'string', { appliesTo: 'start', requiresNewSession: true }),
+      value('agent-file', 'Agent definition file', 'Markdown agent definition loaded for the session', 'mode', ['--agent-file'], 'path', { appliesTo: 'start', requiresNewSession: true }),
+      value('skills-dir', 'Skills directory', 'Load skills from this directory instead of auto-discovery', 'tools', ['--skills-dir'], 'path-list', { argvStyle: 'repeat' }),
+      value('add-dir', 'Additional directories', 'Additional workspace directories for the session', 'context', ['--add-dir'], 'path-list', { argvStyle: 'repeat' }),
+      // No `plan` row here, and not because the flag is missing: Kimi's own
+      // `--help` maps read-only planning to `--plan`, which is already the argv
+      // ClikCode sends for Ask permissions. A second `--plan` row would race
+      // the permission selector for the same flag on the same turn.
+    ],
     // No MCP here: `kimi --help` lists export/fork/provider/session/acp/web/
     // server/rc/login/doctor/vis/install-desktop and mentions mcp nowhere.
     // An earlier entry claimed one on a misreading of that list.
@@ -752,7 +784,11 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     features: ['skills', 'agents', 'ACP'],
   },
   openhands: {
-    options: [],
+    options: [
+      value('file', 'Seed file', 'File whose contents seed the initial conversation', 'context', ['--file'], 'path'),
+      flag('exit-without-confirmation', 'Exit without confirmation', 'Exit even when an action would require confirmation', 'safety', ['--exit-without-confirmation']),
+      flag('override-with-envs', 'Override env vars', 'Read LLM_API_KEY, LLM_BASE_URL and LLM_MODEL from the environment', 'advanced', ['--override-with-envs']),
+    ],
     managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--transport'], localTransport: 'stdio' } } },
     features: ['ACP', 'web UI'],
   },
@@ -911,11 +947,48 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   // this server require authentication?") and waits on stdin, so driving it
   // headlessly hangs the fan-out rather than failing it. Checked live.
   auggie: {
-    options: [],
+    // Options read from `auggie --help`. `-a/--ask` stays a raw row, not a
+    // permission mode: it means "retrieval and non-editing tools only" (the
+    // read-only mode), which is orthogonal to ClikCode's ask/bypass/auto
+    // approval modes. --add-workspace folds into the /add-dir control.
+    options: [
+      value('persona', 'Persona', 'Agent persona used for the session', 'mode', ['--persona']),
+      value('add-dir', 'Additional workspaces', 'Additional workspace directories to index', 'context', ['--add-workspace'], 'path-list', { argvStyle: 'repeat' }),
+      value('rules', 'Additional rules', 'Additional rules file loaded for the session', 'context', ['--rules'], 'path-list', { argvStyle: 'repeat' }),
+      flag('ask', 'Read-only ask mode', 'Retrieval and non-editing tools only', 'mode', ['--ask']),
+      value('max-turns', 'Maximum turns', 'Limit the number of agentic turns', 'safety', ['--max-turns'], 'number'),
+      value('mcp-config', 'MCP configuration', 'MCP server configuration', 'tools', ['--mcp-config'], 'string-list', { argvStyle: 'repeat' }),
+      value('plugin-dir', 'Plugin directories', 'Local plugin marketplace directories', 'tools', ['--plugin-dir'], 'path-list', { argvStyle: 'repeat' }),
+      value('permission', 'Tool permissions', 'Tool permission rules in tool-name:policy form', 'permissions', ['--permission'], 'string-list', { argvStyle: 'repeat' }),
+      value('remove-tool', 'Removed tools', 'Remove a tool by name', 'tools', ['--remove-tool'], 'string-list', { argvStyle: 'repeat' }),
+      value('shell', 'Shell', 'Shell used for commands', 'advanced', ['--shell'], 'enum', { values: ['bash', 'zsh', 'fish', 'sh', 'powershell'] }),
+      value('retry-timeout', 'Retry timeout', 'Timeout for rate-limit retries, in seconds', 'safety', ['--retry-timeout'], 'number'),
+      value('startup-script', 'Startup script', 'Inline startup script run before each command', 'session', ['--startup-script']),
+      value('startup-script-file', 'Startup script file', 'Load the startup script from a file', 'session', ['--startup-script-file'], 'path'),
+      flag('enhance-prompt', 'Enhance prompt', 'Enhance the prompt before sending', 'advanced', ['--enhance-prompt']),
+      flag('show-cost', 'Show cost', 'Show the billing cost summary at the end of the run', 'output', ['--show-cost']),
+      flag('allow-indexing', 'Allow indexing', 'Skip the indexing confirmation screen', 'context', ['--allow-indexing']),
+      flag('wait-for-indexing', 'Wait for indexing', 'Wait for workspace indexing before inference', 'context', ['--wait-for-indexing']),
+      flag('ephemeral', 'Do not save session', 'Do not save conversation history', 'session', ['--dont-save-session'], { requiresNewSession: true }),
+      value('augment-cache-dir', 'Cache directory', 'Cache directory, defaults to ~/.augment', 'advanced', ['--augment-cache-dir'], 'path'),
+    ],
     managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', transportPrefix: ['-t'], urlPrefix: ['-u'], commandPrefix: ['-c'], argsPrefix: ['--args'], argsStyle: 'joined' } } },
   },
   vibe: {
-    options: [],
+    // Options read from `vibe --help`. --smart-approve and --auto-approve are
+    // deliberately absent: they are the permission selector's own spellings,
+    // and a raw row beside Ask/Bypass/Auto would disagree with the selector.
+    options: [
+      value('max-turns', 'Maximum turns', 'Maximum number of assistant turns', 'safety', ['--max-turns'], 'number'),
+      value('max-price', 'Maximum price', 'Maximum cost in dollars for the session', 'safety', ['--max-price'], 'number'),
+      value('max-tokens', 'Maximum tokens', 'Maximum total prompt plus completion tokens', 'safety', ['--max-tokens'], 'number'),
+      value('enabled-tools', 'Enabled tools', 'Enable specific tools; disables all others', 'tools', ['--enabled-tools'], 'string-list', { argvStyle: 'repeat' }),
+      value('disabled-tools', 'Disabled tools', 'Disable tools after enabled-tools filtering', 'tools', ['--disabled-tools'], 'string-list', { argvStyle: 'repeat' }),
+      value('agent', 'Agent', 'Agent used for the session', 'mode', ['--agent']),
+      flag('trust', 'Trust workspace', 'Trust the working directory for this invocation only', 'permissions', ['--trust'], { dangerous: true }),
+      value('add-dir', 'Additional directories', 'Additional working directories for file access', 'context', ['--add-dir'], 'path-list', { argvStyle: 'repeat' }),
+      flag('worktree', 'Managed worktree', 'Run inside a Git worktree under $VIBE_HOME/worktrees', 'session', ['--worktree'], { requiresNewSession: true }),
+    ],
     managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', transportPrefix: ['--transport'], localTransport: 'stdio', urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--arg'], argsStyle: 'repeat-equals', remoteExtraArgv: ['--no-login'] } } },
   },
   hermes: {
@@ -955,6 +1028,28 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     ],
     managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add', '-s', 'user'], shape: 'positional', transportPrefix: ['-t'] } }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Mods', manageArgv: ['mods'] } },
     features: ['skills', 'mods', 'taste learning', 'MCP', 'managed worktrees', 'plan mode'],
+  },
+  // Continue: these are the raw vendor rows for the flags `cn --help` really
+  // lists. --model stays the model selector's own flag (the help's --model
+  // hub-slug spelling is the same flag name) and --prompt is the turn's own
+  // prompt, so neither becomes a row beside its owner. The permission surface
+  // (--readonly / --auto / --allow / --ask / --exclude) overlaps the selector:
+  // only the two tool-list spellings --allow and --ask sit here as rows, and
+  // they are the pieces of that surface the selector does not drive.
+  cn: {
+    options: [
+      value('agent', 'Agent', 'Agent file loaded from the hub', 'mode', ['--agent']),
+      value('config', 'Config', 'Configuration file path or hub slug', 'advanced', ['--config']),
+      value('org', 'Organization', 'Organization slug used in headless mode', 'advanced', ['--org']),
+      flag('verbose', 'Verbose', 'Verbose logging', 'output', ['--verbose']),
+      flag('beta-status-tool', 'Beta status tool', 'Enable the beta status tool', 'tools', ['--beta-status-tool']),
+      flag('beta-subagent-tool', 'Beta subagent tool', 'Enable the beta subagent tool', 'tools', ['--beta-subagent-tool']),
+      value('rules', 'Rules', 'Rules added for the session', 'context', ['--rule'], 'string-list', { argvStyle: 'repeat' }),
+      value('mcp', 'MCP servers', 'MCP servers loaded from the hub as owner/package slugs', 'tools', ['--mcp'], 'string-list', { argvStyle: 'repeat' }),
+      value('allow', 'Allowed tools', 'Tools allowed, overriding default policies', 'permissions', ['--allow'], 'string-list', { argvStyle: 'repeat' }),
+      value('ask', 'Ask about tools', 'Tools that ask for permission before use', 'permissions', ['--ask'], 'string-list', { argvStyle: 'repeat' }),
+      value('exclude', 'Excluded tools', 'Tools excluded from use', 'tools', ['--exclude'], 'string-list', { argvStyle: 'repeat' }),
+    ],
   },
 };
 

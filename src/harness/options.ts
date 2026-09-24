@@ -37,7 +37,7 @@ export const OPTION_NORMALIZATION: Readonly<Record<string, OptionNormalization>>
   'include-directories': common('/add-dir', 'Gemini and Qwen spell --add-dir this way; same concept, same control.'),
 
   // --- already uniform, no dedicated command needed -------------------------
-  worktree: shared('--worktree on all seven, same meaning: run in an isolated managed worktree.'),
+  worktree: shared('--worktree on all nine, same meaning: run in an isolated managed worktree.'),
   'safe-mode': shared('--safe-mode on all four: disable customizations, plugins and MCP.'),
   ephemeral: shared('--ephemeral or --no-session: do not persist the native session.'),
   plan: shared('--plan on all three: start in read-only planning mode.'),
@@ -57,11 +57,20 @@ export const OPTION_NORMALIZATION: Readonly<Record<string, OptionNormalization>>
   share: shared('publish the native session through the vendor.'),
   'max-turns': shared('maximum autonomous turns without user input.'),
   'data-dir': shared('isolated vendor state directory.'),
+  'disallowed-tools': shared('tool patterns that must not run; the deny spelling differs per vendor.'),
+  'disabled-tools': shared('disable selected tool ids or name patterns outright.'),
+  allow: shared('tools or permission rules allowed without extra approval.'),
+  rules: shared('extra rule or instruction entries the agent loads into context.'),
+  verbose: shared('verbose logging emitted by the harness CLI itself.'),
+  'json-schema': shared('a JSON schema constraining the final response.'),
+  file: shared('files loaded into the run, as editable context or a seed file.'),
+  'system-prompt': shared('override the default system prompt; the flag spelling differs.'),
 
   // --- the id coincides; the meaning does not --------------------------------
   provider: vendor('an inference provider INSIDE a harness (Goose, Pi, Cline, Hermes), not ClikCode\'s provider. Promoting it would collide with /provider and mean something else.'),
   agent: vendor('every vendor has "agents" and none of them are the same thing; the value space is vendor-bound even though the flag name is not.'),
   mode: vendor('Antigravity means edit-accepting versus planning; Cursor means plan versus question. Shared name, different enums.'),
+  ask: vendor('Auggie\'s --ask is read-only retrieval mode; Continue\'s --ask names tools the model must ask about. Same flag, opposite shapes.'),
 };
 
 /** The command that owns this option, when one does. */
