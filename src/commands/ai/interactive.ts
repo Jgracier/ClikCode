@@ -645,9 +645,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             if (interruptedSubmission.restoreOnEscape) TERMINAL.active.restoreDraft(interruptedSubmission.text);
           }
           notice = outputStarted ? 'Stopped' : interruptedSubmission.restoreOnEscape ? 'Stopped · draft restored' : 'Stopped';
-        // Running out of quota is an outcome, not a fault: ClikCode's own
-        // "Usage Exhausted · Resets …" is a finished sentence and reads wrong
-        // behind an "Error:" that suggests something broke.
+        // Running out of quota is an outcome, not a fault. "All accounts
+        // exhausted" reads wrong behind an "Error:" that suggests something broke.
         } else if (rl.render) {
           notice = cancelled ? 'Stopped' : isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
         }

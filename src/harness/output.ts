@@ -85,6 +85,11 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
     return;
   }
   if (payload.panel === 'error' && typeof payload.message === 'string') {
+    // Running out of every account is an outcome, not a fault.
+    if (/^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/.test(payload.message.trim())) {
+      write(`\n${payload.message}\n\n`);
+      return;
+    }
     write(`\n${chalk.red('Error:')} ${payload.message}\n\n`);
     return;
   }
