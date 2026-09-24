@@ -10,6 +10,7 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } from '../definition.js';
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
+import { hermesCachedModels } from './hermes-discovery.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -103,7 +104,8 @@ function catalogProfileRoot(harness: AiLocalHarnessDefinition, account?: AiHarne
   return account?.nativeProfile?.path
     ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined)
     ?? (harness.command === 'codex' ? join(homedir(), '.codex')
-      : harness.command === 'claude' ? join(homedir(), '.claude') : undefined);
+      : harness.command === 'claude' ? join(homedir(), '.claude')
+        : harness.command === 'hermes' ? join(homedir(), '.hermes') : undefined);
 }
 
 /** Every file nativeModelCatalogUncached reads, as identities, plus the
@@ -117,6 +119,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     await resolveBinaryPath(harness.binary),
     ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
     ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
+    ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json')] : []),
   ];
   const identities = await Promise.all(files.map(fileIdentity));
   return [...identities, (account?.models ?? []).join(',')].join('|');
@@ -364,6 +367,11 @@ async function nativeModelCatalogUncached(
   // against a live install (`{"default":"stealth/ox-alpha","provider":"nous",...}`).
   if (harness.command === 'hermes') {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
+    if (profileRoot) {
+      try {
+        for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) models.add(model);
+      } catch { /* The cache is optional and only holds providers that have been fetched. */ }
+    }
     try {
       const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, 12_000)) as { default?: unknown };
       if (typeof parsed.default === 'string' && parsed.default.trim()) configured = parsed.default.trim();

@@ -2,6 +2,7 @@
 
 import chalk from 'chalk';
 import { vendorFacingOptions } from '../../harness/options.js';
+import { discoverHermesChoices } from '../../harness/accounts/hermes-discovery.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
@@ -16,6 +17,14 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   if (!harness) throw new Error('Choose a provider first.');
   const manifest = localHarnessCapabilityManifest(harness);
+  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  const discovered = harness.command === 'hermes' ? await discoverHermesChoices(harness, account).catch(() => undefined) : undefined;
+  const options = manifest.options.map((item) => {
+    if (!discovered) return item;
+    if (item.id === 'provider' && discovered.providers.length) return { ...item, kind: 'enum' as const, values: discovered.providers };
+    if (item.id === 'toolsets' && discovered.toolsets.length) return { ...item, values: discovered.toolsets };
+    return item;
+  });
   // Only what no ClikCode command already owns. /model, /permissions, /effort,
   // /cwd and /add-dir were each listed here as a raw vendor row as well, so the
   // same setting had two interfaces that could disagree.
@@ -46,7 +55,7 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
       },
     };
   };
-  const option = await chooseOption(rl, `${harness.displayName} options`, vendorFacingOptions(manifest.options).map((item) => ({
+  const option = await chooseOption(rl, `${harness.displayName} options`, vendorFacingOptions(options).map((item) => ({
     label: item.label,
     detail: [
       `· ${item.description}`,
