@@ -178,6 +178,9 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(openclaw, { prompt: 'hi', nativeSessionId: 'sess-1' })).toEqual([
       'agent', '--local', '--json', '--session-id', 'sess-1', '--message', 'hi',
     ]);
+    expect(nativeHarnessTurnArgv(openclaw, { prompt: 'hi', nativeSessionId: 'agent:main:main' })).toEqual([
+      'agent', '--local', '--json', '--session-key', 'agent:main:main', '--message', 'hi',
+    ]);
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'bypass' })).toContain('--yolo');
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--yolo');
 

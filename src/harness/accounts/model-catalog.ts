@@ -359,6 +359,16 @@ async function nativeModelCatalogUncached(
   // still-open gap in Copilot CLI itself: there is no `copilot models`
   // command, only an interactive picker with no scriptable equivalent.
   // Removed rather than kept as a guess.
+  // Hermes has no `models` command. `hermes model` is an interactive picker.
+  // The configured model is this JSON object's `default` field, confirmed
+  // against a live install (`{"default":"stealth/ox-alpha","provider":"nous",...}`).
+  if (harness.command === 'hermes') {
+    const environment = nativeProfileEnvironment(account?.nativeProfile);
+    try {
+      const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, 12_000)) as { default?: unknown };
+      if (typeof parsed.default === 'string' && parsed.default.trim()) configured = parsed.default.trim();
+    } catch { /* Keep account models. A missing config is not an empty catalog. */ }
+  }
   if (harness.modelDiscoveryArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {

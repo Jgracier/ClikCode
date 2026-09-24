@@ -183,6 +183,10 @@ export interface AiHarnessTurnDefinition {
   startArgv: readonly string[];
   resumeArgv?: readonly string[];
   resumeIdPrefix?: readonly string[];
+  /** Used instead of `resumeIdPrefix` when the stored id is a session key
+   * (`agent:main:main`) rather than the turn's session id. OpenClaw publishes
+   * both, and they are not interchangeable. */
+  resumeKeyPrefix?: readonly string[];
   resumeIdSuffix?: readonly string[];
   createIdPrefix?: readonly string[];
   createIdSuffix?: readonly string[];
@@ -321,6 +325,8 @@ export interface AiLocalHarnessDefinition {
   session?: {
     continueArgv?: readonly string[];
     resumeIdPrefix?: readonly string[];
+    /** See `AiHarnessTurnDefinition.resumeKeyPrefix`. */
+    resumeKeyPrefix?: readonly string[];
     resumeIdSuffix?: readonly string[];
     /** Let ClikCode allocate the UUID before the vendor process starts. */
     createIdPrefix?: readonly string[];
@@ -507,13 +513,20 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'cline', provider: 'cline', displayName: 'Cline CLI', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'cline-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp'], permissionArgv: { auto: ['--auto-approve', 'true'] } }, effortValues: ['none', 'low', 'medium', 'high', 'xhigh'], normalizedPermissionOptionIds: ['auto-approve'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', loginArgv: ['auth'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--auto-approve', 'false'] }, bypass: { argv: ['--auto-approve', 'true'] } }, turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['--id'] } },
   { ...OPENCODE_FORK_BASE, command: 'kilo', provider: 'kilo', displayName: 'Kilo Code CLI', tier: 'more', binary: 'kilo', npmPackage: '@kilocode/cli', permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['--auto'] } } },
   { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'cursor-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.cursor/commands', '~/.cursor/commands'], normalizedPermissionOptionIds: ['auto-review', 'force'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cursor-agent', loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--force'] }, auto: { argv: ['--auto-review'] } }, turn: { promptGuard: 'double-dash', startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
-  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models', 'list'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
-  // OpenClaw is the same shape of product as Hermes (a local agent with its
-  // own state directory, sessions, and a one-shot turn), not a fork of it.
-  // Flags are the ones the current CLI documents: `agent --local` for a turn
-  // that can resume, `sessions --json` for the list, OPENCLAW_STATE_DIR for
-  // the account profile. Not run against a live binary here.
-  { command: 'openclaw', provider: 'openclaw', displayName: 'OpenClaw', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, npmPackage: 'openclaw', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'openclaw', loginArgv: ['onboard'], statusArgv: ['status'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models', 'list'], effortArgvPrefix: ['--thinking'], effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], profileEnv: 'OPENCLAW_STATE_DIR', turn: { startArgv: ['agent', '--local', '--json', '--agent', 'main'], resumeArgv: ['agent', '--local', '--json'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['--message'], output: 'json', responseFields: ['final', 'text', 'result'] }, session: { resumeIdPrefix: ['--session-id'], discoverArgv: ['sessions', '--json', '--limit', '50'], discoverFormat: 'json' } },
+  // Checked against the installed CLI. `hermes model` is an interactive picker
+  // and there is no `models list`; the configured model is `hermes config get
+  // model --json` (`default`). ACP (`hermes acp`) is the turn that streams
+  // tool calls. `chat --quiet` is only the text fallback.
+  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
+  // Same kind of product as Hermes, not a fork. The one-shot turn is
+  // `agent --local --json` (docs.openclaw.ai/cli/agent): it returns one JSON
+  // envelope with `final` and `sessionId`, not a tool stream. `openclaw acp`
+  // does stream tools, but only by forwarding to a running Gateway, so it is
+  // not the turn. Session lists identify a conversation by `key`
+  // (`agent:main:main`); that resumes with `--session-key`. A turn's
+  // `sessionId` resumes with `--session-id`. Login is `onboard` (there is no
+  // argument-free logout). No per-turn permission or image flag is documented.
+  { command: 'openclaw', provider: 'openclaw', displayName: 'OpenClaw', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, npmPackage: 'openclaw', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'openclaw', loginArgv: ['onboard'], statusArgv: ['status'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models', 'list', '--json'], effortArgvPrefix: ['--thinking'], effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], profileEnv: 'OPENCLAW_STATE_DIR', turn: { startArgv: ['agent', '--local', '--json', '--agent', 'main'], resumeArgv: ['agent', '--local', '--json'], resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], promptArgvPrefix: ['--message'], output: 'json', responseFields: ['final', 'text', 'result'] }, session: { resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], discoverArgv: ['sessions', '--json', '--limit', '50'], discoverFormat: 'json' } },
   { command: 'command', provider: 'command-code', displayName: 'Command Code', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['low', 'medium', 'high'], profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cmdc', npmPackage: 'command-code', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'standard'] }, bypass: { argv: ['--yolo'] }, auto: { argv: ['--permission-mode', 'auto-accept'] } }, profileEnv: 'HOME', turn: { startArgv: ['--print', '--output-format', 'json', '--skip-onboarding', '--no-auto-update'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // ---- Added from vendor documentation; none of these binaries was available
   // to run live, so every one-shot contract below is `experimental` and only
@@ -969,14 +982,25 @@ export interface AiNativeHarnessLaunchInput {
   effort?: string | null;
 }
 
+/** A session key (`agent:main:main`) is not a session id. Only a harness that
+ * declares both prefixes gets the key form, and only when the stored value
+ * contains a colon — OpenClaw's ids do not. */
+function sessionSelector(
+  id: string, idPrefix?: readonly string[], keyPrefix?: readonly string[],
+): readonly string[] | undefined {
+  if (keyPrefix && id.includes(':')) return keyPrefix;
+  return idPrefix;
+}
+
 /** Build only argv declared by the adapter; user-controlled values never become shell text. */
 export function nativeHarnessLaunchArgv(harness: AiLocalHarnessDefinition, input: AiNativeHarnessLaunchInput): string[] {
   let argv = [...(harness.launchArgv ?? [])];
   if (input.nativeSessionId) {
     if (input.createdHere && harness.session?.createIdPrefix) {
       argv = [...harness.session.createIdPrefix, input.nativeSessionId, ...(harness.session.createIdSuffix ?? [])];
-    } else if (harness.session?.resumeIdPrefix) {
-      argv = [...harness.session.resumeIdPrefix, input.nativeSessionId, ...(harness.session.resumeIdSuffix ?? [])];
+    } else if (harness.session?.resumeIdPrefix || harness.session?.resumeKeyPrefix) {
+      const prefix = sessionSelector(input.nativeSessionId, harness.session.resumeIdPrefix, harness.session.resumeKeyPrefix);
+      if (prefix) argv = [...prefix, input.nativeSessionId, ...(harness.session.resumeIdSuffix ?? [])];
     }
   } else if (input.launchedBefore && harness.session?.continueArgv) {
     argv = [...harness.session.continueArgv];
@@ -1039,7 +1063,9 @@ export function nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: 
   const resumed = Boolean(input.nativeSessionId && !input.createdHere);
   let argv = [...(resumed && harness.turn.resumeArgv ? harness.turn.resumeArgv : harness.turn.startArgv)];
   if (input.nativeSessionId) {
-    const prefix = input.createdHere ? harness.turn.createIdPrefix : harness.turn.resumeIdPrefix;
+    const prefix = input.createdHere
+      ? harness.turn.createIdPrefix
+      : sessionSelector(input.nativeSessionId, harness.turn.resumeIdPrefix, harness.turn.resumeKeyPrefix);
     if (prefix) argv.push(...prefix, input.nativeSessionId, ...(input.createdHere ? harness.turn.createIdSuffix ?? [] : harness.turn.resumeIdSuffix ?? []));
     else if (resumed && harness.turn.resumeArgv) argv.push(input.nativeSessionId, ...(harness.turn.resumeIdSuffix ?? []));
   }

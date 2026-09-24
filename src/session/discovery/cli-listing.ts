@@ -14,10 +14,8 @@ function splitTableColumns(line: string): string[] {
 
 /** Covers exactly the display formats actually observed from an installed
  * vendor table (opencode: a bare "11:16 AM" clock time for today; Hermes:
- * "yesterday" or a plain "2026-08-21" date) — not a general relative-date
- * parser. Anything else (a weekday name, "3 days ago", an "N ago" style)
- * returns undefined rather than a guessed value, since a wrong sort position
- * is worse than an honest "can't tell how recent this is". */
+ * "yesterday", a plain "2026-08-21" date, or "5d ago") — not a general
+ * relative-date parser. A weekday name or "3 days ago" stays undefined. */
 function parseDiscoveredTimestamp(text: string | undefined): number | undefined {
   if (!text) return undefined;
   const trimmed = text.trim();
@@ -26,6 +24,12 @@ function parseDiscoveredTimestamp(text: string | undefined): number | undefined 
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   if (lower === 'today') return startOfToday.getTime();
   if (lower === 'yesterday') return startOfToday.getTime() - 24 * 60 * 60 * 1000;
+  const ago = /^(\d+)\s*([mhd])\s*ago$/.exec(lower);
+  if (ago) {
+    const amount = Number(ago[1]);
+    const unit = ago[2] === 'm' ? 60 * 1000 : ago[2] === 'h' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    return now.getTime() - amount * unit;
+  }
   if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
     const parsed = Date.parse(trimmed);
     return Number.isNaN(parsed) ? undefined : parsed;
