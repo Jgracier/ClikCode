@@ -54,7 +54,7 @@ import { reportStructuredLine } from '../harness/events/structured.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { localApiKey } from '../daemon/server.js';
 import { appServerThreadOverrides, declaredOptionArgv, normalizeTurnUsage, type NormalizedTurnUsage } from '../harness/transport/options.js';
-import { sessionTranscriptMessages } from './checkpoint.js';
+import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
 
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
@@ -233,7 +233,16 @@ export async function aiSessionSend(
      * drift from itself. */
     const emitResponseDelta = (text: string, mode: 'append' | 'replace' = 'append'): void => {
       const visible = titleStream ? titleStream.push(text, mode) : text;
-      if (visible === undefined) return;
+      // undefined: the title filter is still holding the head back. '': a
+      // replace arrived before that question was settled. Either one used to
+      // be written through, and an empty replace clears the answer already
+      // on screen -- the reply flashed, then was gone.
+      if (!visible) return;
+      // A later snapshot that is not a longer copy of what is already on
+      // screen must not replace it. Vendors resend only the last block; taking
+      // that as the whole answer is what made earlier paragraphs vanish.
+      const kept = mode === 'replace' ? durableAnswer(session.pendingTurn?.response ?? '', visible) : visible;
+      if (mode === 'replace' && kept !== visible) return;
       checkpoint.response(visible, mode);
       prompter?.response(visible, mode);
     };

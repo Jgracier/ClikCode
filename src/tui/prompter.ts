@@ -616,7 +616,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
     onCommand?: (text: string) => Promise<LiveTurnInputResult>,
   ): void {
+    // stopWaiting is also how a finished turn drops its prompt. Calling it
+    // here, a moment after Enter painted that prompt, used to drop the prompt
+    // with it -- the message flashed and was gone until a later snapshot
+    // happened to bring it back. This call is only resetting the previous
+    // turn's waiting state. The prompt belongs to the turn being started.
+    const submittedPrompt = this.submittedPrompt;
     this.stopWaiting(false);
+    this.submittedPrompt = submittedPrompt;
     // A new turn is the reader rejoining the conversation.
     this.alternateScrollback = 0;
     this.liveResponse = '';
