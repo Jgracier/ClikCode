@@ -62,19 +62,22 @@ function allowance(account: AiHarnessAccount, state: HarnessState, now: number):
   return { label: 'not reported yet' };
 }
 
-function accountBlock(account: AiHarnessAccount, state: HarnessState, session: HarnessSession, now: number): string[] {
-  const invocations = state.invocations.filter((item) => item.accountId === account.id);
-  const totals = sumInvocations(invocations);
+const NAME_W = 22;
+const ALLOW_W = 32;
+const TOKEN_W = 10;
+const COST_W = 10;
+
+function cell(text: string, width: number, align: 'left' | 'right' = 'left'): string {
+  const value = text.length > width ? `${text.slice(0, width - 1)}…` : text;
+  return align === 'right' ? value.padStart(width) : value.padEnd(width);
+}
+
+function accountRow(account: AiHarnessAccount, state: HarnessState, session: HarnessSession, now: number): string {
+  const totals = sumInvocations(state.invocations.filter((item) => item.accountId === account.id));
   const quota = allowance(account, state, now);
+  const allowanceText = quota.label === 'not reported yet' ? '—' : quota.reset ? `${quota.label} · ${quota.reset}` : quota.label;
   const name = account.id === session.accountId ? `${account.label} · current` : account.label;
-  return [
-    `  ${name}`,
-    `    allowance  ${quota.label}`,
-    ...(quota.reset ? [`    ${quota.reset}`] : []),
-    `    turns      ${totals.turns}`,
-    `    tokens     ${formatTokens(totals.totalTokens)}  (in ${formatTokens(totals.inputTokens)} · out ${formatTokens(totals.outputTokens)} · cached ${formatTokens(totals.cacheReadTokens)})`,
-    `    cost       ${costLine(totals)}`,
-  ];
+  return `  ${cell(name, NAME_W)}  ${cell(allowanceText, ALLOW_W)}  ${cell(formatTokens(totals.totalTokens), TOKEN_W, 'right')}  ${cell(totals.costKnown ? costLine(totals) : '—', COST_W, 'right')}`;
 }
 
 /** Ids that name this chat's provider. A session stores the catalog id
@@ -99,23 +102,28 @@ export function usageReport(
   const providerInvocations = state.invocations.filter((item) => accountIds.has(item.accountId) || ids.has(item.provider));
   const totals = { ...sumInvocations(providerInvocations), accounts: accounts.length };
   const conversation = sumInvocations(state.invocations.filter((item) => item.sessionId === session.id));
+  const header = `  ${cell('Account', NAME_W)}  ${cell('Allowance', ALLOW_W)}  ${cell('Tokens', TOKEN_W, 'right')}  ${cell('Cost', COST_W, 'right')}`;
+  const providerLine = [
+    `${totals.accounts} ${totals.accounts === 1 ? 'account' : 'accounts'}`,
+    `${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`,
+    `${formatTokens(totals.inputTokens)} in`,
+    `${formatTokens(totals.cacheReadTokens)} cached`,
+    `${formatTokens(totals.outputTokens)} out`,
+    totals.costKnown ? costLine(totals) : null,
+  ].filter((part): part is string => Boolean(part)).join(' · ');
+  const chatLine = [
+    `${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`,
+    `${formatTokens(conversation.totalTokens)} tokens`,
+    conversation.costKnown ? costLine(conversation) : null,
+  ].filter((part): part is string => Boolean(part)).join(' · ');
   const lines = [
     providerName,
-    `  accounts   ${totals.accounts}`,
-    `  turns      ${totals.turns}`,
-    `  input      ${formatTokens(totals.inputTokens)} tokens`,
-    `  cached     ${formatTokens(totals.cacheReadTokens)} tokens`,
-    `  output     ${formatTokens(totals.outputTokens)} tokens`,
-    `  total      ${formatTokens(totals.totalTokens)} tokens`,
-    `  cost       ${costLine(totals)}`,
     '',
-    'Accounts',
-    ...(accounts.length ? accounts.flatMap((account) => accountBlock(account, state, session, now)) : ['  none on this provider']),
+    header,
+    ...(accounts.length ? accounts.map((account) => accountRow(account, state, session, now)) : ['  No accounts on this provider']),
     '',
-    'This conversation',
-    `  turns      ${conversation.turns}`,
-    `  tokens     ${formatTokens(conversation.totalTokens)}`,
-    `  cost       ${costLine(conversation)}`,
+    `  ${providerLine}`,
+    `  This chat · ${chatLine}`,
   ];
   return { text: lines.join('\n'), totals };
 }
