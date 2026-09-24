@@ -83,10 +83,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingLabel = '';
   private waitingStartedAt = 0;
   private activityEntries: ActivityEntry[] = [];
-  private activeTools = new Map<string, { label: string; category?: ToolCategory }>();
-  /** Category of the tool the waiting band is currently reporting, so the
-   * spinner is tinted by what is actually happening. */
-  private waitingCategory?: ToolCategory;
+  private activeTools = new Map<string, { label: string; category?: ToolCategory; agent?: boolean }>();
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
@@ -576,8 +573,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
     const lifecycle = activityLifecyclePhase(this.activeTools, event);
     this.activeTools = lifecycle.activeTools;
-    this.waitingCategory = lifecycle.category;
-    this.phase(lifecycle.phase);
+    // Claude Code and Codex keep the status line on the turn. A tool does
+    // not replace "generating response", and it does not become the spinner's
+    // label. The open call is one row in the live transcript, below.
     this.schedulePaint();
   }
 
@@ -645,7 +643,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingCursor = 0;
     this.waitingSubmissions = [];
     this.activeTools.clear();
-    this.waitingCategory = undefined;
     this.waitingCancelled = false;
     this.waitingFrame = 0;
     this.waitingStartedAt = Date.now();
@@ -842,14 +839,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const split = label.indexOf(' (');
     // One spinner, one motion, for every harness and every tool -- the shape
     // is the standard, the colour is what kind of work is running.
-    const spinner = waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
-    const tinted = this.waitingCategory ? TOOL_CATEGORY_STYLE[this.waitingCategory].paint(spinner) : chalk.cyanBright(spinner);
-    // The same glyph the settled row will carry, so a tool looks like itself
-    // before and after it finishes rather than changing shape on completion.
-    const mark = this.waitingCategory
-      ? ` ${TOOL_CATEGORY_STYLE[this.waitingCategory].paint(TOOL_CATEGORY_STYLE[this.waitingCategory].glyph)}`
-      : '';
-    return `${tinted}${mark}  ${label.slice(0, split)}${chalk.dim(label.slice(split))}`;
+    const spinner = chalk.cyanBright(waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame));
+    return `${spinner}  ${label.slice(0, split)}${chalk.dim(label.slice(split))}`;
   }
 
   private updateWaiting(): void {
@@ -1225,17 +1216,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       emit(step.finished);
       liveConversation.push(...step.live);
     }
-    // Claude Code and Codex keep a moving row in the transcript while a
-    // command or sub-agent is outstanding. The waiting band still says the
-    // turn is running; this says WHAT is being waited on, and it moves
-    // because this region is redrawn on every spinner tick.
+    // One row per open call, redrawn in place. It sits under the answer that
+    // is still streaming, and it leaves when the call settles into the
+    // transcript. The status line above the composer is not this row.
     if (this.waitingLabel) {
-      for (const entry of this.activityEntries) {
-        const event = entry.event;
-        if (entry.anchor !== this.activityAnchor || !event) continue;
-        const kind = liveWaitKind(event);
-        if (!kind) continue;
-        liveConversation.push('', runningChatLine(event.label, this.reducedMotion ? 0 : this.waitingFrame, kind));
+      const frame = this.reducedMotion ? 0 : this.waitingFrame;
+      for (const tool of this.activeTools.values()) {
+        const kind = liveWaitKind({
+          kind: 'tool-start', label: tool.label,
+          ...(tool.category ? { category: tool.category } : {}),
+          ...(tool.agent ? { agent: true } : {}),
+        }) ?? 'tool';
+        liveConversation.push('', runningChatLine(tool.label, frame, kind));
       }
     }
     for (const [queueIndex, message] of queuedMessages.entries()) {
@@ -1283,21 +1275,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
     if (waitingRows) {
-      // What is running right now, one row each, directly above the band.
-      //
-      // Not in the conversation: a row there is anchored at the offset where
-      // the tool STARTED, which pins every later paragraph into the repainted
-      // region and parks the call above the composer for the whole turn --
-      // a regression the live-tools test covers, and caught. The
-      // footer has no anchor, so this costs nothing structurally.
-      //
-      // The band below says only what KIND of work it is; the label lives
-      // here, where there is room for it.
-      for (const tool of this.activeTools.values()) {
-        const style = tool.category ? TOOL_CATEGORY_STYLE[tool.category] : undefined;
-        const mark = style ? `${style.paint(style.glyph)} ` : '';
-        footer.push(`  ${mark}${chalk.dim(visibleSlice(tool.label, Math.max(1, inner - 2)))}`);
-      }
       footer.push('', `  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
     // Usage lives on the upper composer border, mirroring the title on the

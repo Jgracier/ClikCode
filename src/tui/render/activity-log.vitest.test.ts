@@ -23,10 +23,7 @@ describe('the activity log', () => {
   });
 
   it('keeps the spinner on a remaining parallel tool until all tools finish', () => {
-    // The band says what KIND of work is running, not which file: the tool's
-    // own row is drawn in the conversation now, so repeating its label here
-    // said the same thing twice a line apart. Which tool it is still decides
-    // the verb and the colour, which is what this checks.
+    // The verb names the open call. The status line does not show it.
     let state = activityLifecyclePhase(new Map(), { kind: 'tool-start', id: 'one', label: 'read files', category: 'read' });
     state = activityLifecyclePhase(state.activeTools, { kind: 'tool-start', id: 'two', label: 'run tests', category: 'run' });
     expect(state.phase).toBe('running');

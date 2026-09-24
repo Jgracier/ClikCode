@@ -109,11 +109,15 @@ export function rebaseActivityOffsets(
  * nothing at all on a NO_COLOR or piped transcript. */
 
 export function activityLifecyclePhase(
-  activeTools: ReadonlyMap<string, { label: string; category?: ToolCategory }>, event: HarnessActivityEvent,
-): { activeTools: Map<string, { label: string; category?: ToolCategory }>; phase: string; category?: ToolCategory } {
+  activeTools: ReadonlyMap<string, { label: string; category?: ToolCategory; agent?: boolean }>, event: HarnessActivityEvent,
+): { activeTools: Map<string, { label: string; category?: ToolCategory; agent?: boolean }>; phase: string; category?: ToolCategory } {
   const next = new Map(activeTools);
   const key = event.id ?? event.label;
-  if (event.kind === 'tool-start') next.set(key, { label: event.label, ...(event.category ? { category: event.category } : {}) });
+  if (event.kind === 'tool-start') next.set(key, {
+    label: event.label,
+    ...(event.category ? { category: event.category } : {}),
+    ...(event.agent ? { agent: true } : {}),
+  });
   else if (event.kind === 'tool-done' || event.kind === 'tool-error') {
     if (!next.delete(key) && !event.id) {
       const matchingKey = [...next].reverse().find(([, tool]) => tool.label === event.label)?.[0];
@@ -123,12 +127,9 @@ export function activityLifecyclePhase(
   const running = [...next.values()];
   const current = running[running.length - 1];
   if (!current) return { activeTools: next, phase: 'thinking' };
-  // The verb is what the tool is doing, not a generic "running" for
-  // everything. An unclassified tool keeps the word it always had.
-  // The verb alone. The tool's own row is now drawn in the conversation while
-  // it runs, so repeating its label down here said the same thing twice, one
-  // line apart -- and the band is the narrower place to say it, where a long
-  // label crowds out the elapsed counter and the interrupt hint.
+  // The verb names the open call. The status line does not use it: that line
+  // stays the turn ("thinking" / "generating response"). The call itself is
+  // one row in the transcript.
   const verb = current.category ? TOOL_CATEGORY_STYLE[current.category].verb : 'running';
   return {
     activeTools: next, phase: verb,
