@@ -13,11 +13,23 @@ import { defaultTools, mergeTools, toolSpecs } from './tools/registry.js';
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
 import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind, type ModelStepResult, type ModelToolCall, type TokenUsage } from './model-client.js';
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
+import type { ToolCategory } from '../harness/prompter.js';
 import { emptyLedger, recordUsage } from './usage.js';
 
 const DEFAULT_MAX_STEPS = 60;
 const NO_PROGRESS_LIMIT = 3;
 const STREAM_EVENT_INTERVAL_MS = 150;
+
+/** The gateway loop's label is the command or the path, not the tool name,
+ * so the verb table cannot see that a bash call is a command. The class is
+ * the fact that can. */
+function categoryForTool(tool: ToolDefinition | undefined): { category?: ToolCategory } {
+  if (tool?.class === 'exec') return { category: 'run' };
+  if (tool?.class === 'read') return { category: 'read' };
+  if (tool?.class === 'write') return { category: 'edit' };
+  if (tool?.class === 'network') return { category: 'fetch' };
+  return {};
+}
 
 /** Structured classification only: a status code or an explicit kind set by
  * the model client. Message text is never pattern-matched here. */
@@ -113,11 +125,12 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     const tool: ToolDefinition | undefined = tools.find((candidate) => candidate.name === call.name);
     let label = call.name;
     if (tool) { try { label = tool.label(call.args); } catch { /* invalid args: fall back to the name */ } }
-    input.onActivity?.({ kind: 'tool-start', label, id: call.id });
+    const category = categoryForTool(tool);
+    input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category });
     const finish = (result: ToolRunResult): ToolRunResult => {
       const output = eventOutputPreview(result.output);
       input.onActivity?.({
-        kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id,
+        kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
         ...(output ? { output } : {}), ...(result.diff ? { diff: result.diff } : {}),
       });
       return { ...result, output: capHeadTail(result.output).text };
@@ -141,7 +154,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       if (now - lastEmit < STREAM_EVENT_INTERVAL_MS) return;
       lastEmit = now;
       const output = eventOutputPreview(streamed);
-      if (output) input.onActivity?.({ kind: 'tool-start', label, id: call.id, output });
+      if (output) input.onActivity?.({ kind: 'tool-start', label, id: call.id, output, ...category });
     });
 
     const verdict = decidePermission({ tool, args: call.args, mode: input.permissionMode, rules: rulesNow, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });

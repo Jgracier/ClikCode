@@ -57,6 +57,7 @@ export function upsertActivityEvent(
       // A completion frame routinely carries neither the name nor the input
       // the category was derived from. The row keeps what its start knew.
       ...(normalized.category ? {} : prior.event?.category ? { category: prior.event.category } : {}),
+      ...(normalized.agent ? {} : prior.event?.agent ? { agent: prior.event.agent } : {}),
       ...(normalized.diff ? {} : prior.event?.diff ? { diff: prior.event.diff } : {}),
     };
     next[matchIndex] = { ...prior, event: effective, lines: renderActivityLine(effective).map((line) => line.trim()) };

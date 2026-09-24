@@ -36,7 +36,23 @@ export function toolLabel(name: string, input?: Record<string, unknown>): string
   const target = WANTED
     .map((wanted) => Object.entries(input ?? {}).find(([key]) => normalise(key) === wanted)?.[1])
     .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
-  return formatToolRow(name, target);
+  if (target || !isAgentToolName(name)) return formatToolRow(name, target);
+  // A sub-agent's row is the task, not the bare tool name. These keys are
+  // not targets for any other tool: a command still wins above, and a tool
+  // that is not an agent never reads them.
+  const detail = ['description', 'task', 'prompt', 'instructions']
+    .map((wanted) => Object.entries(input ?? {}).find(([key]) => normalise(key) === wanted)?.[1])
+    .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  return formatToolRow(name, detail);
+}
+
+/** Tool names that mean "a sub-agent is working", with separators and case
+ * removed. A shell command is not one of these: callers that already know
+ * the call is a `run` must not ask. */
+export function isAgentToolName(name: string): boolean {
+  const normalized = name.split('(')[0]?.toLowerCase().replace(/[^a-z]/g, '') ?? '';
+  return /^(task|agent|subagent|delegate|spawn|spawnagent|followuptask|collabagent|launchagent|runagent)$/.test(normalized)
+    || normalized.endsWith('subagent');
 }
 
 /** Vendors do not agree on tool names, but they agree on verbs. Matched

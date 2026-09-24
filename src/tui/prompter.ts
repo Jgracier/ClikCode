@@ -40,7 +40,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, listenForTerminalKeys, onKeyBatchEnd, w
 import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { formatTurnUsage } from './render/usage-line.js';
-import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, rightLabeledRule, runningChatLine, waitingSpinnerGlyph } from './render/waiting.js';
+import { composerUsageLabel, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, rightLabeledRule, runningChatLine, waitingSpinnerGlyph } from './render/waiting.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
@@ -64,17 +64,6 @@ const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
-
-/** Commands and sub-agents are the waits that otherwise look like silence.
- * Reads and edits stay in the waiting band; these two get a moving row in
- * the chat until they finish. */
-function liveWaitKind(event: HarnessActivityEvent): 'command' | 'agent' | undefined {
-  if (event.kind !== 'tool-start') return undefined;
-  const name = event.label.split('(')[0]?.toLowerCase().replace(/[^a-z]/g, '') ?? '';
-  if (/^(task|agent|subagent|delegate|spawn|spawnagent)$/.test(name)) return 'agent';
-  if (event.category === 'run') return 'command';
-  return undefined;
-}
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;

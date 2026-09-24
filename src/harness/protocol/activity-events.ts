@@ -286,9 +286,24 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
         ? (item?.status === 'failed' || item?.status === 'error'
           || (typeof item?.exit_code === 'number' && item.exit_code !== 0)
           || (typeof item?.exitCode === 'number' && item.exitCode !== 0) ? 'tool-error' : 'tool-done')
-        : 'tool-start', label: command,
+        : 'tool-start', label: command, category: 'run',
       ...(typeof item?.id === 'string' ? { id: item.id } : {}),
       ...(output?.length ? { output } : {}),
+    };
+  }
+  // A Codex collab call is a sub-agent the turn is waiting on. It matches
+  // the generic tool_call pattern below, which would label it "tool" and
+  // drop the fact that it is an agent.
+  if (/collab_agent/.test(itemType) && /started|completed/.test(type)) {
+    const name = String(item?.tool ?? item?.name ?? 'agent');
+    const detail = typeof item?.prompt === 'string' ? item.prompt
+      : typeof item?.task === 'string' ? item.task
+        : typeof item?.description === 'string' ? item.description : undefined;
+    return {
+      kind: type.endsWith('completed')
+        ? (item?.status === 'failed' || item?.status === 'error' ? 'tool-error' : 'tool-done')
+        : 'tool-start', label: formatToolRow(name, detail), agent: true,
+      ...(typeof item?.id === 'string' ? { id: item.id } : {}),
     };
   }
   if (/file_change/.test(itemType) && /started|completed/.test(type)) {
