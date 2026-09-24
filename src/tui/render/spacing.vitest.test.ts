@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import chalk from 'chalk';
-import { paintTitleRule, paintUsageRule, usageRemainingPercent } from './waiting.js';
+import { composerUsageLabel, paintTitleRule, paintUsageRule, usageRemainingPercent } from './waiting.js';
 
 // Colour is off by default with no TTY, which would make every assertion
 // below vacuously pass. These tests are about which colour is chosen.
@@ -46,6 +46,15 @@ describe('usage reads by state, not as furniture', () => {
     expect(usageRemainingPercent('58% used')).toBe(42);
     expect(usageRemainingPercent('$12 credits left')).toBeUndefined();
     expect(usageRemainingPercent(undefined)).toBeUndefined();
+  });
+
+  it('replaces an empty percentage with the reset, or with out of credits', () => {
+    expect(composerUsageLabel('5h 0% left · weekly 0% left', 'Resets 5:30PM')).toBe('Resets 5:30PM');
+    expect(composerUsageLabel('5h 0% left', 'Resets 7:00PM Saturday Sep 26')).toBe('Resets 7:00PM Saturday Sep 26');
+    expect(composerUsageLabel('Credits Exhausted')).toBe('Out Of Credits');
+    expect(composerUsageLabel('5h 42% left')).toBe('5h 42% left');
+    expect(colourOf(paintUsageRule(40, 'Resets 5:30PM'), 'Resets 5:30PM')).toBe('31');
+    expect(colourOf(paintUsageRule(40, 'Out Of Credits'), 'Out Of Credits')).toBe('31');
   });
 
   it('stays unpainted until the allowance is actually gone', () => {

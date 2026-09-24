@@ -40,7 +40,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, listenForTerminalKeys, onKeyBatchEnd, w
 import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { formatTurnUsage } from './render/usage-line.js';
-import { liveConversationLines, paintTitleRule, paintUsageRule, rightLabeledRule, waitingSpinnerGlyph } from './render/waiting.js';
+import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, rightLabeledRule, waitingSpinnerGlyph } from './render/waiting.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
@@ -1281,17 +1281,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       footer.push('', `  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
-    // When a window is exhausted, the harness-reported reset time sits
-    // directly above the usage rule it describes.
-    if (this.usageResetLabel) {
-      footer.push(`  ${chalk.dim(visibleSlice(this.usageResetLabel, Math.max(1, width - 2)))}`);
-    }
     // Usage lives on the upper composer border, mirroring the title on the
-    // lower border. Keeping it out of the provider/model/directory row makes
-    // the two quota windows easy to scan without adding another footer row.
-    // Usage is information, not furniture: it reads by state, so running low
-    // is visible without reading the number. The rule itself stays dim.
-    footer.push(paintUsageRule(rowWidth, this.usageLabel));
+    // lower border. A spent window replaces the percentage with the reset
+    // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
+    footer.push(paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel)));
     const composerStart = footer.length;
     for (const [index, row] of composerRows.rows.entries()) {
       // The caret is drawn in the same foreground as the rules and the text

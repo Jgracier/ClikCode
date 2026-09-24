@@ -83,6 +83,26 @@ export function paintLabeledRule(
  * asks for something to be done. */
 const RULE_LABEL = (text: string): string => text;
 
+/** What the composer rule says once the allowance is gone.
+ *
+ * A window that refills says when, in the same words as everywhere else
+ * (`Resets 5:34PM`, or with the weekday and date when that is not today).
+ * A balance that does not refill has no time to give, so it says so.
+ * A percentage at zero is not shown: the reset, or the credit line, is the
+ * whole message. */
+export function composerUsageLabel(label?: string, resetLabel?: string): string | undefined {
+  if (resetLabel) return resetLabel;
+  if (label && /credits exhausted|out of credits/i.test(label)) return 'Out Of Credits';
+  return label;
+}
+
+function usageLabelIsSpent(label?: string): boolean {
+  if (!label) return false;
+  if (/^resets\b/i.test(label) || label === 'Out Of Credits') return true;
+  const remaining = usageRemainingPercent(label);
+  return /exhausted/i.test(label) || (remaining !== undefined && remaining <= 0);
+}
+
 /** Usage reads by state, but only one state is worth shouting about.
  *
  * Running out is red. Everything else is the terminal's own foreground, the
@@ -90,10 +110,7 @@ const RULE_LABEL = (text: string): string => text;
  * to say so, and spending one on it only makes the one that matters quieter
  * by comparison. */
 export function paintUsageRule(width: number, label?: string): string {
-  const remaining = usageRemainingPercent(label);
-  const spent = label !== undefined
-    && (/exhausted/i.test(label) || (remaining !== undefined && remaining <= 0));
-  return paintLabeledRule(width, label, spent ? chalk.red : (text) => text);
+  return paintLabeledRule(width, label, usageLabelIsSpent(label) ? chalk.red : (text) => text);
 }
 
 /** The chat's own name, on the rule below the composer. */
