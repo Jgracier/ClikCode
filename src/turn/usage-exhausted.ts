@@ -6,19 +6,13 @@
  * whatever the vendor's own error happened to be ("Payment Required",
  * "usage limit reached", "quota exhausted").
  *
- * Three forms, and only three:
+ * One sentence, for every harness:
  *
- *   Credits Exhausted
- *   Usage Exhausted · Resets 5:34PM
- *   Usage Exhausted · Resets 5:34PM Friday Sep 25
+ *   All accounts exhausted
  *
- * A windowed plan comes back on its own, so the useful thing to say is when.
- * The date is included whenever the reset is not today -- decided by the
- * calendar day rather than the window's name, because a five-hour window that
- * rolls over after midnight needs its date as much as a weekly one does, and
- * "Resets 7:00PM" on a Monday is a lie about a window that returns Saturday.
- * A balance does not come back by itself, so there is nothing to wait for and
- * the wording says so instead.
+ * The composer rule already says when a window comes back, and "Out Of Credits"
+ * for a balance. This line only says that none of the accounts left can take
+ * the turn. It is not an error.
  */
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { AccountUsageReading, UsageWindow } from '../harness/accounts/usage-reading.js';
@@ -59,21 +53,20 @@ export function quotaResetPhrase(reset: Date, now: number = Date.now()): string 
 }
 
 /** The one sentence shown when every account has been tried and none has
- * quota left. */
+ * quota left. The same words for every harness. The reset time, when there
+ * is one, stays on the composer rule rather than in this sentence. */
 export function usageExhaustedMessage(
-  accounts: readonly AiHarnessAccount[], now: number = Date.now(),
+  _accounts: readonly AiHarnessAccount[], _now: number = Date.now(),
 ): string {
-  const reset = nextQuotaReset(accounts, now);
-  return reset ? `Usage Exhausted · Resets ${quotaResetPhrase(reset, now)}` : 'Credits Exhausted';
+  return 'All accounts exhausted';
 }
 
 /** Whether a failure message is one ClikCode composed itself, rather than a
  * vendor's or a crash's.
  *
- * These are finished sentences stating what happened -- "Usage Exhausted ·
- * Resets 5:34PM". Prefixing them with "Error:" reads as though something
- * broke, when running out of quota is an ordinary outcome the user is simply
- * being told about. */
+ * Prefixing this with "Error:" reads as though something broke, when running
+ * out of quota is an ordinary outcome. Older wordings are still recognized
+ * so a message already on screen is not relabeled. */
 export function isUsageExhaustedMessage(message: string): boolean {
-  return /^(?:Usage Exhausted|Credits Exhausted)\b/.test(message.trim());
+  return /^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/.test(message.trim());
 }

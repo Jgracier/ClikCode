@@ -8,33 +8,12 @@ const account = (windows: Array<{ name: string; usedPct: number; resetsAt?: stri
   ({ id: 'a', provider: 'p', label: 'me', usage: { at: '', windows } } as unknown as AiHarnessAccount);
 
 describe('being out of quota', () => {
-  it('gives the time when the window comes back today', () => {
-    const message = usageExhaustedMessage(
-      [account([{ name: '5h', usedPct: 100, resetsAt: new Date(Date.parse('2026-09-21T16:50:00')).toISOString() }])], NOW);
-    expect(message).toBe('Usage Exhausted · Resets 4:50PM');
-  });
-
-  it('gives the date as well when it does not', () => {
-    // A weekly window on a Monday that returns on Saturday: the time alone
-    // would read as "tonight".
-    const message = usageExhaustedMessage(
-      [account([{ name: 'weekly', usedPct: 100, resetsAt: new Date(Date.parse('2026-09-26T19:00:00')).toISOString() }])], NOW);
-    expect(message).toBe('Usage Exhausted · Resets 7:00PM Saturday Sep 26');
-  });
-
-  it('asks for credits when nothing on offer ever comes back', () => {
-    // A spent balance, or a vendor that reports no window at all -- which is
-    // exactly what Grok Build's 402 is.
-    expect(usageExhaustedMessage([account([])], NOW)).toBe('Credits Exhausted');
-    expect(usageExhaustedMessage([], NOW)).toBe('Credits Exhausted');
-  });
-
-  it('takes the soonest reset across every account that was tried', () => {
-    const message = usageExhaustedMessage([
-      account([{ name: 'weekly', usedPct: 100, resetsAt: new Date(Date.parse('2026-09-26T19:00:00')).toISOString() }]),
-      account([{ name: '5h', usedPct: 100, resetsAt: new Date(Date.parse('2026-09-21T15:30:00')).toISOString() }]),
-    ], NOW);
-    expect(message).toBe('Usage Exhausted · Resets 3:30PM');
+  it('says the same thing for every harness, with no reset and no error', () => {
+    expect(usageExhaustedMessage(
+      [account([{ name: '5h', usedPct: 100, resetsAt: new Date(Date.parse('2026-09-21T16:50:00')).toISOString() }])], NOW,
+    )).toBe('All accounts exhausted');
+    expect(usageExhaustedMessage([account([])], NOW)).toBe('All accounts exhausted');
+    expect(usageExhaustedMessage([], NOW)).toBe('All accounts exhausted');
   });
 
   it('ignores a window that still has room, and one already past', () => {
@@ -74,6 +53,7 @@ describe('a vendor error that says it in its own words', () => {
 
 describe('isUsageExhaustedMessage', () => {
   it('recognises both forms ClikCode composes', () => {
+    expect(isUsageExhaustedMessage('All accounts exhausted')).toBe(true);
     expect(isUsageExhaustedMessage('Credits Exhausted')).toBe(true);
     expect(isUsageExhaustedMessage('Usage Exhausted · Resets 5:34PM')).toBe(true);
   });
