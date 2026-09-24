@@ -61,6 +61,11 @@ export const HARNESS_INSTALL_HINTS: Readonly<Record<string, HarnessInstallHint>>
     docs: 'https://hermes-agent.nousresearch.com/docs/getting-started/installation',
     source: 'https://hermes-agent.nousresearch.com/docs/getting-started/installation',
   },
+  openclaw: {
+    command: 'npm install -g openclaw@latest',
+    docs: 'https://docs.openclaw.ai/install',
+    source: 'https://docs.openclaw.ai/install',
+  },
   // Kiro publishes downloads, not a scriptable installer: its own install page
   // lists supported platforms and links a downloads page, with no command to
   // quote. Antigravity's CLI ships with the Antigravity editor rather than
