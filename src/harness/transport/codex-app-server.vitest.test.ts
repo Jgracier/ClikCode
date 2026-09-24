@@ -4,10 +4,16 @@ import { codexActivityForItem, codexPermissionSettings, codexSteerParams, comple
 describe('Codex app-server protocol mapping', () => {
   it('preserves native ids so tool completion updates the start row', () => {
     const item = { type: 'commandExecution', id: 'tool-1', command: 'git status' };
-    expect(codexActivityForItem(item, false)).toEqual({ kind: 'tool-start', label: 'git status', id: 'tool-1' });
-    expect(codexActivityForItem(item, true)).toEqual({ kind: 'tool-done', label: 'git status', id: 'tool-1' });
+    expect(codexActivityForItem(item, false)).toEqual({ kind: 'tool-start', label: 'git status', category: 'run', id: 'tool-1' });
+    expect(codexActivityForItem(item, true)).toEqual({ kind: 'tool-done', label: 'git status', category: 'run', id: 'tool-1' });
     expect(codexActivityForItem({ ...item, exitCode: 1 }, true))
-      .toEqual({ kind: 'tool-error', label: 'git status', id: 'tool-1' });
+      .toEqual({ kind: 'tool-error', label: 'git status', category: 'run', id: 'tool-1' });
+  });
+
+  it('marks a collab call as a sub-agent the chat can show while it runs', () => {
+    expect(codexActivityForItem({
+      type: 'collabAgentToolCall', id: 'agent-1', tool: 'spawn_agent', prompt: 'review the tests',
+    }, false)).toEqual({ kind: 'tool-start', label: 'spawn_agent(review the tests)', agent: true, id: 'agent-1' });
   });
 
   it('maps Ask, Auto, and Bypass without weakening their approval policy', () => {

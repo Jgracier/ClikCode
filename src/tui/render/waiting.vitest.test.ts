@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './width';
-import { liveConversationLines, rightLabeledRule, runningChatLine, waitingSpinnerFrame, waitingSpinnerGlyph } from './waiting';
+import { liveConversationLines, liveWaitKind, rightLabeledRule, runningChatLine, waitingSpinnerFrame, waitingSpinnerGlyph } from './waiting';
 
 describe('the waiting band', () => {
   it('packs four animation phases of a logical 4x4 grid into two Braille cells', () => {
@@ -14,6 +14,17 @@ describe('the waiting band', () => {
     expect(runningChatLine('Bash(npm test)', 0, 'command')).toContain('running Bash(npm test)');
     expect(runningChatLine('Task(review)', 0, 'agent')).toContain('agent Task(review)');
     expect(runningChatLine('Bash(npm test)', 0, 'command')).not.toBe(runningChatLine('Bash(npm test)', 1, 'command'));
+  });
+
+  it('shows a chat row for a command or a sub-agent and for nothing else', () => {
+    expect(liveWaitKind({ kind: 'tool-start', label: 'git status', category: 'run' })).toBe('command');
+    expect(liveWaitKind({ kind: 'tool-start', label: 'Task(review the tests)' })).toBe('agent');
+    expect(liveWaitKind({ kind: 'tool-start', label: 'followup_task(check the build)' })).toBe('agent');
+    expect(liveWaitKind({ kind: 'tool-start', label: 'Task: review the tests', agent: true })).toBe('agent');
+    // A shell command whose text is the word "task" is still a command.
+    expect(liveWaitKind({ kind: 'tool-start', label: 'task', category: 'run' })).toBe('command');
+    expect(liveWaitKind({ kind: 'tool-start', label: 'Read(src/app.ts)', category: 'read' })).toBeUndefined();
+    expect(liveWaitKind({ kind: 'tool-done', label: 'git status', category: 'run' })).toBeUndefined();
   });
 
   it('keeps real live content in the final row on compact mobile viewports', () => {

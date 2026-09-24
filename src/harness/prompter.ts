@@ -17,6 +17,10 @@ export interface HarnessActivityEvent {
    * catalogued renders exactly as it did before this existed, rather than
    * being assigned a plausible-looking category. */
   category?: ToolCategory;
+  /** The turn is blocked on a sub-agent, not on a read or a shell command.
+   * Set from the envelope (Codex collab calls, an agent-shaped tool name)
+   * rather than guessed from prose. */
+  agent?: boolean;
   /** Vendor tool-call identity, when emitted, lets the TUI update an in-flight
    * row instead of appending a detached completion at the bottom. */
   id?: string;

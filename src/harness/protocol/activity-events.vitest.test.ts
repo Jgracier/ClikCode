@@ -9,7 +9,7 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'call-1', type: 'command_execution', command: 'git status', aggregated_output: 'one\ntwo\nthree\nfour' },
     }));
-    expect(event).toEqual({ kind: 'tool-done', label: 'git status', id: 'call-1', output: ['one', 'two', 'three', '… 1 more line'] });
+    expect(event).toEqual({ kind: 'tool-done', label: 'git status', category: 'run', id: 'call-1', output: ['one', 'two', 'three', '… 1 more line'] });
     // Summary plus the captured output: a row shows enough of the command's
     // result to recognise it without opening anything.
     expect(renderActivityLine(event!)).toHaveLength(5);
@@ -20,7 +20,7 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'call-failed', type: 'command_execution', command: 'pnpm test', exit_code: 1 },
     }));
-    expect(event).toEqual({ kind: 'tool-error', label: 'pnpm test', id: 'call-failed' });
+    expect(event).toEqual({ kind: 'tool-error', label: 'pnpm test', category: 'run', id: 'call-failed' });
     expect(renderActivityLine(event!)[0]!.replace(/\u001b\[[0-9;]*m/g, '')).toContain('failed');
   });
 
@@ -64,6 +64,14 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'call-3', type: 'command_execution', command: 'inspect', aggregated_output: '{"ok":true}' },
     }));
-    expect(event).toEqual({ kind: 'tool-done', label: 'inspect', id: 'call-3' });
+    expect(event).toEqual({ kind: 'tool-done', label: 'inspect', category: 'run', id: 'call-3' });
+  });
+
+  it('treats a Codex collab call as a sub-agent rather than an unnamed tool', () => {
+    const event = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.started',
+      item: { id: 'agent-1', type: 'collab_agent_tool_call', tool: 'followup_task', prompt: 'check the build' },
+    }));
+    expect(event).toEqual({ kind: 'tool-start', label: 'followup_task(check the build)', agent: true, id: 'agent-1' });
   });
 });

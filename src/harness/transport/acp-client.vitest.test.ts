@@ -5,11 +5,11 @@ describe('shared ACP adapter contract', () => {
   it('normalizes agent prose and tool lifecycle events', () => {
     expect(acpResponseDelta({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } })).toBe('hello');
     expect(acpActivityEvent({ sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Read config', status: 'pending' }))
-      .toEqual({ kind: 'tool-start', id: 'call-1', label: 'Read config' });
+      .toEqual({ kind: 'tool-start', id: 'call-1', label: 'Read config', category: 'read' });
     expect(acpActivityEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', title: 'Read config', status: 'completed' }))
-      .toEqual({ kind: 'tool-done', id: 'call-1', label: 'Read config' });
+      .toEqual({ kind: 'tool-done', id: 'call-1', label: 'Read config', category: 'read' });
     expect(acpActivityEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', title: 'Read config', status: 'failed' }))
-      .toEqual({ kind: 'tool-error', id: 'call-1', label: 'Read config' });
+      .toEqual({ kind: 'tool-error', id: 'call-1', label: 'Read config', category: 'read' });
   });
 
   it('preserves ACP diff content in the provider-neutral activity event', () => {
@@ -35,7 +35,19 @@ describe('shared ACP adapter contract', () => {
     expect(acpActivityEvent({
       sessionUpdate: 'tool_call_update', toolCallId: 'c', title: 'Run', status: 'completed',
       content: [{ type: 'content', content: { type: 'text', text: 'ok\n2 passed\n' } }],
-    })).toEqual({ kind: 'tool-done', id: 'c', label: 'Run', output: ['ok', '2 passed'] });
+    })).toEqual({ kind: 'tool-done', id: 'c', label: 'Run', category: 'run', output: ['ok', '2 passed'] });
+  });
+
+  it('classifies a command or a sub-agent from the ACP kind, input, or title', () => {
+    expect(acpActivityEvent({
+      sessionUpdate: 'tool_call', toolCallId: 'sh', title: 'Execute', kind: 'execute', status: 'in_progress',
+    })).toMatchObject({ kind: 'tool-start', category: 'run' });
+    expect(acpActivityEvent({
+      sessionUpdate: 'tool_call', toolCallId: 'sh2', title: 'Shell', status: 'pending', rawInput: { command: 'git status' },
+    })).toMatchObject({ kind: 'tool-start', category: 'run' });
+    expect(acpActivityEvent({
+      sessionUpdate: 'tool_call', toolCallId: 'ag', title: 'Task: review the tests', status: 'in_progress',
+    })).toMatchObject({ kind: 'tool-start', agent: true });
   });
 
   it('describes what is being approved', () => {

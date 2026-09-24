@@ -4,6 +4,7 @@ import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
+import { categoryOf, formatToolRow } from '../protocol/tools.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -87,13 +88,25 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
   if (type === 'commandExecution') {
     const aggregated = completed && typeof item.aggregatedOutput === 'string' ? outputTail(item.aggregatedOutput) : undefined;
     return {
-      kind: completed ? completedKind : 'tool-start', label: codexCommandText(item.command) ?? 'command', ...(id ? { id } : {}),
+      kind: completed ? completedKind : 'tool-start', label: codexCommandText(item.command) ?? 'command', category: 'run', ...(id ? { id } : {}),
       ...(aggregated?.length ? { output: aggregated } : {}),
     };
   }
   if (type === 'fileChange') return { kind: completed ? completedKind : 'tool-start', label: 'files updated', ...(id ? { id } : {}) };
-  if (type === 'mcpToolCall' || type === 'dynamicToolCall' || type === 'collabAgentToolCall') {
-    return { kind: completed ? completedKind : 'tool-start', label: String(item.tool ?? item.server ?? 'tool'), ...(id ? { id } : {}) };
+  if (type === 'collabAgentToolCall') {
+    const tool = String(item.tool ?? item.name ?? 'agent');
+    const detail = typeof item.prompt === 'string' ? item.prompt
+      : typeof item.task === 'string' ? item.task
+        : typeof item.description === 'string' ? item.description : undefined;
+    return {
+      kind: completed ? completedKind : 'tool-start', label: formatToolRow(tool, detail), agent: true, ...(id ? { id } : {}),
+    };
+  }
+  if (type === 'mcpToolCall' || type === 'dynamicToolCall') {
+    const name = String(item.tool ?? item.server ?? item.name ?? 'tool');
+    return {
+      kind: completed ? completedKind : 'tool-start', label: name, ...categoryOf(name, undefined, 'codex'), ...(id ? { id } : {}),
+    };
   }
   if (type === 'webSearch') return { kind: completed ? completedKind : 'tool-start', label: 'web search', ...(id ? { id } : {}) };
   if (type === 'reasoning' && completed) {
@@ -456,9 +469,14 @@ class CodexSessionImpl implements CodexSession {
     if (now - entry.emittedAt < OUTPUT_EMIT_INTERVAL_MS) return;
     entry.emittedAt = now;
     const item = turn.items.get(itemId);
-    const label = item ? codexActivityForItem(item, false)?.label ?? 'command' : 'command';
+    const activity = item ? codexActivityForItem(item, false) : undefined;
+    const label = activity?.label ?? 'command';
     turn.sawActivity = true;
-    turn.input.onActivity?.({ kind: 'tool-start', label, id: itemId, output: outputTail(entry.text) });
+    turn.input.onActivity?.({
+      kind: 'tool-start', label, id: itemId, output: outputTail(entry.text),
+      ...(activity?.category ? { category: activity.category } : {}),
+      ...(activity?.agent ? { agent: activity.agent } : {}),
+    });
   }
 }
 

@@ -2,7 +2,21 @@
  * conversation lines are still live. */
 
 import chalk from 'chalk';
+import type { HarnessActivityEvent } from '../../harness/prompter.js';
+import { isAgentToolName } from '../../harness/protocol/tools.js';
 import { terminalCellWidth, visibleSlice } from './width.js';
+
+/** Whether a still-open tool call is a command or a sub-agent. Reads and
+ * edits stay in the waiting band; these two get a moving row in the chat.
+ * A call already classified as a shell command stays a command even when
+ * its text happens to start with an agent-shaped word. */
+export function liveWaitKind(event: HarnessActivityEvent): 'command' | 'agent' | undefined {
+  if (event.kind !== 'tool-start') return undefined;
+  if (event.agent) return 'agent';
+  if (event.category !== 'run' && isAgentToolName(event.label)) return 'agent';
+  if (event.category === 'run') return 'command';
+  return undefined;
+}
 
 /** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
  * the same compact shape without changing its dimensions. */

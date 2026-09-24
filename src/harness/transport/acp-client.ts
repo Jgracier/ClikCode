@@ -6,8 +6,9 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import type { AiHarnessPermissionMode } from '../definition.js';
-import type { HarnessActivityEvent } from '../prompter.js';
+import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
+import { categoryOf, isAgentToolName } from '../protocol/tools.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 
@@ -99,13 +100,36 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
     .flatMap((entry) => entry?.type === 'content' && entry.content?.type === 'text' && typeof entry.content.text === 'string' ? [entry.content.text as string] : [])
     .join('\n');
   const output = outputText.trim() ? outputText.replace(/\r?\n$/, '').split(/\r?\n/).slice(-OUTPUT_LINE_CAP) : undefined;
+  const classified = acpToolClass(update);
   return {
     kind: status === 'failed' ? 'tool-error' : completed ? 'tool-done' : 'tool-start',
     label: String(update.title ?? update.name ?? 'tool'),
+    ...classified,
     ...(typeof update.toolCallId === 'string' ? { id: update.toolCallId } : {}),
     ...(output ? { output } : {}),
     ...(diff ? { diff } : {}),
   };
+}
+
+/** ACP publishes a tool kind (`execute`, `read`, …) and, when the agent
+ * sends it, the raw input. Titles are a sentence ("Read config"), so only
+ * the first word is a tool name. Anything that matches neither stays
+ * unclassified. */
+const ACP_KIND_CATEGORY: Readonly<Record<string, ToolCategory>> = {
+  execute: 'run', read: 'read', edit: 'edit', delete: 'edit', move: 'edit', search: 'search', fetch: 'fetch',
+};
+
+function acpToolClass(update: Json): { category?: ToolCategory; agent?: true } {
+  const raw = update.rawInput && typeof update.rawInput === 'object' ? update.rawInput as Record<string, unknown> : undefined;
+  const titled = String(update.name ?? update.title ?? '');
+  const head = titled.split(/[\s:(]/, 1)[0] || titled;
+  const fromKind = ACP_KIND_CATEGORY[String(update.kind ?? '').toLowerCase()];
+  const command = Array.isArray(raw?.command) ? raw.command.map(String).join(' ')
+    : typeof raw?.command === 'string' ? raw.command
+      : typeof raw?.cmd === 'string' ? raw.cmd : '';
+  const category = fromKind ?? (command.trim() ? 'run' as const : categoryOf(head, raw).category);
+  const agent = isAgentToolName(head) || isAgentToolName(String(update.tool ?? '')) ? true as const : undefined;
+  return { ...(category ? { category } : {}), ...(agent ? { agent } : {}) };
 }
 
 function acpPlanEntries(update: Json): HarnessPlanEntry[] | undefined {
