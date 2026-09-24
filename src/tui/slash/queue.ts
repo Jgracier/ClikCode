@@ -31,6 +31,7 @@ import { expandHomePath } from '../../session/attachments.js';
 import { routeSlashInput, slashRouteAppliesDuringTurn, type SlashRouteContext } from './registry.js';
 import { aiSessionCommand } from './handlers.js';
 import { sessionHarness, slashRouteContextFor } from './context.js';
+import { isShellCommandLine } from '../../commands/ai/shell-run.js';
 
 /** Whether this line is ClikCode's own command, or words for the model.
  *
@@ -61,10 +62,20 @@ export async function commandDuringTurn(sessionId: string, line: string): Promis
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
+  // A `!` line is ClikCode's own command too: it is a shell command for the
+  // composer, never conversation to steer at the running turn. Queued as a
+  // command so the interactive loop runs it at the turn boundary the same way
+  // it runs a slash command typed mid-turn.
+  const submission = { id: randomUUID(), text: line, submittedAt: new Date().toISOString() };
+  if (isShellCommandLine(line)) {
+    const queued = { ...submission, kind: 'command' as const };
+    enqueueSessionTurn(session, queued, queued.submittedAt);
+    await writeState(state);
+    return { disposition: 'command', submission: queued };
+  }
   const route = routeSlashInput(line, slashRouteContextFor(
     session, sessionHarness(session), (path) => existsSync(expandHomePath(path)),
   ));
-  const submission = { id: randomUUID(), text: line, submittedAt: new Date().toISOString() };
   if (slashRouteAppliesDuringTurn(route)) {
     // Straight through to the same handler the composer would reach between
     // turns. It reads state itself, so nothing here writes first.

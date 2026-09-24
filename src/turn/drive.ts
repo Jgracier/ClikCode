@@ -44,6 +44,7 @@ import { writeState } from '../session/state/write.js';
 import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
+import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
@@ -79,6 +80,17 @@ export async function aiSessionSend(
   if (!text) throw new Error('prompt is required');
   const prepared = await prepareAttachments(session.attachments ?? []);
   let turnText = `${text}${prepared.textContext}`;
+  // A resumed native-harness thread never replays ClikCode's own transcript
+  // (see failoverPrompt and the attachment envelope: the vendor process keeps
+  // its own session and ClikCode's `messages` are not passed back in). So `!`
+  // output has to ride in like an attachment -- injected here and cleared
+  // beside session.attachments, so a resumed vendor still learns what the
+  // shell printed. Fresh native threads and the direct/gateway routes replay
+  // session.messages and already carry the note; gating on resumed-only keeps
+  // it from being delivered twice to them.
+  if (session.nativeSessionId && !session.nativeSessionPreallocated) {
+    turnText += shellContextBlock(session.shellNotes ?? []);
+  }
   const startedAt = Date.now();
 
   // Auth and transport are separate questions, and conflating them was a real
@@ -706,6 +718,7 @@ export async function aiSessionSend(
         continue;
       }
       session.attachments = [];
+      session.shellNotes = [];
       // Unconditional: extracting from text with no marker returns it
       // unchanged, and the one thing that must never happen is a marker
       // reaching the screen because the stream that would have stripped it
@@ -864,6 +877,7 @@ export async function aiSessionSend(
   }
   account.verification = undefined;
   session.attachments = [];
+  session.shellNotes = [];
   const answer = extractSessionTitle(turn.text);
   await checkpoint.complete(answer.text);
   await nameSession(session, { title: titleStream?.title ?? answer.title });
@@ -939,6 +953,7 @@ export async function aiGatewaySessionSend(
     };
     state.invocations.push(harnessInvocation);
     session.attachments = [];
+    session.shellNotes = [];
     const named = extractSessionTitle(harnessTurn.text);
     await checkpoint.complete(named.text);
     await nameSession(session, { title: titleStream?.title ?? named.title });
@@ -1032,6 +1047,7 @@ export async function aiGatewaySessionSend(
   const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'gateway', ...(session.model ? { model: session.model } : {}), at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
   state.invocations.push(invocation);
   session.attachments = [];
+  session.shellNotes = [];
   const answered = extractSessionTitle(reply);
   await checkpoint.complete(answered.text);
   await nameSession(session, { title: titleStream?.title ?? answered.title });

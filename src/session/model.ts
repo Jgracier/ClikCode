@@ -2,6 +2,7 @@
  * harness and account it is attached to, and the defaults it inherits. */
 
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute } from '../harness/definition.js';
+import type { ShellNote } from '../commands/ai/shell-run.js';
 
 export interface HarnessSession {
   id: string;
@@ -83,6 +84,12 @@ export interface HarnessSession {
    * running. Persisted independently so process exit cannot discard them. */
   queuedTurns?: Array<{ id: string; text: string; submittedAt: string; kind?: 'command' }>;
   attachments?: string[];
+  /** Output the user's `!<command>` runs produced between turns. Injected into
+   * the next turn the way attachments are (see shellContextBlock and
+   * drive.ts), then cleared at the same sites as `attachments`. Kept separate
+   * from `messages` so a resumed native-harness thread -- which never replays
+   * ClikCode's own transcript -- still learns what the shell printed. */
+  shellNotes?: ShellNote[];
   /** Provider-native values validated against the selected harness manifest. */
   harnessOptions?: Record<string, unknown>;
 }

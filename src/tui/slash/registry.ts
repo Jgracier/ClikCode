@@ -271,6 +271,7 @@ function slashHelpSections(
   result.push({ group: 'Switch harness', rows: [
     ['/<harness>', 'hand off to another provider and optionally send a first request'],
     ['//<text>', 'send a slash command to the harness itself, verbatim'],
+    ['!<command>', 'run a shell command on this machine and carry its output into the next request'],
   ] });
   return result;
 }
@@ -293,6 +294,7 @@ export function slashControls(): Array<{ command: string; aliases: string[]; arg
     })),
     { command: '/<harness>', aliases: [], argHint: '[request]', description: 'hand off to another provider and optionally send a first request', group: 'Switch harness' as const },
     { command: '//<text>', aliases: [], description: 'send a slash command to the harness itself, verbatim', group: 'Conversation' as const },
+    { command: '!<command>', aliases: [], description: 'run a shell command and carry its output into the next request', group: 'Conversation' as const },
   ];
 }
 

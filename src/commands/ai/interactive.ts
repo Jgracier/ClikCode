@@ -11,6 +11,7 @@ import { chatNamed } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { discardIfBlank } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
+import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -405,6 +406,44 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // it is automatically dispatched after the active turn.
         if (queuedTurnId) {
           await runInteractiveTurn(id, line, { echo: true, queuedTurnId });
+          continue;
+        }
+        // `!<command>`: a literal shell command, run here in the user's
+        // terminal. Its output becomes a transcript message (so the model sees
+        // it next turn) and a shell note (so even a resumed native-harness
+        // thread -- which never replays ClikCode's transcript -- still sees it;
+        // see shellContextBlock in drive.ts). No approval, no model, no
+        // parsing: exactly what was typed, in the workspace, with the user's
+        // environment.
+        if (isShellCommandLine(line)) {
+          const command = line.trim().slice(1).trim();
+          if (!command) {
+            // A bare `!` cannot be escaped yet and is never good conversation;
+            // teach instead of silently sending it to a model.
+            notice = 'Type `!<command>` to run it and give the model its output, e.g. `!git status`.';
+            continue;
+          }
+          const controller = new AbortController();
+          const waiting = rl instanceof TerminalHarnessPrompter ? rl : undefined;
+          if (waiting) waiting.startWaiting(`! ${command}`, () => controller.abort());
+          let result: Awaited<ReturnType<typeof runShellCommand>>;
+          try {
+            result = await runShellCommand(command, activeWorkspace, controller.signal);
+          } finally {
+            waiting?.stopWaiting();
+          }
+          const note: ShellNote = { command, output: result.output, exitCode: result.exitCode, at: new Date().toISOString() };
+          const shellState = await readState();
+          const shellSession = shellState.sessions.find((item) => item.id === id);
+          if (shellSession) {
+            shellSession.messages = [...(shellSession.messages ?? []), { role: 'user' as const, content: shellMessageContent(note) }];
+            shellSession.shellNotes = [...(shellSession.shellNotes ?? []), note];
+            shellSession.updatedAt = new Date().toISOString();
+            await writeState(shellState);
+          }
+          notice = result.exitCode === 0
+            ? `Ran \`!${command}\` (exit 0) — its output rides into the next request`
+            : `\`!${command}\` ended with ${result.exitCode === null ? 'no exit code (killed or cancelled)' : `exit ${result.exitCode}`}`;
           continue;
         }
         const standaloneAttachment = await resolveStandaloneAttachment(line, activeWorkspace);
