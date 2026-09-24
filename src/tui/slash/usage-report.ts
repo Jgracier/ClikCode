@@ -77,20 +77,26 @@ function accountBlock(account: AiHarnessAccount, state: HarnessState, session: H
   ];
 }
 
-/** Quota and metered use for every account on this session's provider, then
- * the same figures added together, then this conversation. Nothing here asks
- * a vendor: a percentage is the last saved window or the learned limit, and
- * tokens are the turns ClikCode itself recorded. */
+/** Ids that name this chat's provider. A session stores the catalog id
+ * (`xai`) and sometimes only the command (`grok`). Accounts are filed under
+ * the catalog id. Both have to match, for every harness, not one of them. */
+function providerIds(session: HarnessSession, providerId?: string): Set<string> {
+  return new Set([providerId, session.provider, session.nativeHarness].filter((id): id is string => Boolean(id)));
+}
+
+/** Quota and metered use for every account on the harness this chat is using,
+ * then those figures added together, then this conversation. Nothing here
+ * asks a vendor: a percentage is the last saved window or the learned limit,
+ * and tokens are the turns ClikCode itself recorded. */
 export function usageReport(
-  state: HarnessState, session: HarnessSession, options: { now?: number; providerName?: string } = {},
+  state: HarnessState, session: HarnessSession, options: { now?: number; providerName?: string; providerId?: string } = {},
 ): { text: string; totals: UsageReportTotals } {
   const now = options.now ?? Date.now();
+  const ids = providerIds(session, options.providerId);
   const providerName = options.providerName ?? session.provider ?? session.nativeHarness ?? 'this provider';
-  const accounts = session.route === 'gateway'
-    ? []
-    : state.accounts.filter((account) => account.provider === session.provider);
+  const accounts = session.route === 'gateway' ? [] : state.accounts.filter((account) => ids.has(account.provider));
   const accountIds = new Set(accounts.map((account) => account.id));
-  const providerInvocations = state.invocations.filter((item) => accountIds.has(item.accountId) || item.provider === session.provider);
+  const providerInvocations = state.invocations.filter((item) => accountIds.has(item.accountId) || ids.has(item.provider));
   const totals = { ...sumInvocations(providerInvocations), accounts: accounts.length };
   const conversation = sumInvocations(state.invocations.filter((item) => item.sessionId === session.id));
   const lines = [

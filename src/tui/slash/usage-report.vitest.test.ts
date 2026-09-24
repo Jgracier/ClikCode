@@ -52,4 +52,15 @@ describe('/usage report', () => {
     expect(report.text).toContain('This conversation');
     expect(report.text).toContain('$0.0100');
   });
+
+  it('follows the harness the chat is on, even when the session has no provider id', () => {
+    const grok = account('grok-login', { provider: 'xai', label: 'grok-login' });
+    const claude = account('claude-login');
+    const chat = { ...session('grok-login'), provider: null, nativeHarness: 'grok' };
+    const report = usageReport(state([grok, claude]), chat, { now: NOW, providerName: 'Grok Build', providerId: 'xai' });
+    expect(report.text).toContain('Grok Build');
+    expect(report.text).toContain('grok-login · current');
+    expect(report.text).not.toContain('claude-login');
+    expect(report.totals.accounts).toBe(1);
+  });
 });

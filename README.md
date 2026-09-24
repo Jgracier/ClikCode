@@ -316,7 +316,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | --- | --- |
 | `/status` | current configuration |
 | `/context` | how much of the model's context this conversation is using |
-| `/cost` | tokens and cost for this conversation |
+| `/usage` | quota, tokens, and cost for the provider you are in (`/cost` is the same command) |
 | `/usage` | token usage for this account |
 | `/doctor` | check your installed tools and accounts |
 | `/help` (also `/?`) | all commands |
