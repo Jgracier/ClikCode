@@ -62,12 +62,18 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // Back to 73 when Goose gained a permission mapping. OpenClaw then added
     // a model and an effort control (both folded). Hermes added six of its
     // own chat flags, which stay as vendor rows.
+    //
+    // 75 -> 78 when Grok, Kimi, Auggie and Vibe gained real option rows: three
+    // of those new rows are additional workspaces, which the /add-dir control
+    // folds, and the rest are vendor-specific and stay. 155 -> 214 is those
+    // same four vendors' kept rows (16 + 3 + 18 + 8), plus OpenHands' 3 and
+    // Continue's 11. Only OpenClaw still folds everything it publishes.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(75);
-    expect(kept.length).toBe(155);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(78);
+    expect(kept.length).toBe(214);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
-    expect(emptied.map((h) => h.command)).toEqual(['grok', 'openclaw', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']);
+    expect(emptied.map((h) => h.command)).toEqual(['openclaw']);
   });
 
   it('routes both spellings of extra directories to the same command', () => {
@@ -149,11 +155,11 @@ describe('a harness only ever shows its own options', () => {
   });
 
   it('keeps vendor-specific ids out of every other harness that lacks them', () => {
-    // `--worktree` exists on seven harnesses and must not appear on the other
-    // seventeen just because it is a shared, normalized name.
+    // `--worktree` exists on nine harnesses and must not appear on the other
+    // fifteen just because it is a shared, normalized name.
     const withWorktree = harnesses.filter((h) => optionsOf(h).some((o) => o.id === 'worktree')).map((h) => h.command);
     const withoutWorktree = harnesses.filter((h) => !withWorktree.includes(h.command));
-    expect(withWorktree.length).toBe(7);
+    expect(withWorktree.length).toBe(9);
     for (const harness of withoutWorktree) {
       expect(vendorFacingOptions(optionsOf(harness)).some((o) => o.id === 'worktree')).toBe(false);
     }
