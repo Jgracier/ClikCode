@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './width';
-import { liveConversationLines, rightLabeledRule, waitingSpinnerFrame, waitingSpinnerGlyph } from './waiting';
+import { liveConversationLines, rightLabeledRule, runningChatLine, waitingSpinnerFrame, waitingSpinnerGlyph } from './waiting';
 
 describe('the waiting band', () => {
   it('packs four animation phases of a logical 4x4 grid into two Braille cells', () => {
@@ -11,6 +11,9 @@ describe('the waiting band', () => {
     const glyphs = Array.from({ length: 4 }, (_, frame) => waitingSpinnerGlyph(frame));
     expect(new Set(glyphs).size).toBe(4);
     expect(glyphs.every((glyph) => [...glyph].length === 2 && terminalCellWidth(glyph) === 2)).toBe(true);
+    expect(runningChatLine('Bash(npm test)', 0, 'command')).toContain('running Bash(npm test)');
+    expect(runningChatLine('Task(review)', 0, 'agent')).toContain('agent Task(review)');
+    expect(runningChatLine('Bash(npm test)', 0, 'command')).not.toBe(runningChatLine('Bash(npm test)', 1, 'command'));
   });
 
   it('keeps real live content in the final row on compact mobile viewports', () => {

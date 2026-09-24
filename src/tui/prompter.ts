@@ -40,7 +40,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, listenForTerminalKeys, onKeyBatchEnd, w
 import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { formatTurnUsage } from './render/usage-line.js';
-import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, rightLabeledRule, waitingSpinnerGlyph } from './render/waiting.js';
+import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, rightLabeledRule, runningChatLine, waitingSpinnerGlyph } from './render/waiting.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
@@ -64,6 +64,17 @@ const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
+
+/** Commands and sub-agents are the waits that otherwise look like silence.
+ * Reads and edits stay in the waiting band; these two get a moving row in
+ * the chat until they finish. */
+function liveWaitKind(event: HarnessActivityEvent): 'command' | 'agent' | undefined {
+  if (event.kind !== 'tool-start') return undefined;
+  const name = event.label.split('(')[0]?.toLowerCase().replace(/[^a-z]/g, '') ?? '';
+  if (/^(task|agent|subagent|delegate|spawn|spawnagent)$/.test(name)) return 'agent';
+  if (event.category === 'run') return 'command';
+  return undefined;
+}
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
@@ -1117,11 +1128,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return rows;
     };
     /** The in-flight turn's tools and steering messages, as rows that settle.
-     * A running tool is reported in the waiting band ("running <label>") and
-     * nowhere else: its row is still mutable -- completion rewrites it with the
-     * output preview -- and a mutable row can never enter scrollback. At the
-     * end of the turn a tool that never reported completion settles anyway,
-     * rather than being lost or holding the region open forever. */
+     * A running command or sub-agent is drawn in the live chat (see below),
+     * not here: its row is still mutable, and a mutable row can never enter
+     * scrollback. At the end of the turn a tool that never reported
+     * completion settles anyway, rather than being lost. */
     const turnTools = (ended: boolean): SettlingTool[] => {
       const tools: SettlingTool[] = this.activityEntries
         // An anchor is reused: the next turn's assistant occupies the same
@@ -1225,6 +1235,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       });
       emit(step.finished);
       liveConversation.push(...step.live);
+    }
+    // Claude Code and Codex keep a moving row in the transcript while a
+    // command or sub-agent is outstanding. The waiting band still says the
+    // turn is running; this says WHAT is being waited on, and it moves
+    // because this region is redrawn on every spinner tick.
+    if (this.waitingLabel) {
+      for (const entry of this.activityEntries) {
+        const event = entry.event;
+        if (entry.anchor !== this.activityAnchor || !event) continue;
+        const kind = liveWaitKind(event);
+        if (!kind) continue;
+        liveConversation.push('', runningChatLine(event.label, this.reducedMotion ? 0 : this.waitingFrame, kind));
+      }
     }
     for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user
