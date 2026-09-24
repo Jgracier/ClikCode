@@ -98,7 +98,10 @@ function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-l
     const item = record as Record<string, unknown>;
     // Crush's own `uuid` (the full resumable id) must win over its `id` (a
     // 7-char display-only hash) when both are present on the same record.
-    const nativeId = item.uuid ?? item.id ?? item.sessionId ?? item.session_id ?? item.sessionID;
+    // OpenClaw's `sessions --json` row calls the resumable id `key`
+    // (`agent:main:main`). It is only used when none of the usual id fields
+    // are present, so a record that has both keeps its real id.
+    const nativeId = item.uuid ?? item.id ?? item.sessionId ?? item.session_id ?? item.sessionID ?? item.key;
     if (typeof nativeId !== 'string' || !nativeId) continue;
     const title = item.customTitle ?? item.title ?? item.name ?? item.summary
       ?? (typeof item.prompt === 'string' ? item.prompt : undefined);

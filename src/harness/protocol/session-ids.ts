@@ -10,6 +10,7 @@ const HARNESS_SESSION_KEYS: Readonly<Record<string, readonly string[]>> = {
   claude: ['session_id'], qwen: ['session_id'], cursor: ['session_id'],
   droid: ['session_id'], pi: ['session_id', 'sessionId'], codex: ['thread_id'],
   antigravity: ['conversation_id'], opencode: ['sessionID'], kilo: ['sessionID'],
+  openclaw: ['sessionId'],
 };
 
 /** Envelopes that introduce a session, where a bare `id` IS the session id. */

@@ -30,7 +30,7 @@ describe('local harness catalog', () => {
     expect(AI_LOCAL_HARNESSES.map((item) => item.command).sort()).toEqual([
       'aider', 'amp', 'antigravity', 'auggie', 'claude', 'cline', 'cn', 'codex',
       'command', 'copilot', 'cursor', 'droid', 'gemini', 'goose', 'grok', 'hermes',
-      'kilo', 'kimi', 'kiro', 'opencode', 'openhands', 'pi', 'qwen', 'vibe',
+      'kilo', 'kimi', 'kiro', 'openclaw', 'opencode', 'openhands', 'pi', 'qwen', 'vibe',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(localHarnessForCommand(harness.command)).toEqual(harness);
@@ -171,6 +171,13 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(cursor, { prompt: 'hi', permissionMode: 'auto' })).toContain('--auto-review');
 
     const hermes = localHarnessForCommand('hermes')!;
+    const openclaw = localHarnessForCommand('openclaw')!;
+    expect(nativeHarnessTurnArgv(openclaw, { prompt: 'hi', model: 'openai/gpt', effort: 'low' })).toEqual([
+      'agent', '--local', '--json', '--agent', 'main', '--model', 'openai/gpt', '--thinking', 'low', '--message', 'hi',
+    ]);
+    expect(nativeHarnessTurnArgv(openclaw, { prompt: 'hi', nativeSessionId: 'sess-1' })).toEqual([
+      'agent', '--local', '--json', '--session-id', 'sess-1', '--message', 'hi',
+    ]);
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'bypass' })).toContain('--yolo');
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--yolo');
 

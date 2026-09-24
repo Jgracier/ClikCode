@@ -8,7 +8,7 @@ sign-in, its own idea of where your conversations live. None of them know the
 others exist, so picking one up means learning it again and leaving your work
 behind in the last one.
 
-ClikCode sits in front of 24 of them. One sign-in, one list of conversations, one
+ClikCode sits in front of 25 of them. One sign-in, one list of conversations, one
 set of controls, the same keystrokes whichever tool answers. It replaces
 nothing — your tools stay yours, the logins you already had keep working — and
 what it adds is this:
