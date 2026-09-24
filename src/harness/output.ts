@@ -148,6 +148,10 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
       : `  ${chalk.dim('None queued.')}`) + '\n\n');
     return;
   }
+  if (payload.panel === 'usage' && typeof payload.text === 'string') {
+    write(`\n${payload.text}\n\n`);
+    return;
+  }
   if (payload.panel === 'usage' && payload.totals && typeof payload.totals === 'object') {
     const totals = payload.totals as Record<string, unknown>;
     write(`\n${chalk.bold('Usage')}\n${line('calls', totals.calls)}\n${line('input', `${totals.inputTokens ?? 0} tokens`)}\n${line('output', `${totals.outputTokens ?? 0} tokens`)}\n\n`);

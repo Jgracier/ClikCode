@@ -158,7 +158,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('status', 'Info', 'current configuration'),
   entry('context', 'Info', 'context window and token usage reported by the harness'),
   entry('cost', 'Info', 'tokens and cost for this conversation'),
-  entry('usage', 'Info', 'token usage for this account'),
+  entry('usage', 'Info', 'quota, tokens, and cost for this provider'),
   entry('doctor', 'Info', 'check installed harnesses and accounts'),
   entry('help', 'Info', 'all commands', { aliases: ['?'] }),
 ];
