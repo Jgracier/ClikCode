@@ -49,14 +49,15 @@ export function rightLabeledRule(width: number, label?: string): string {
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
 }
 
-/** A command or sub-agent that is still running, drawn in the chat the way
- * Claude Code and Codex do: the same spinner as the waiting band, beside what
- * is being waited on. It lives in the live region, so the glyph can move
- * without ever being written into scrollback. */
-export function runningChatLine(label: string, frame: number, kind: 'command' | 'agent'): string {
-  const spinner = kind === 'command' ? chalk.yellow(waitingSpinnerGlyph(frame)) : chalk.cyan(waitingSpinnerGlyph(frame));
-  const verb = kind === 'command' ? 'running' : 'agent';
-  return `  ${spinner}  ${verb} ${label}`;
+/** One open call, drawn under the answer that is still streaming. A command
+ * or a sub-agent says so; any other tool is just its own label. The row is
+ * repainted, not appended, and the status line is a different place. */
+export function runningChatLine(label: string, frame: number, kind: 'command' | 'agent' | 'tool'): string {
+  const spinner = kind === 'command' ? chalk.yellow(waitingSpinnerGlyph(frame))
+    : kind === 'agent' ? chalk.cyan(waitingSpinnerGlyph(frame))
+      : chalk.dim(waitingSpinnerGlyph(frame));
+  const verb = kind === 'command' ? 'running ' : kind === 'agent' ? 'agent ' : '';
+  return `  ${spinner}  ${verb}${label}`;
 }
 
 /** A live response must end on content, not its decorative separator. On a

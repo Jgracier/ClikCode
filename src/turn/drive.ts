@@ -1007,25 +1007,15 @@ export async function aiGatewaySessionSend(
         // renders identically to a Codex or Claude Code one — same glyph,
         // same color, same bare-subject wording (renderActivityLine adds its
         // own verb, so the canonical label here is the bare tool name via
-        // `tool`, not the backend's already-verbed `label`). The phase
-        // (spinner text) uses `label` directly instead, since the backend's
-        // phrasing ("Restarting the app…") is already the ideal spinner
-        // text and the terminal lifecycle's own "running X" wording is for
-        // bare native-harness tool names, not a pre-verbed phrase. There's
-        // no 'tool-done' here because AssistantChatEvent has no completion
+        // `tool`, not the backend's already-verbed `label`). The status line
+        // stays the turn. There's no 'tool-done' here because AssistantChatEvent has no completion
         // signal to report (verified: 'tool_call' fires once, nothing after
         // it) — a real gap in what the agent loop reports, not something to
         // fake here.
         if (event.type === 'status' && typeof event.label === 'string') {
           const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
           checkpoint.activity(activityEvent);
-          if (prompter) {
-            prompter.activityEvent(activityEvent);
-            // Gateway labels are already humanized (for example,
-            // "Restarting the app…"). Apply that richer label after the
-            // generic lifecycle updates active-tool tracking.
-            prompter.phase(event.label);
-          }
+          if (prompter) prompter.activityEvent(activityEvent);
           else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(activityEvent)) output.write(`${activity}\n`);
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
