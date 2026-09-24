@@ -13,9 +13,13 @@
  * tell `/model` from `/etc/hosts explain this`. So this is generous, and the
  * caller routes what it gets and falls back to queueing it as conversation
  * when the router says that is what it really is.
+ *
+ * A `!` line is the same kind of candidate: `!ls` is a shell command for the
+ * composer, never words for the model.
  */
 export function commandLineTypedDuringTurn(draft: string): string | undefined {
   const text = draft.trim();
+  if (text.startsWith('!')) return text.length > 1 ? text : undefined;
   if (!text.startsWith('/')) return undefined;
   // `//text` is the explicit "send this to the harness verbatim" escape: it is
   // conversation by definition, and routing it as a command would take away

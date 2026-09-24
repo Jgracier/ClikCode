@@ -225,6 +225,7 @@ export async function preserveInterruptedTurn(id: string, prompt: string, partia
     finishPendingTurn(session, partialResponse || undefined, new Date().toISOString());
   } else session.messages = interruptedTurnMessages(session.messages ?? [], prompt, partialResponse, outputStarted);
   session.attachments = [];
+  session.shellNotes = [];
   session.updatedAt = new Date().toISOString();
   await writeState(state);
 }

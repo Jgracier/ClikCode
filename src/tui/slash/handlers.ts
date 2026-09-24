@@ -48,6 +48,7 @@ import { exportTranscript } from './export-transcript.js';
 import { nativeManagerListing } from './native-manager.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
 import { addSessionDirectory, changeSessionWorkspace, workspaceDiff } from './workspace.js';
+import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from '../../commands/ai/shell-run.js';
 
 function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
@@ -584,6 +585,21 @@ export async function aiSessionCommand(id: string, input: string, inferred = fal
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const text = input.trim();
   if (!text.replace(/^\/+/, '')) throw new Error('slash command is required');
+  // A `!` line is a shell command, not a slash command: run it headlessly and
+  // record it as a transcript message the same way the interactive loop does,
+  // so piped/argv callers can ask for real machine state too.
+  if (isShellCommandLine(text)) {
+    const command = text.slice(1).trim();
+    if (!command) throw new Error('Type `!<command>` to run it, e.g. `!git status`.');
+    const result = await runShellCommand(command, session.workspace ?? process.cwd());
+    const note: ShellNote = { command, output: result.output, exitCode: result.exitCode, at: new Date().toISOString() };
+    session.messages = [...(session.messages ?? []), { role: 'user', content: shellMessageContent(note) }];
+    session.shellNotes = [...(session.shellNotes ?? []), note];
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    emitHarnessOutput({ panel: 'shell', text: shellMessageContent(note) });
+    return id;
+  }
   const harness = sessionHarness(session);
   const route = routeSlashInput(text.startsWith('/') ? text : `/${text}`, slashRouteContextFor(session, harness));
   if (route.kind === 'command') {
