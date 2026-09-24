@@ -59,16 +59,15 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // encodes effort in the model id and rejects --effort outright, so the
     // row was not a duplicate control, it was one that could never work.
     //
-    // Back to 73 when Goose gained a permission mapping. It carries its mode
-    // in GOOSE_MODE rather than argv, so ClikCode had offered no permission
-    // control for it at all while its raw vendor row sat exposed; now the
-    // normalized control owns that setting and the raw row folds into it.
+    // Back to 73 when Goose gained a permission mapping. OpenClaw then added
+    // a model and an effort control (both folded). Hermes added six of its
+    // own chat flags, which stay as vendor rows.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(73);
-    expect(kept.length).toBe(149);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(75);
+    expect(kept.length).toBe(155);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
-    expect(emptied.map((h) => h.command)).toEqual(['grok', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']);
+    expect(emptied.map((h) => h.command)).toEqual(['grok', 'openclaw', 'kimi', 'auggie', 'vibe', 'openhands', 'cn']);
   });
 
   it('routes both spellings of extra directories to the same command', () => {

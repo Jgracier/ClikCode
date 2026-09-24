@@ -134,7 +134,8 @@ async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] 
   if (cached?.identity === identity) return cached.result.values.length ? cached.result.values : undefined;
   let values: string[] = [];
   try {
-    values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, ['--help'], {}, 8_000), flag);
+    const helpArgv = harness.command === 'hermes' ? ['chat', '--help'] : ['--help'];
+    values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, helpArgv, {}, 8_000), flag);
   } catch { /* fail-open-ok: no help text is the catalog's cue, not an error. */ }
   cache.set(key, { identity, result: { values, source: 'vendor-help' } });
   return values.length ? values : undefined;

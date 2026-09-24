@@ -921,9 +921,15 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   hermes: {
     options: [
       value('provider', 'Inference provider', 'Override the inference provider', 'model', ['--provider']),
-      value('toolsets', 'Toolsets', 'Comma-separated toolsets enabled for the turn', 'tools', ['--toolsets']),
-      value('skills', 'Preloaded skills', 'Skills loaded for this session', 'tools', ['--skills'], 'string-list'),
+      value('toolsets', 'Toolsets', 'Toolsets enabled for the turn, from hermes tools list', 'tools', ['--toolsets'], 'string-list', { argvStyle: 'csv' }),
+      value('skills', 'Preloaded skills', 'Skills loaded for this session', 'tools', ['--skills'], 'string-list', { argvStyle: 'csv' }),
+      value('max-turns', 'Maximum turns', 'Maximum tool-calling iterations in one turn', 'safety', ['--max-turns'], 'number'),
+      value('run-budget', 'Run budget (seconds)', 'Wall-clock budget for one run', 'safety', ['--run-budget'], 'number'),
       flag('worktree', 'Isolated worktree', 'Run in an isolated Git worktree', 'session', ['--worktree'], { requiresNewSession: true }),
+      flag('checkpoints', 'Checkpoints', 'Snapshot files before destructive edits', 'safety', ['--checkpoints']),
+      flag('accept-hooks', 'Accept hooks', 'Auto-approve unseen shell hooks', 'safety', ['--accept-hooks']),
+      flag('pass-session-id', 'Pass session id', 'Include the session id in the system prompt', 'session', ['--pass-session-id']),
+      flag('verbose', 'Verbose', 'Verbose output', 'output', ['--verbose']),
       flag('safe-mode', 'Safe mode', 'Disable user config, rules, plugins, and MCP', 'safety', ['--safe-mode']),
       flag('ignore-user-config', 'Ignore user config', 'Use built-in defaults while retaining credentials', 'safety', ['--ignore-user-config']),
       flag('ignore-rules', 'Ignore rules', 'Skip AGENTS.md, memory, and preloaded skills', 'safety', ['--ignore-rules']),
