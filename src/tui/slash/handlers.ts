@@ -43,6 +43,7 @@ import { capabilitiesText } from './capabilities-text.js';
 import { compactConversation } from './compact.js';
 import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from './context.js';
 import { contextUsageText, costReport } from './cost.js';
+import { usageReport } from './usage-report.js';
 import { exportTranscript } from './export-transcript.js';
 import { nativeManagerListing } from './native-manager.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
@@ -285,11 +286,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     });
   },
   usage: async ({ state, session }) => {
-    const invocations = state.invocations.filter((invocation) => invocation.accountId === session.accountId || (session.route === 'gateway' && invocation.accountId === 'gateway'));
-    return emitHarnessOutput({
-      panel: 'usage', invocations,
-      totals: invocations.reduce((total, invocation) => ({ calls: total.calls + 1, inputTokens: total.inputTokens + (invocation.inputTokens ?? 0), outputTokens: total.outputTokens + (invocation.outputTokens ?? 0) }), { calls: 0, inputTokens: 0, outputTokens: 0 }),
-    });
+    const report = usageReport(state, session, { providerName: sessionHarness(session)?.displayName });
+    return emitHarnessOutput({ panel: 'usage', text: report.text, totals: report.totals });
   },
   settings: async ({ id, state, session, words }) => {
     const setting = words.shift()?.toLowerCase();
