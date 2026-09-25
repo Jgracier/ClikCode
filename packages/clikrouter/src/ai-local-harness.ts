@@ -1027,6 +1027,18 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     ],
     managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', transportPrefix: ['--transport'], localTransport: 'stdio', urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--arg'], argsStyle: 'repeat-equals', remoteExtraArgv: ['--no-login'] } } },
   },
+  // `openclaw agent` (2026.9.6). --agent, --session-id/--session-key,
+  // --model, --thinking and --message are the turn itself; delivery flags
+  // (--channel, --deliver, --reply-*) send the reply to a chat app, which is
+  // not a coding turn.
+  openclaw: {
+    options: [
+      value('timeout', 'Turn timeout (seconds)', 'Override the agent command timeout', 'safety', ['--timeout'], 'number'),
+      value('verbose', 'Verbose', 'Persist the agent verbose level for the session', 'output', ['--verbose'], 'enum', { values: ['on', 'off'] }),
+    ],
+    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
+    features: ['plugins', 'skills', 'hooks', 'memory', 'chat channels', 'model fallbacks'],
+  },
   hermes: {
     options: [
       value('toolsets', 'Toolsets', 'Toolsets enabled for the turn, from hermes tools list', 'tools', ['--toolsets'], 'string-list', { argvStyle: 'csv' }),
