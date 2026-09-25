@@ -1,4 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import { atomicWriteFile } from '../../session/store/files.js';
+import { stateDirectory } from '../../session/store/paths.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiLocalHarnessDefinition, ModelCatalogConnect } from '../definition.js';
@@ -82,7 +84,37 @@ export async function discoverGooseProviders(
   });
 }
 
+/** The models.dev catalog: OpenCode's copy when it keeps one, else fetched
+ * from models.dev and kept a day -- a server's list, so a clock is the only
+ * freshness rule there is. Empty when neither is reachable. */
 export async function modelsDevCache(): Promise<string> {
   const cacheRoot = process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache');
-  return readFile(join(cacheRoot, 'opencode', 'models.json'), 'utf8').catch(() => '');
+  const opencode = await readFile(join(cacheRoot, 'opencode', 'models.json'), 'utf8').catch(() => '');
+  if (opencode) return opencode;
+  const own = join(stateDirectory(), 'models-dev.json');
+  const kept = await stat(own).catch(() => undefined);
+  if (kept && Date.now() - kept.mtimeMs < 24 * 60 * 60_000) return readFile(own, 'utf8').catch(() => '');
+  try {
+    const response = await fetch('https://models.dev/api.json', { signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(String(response.status));
+    const body = await response.text();
+    await atomicWriteFile(own, body).catch(() => undefined);
+    return body;
+  } catch {
+    return kept ? readFile(own, 'utf8').catch(() => '') : '';
+  }
+}
+
+/** A provider's models in the models.dev catalog, with their names. */
+export function modelsDevProvider(cacheJson: string, providerId: string): { models: string[]; labels: Record<string, string> } {
+  try {
+    const provider = (JSON.parse(cacheJson) as Record<string, { models?: Record<string, { name?: unknown }> }>)[providerId];
+    const entries = Object.entries(provider?.models ?? {});
+    return {
+      models: entries.map(([id]) => id),
+      labels: Object.fromEntries(entries.filter(([, model]) => typeof model.name === 'string').map(([id, model]) => [id, model.name as string])),
+    };
+  } catch {
+    return { models: [], labels: {} };
+  }
 }
