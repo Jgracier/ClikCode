@@ -477,7 +477,8 @@ export async function aiSessionSend(
       // A route that keeps no history: forget the session, so the next turn
       // opens a fresh one and carries ClikCode's own transcript (the fresh-
       // thread replay above) instead of resuming into an empty memory.
-      if (!result.isError && result.nativeSessionStateless) {
+      const statelessProvider = Boolean(model && harness.turn?.statelessProviders?.includes(modelProvider(harness, model) ?? ''));
+      if (!result.isError && (result.nativeSessionStateless || statelessProvider)) {
         session.nativeSessionId = undefined;
         delete session.nativeSessionPreallocated;
       }

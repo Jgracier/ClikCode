@@ -15,7 +15,9 @@ describe('local harness catalog', () => {
   });
 
   it('uses the documented Kiro auth and OpenCode discovery contracts', () => {
-    expect(localHarnessForCommand('kiro')?.localAuth).toEqual(['api-key']);
+    // `kiro-cli login` (Builder ID, Identity Center) and KIRO_API_KEY, both
+    // read out of kiro-cli itself.
+    expect(localHarnessForCommand('kiro')?.localAuth).toEqual(['api-key', 'oauth', 'vendor-cli']);
     expect(localHarnessForCommand('opencode')?.session).toMatchObject({
       discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json',
     });
@@ -129,10 +131,20 @@ describe('local harness catalog', () => {
   });
 
   it('leaves permission mode as a no-op for a harness that does not declare support for it', () => {
+    const amp = localHarnessForCommand('amp')!;
+    expect(harnessSupportsPermissionMode(amp, 'ask')).toBe(false);
+    expect(nativeHarnessTurnArgv(amp, { prompt: 'inspect', permissionMode: 'ask' }))
+      .toEqual(nativeHarnessTurnArgv(amp, { prompt: 'inspect' }));
+  });
+
+  it('carries Goose’s permission mode in GOOSE_MODE, adding nothing to argv', () => {
     const goose = localHarnessForCommand('goose')!;
-    expect(harnessSupportsPermissionMode(goose, 'ask')).toBe(false);
-    expect(nativeHarnessTurnArgv(goose, { prompt: 'inspect', permissionMode: 'ask' }))
-      .toEqual(['run', '--output-format', 'stream-json', '--text', 'inspect']);
+    for (const mode of ['ask', 'bypass', 'auto'] as const) {
+      expect(harnessSupportsPermissionMode(goose, mode)).toBe(true);
+      expect(nativeHarnessTurnArgv(goose, { prompt: 'inspect', permissionMode: mode }))
+        .toEqual(['run', '--output-format', 'stream-json', '--text', 'inspect']);
+    }
+    expect(goose.permissionEnv?.ask).toEqual({ GOOSE_MODE: 'approve' });
   });
 
   it('declares effort support only where a real flag exists', () => {
@@ -146,7 +158,7 @@ describe('local harness catalog', () => {
     // the test agree with whatever the catalog says, which is not a test.
     // grok, kimi, vibe, openhands and cn were added after the previous lists
     // were written.
-    const fullThreeTier = new Set(['codex', 'claude', 'grok', 'gemini', 'cursor', 'qwen', 'droid', 'command', 'kimi', 'vibe']);
+    const fullThreeTier = new Set(['codex', 'claude', 'grok', 'gemini', 'cursor', 'qwen', 'droid', 'command', 'kimi', 'vibe', 'goose']);
     const askAndAuto = new Set(['kilo']);
     const bypassAndAuto = new Set(['openhands']);
     const askAndBypass = new Set([
@@ -212,10 +224,12 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(goose, { prompt: 'hi', model: 'openrouter/anthropic/claude-5' })).toEqual(expect.arrayContaining(['--provider', 'openrouter', '--model', 'anthropic/claude-5']));
     expect(nativeHarnessTurnArgv(goose, { prompt: 'hi', model: 'sonnet' })).not.toContain('--provider');
     expect(harnessLoginArgvForModel(goose, 'anthropic/claude-5')).toEqual(['configure']);
+    // Goose never hands Claude Code its history; ClikCode carries it instead.
+    expect(goose.turn?.statelessProviders).toEqual(['claude-code']);
     // Every harness either says whether it is signed in or cannot be asked
     // (Antigravity keeps its token in the system keyring only; the drivers
     // sign in per provider from the model picker).
-    const unknowable = ['antigravity', 'goose', 'opencode', 'kilo'];
+    const unknowable = ['antigravity', 'goose'];
     for (const harness of AI_LOCAL_HARNESSES) {
       if (unknowable.includes(harness.command)) continue;
       expect(Boolean(harness.statusArgv || harness.authFiles?.length || harness.authEnv?.length), `${harness.command} sign-in state`).toBe(true);
@@ -263,7 +277,7 @@ describe('local harness catalog', () => {
       const option = localHarnessCapabilityManifest(harness).options.find((item) => item.id === 'permissions');
       if (harness.permissionModes?.length) {
         expect(option?.values, harness.command).toEqual(harness.permissionModes);
-        for (const mode of harness.permissionModes) expect(harness.permissionArgv?.[mode], `${harness.command}:${mode}`).toBeDefined();
+        for (const mode of harness.permissionModes) expect(harness.permissionArgv?.[mode] ?? harness.permissionEnv?.[mode], `${harness.command}:${mode}`).toBeDefined();
       }
       else expect(option, harness.command).toBeUndefined();
     }
@@ -432,10 +446,11 @@ describe('local harness catalog', () => {
   });
 
   it('derives Kilo from the shared OpenCode base, differing only where declared', () => {
-    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, ...opencode } = localHarnessForCommand('opencode')!;
-    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, ...kilo } = localHarnessForCommand('kilo')!;
+    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, ...opencode } = localHarnessForCommand('opencode')!;
+    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, authFiles: _kaf, ...kilo } = localHarnessForCommand('kilo')!;
     expect(kilo).toEqual(opencode);
     expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
+    expect(localHarnessForCommand('kilo')!.authFiles).toEqual([{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }]);
   });
 
   it('upgrades Amp to stream-json while keeping the text contract as its fallback', () => {
