@@ -172,6 +172,9 @@ export interface AiLocalHarnessDefinition {
   loginCapturable?: boolean;
   statusArgv?: readonly string[];
   logoutArgv?: readonly string[];
+  authFiles?: readonly { path: string; contains?: string; removeLine?: boolean }[];
+  authEnv?: readonly string[];
+  loginHint?: string;
   versionArgv?: readonly string[];
   launchArgv?: readonly string[];
   modelArgvPrefix?: readonly string[];
@@ -276,8 +279,9 @@ export interface AiRouterRuntime {
 
 /** A provider the harness can reach but is not signed in to: the picker
  * offers `argv` (a vendor sign-in command) instead of models. Only
- * multi-provider harnesses (Hermes) publish these. */
-export type ModelCatalogConnect = { id: string; label: string; detail?: string; argv: readonly string[] };
+ * multi-provider harnesses publish these. `hint` is what to do once the
+ * vendor opens, for one that signs in only from its own session (Pi). */
+export type ModelCatalogConnect = { id: string; label: string; detail?: string; argv: readonly string[]; hint?: string };
 export type ModelCatalogResult = { configured?: string; models: string[]; labels?: Readonly<Record<string, string>>; connect?: readonly ModelCatalogConnect[] };
 
 export type NativeUsageProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<string | undefined>;

@@ -19,6 +19,7 @@ import { harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsPermissi
 import type { AiHarnessAccount, AiHarnessOptionDefinition, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { PickerOption } from '../harness/prompter.js';
 import type { HarnessDefaultSettings, HarnessSession } from './model.js';
+import { harnessCanLogout } from '../harness/accounts/auth-files.js';
 
 /** Effort words every harness understands, narrowed per harness by
  * harnessSupportsEffort. */
@@ -313,7 +314,7 @@ function providerAccountPickerOptions(
           ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
         ...(account.verification ? [{ label: 'I’ve verified it', value: 'verified' }] : []),
       ];
-      const deleteAction = harness.logoutArgv && account.authKind === 'vendor-cli' && account.status === 'ready'
+      const deleteAction = harnessCanLogout(harness) && account.authKind === 'vendor-cli' && account.status === 'ready'
         ? { label: 'Disconnect', value: 'disconnect' }
         : { label: 'Remove', value: 'remove' };
       return {

@@ -25,6 +25,7 @@ import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition } fr
 import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, firstUnusedAccountLabel } from '../harness/accounts/labels.js';
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
+import { authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
 
 // emitHarnessOutput is defined in ai.ts (the HTTP-server-adjacent JSON/panel
 // output helper) -- passed in rather than imported to avoid a circular
@@ -71,8 +72,8 @@ export async function aiDoctor(): Promise<void> {
         scriptedLogin: Boolean(harness.loginArgv?.length),
         interactiveAuthHandoff: harness.loginArgv !== undefined && harness.loginArgv.length === 0,
         accountAdd: harness.localAuth.includes('api-key') || harness.loginArgv !== undefined,
-        accountStatus: Boolean(harness.statusArgv),
-        logout: Boolean(harness.logoutArgv),
+        accountStatus: Boolean(harness.statusArgv) || hasAuthEvidence(harness),
+        logout: harnessCanLogout(harness),
         isolatedProfiles: Boolean(harness.profileEnv),
         modelSelection: Boolean(harness.modelArgvPrefix),
         workspaceSelection: Boolean(harness.workspaceArgvPrefix),
@@ -301,9 +302,12 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
  * other harness's loginArgv actually targets a real login flow that
  * returns control on its own once finished, so this notice would be noise
  * for those. */
-export function announceBareInteractiveLogin(harness: AiLocalHarnessDefinition): void {
-  if (harness.loginArgv?.length === 0) {
-    output.write(`\n${chalk.dim(`Opening ${harness.displayName}'s own interactive session to sign in -- exit it (its own quit/Ctrl+C) once done to return here.`)}\n\n`);
+export function announceBareInteractiveLogin(harness: Pick<AiLocalHarnessDefinition, 'displayName' | 'loginArgv' | 'loginHint'>): void {
+  // A vendor that signs in only from inside its own session (Pi's /login)
+  // says what to type; the rest open straight into their sign-in.
+  const hint = harness.loginHint ? ` ${harness.loginHint}, then` : '';
+  if (harness.loginArgv?.length === 0 || harness.loginHint) {
+    output.write(`\n${chalk.dim(`Opening ${harness.displayName}'s own interactive session to sign in --${hint} exit it (its own quit/Ctrl+C) once done to return here.`)}\n\n`);
   }
 }
 
@@ -320,8 +324,10 @@ function nativeAccountContext(state: HarnessState, labelOrId: string): { account
 export async function aiAccountStatus(labelOrId: string): Promise<void> {
   const state = await readState();
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
-  if (!harness.statusArgv) throw new Error(`${harness.displayName} does not publish a non-destructive account-status command`);
-  const nativeStatus = (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim();
+  if (!harness.statusArgv && !hasAuthEvidence(harness)) throw new Error(`${harness.displayName} does not publish a non-destructive account-status command`);
+  const nativeStatus = harness.statusArgv
+    ? (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim()
+    : await authEvidencePresent(harness, environment) ? 'signed in' : 'not signed in';
   const usage = await accountUsageLabel(account, state);
   emitJson({ account: { ...accountView(account), usage }, nativeStatus, credentialBoundary: 'local-only' });
 }
@@ -329,8 +335,9 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
 export async function aiAccountLogout(labelOrId: string): Promise<void> {
   const state = await readState();
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
-  if (!harness.logoutArgv) throw new Error(`${harness.displayName} does not publish a non-interactive logout command`);
-  await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
+  if (!harnessCanLogout(harness)) throw new Error(`${harness.displayName} does not publish a non-interactive logout command`);
+  if (harness.logoutArgv) await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
+  else await logoutNativeHarness(harness, environment);
   account.status = 'needs_login';
   await writeState(state);
   emitJson({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
@@ -360,14 +367,17 @@ export function clearLoginStatusCache(harnessCommand?: string): void {
   }
 }
 
-/** No status command published: there is no reliable signal, so assume logged
- * in rather than force a prompt on a user who already authenticated outside
- * ClikCode. A non-zero exit is treated as logged-out unconditionally (true for
+/** No status command and no credential location declared: there is no
+ * reliable signal, so assume logged in rather than force a prompt on a user
+ * who already authenticated outside ClikCode. A non-zero exit is treated as logged-out unconditionally (true for
  * every status command checked against real output: Codex, Claude Code); an
  * explicit `loggedIn`/`isAuthenticated: false` in a JSON body catches the ones
  * that report failure with exit 0 instead (Cursor Agent). */
 export async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>): Promise<boolean> {
-  if (!harness.statusArgv) return false;
+  // No status command: the credential the vendor keeps on disk, or an API-key
+  // variable, is the answer. Cheap enough to read every time, and never stale
+  // after a sign-in the way a cached answer would be.
+  if (!harness.statusArgv) return hasAuthEvidence(harness) ? !await authEvidencePresent(harness, environment) : false;
   const envKey = Object.entries(environment).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(';');
   const cacheKey = `${harness.command}:${envKey}`;
   const cached = loginStatusCache.get(cacheKey);
@@ -451,10 +461,10 @@ export async function aiAccountRemove(labelOrId: string, options: AccountRemoveO
       // fail-open-ok: without the catalog there is no declared logout to run; removal itself must still succeed.
       harness = undefined;
     }
-    if (harness?.logoutArgv) {
+    if (harness && harnessCanLogout(harness)) {
       // Best effort and bounded: an offline or already-expired login must
       // never make an account impossible to remove.
-      loggedOut = await captureNativeHarnessOutput(harness, harness.logoutArgv, profileEnvironment(harness, removed), 10_000)
+      loggedOut = await logoutNativeHarness(harness, profileEnvironment(harness, removed), 10_000)
         .then(() => true, () => false);
     }
   }

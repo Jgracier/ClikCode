@@ -19,6 +19,7 @@ import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { requiresProviderHandoff } from '../../session/options.js';
 import { preferredAccountId } from './preferred-account.js';
+import { hasAuthEvidence } from '../../harness/accounts/auth-files.js';
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
  * it first if needed, and — only inside the interactive terminal session,
@@ -107,7 +108,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (TERMINAL.active && harness.loginArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     const shouldCheckLogin = freshInstall
-      || (accountJustCreated && !harness.statusArgv)
+      || (accountJustCreated && !harness.statusArgv && !hasAuthEvidence(harness))
       || account?.status !== 'ready'
       || (accountJustCreated && await harnessNeedsLogin(harness, environment));
     if (shouldCheckLogin) {
