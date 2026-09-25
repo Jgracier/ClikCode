@@ -14,7 +14,7 @@ import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js'
 import { discoverOpenClawModels } from './openclaw-discovery.js';
 import { discoverOpencodeConnect } from './opencode-discovery.js';
 import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
-import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache } from './goose-discovery.js';
+import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPath } from './auth-files.js';
 import { acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId } from '../../runtime/lazy-bridge.js';
@@ -433,6 +433,16 @@ async function nativeModelCatalogUncached(
       if (inventory.configured) configured = inventory.configured;
       connect = inventory.connect;
     }
+  }
+  // Copilot publishes no model list anywhere ClikCode can read it: no
+  // command, nothing on its ACP session, and GitHub issues the list only to
+  // Copilot's own sign-in (a `gh` token gets 403). The public models.dev
+  // catalog lists what Copilot offers; which of those the account may use
+  // is Copilot's to say when the turn runs.
+  if (harness.command === 'copilot') {
+    const listed = modelsDevProvider(await modelsDevCache(), 'github-copilot');
+    listed.models.forEach((model) => models.add(model));
+    labels = { ...labels, ...listed.labels };
   }
   // Goose: its configured providers' models, and the rest to set up. A
   // provider that is another agent CLI (claude-code) lists that harness's own
