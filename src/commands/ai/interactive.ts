@@ -7,7 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
-import { chatNamed } from '../../session/options.js';
+import { chatNamed, latestChat } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { discardIfBlank } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
@@ -98,18 +98,24 @@ import { closeAllWorkerClients, runTurnThroughWorker } from '../../worker/turn-b
 // never saved because a hangup killed the process before any handler ran)
 // that the worker split does not address.
 
-export async function aiSessionOpenDefault(config: Conf): Promise<void> {
+export async function aiSessionOpenDefault(config: Conf, options: { continue?: boolean } = {}): Promise<void> {
   const state = await readState();
+  if (options.continue) {
+    const latest = latestChat(state.sessions, process.cwd());
+    if (latest) return aiSessionResume(config, latest.id);
+  }
   const session = launchSession(state, process.cwd());
   state.sessions.push(session);
   await writeState(state);
   await aiSessionInteractive(config, session.id);
 }
 
-export async function aiSessionResume(config: Conf, id: string): Promise<void> {
+export async function aiSessionResume(config: Conf, ref: string): Promise<void> {
   const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session) throw new Error(`AI session "${id}" was not found`);
+  // An id, the start of one, a chat's name, or `last`.
+  const id = state.sessions.some((item) => item.id === ref) ? ref : chatNamed(state.sessions, ref, '');
+  const session = id ? state.sessions.find((item) => item.id === id) : undefined;
+  if (!session) throw new Error(`no chat matches "${ref}" -- use its name, the start of its id, or last`);
   if (session.status !== 'active') {
     session.status = 'active';
     session.closedAt = undefined;

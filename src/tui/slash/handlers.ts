@@ -199,7 +199,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     delete fork.handoff;
     state.sessions.push(fork);
     await writeState(state);
-    return emitHarnessOutput({ panel: 'session-forked', text: `Conversation forked as ${fork.id.slice(0, 8)}. Use /resume to open it.`, session: fork });
+    // The fork is where the user goes next: returning its id switches to it.
+    emitHarnessOutput({ panel: 'session-forked', text: `Forked as ${fork.id.slice(0, 8)} -- you are in the fork; /resume ${session.id.slice(0, 8)} goes back.`, session: fork });
+    return fork.id;
   },
   model: async ({ state, session, words }) => {
     // `--any`: an id typed on purpose (the picker's "Enter a model ID…") is

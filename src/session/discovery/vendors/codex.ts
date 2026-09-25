@@ -101,7 +101,7 @@ export async function discoverCodexFsSessions(workspace: string, environment: Na
       // Only files that survive the filter are stat-ed at all.
       const info = await stat(path).catch(() => undefined);
       if (!info) continue;
-      matches.push({ nativeId: facts.id, title: facts.title, updatedAt: new Date(info.mtimeMs).toISOString(), updatedAtMs: info.mtimeMs });
+      matches.push({ nativeId: facts.id, title: facts.title, updatedAt: new Date(info.mtimeMs).toISOString(), updatedAtMs: info.mtimeMs, ...(facts.cwd ? { workspace: facts.cwd } : {}) });
     }
   }
   await saveDiscoveryCache();

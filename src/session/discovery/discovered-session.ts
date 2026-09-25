@@ -20,4 +20,7 @@ export interface DiscoveredNativeSession {
    * into this when the format is unambiguous, left unset otherwise, so an
    * unsortable value is never guessed into a false position. */
   updatedAtMs?: number;
+  /** The folder the chat ran in, where the vendor records it. Discovery
+   * across every folder shows it, and adopting the chat opens it there. */
+  workspace?: string;
 }
