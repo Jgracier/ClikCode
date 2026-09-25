@@ -56,6 +56,7 @@ import { exportTranscript } from '../../tui/slash/export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory.js';
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
+import { interactiveResumeInPicker } from '../../tui/pickers/resume-in.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
 import { interactiveHarnessOptionPicker } from '../../tui/pickers/options.js';
@@ -272,6 +273,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     // silently halve the real refresh rate.
   }, 15_000) : undefined;
   let notice: string | undefined;
+  /** A message to send next, without asking: the one that ran out of usage,
+   * after "Resume in" moved the chat to a harness that has some. */
+  let resend: string | undefined;
   let synchronizedSessionId = id;
   let transportSessionId = id;
   try {
@@ -319,6 +323,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // not already say.
           line = queued.text;
           queuedTurnId = queued.id;
+        } else if (resend) {
+          line = resend;
+          resend = undefined;
         } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true })).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
@@ -716,6 +723,16 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // exhausted" reads wrong behind an "Error:" that suggests something broke.
         } else if (rl.render) {
           notice = cancelled ? 'Stopped' : isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
+          // Out of usage on every account here: offer the harnesses that
+          // still have some, and carry on there with the same message.
+          if (!cancelled && !queuedTurnId && isUsageExhaustedMessage(message) && rl instanceof TerminalHarnessPrompter) {
+            const moved = await interactiveResumeInPicker(rl, id, line).catch(() => undefined);
+            if (moved) {
+              id = moved;
+              resend = line;
+              notice = undefined;
+            }
+          }
         }
         else emitHarnessOutput({ panel: 'error', message });
       }

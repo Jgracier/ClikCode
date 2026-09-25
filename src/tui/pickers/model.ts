@@ -1,6 +1,6 @@
 /** Choosing a model from the active harness's catalog. */
 
-import type { ModelCatalogResult } from '../../harness/definition.js';
+import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { localHarnessForCommand, localHarnessForProvider, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
@@ -12,6 +12,26 @@ import { TerminalHarnessPrompter } from '../prompter.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { withVendorTerminal } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
+
+/** One model as every model list shows it. A harness that drives other
+ * providers shows `provider:model`, and a name only where it says something
+ * the id does not ("Opus 5.5" for `opus`) -- never the id a second time;
+ * "Claude Opus 5.5" only respells `claude-opus-5-5`, compared on letters and
+ * digits alone. */
+export function modelRow(
+  harness: AiLocalHarnessDefinition | undefined, catalog: ModelCatalogResult, model: string, current: string | undefined, providerConfigured = false,
+): PickerOption<string> {
+  const shown = harness ? modelDisplayId(harness, model) : model;
+  const name = catalog.labels?.[model];
+  const bare = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const respells = name !== undefined && [shown, shown.slice(shown.indexOf(':') + 1)].some((id) => bare(id) === bare(name));
+  const parts = [
+    name && !respells ? name : undefined,
+    model === current ? 'current' : undefined,
+    model === current && providerConfigured ? 'provider configured' : undefined,
+  ].filter((part): part is string => Boolean(part));
+  return { label: shown, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
+}
 
 export async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<void> {
   const state = await readState();
@@ -36,23 +56,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const effective = session.model ?? catalog.configured;
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
-    ...discoveredModels.map((model) => {
-      // A harness that drives other providers shows every model one way,
-      // `provider:model`, and a name only where it says something the id
-      // does not ("Opus 5.5" for `opus`) -- never the id a second time.
-      const shown = harness ? modelDisplayId(harness, model) : model;
-      const name = catalog.labels?.[model];
-      // "Claude Opus 5.5" only respells `claude-opus-5-5`; "Opus 5.5" names
-      // what `opus` is. Compared on letters and digits alone.
-      const bare = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const respells = name !== undefined && [shown, shown.slice(shown.indexOf(':') + 1)].some((id) => bare(id) === bare(name));
-      const parts = [
-        name && !respells ? name : undefined,
-        model === effective ? 'current' : undefined,
-        model === effective && !session.model && model === catalog.configured ? 'provider configured' : undefined,
-      ].filter((part): part is string => Boolean(part));
-      return { label: shown, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
-    }),
+    ...discoveredModels.map((model) => modelRow(harness, catalog, model, effective, !session.model && model === catalog.configured)),
     // A multi-provider harness (Hermes) lists providers it can reach but is
     // not signed in to. Signing in here is the whole connection flow: no
     // command to know, and the picker comes back with that provider's models.
