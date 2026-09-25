@@ -102,11 +102,13 @@ export async function interactiveAccountPicker(
     // Choosing an account the vendor is holding for verification cannot work
     // yet: send the user to the fix instead, and keep them in the list so
     // "I've verified it" (Tab) is one step away.
+    // An account the vendor is holding for verification is still selected:
+    // the page opens (and is named) so it can be finished, and the next turn
+    // that succeeds clears the flag by itself -- no "I've verified it" step.
     const pending = providerAccounts.find((account) => account.id === selected.accountId)?.verification;
     if (pending) {
       if (pending.url && hasLocalDisplay()) openLoginUrl(pending.url);
-      rl.panel?.('Verify this account', `${verificationNotice(pending)}\n\nWhen you have finished, press Tab on it and choose “I’ve verified it”.`);
-      continue;
+      rl.panel?.('Verify this account', verificationNotice(pending));
     }
     await aiSessionCommand(id, `/settings account ${selected.accountId}`);
     return id;

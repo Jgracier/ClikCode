@@ -57,6 +57,7 @@ import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
 import { interactiveResumeInPicker } from '../../tui/pickers/resume-in.js';
+import { chooseOption } from '../../tui/pickers/choose.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
 import { interactiveHarnessOptionPicker } from '../../tui/pickers/options.js';
@@ -622,8 +623,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               return { exit: true };
             },
             delete: async () => {
-              const answer = (await rl.question('Delete this conversation? Type delete › ')).trim().toLowerCase();
-              if (answer !== 'delete') return {};
+              // The same confirmation every delete uses: Cancel first.
+              const confirmed = await chooseOption(rl, 'Delete this conversation?', [
+                { label: 'Cancel', value: false }, { label: 'Delete this conversation', value: true },
+              ]);
+              if (!confirmed) return {};
               await aiSessionCommand(id, '/delete confirm');
               return { exit: true };
             },
