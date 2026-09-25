@@ -50,7 +50,7 @@ import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
 import { harnessTurnTransport } from '../harness/transport/select.js';
-import { harnessAcpLaunch, harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, isDirectModelProvider, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
+import { harnessAcpLaunch, harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelProvider, isDirectModelProvider, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { localApiKey } from '../daemon/server.js';
@@ -474,6 +474,13 @@ export async function aiSessionSend(
       const replyError = !result.isError ? harnessReplyError(harness, result.text ?? '') : undefined;
       if (replyError) result = { ...result, isError: true, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
       if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
+      // A route that keeps no history: forget the session, so the next turn
+      // opens a fresh one and carries ClikCode's own transcript (the fresh-
+      // thread replay above) instead of resuming into an empty memory.
+      if (!result.isError && result.nativeSessionStateless) {
+        session.nativeSessionId = undefined;
+        delete session.nativeSessionPreallocated;
+      }
       // A non-zero exit code alone is not treated as failure here: by this
       // point nativeTurnResult has already thrown if it found neither assistant
       // text nor tool work, so a result means a real, complete turn. A harness
@@ -519,7 +526,7 @@ export async function aiSessionSend(
             authRetried = true;
             await closePersistentTransport(session.id);
             const signIn = { ...harness, loginArgv: signInArgv };
-            const signInName = signInArgv === harness.loginArgv ? harness.displayName : `${harness.displayName} › ${model?.split(':')[0]}`;
+            const signInName = signInArgv === harness.loginArgv ? harness.displayName : `${harness.displayName} › ${model ? modelProvider(harness, model) : ''}`;
             if (harness.loginCapturable) {
               prompter.startWaiting(`signing in to ${signInName}…`);
               try { await loginNativeHarness(signIn, environment); } finally { prompter.stopWaiting(); }

@@ -203,6 +203,12 @@ export interface AiHarnessTurnDefinition {
   output: 'text' | 'json' | 'json-lines';
   /** Ordered JSON property names that may contain the final assistant text. */
   responseFields?: readonly string[];
+  /** A route that keeps no history between one-shot turns: when the turn
+   * result's value at `path` is one of `values`, the session it names cannot
+   * be resumed with context, so ClikCode carries its own transcript next turn
+   * instead. OpenClaw's CLI back ends (`claude-cli`) refuse to reseed history
+   * in `agent --local`. */
+  statelessRoute?: { path: readonly string[]; values: readonly string[] };
   /** Literal phrases this vendor writes into its OWN result text when an
    *  account is out of usage, while still reporting the turn as a success.
    *  Matched literally and declared per harness, never inferred -- see
@@ -285,6 +291,9 @@ export interface AiLocalHarnessDefinition {
   /** Sign-in for one provider inside a multi-provider harness; `{provider}`
    * is replaced with the provider half of a `provider:model` id. */
   providerLoginArgv?: readonly string[];
+  /** What separates provider from model in this harness's ids. Default `:`
+   * (Hermes); OpenClaw writes `provider/model`. */
+  modelProviderSeparator?: ':' | '/';
   /** Replies that are really a failed call (see AiHarnessReplyErrorPattern). */
   replyErrorPatterns?: readonly AiHarnessReplyErrorPattern[];
   /** For a harness whose model ids carry their provider (`provider:model`,
@@ -541,15 +550,17 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // single provider is `hermes auth add <provider>`, which picks OAuth or an
   // API key for that provider itself.
   { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['model'], providerLoginArgv: ['auth', 'add', '{provider}'], statusArgv: ['status'], logoutArgv: ['logout'], retiredOptionIds: ['provider'], replyErrorPatterns: HERMES_REPLY_ERRORS, modelArgvPrefix: ['--model'], modelProviderArgvPrefix: ['--provider'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
-  // Same kind of product as Hermes, not a fork. The one-shot turn is
-  // `agent --local --json` (docs.openclaw.ai/cli/agent): it returns one JSON
-  // envelope with `final` and `sessionId`, not a tool stream. `openclaw acp`
-  // does stream tools, but only by forwarding to a running Gateway, so it is
-  // not the turn. Session lists identify a conversation by `key`
-  // (`agent:main:main`); that resumes with `--session-key`. A turn's
-  // `sessionId` resumes with `--session-id`. Login is `onboard` (there is no
-  // argument-free logout). No per-turn permission or image flag is documented.
-  { command: 'openclaw', provider: 'openclaw', displayName: 'OpenClaw', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, npmPackage: 'openclaw', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'openclaw', loginArgv: ['onboard'], statusArgv: ['status'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models', 'list', '--json'], effortArgvPrefix: ['--thinking'], effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], profileEnv: 'OPENCLAW_STATE_DIR', turn: { startArgv: ['agent', '--local', '--json', '--agent', 'main'], resumeArgv: ['agent', '--local', '--json'], resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], promptArgvPrefix: ['--message'], output: 'json', responseFields: ['final', 'text', 'result'] }, session: { resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], discoverArgv: ['sessions', '--json', '--limit', '50'], discoverFormat: 'json' } },
+  // Same kind of product as Hermes, not a fork; checked against a real
+  // install (OpenClaw 2026.9.6). The one-shot turn is `agent --local --json`,
+  // whose answer is `meta.finalAssistantVisibleText` -- the generic fields
+  // also match `meta.executionTrace…result: "success"`, which used to become
+  // the reply. Without --session-id every turn joins the shared
+  // `agent:main:main` session, so each chat gets its own. A model is
+  // `provider/model` and --model takes it whole; one provider signs in with
+  // `models auth login --provider <id>`, the whole setup is `onboard`. The
+  // CLI back ends (a Claude Code login) keep no history between --local
+  // turns, so those turns carry ClikCode's transcript instead.
+  { command: 'openclaw', provider: 'openclaw', displayName: 'OpenClaw', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, npmPackage: 'openclaw', localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'openclaw', loginArgv: ['onboard'], providerLoginArgv: ['models', 'auth', 'login', '--provider', '{provider}'], modelProviderSeparator: '/', statusArgv: ['models', 'status'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'adaptive', 'max', 'ultra'], profileEnv: 'OPENCLAW_STATE_DIR', turn: { startArgv: ['agent', '--local', '--json', '--agent', 'main'], resumeArgv: ['agent', '--local', '--json', '--agent', 'main'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], promptArgvPrefix: ['--message'], output: 'json', responseFields: ['finalAssistantVisibleText'], statelessRoute: { path: ['meta', 'systemPromptReport', 'provider'], values: ['claude-cli', 'google-gemini-cli'] } }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], resumeKeyPrefix: ['--session-key'], discoverArgv: ['sessions', '--json', '--limit', '50'], discoverFormat: 'json' } },
   { command: 'command', provider: 'command-code', displayName: 'Command Code', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['low', 'medium', 'high'], profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cmdc', npmPackage: 'command-code', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'standard'] }, bypass: { argv: ['--yolo'] }, auto: { argv: ['--permission-mode', 'auto-accept'] } }, profileEnv: 'HOME', turn: { startArgv: ['--print', '--output-format', 'json', '--skip-onboarding', '--no-auto-update'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // ---- Added from vendor documentation; none of these binaries was available
   // to run live, so every one-shot contract below is `experimental` and only
@@ -1123,6 +1134,15 @@ export function splitProviderModel(model: string): { provider: string; model: st
   return match ? { provider: match[1]!, model: match[2]! } : undefined;
 }
 
+/** The provider half of a model id, in the harness's own spelling. */
+export function modelProvider(harness: AiLocalHarnessDefinition, model: string): string | undefined {
+  if (harness.modelProviderSeparator === '/') {
+    const slash = model.indexOf('/');
+    return slash > 0 ? model.slice(0, slash) : undefined;
+  }
+  return splitProviderModel(model)?.provider;
+}
+
 /** The model flag, plus the provider flag when the harness takes the provider
  * separately and the id names one. */
 export function modelSelectorArgv(harness: AiLocalHarnessDefinition, model: string): string[] {
@@ -1152,7 +1172,7 @@ export function harnessReplyError(harness: AiLocalHarnessDefinition, text: strin
 /** The sign-in to run for a model: its own provider's when the harness has
  * one and the id names a provider, else the harness's whole sign-in. */
 export function harnessLoginArgvForModel(harness: AiLocalHarnessDefinition, model: string | null | undefined): readonly string[] | undefined {
-  const provider = model && harness.providerLoginArgv ? splitProviderModel(model)?.provider : undefined;
+  const provider = model && harness.providerLoginArgv ? modelProvider(harness, model) : undefined;
   return provider ? harness.providerLoginArgv!.map((part) => part === '{provider}' ? provider : part) : harness.loginArgv;
 }
 

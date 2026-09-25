@@ -176,10 +176,10 @@ describe('local harness catalog', () => {
       'agent', '--local', '--json', '--agent', 'main', '--model', 'openai/gpt', '--thinking', 'low', '--message', 'hi',
     ]);
     expect(nativeHarnessTurnArgv(openclaw, { prompt: 'hi', nativeSessionId: 'sess-1' })).toEqual([
-      'agent', '--local', '--json', '--session-id', 'sess-1', '--message', 'hi',
+      'agent', '--local', '--json', '--agent', 'main', '--session-id', 'sess-1', '--message', 'hi',
     ]);
     expect(nativeHarnessTurnArgv(openclaw, { prompt: 'hi', nativeSessionId: 'agent:main:main' })).toEqual([
-      'agent', '--local', '--json', '--session-key', 'agent:main:main', '--message', 'hi',
+      'agent', '--local', '--json', '--agent', 'main', '--session-key', 'agent:main:main', '--message', 'hi',
     ]);
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'bypass' })).toContain('--yolo');
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--yolo');
@@ -198,6 +198,11 @@ describe('local harness catalog', () => {
     expect(harnessReplyError(hermes, 'HTTP 400: {"detail":"not supported"}')).toEqual({ statusCode: 400 });
     expect(harnessReplyError(hermes, 'No access token found for Nous Portal login. Run `hermes model` to\r\nre-authenticate.')).toEqual({ statusCode: 401 });
     expect(harnessReplyError(hermes, 'The fix returns HTTP 400: when the body is empty.')).toBeUndefined();
+    const claw = localHarnessForCommand('openclaw')!;
+    expect(harnessLoginArgvForModel(claw, 'openai/gpt-5.5')).toEqual(['models', 'auth', 'login', '--provider', 'openai']);
+    expect(harnessLoginArgvForModel(claw, 'openrouter/moonshotai/kimi-k2')).toEqual(['models', 'auth', 'login', '--provider', 'openrouter']);
+    expect(nativeHarnessTurnArgv(claw, { prompt: 'hi', model: 'openai/gpt-5.5', nativeSessionId: 's-1', createdHere: true }))
+      .toEqual(['agent', '--local', '--json', '--agent', 'main', '--session-id', 's-1', '--model', 'openai/gpt-5.5', '--message', 'hi']);
 
     const antigravity = localHarnessForCommand('antigravity')!;
     expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--mode');

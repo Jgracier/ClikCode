@@ -57,6 +57,8 @@ export async function captureNativeHarness(spec: NativeHarnessSpec, args: readon
 /** `stdinText` answers a vendor that asks a question. With stdin ignored a
  *  prompt reads EOF and takes its default, which for Hermes' "Save config
  *  anyway? [y/N]" is No -- so `mcp add` exited 0 having written nothing. */
+const CAPTURE_LIMIT_BYTES = 2 * 1024 * 1024;
+
 export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs = 15_000, cwd?: string, stdinText?: string): Promise<string> {
   await ensureNativeHarness(spec);
   return new Promise((resolve, reject) => {
@@ -80,15 +82,20 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
     child.stderr!.setEncoding('utf8');
     child.stdout!.on('data', (chunk: string) => {
       stdout += chunk;
-      if (stdout.length > 64 * 1024) {
+      // A guard against a runaway child, not a size budget: OpenClaw's
+      // `plugins list --json` is ~105 KiB and was cut off at the old 64 KiB.
+      if (stdout.length > CAPTURE_LIMIT_BYTES) {
         exceededLimit = true;
         terminatePortable(child);
       }
     });
     child.stderr!.on('data', (chunk: string) => { if (stderr.length < 16 * 1024) stderr += chunk; });
     child.once('error', (error) => finish(error));
-    child.once('exit', (code, signal) => {
-      if (exceededLimit) return finish(new Error(`${spec.displayName} helper output exceeded 64 KiB`));
+    // `close`, not `exit`: exit can fire before the stdout pipe has drained,
+    // and a child that prints its JSON and exits at once (OpenClaw) was read
+    // back as empty.
+    child.once('close', (code, signal) => {
+      if (exceededLimit) return finish(new Error(`${spec.displayName} helper output exceeded ${CAPTURE_LIMIT_BYTES / 1024 / 1024} MiB`));
       if (code !== 0) return finish(new Error(`${spec.binary} ${signal ? `stopped (${signal})` : `exited ${code ?? 1}`}${stderr.trim() ? `: ${stderr.trim().slice(-2000)}` : ''}`));
       finish();
     });

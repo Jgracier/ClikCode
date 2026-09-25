@@ -20,6 +20,9 @@ export interface NativeTurnResult {
   /** Latest `rate_limit_event` status, e.g. 'allowed' | 'allowed_warning' | 'rejected'. */
   rateLimitStatus?: string;
   usage?: NativeTurnUsage;
+  /** The turn ran on a route that keeps no history (see
+   * `turn.statelessRoute`); its session must not be resumed as if it did. */
+  nativeSessionStateless?: boolean;
 }
 
 /** Top-level assistant prose of a Claude-shaped stream, in order. Text blocks
@@ -151,8 +154,12 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   const text = claudeText || gooseStreamText.trim() || messages[messages.length - 1]?.trim() || errorMessage;
   const ids = nativeSessionIdsFromValues(values, harness.command);
   const usage = nativeTurnUsage(harness, values);
+  const route = harness.turn.statelessRoute;
+  const routeValue = route ? values.map((value) => route.path.reduce<unknown>((node, key) => asRecord(node)?.[key], value)).find((found) => typeof found === 'string') : undefined;
+  const stateless = Boolean(route && typeof routeValue === 'string' && route.values.includes(routeValue));
   const extras = {
     ...(ids.size ? { nativeSessionId: [...ids][0] } : {}),
+    ...(stateless ? { nativeSessionStateless: true } : {}),
     ...(statusCode ? { statusCode } : {}), ...(errorKind ? { errorKind } : {}),
     ...(rateLimitStatus ? { rateLimitStatus } : {}), ...(usage ? { usage } : {}),
   };
