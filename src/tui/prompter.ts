@@ -30,7 +30,7 @@ import { runOptionPicker } from './option-picker.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
-import { highlightSelection, selectedText, selectionAction, selectionIsEmpty, type MouseAction, type Selection } from './render/selection.js';
+import { highlightSelectionAt, orderedRange, selectedText, selectionAction, selectionIsEmpty, type MouseAction, type Selection } from './render/selection.js';
 import { copyToClipboard } from '../session/attachments.js';
 import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
@@ -64,6 +64,8 @@ const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
+/** How often a drag held at the screen's edge scrolls the selection a line. */
+const SELECTION_SCROLL_MS = 60;
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
@@ -147,11 +149,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the footer starts, and the status line gets drawn at both rows. Guarded the
    * same way `selecting` already guards this for select() pickers. */
   private paletteActive = false;
-  /** A mouse selection in progress, in screen cells (render/selection.ts). */
+  /** A mouse selection in progress, in conversation lines, not screen rows
+   * (see lineAtRow): a drag that scrolls the view keeps what it selected, and
+   * one longer than the screen copies whole. */
   private selection?: Selection;
-  /** The last frame's rows as drawn, before any selection highlight: what a
-   * selection copies from. */
-  private screenRows: string[] = [];
+  /** While a drag rests on the top or bottom edge, the view keeps scrolling
+   * that way, a line at a time, extending the selection -- the way every
+   * terminal's own selection does. */
+  private selectionScroll?: { timer: NodeJS.Timeout; direction: 1 | -1; col: number };
+  /** Rows dropped from the front of alternateTranscript, so a line's number
+   * stays the same when older rows are trimmed. */
+  private alternateTrimmed = 0;
+  /** The live rows below the transcript in the last frame: the text a
+   * selection copies from them. */
+  private frameLayout = { live: [] as string[] };
   /** What the composer's slash palette offers, remembered from the last
    * question() so a turn in flight can offer the same commands. A turn does
    * not change which commands exist; each is re-checked when it runs. */
@@ -1412,7 +1423,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (this.alternateScrollback > 0) this.alternateScrollback += finished.length;
       // Trimming the front does not move the end, so it leaves the offset be.
       const excess = this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS;
-      if (excess > 0) this.alternateTranscript.splice(0, excess);
+      if (excess > 0) {
+        this.alternateTranscript.splice(0, excess);
+        this.alternateTrimmed += excess;
+      }
     }
     const height = this.viewportRows();
     const live = pending.live.slice(-height);
@@ -1432,19 +1446,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const furthest = Math.max(0, this.alternateTranscript.length - above);
     this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
     const scrolled = this.alternateScrollback;
-    let rows = scrolled > 0
-      ? [
-        ...this.alternateTranscript.slice(
-          Math.max(0, this.alternateTranscript.length - above - scrolled),
-          this.alternateTranscript.length - scrolled,
-        ),
-        ...live.slice(0, Math.max(0, height - above)),
-      ]
-      : [...this.alternateTranscript.slice(-above), ...live];
+    const first = Math.max(0, this.alternateTranscript.length - above - scrolled);
+    const shownTranscript = this.alternateTranscript.slice(first, this.alternateTranscript.length - scrolled);
+    const shownLive = scrolled > 0 ? live.slice(0, Math.max(0, height - above)) : live;
+    let rows = [...shownTranscript, ...shownLive];
     while (rows.length < height) rows.unshift('');
-    // What is on screen, before the highlight: the text a selection copies.
-    this.screenRows = rows;
-    if (this.selection) rows = highlightSelection(rows, this.selection);
+    this.frameLayout = { live: [...live] };
+    if (this.selection) rows = highlightSelectionAt(rows, rows.map((_, row) => this.lineAtRow(row)), this.selection);
     // Only what changed. A keystroke changes the composer's row and nothing
     // else, and rewriting the whole screen for it costs kilobytes per key on
     // a phone link -- long enough for a client's own prediction popup to
@@ -1720,26 +1728,106 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * shown: the highlight is what was selected, and it clears when the text is
    * on the clipboard. Only a failure to copy says anything. */
   private handleSelection(action: MouseAction): void {
+    // Scrolled back, the rows below the conversation are the composer and the
+    // status line: a drag reaching them is reaching for the conversation's
+    // next line, which the edge scroll brings up, not for the chrome.
+    const intoChrome = this.alternateScrollback > 0 && action.kind !== 'press' && action.at.row >= this.alternateAbove;
+    const at = intoChrome
+      ? { row: this.lineAtRow(Math.max(0, this.alternateAbove - 1)), col: Number.MAX_SAFE_INTEGER }
+      : { row: this.lineAtRow(action.at.row), col: action.at.col };
     if (action.kind === 'press') {
-      this.selection = { anchor: action.at, head: action.at };
+      this.stopSelectionScroll();
+      if (!Number.isFinite(at.row)) return;
+      this.selection = { anchor: at, head: at };
       return;
     }
     const selection = this.selection;
     if (!selection) return;
-    selection.head = action.at;
+    if (Number.isFinite(at.row)) selection.head = at;
     if (action.kind === 'drag') {
+      this.followSelectionEdge(action.at.row, action.at.col);
       this.redrawSelection();
       return;
     }
+    this.stopSelectionScroll();
     this.selection = undefined;
     if (selectionIsEmpty(selection)) return;
-    const text = selectedText(this.screenRows, selection);
+    const text = this.selectionText(selection);
     this.redrawSelection();
     if (!text) return;
     void copyToClipboard(text).catch((error: unknown) => {
       this.showTransientNotice(`Could not copy: ${error instanceof Error ? error.message : String(error)}`, 4000, () => this.redrawSelection());
       this.redrawSelection();
     });
+  }
+
+  /** The conversation line screen row `row` shows: a transcript row's number
+   * (stable while the view scrolls and old rows are trimmed), or, below the
+   * transcript, a live row numbered after the transcript's end. -Infinity for
+   * the blank rows above a short transcript. */
+  private lineAtRow(row: number): number {
+    // From where the view is now, not from the last frame drawn: a scroll's
+    // repaint lands a moment after the scroll, and a release in between was
+    // placed by the old layout -- the selection snapped back to where the
+    // drag reached the edge.
+    const length = this.alternateTranscript.length;
+    const first = Math.max(0, length - this.alternateAbove - this.alternateScrollback);
+    const shown = Math.max(0, length - this.alternateScrollback - first);
+    const pad = Math.max(0, this.alternateAbove - shown);
+    if (row < pad) return Number.NEGATIVE_INFINITY;
+    if (row < pad + shown) return this.alternateTrimmed + first + (row - pad);
+    return this.alternateTrimmed + this.alternateTranscript.length + (row - pad - shown);
+  }
+
+  /** The text of one conversation line, on screen or not. */
+  private lineText(line: number): string {
+    const end = this.alternateTrimmed + this.alternateTranscript.length;
+    if (line < this.alternateTrimmed) return '';
+    if (line < end) return this.alternateTranscript[line - this.alternateTrimmed] ?? '';
+    return this.frameLayout.live[line - end] ?? '';
+  }
+
+  /** What a selection copies, read from the conversation itself -- all of it,
+   * including the lines scrolled out of view while it was being made. */
+  private selectionText(selection: Selection): string {
+    const range = orderedRange(selection);
+    const rows: string[] = [];
+    for (let line = range.start.row; line <= range.end.row; line += 1) rows.push(this.lineText(line));
+    const shift = (cell: { row: number; col: number }) => ({ row: cell.row - range.start.row, col: cell.col });
+    return selectedText(rows, { anchor: shift(selection.anchor), head: shift(selection.head) });
+  }
+
+  /** A drag resting on the top row scrolls back; one resting on the bottom of
+   * the conversation while it is scrolled back scrolls forward. Anywhere else
+   * stops. The terminal sends a drag report only when the pointer moves, so
+   * a timer carries the scroll while it is held still at the edge. */
+  private followSelectionEdge(row: number, col: number): void {
+    const bottom = Math.max(0, this.alternateAbove - 1);
+    const direction: 1 | -1 | 0 = row <= 0 ? 1 : row >= bottom && this.alternateScrollback > 0 ? -1 : 0;
+    if (!direction) { this.stopSelectionScroll(); return; }
+    if (this.selectionScroll?.direction === direction) { this.selectionScroll.col = col; return; }
+    this.stopSelectionScroll();
+    const timer = setInterval(() => this.stepSelectionScroll(), SELECTION_SCROLL_MS);
+    timer.unref?.();
+    this.selectionScroll = { timer, direction, col };
+    this.stepSelectionScroll();
+  }
+
+  private stepSelectionScroll(): void {
+    const scroll = this.selectionScroll;
+    const selection = this.selection;
+    if (!scroll || !selection || this.closed || this.suspended) { this.stopSelectionScroll(); return; }
+    const before = this.alternateScrollback;
+    if (!this.scrollTranscript(scroll.direction)) { this.stopSelectionScroll(); return; }
+    // The line under the resting pointer moved by however far the view did.
+    const moved = this.alternateScrollback - before;
+    selection.head = { row: selection.head.row - moved, col: scroll.direction < 0 ? Number.MAX_SAFE_INTEGER : scroll.col };
+  }
+
+  private stopSelectionScroll(): void {
+    if (!this.selectionScroll) return;
+    clearInterval(this.selectionScroll.timer);
+    this.selectionScroll = undefined;
   }
 
   /** The current frame again, so the highlight follows the pointer. */
