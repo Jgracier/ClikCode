@@ -73,7 +73,7 @@ async function harnessOptionPickerOnce(rl: HarnessPrompter, id: string): Promise
       },
     };
   };
-  const option = await chooseOption(rl, `${harness.displayName} options`, vendorFacingOptions(options).map((item) => ({
+  const option = await chooseOption(rl, `${harness.displayName} options`, vendorFacingOptions(options, harness).map((item) => ({
     label: item.label,
     detail: [
       `· ${item.description}`,

@@ -174,6 +174,7 @@ export interface AiLocalHarnessDefinition {
   loginCapturable?: boolean;
   statusArgv?: readonly string[];
   logoutArgv?: readonly string[];
+  planMode?: { option: string; value: true | string };
   authFiles?: readonly { path: string; contains?: string; removeLine?: boolean }[];
   authEnv?: readonly string[];
   loginHint?: string;

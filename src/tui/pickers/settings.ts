@@ -30,6 +30,7 @@ import { interactiveModelPicker } from './model.js';
 import { interactiveHarnessOptionPicker } from './options.js';
 import { interactivePermissionPicker } from './permissions.js';
 import { applyToChat, settingLabel } from './setting-scope.js';
+import { aiSessionCommand } from '../slash/handlers.js';
 import { harnessManagers, interactiveToolsPicker } from './tools.js';
 
 /** A setting with at most this many values is chosen in its row; one with
@@ -61,7 +62,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     const inline = (choices: readonly { label: string; value: string }[], current: string, apply: (value: string) => Promise<void>) => (
       choices.length >= 2 && choices.length <= INLINE_MAX_CHOICES ? { inline: { choices, current, apply } } : {}
     );
-    const optionCount = harness ? vendorFacingOptions(localHarnessCapabilityManifest(harness).options).length : 0;
+    const optionCount = harness ? vendorFacingOptions(localHarnessCapabilityManifest(harness).options, harness).length : 0;
     const setOptions = Object.keys(session.harnessOptions ?? {}).length;
     const values: Record<DefaultKey, string | undefined> = {
       model: session.model ?? undefined, effort: session.effort || undefined, permissions: session.permissionMode ?? 'ask', failover,
@@ -88,6 +89,16 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
         label: 'Failover', detail: failover === 'auto' ? 'switch accounts when one runs out' : 'stop when an account runs out', value: 'failover',
         actions: defaultActions(harness, 'failover'),
         ...inline([{ label: 'Auto', value: 'auto' }, { label: 'Never', value: 'never' }], failover, (value) => applyToChat(id, 'failover', value)),
+      }] : []),
+      // One Plan mode for every harness that has a read-only planning mode,
+      // whatever the vendor calls it.
+      ...(harness?.planMode ? [{
+        label: 'Plan mode', detail: 'read-only: plan, change nothing', value: 'plan',
+        inline: {
+          choices: [{ label: 'Off', value: 'off' }, { label: 'On', value: 'on' }],
+          current: session.harnessOptions?.[harness.planMode.option] === harness.planMode.value ? 'on' : 'off',
+          apply: (value: string) => aiSessionCommand(id, `/settings option ${harness.planMode!.option} ${value === 'on' ? String(harness.planMode!.value === true ? 'on' : harness.planMode!.value) : 'default'}`).then(() => undefined),
+        },
       }] : []),
       ...(harness && optionCount ? [{ label: `${harness.displayName} options`, detail: setOptions ? `${setOptions} set` : `${optionCount} available`, value: 'options' }] : []),
       ...(harness ? [{ label: 'Tools & integrations', detail: harnessManagers(harness).map(([, manager]) => manager.label).join(', ') || 'MCP servers', value: 'tools' }] : []),
