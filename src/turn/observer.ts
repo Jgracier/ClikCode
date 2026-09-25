@@ -34,4 +34,16 @@ export interface TurnObserver {
   stopWaiting(refresh?: boolean): void;
   suspend(): Promise<void>;
   resume(): void;
+  /** Runs a vendor sign-in somewhere with a terminal. A worker has none, so
+   * it asks its client; absent, the turn signs in where it runs. */
+  signIn?(request: SignInRequest): Promise<void>;
+}
+
+export interface SignInRequest {
+  /** Harness command, resolved again where the sign-in runs. */
+  command: string;
+  argv: readonly string[];
+  environment: Record<string, string>;
+  /** What the user is signing in to (`Hermes › nous`). */
+  name: string;
 }

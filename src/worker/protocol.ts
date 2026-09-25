@@ -29,6 +29,9 @@ export type ClientCommand =
   | { type: 'steer'; text: string; id?: string }
   | { type: 'cancel'; restoreDraft: boolean }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
+  /** The vendor sign-in a `sign-in-request` asked for has finished, on the
+   * client's own terminal; `error` when it failed. */
+  | { type: 'sign-in-response'; id: string; error?: string }
   /** The client made a change the worker did not: an account swap from a
    * local-only login flow, a manual edit to state. Re-read rather than
    * synchronize field-by-field -- the source of truth is the state file
@@ -53,6 +56,10 @@ export type WorkerEvent =
   | { type: 'waiting-start'; message: string }
   | { type: 'waiting-stop' }
   | { type: 'suspend' }
+  /** A turn needs the vendor signed in. The worker has no terminal to run a
+   * sign-in on, so the client runs it on its own and answers with
+   * `sign-in-response`; the worker then retries the turn. */
+  | { type: 'sign-in-request'; id: string; command: string; argv: readonly string[]; environment: Record<string, string>; name: string }
   | { type: 'resume' }
   | { type: 'notice'; message: string }
   | { type: 'turn-error'; message: string }

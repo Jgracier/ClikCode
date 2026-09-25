@@ -16,6 +16,9 @@ import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { WorkerClient } from './client.js';
 import type { WorkerEvent } from './protocol.js';
+import { withVendorTerminal } from '../commands/account.js';
+import { loginNativeHarness } from '../harness/transport/native/login.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 
 export interface WorkerTurnRequest {
   echo: boolean;
@@ -109,6 +112,18 @@ export async function runTurnThroughWorker(
               client.send({ type: 'approval-response', id: event.id, approved });
             });
             return;
+          case 'sign-in-request': {
+            // The worker has no terminal; this window does. The vendor's own
+            // sign-in runs here, and the worker retries the turn after.
+            const harness = localHarnessForCommand(event.command);
+            const signIn = harness ? { ...harness, loginArgv: event.argv } : undefined;
+            void (signIn
+              ? withVendorTerminal(rl, signIn, () => loginNativeHarness(signIn, event.environment), event.name)
+              : Promise.reject(new Error(`unknown harness ${event.command}`)))
+              .then(() => client.send({ type: 'sign-in-response', id: event.id }),
+                (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: error instanceof Error ? error.message : String(error) }));
+            return;
+          }
           case 'suspend':
             // A worker has no terminal to actually hand over (see
             // BroadcastObserver.suspend's own comment) -- reflecting the

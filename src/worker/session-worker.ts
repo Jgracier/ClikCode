@@ -158,6 +158,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (!connection.attached) return;
     if (command.type === 'submit') { void runTurn(command); return; }
     if (command.type === 'approval-response') { observer.resolveApproval(command.id, command.approved); return; }
+    if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
     if (command.type === 'refresh') { observer.render((await currentSessionAndAccount()).session); return; }
     if (command.type === 'detach') { socket.end(); return; }
     if (command.type === 'cancel') {

@@ -17,7 +17,7 @@ import type { HarnessSession } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
-import type { TurnObserver } from '../turn/observer.js';
+import type { SignInRequest, TurnObserver } from '../turn/observer.js';
 import { encodeFrame, type WorkerEvent } from './protocol.js';
 
 export class BroadcastObserver implements TurnObserver {
@@ -34,6 +34,7 @@ export class BroadcastObserver implements TurnObserver {
    * discardInterruptedTurn (nothing happened yet, safe to drop entirely). */
   private outputStarted = false;
   private readonly pendingApprovals = new Map<string, (approved: boolean | 'always') => void>();
+  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 
   attach(socket: Socket): void {
     this.clients.add(socket);
@@ -144,6 +145,26 @@ export class BroadcastObserver implements TurnObserver {
    * here and is expected to surface as the turn failing with an
    * authentication error the client's own (local, client-side) /login flow
    * then handles the normal way. */
+  /** The sign-in runs on the client's terminal (see SignInRequest). With no
+   * client attached there is nowhere to run it, so the turn fails with its
+   * authentication error and the user signs in on reattaching. */
+  signIn(request: SignInRequest): Promise<void> {
+    if (this.clients.size === 0) return Promise.reject(new Error(`sign in to ${request.name} needs an open ClikCode window`));
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      this.pendingSignIns.set(id, { resolve, reject });
+      this.broadcast({ type: 'sign-in-request', id, ...request });
+    });
+  }
+
+  resolveSignIn(id: string, error?: string): void {
+    const pending = this.pendingSignIns.get(id);
+    if (!pending) return;
+    this.pendingSignIns.delete(id);
+    if (error) pending.reject(new Error(error));
+    else pending.resolve();
+  }
+
   async suspend(): Promise<void> {
     this.broadcast({ type: 'suspend' });
   }

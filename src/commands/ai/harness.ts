@@ -12,7 +12,7 @@ import { readState } from '../../session/state/read.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
-import { announceBareInteractiveLogin, harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../account.js';
+import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withVendorTerminal } from '../account.js';
 import { deriveAccountLabel } from '../../harness/accounts/labels.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
@@ -112,19 +112,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       || account?.status !== 'ready'
       || (accountJustCreated && await harnessNeedsLogin(harness, environment));
     if (shouldCheckLogin) {
-      if (harness.loginCapturable) {
-        TERMINAL.active.startWaiting(`signing in to ${harness.displayName}…`);
-        try { await loginNativeHarness(harness, environment); } finally { TERMINAL.active.stopWaiting(); }
-      } else {
-        TERMINAL.active.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
-        await TERMINAL.active.suspend();
-        try {
-          announceBareInteractiveLogin(harness);
-          await loginNativeHarness(harness, environment);
-        } finally {
-          TERMINAL.active.resume();
-        }
-      }
+      await withVendorTerminal(TERMINAL.active, harness, () => loginNativeHarness(harness, environment));
       // Same identity check /account's "add another account" flow uses --
       // a plain /provider login deserves the real dedup-by-identity logic,
       // not a weaker "only rename if it still looks like a placeholder"
