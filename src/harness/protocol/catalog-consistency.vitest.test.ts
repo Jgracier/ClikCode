@@ -31,7 +31,8 @@ describe('every stream format the catalog declares', () => {
     const { parsersByFamily } = await import('../events/adapters.js');
     // generic-json: the shape-matching reader IS its parser. text: no stream.
     // codex-items: codex always negotiates its app-server, never this path.
-    const generic = new Set(['generic-json', 'text', 'codex-items']);
+    // aider: plain text, read line by line in events/aider.ts.
+    const generic = new Set(['generic-json', 'text', 'codex-items', 'aider']);
     const families = new Set(AI_LOCAL_HARNESSES.map((harness) => harness.parser).filter((parser): parser is string => Boolean(parser)));
     for (const family of families) {
       expect(generic.has(family) || family in parsersByFamily, family).toBe(true);

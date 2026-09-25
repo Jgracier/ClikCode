@@ -1,6 +1,7 @@
 /** Provider event envelopes terminate here. The orchestrator and terminal UI
  * consume only normalized response updates, never vendor JSON shapes. */
 import type { AiLocalHarnessDefinition } from '../definition.js';
+import { aiderLine } from './aider.js';
 import { parseNativeActivityEventsFromValue, type NativeActivityEvent } from '../protocol/activity-events.js';
 import { nativeActivityPhaseFromValue } from '../protocol/activity-line.js';
 import { nativeSessionIdsFromValues } from '../protocol/session-ids.js';
@@ -36,6 +37,9 @@ export interface StreamState {
   needsSeparator: boolean;
   /** What has been shown so far already ends on a blank line. */
   atParagraph?: boolean;
+  /** A plain-text harness with a banner before its answer (Aider): where in
+   * the output this turn is. */
+  textPhase?: 'banner' | 'reply' | 'done';
 }
 const streamStates = new Map<string, StreamState>();
 const MAX_STREAM_STATES = 32;
@@ -313,6 +317,7 @@ export function parseHarnessLine(harness: AiLocalHarnessDefinition, lineText: st
   // that same stdout, so echoing each line live cannot diverge from what is
   // ultimately persisted. Without this they show nothing at all until the turn
   // ends, which on a long edit reads as a hung session.
+  if (harness.parser === 'aider') return aiderLine(lineText, turn);
   if (!parsers[harness.command] && harness.turn?.output === 'text') return { response: { text: `${lineText}\n`, mode: 'append' } };
   const candidate = lineText.trim();
   if (candidate[0] !== '{') return {};

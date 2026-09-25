@@ -13,8 +13,20 @@
  * ClikCode's own plumbing and belongs nowhere near the transcript.
  */
 
-/** Opening line of every rehydration prompt; the marker that identifies one. */
-export const FAILOVER_PREAMBLE = 'Continue the same ClikCode conversation after an account or provider failover. Preserve all prior decisions, files, and task state. Do not repeat completed work.';
+/** Opening line of every rehydration prompt; the marker that identifies one.
+ *
+ * Written as context, not as a task. The earlier wording ("Continue the same
+ * ClikCode conversation after an account or provider failover…") read to a
+ * small model as the thing to do: handed a chat moved from Aider, a free
+ * OpenRouter model on Goose answered "test" with a "Failover Continuity
+ * Confirmed" status report, tables and all. */
+export const FAILOVER_PREAMBLE = 'The conversation below took place earlier in this chat; you are continuing it. Treat it as what you already know, answer only the current request, and do not mention this note or that the chat moved.';
+
+/** Preambles ClikCode wrote before, still recognized in vendor transcripts
+ * recorded with them. */
+const EARLIER_PREAMBLES = [
+  'Continue the same ClikCode conversation after an account or provider failover. Preserve all prior decisions, files, and task state. Do not repeat completed work.',
+];
 
 /** Inverse of `escapeFailoverContent`: restore frame tags the prompt neutered. */
 function unescapeFailoverContent(text: string): string {
@@ -26,7 +38,7 @@ function unescapeFailoverContent(text: string): string {
  * still replace it -- a malformed frame is no more worth showing than a
  * well-formed one. */
 export function failoverPromptRequest(text: string): string | undefined {
-  if (!text.startsWith(FAILOVER_PREAMBLE)) return undefined;
+  if (![FAILOVER_PREAMBLE, ...EARLIER_PREAMBLES].some((preamble) => text.startsWith(preamble))) return undefined;
   const request = /<current_request>\n([\s\S]*?)\n<\/current_request>\s*$/.exec(text)?.[1];
   return unescapeFailoverContent(request ?? '').trim();
 }

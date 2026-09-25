@@ -21,7 +21,7 @@ type AiHarnessTier = 'primary' | 'more' | 'experimental';
 type AiHarnessParser =
   | 'claude-stream-json' | 'codex-items' | 'opencode-json'
   | 'cursor-stream-json' | 'pi-json' | 'cline-json' | 'antigravity' | 'goose'
-  | 'generic-json' | 'text';
+  | 'generic-json' | 'text' | 'aider';
 
 type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWEN.md' | 'CONVENTIONS.md';
 
