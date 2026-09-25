@@ -72,6 +72,7 @@ interface AiHarnessTurnDefinition {
    * instead. OpenClaw's CLI back ends (`claude-cli`) refuse to reseed history
    * in `agent --local`. */
   statelessRoute?: { path: readonly string[]; values: readonly string[] };
+  statelessProviders?: readonly string[];
   resumeSupportsWorkspaceSelector?: boolean;
 }
 
@@ -213,6 +214,7 @@ export interface AiLocalHarnessDefinition {
     output: 'text' | 'json' | 'json-lines';
     responseFields?: readonly string[];
     statelessRoute?: { path: readonly string[]; values: readonly string[] };
+  statelessProviders?: readonly string[];
     /** Literal phrases this vendor puts in its OWN result text when an
      *  account is out of usage, while still reporting the turn as a success.
      *  Augment's auggie does exactly that: is_error false, subtype "success",
