@@ -36,7 +36,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   const freshInstall = !(await inspectNativeHarness(harness)).installed;
   if (freshInstall) {
     TERMINAL.active?.startWaiting(`installing ${harness.displayName}…`);
-    try { await ensureNativeHarness(harness); } finally { TERMINAL.active?.stopWaiting(); }
+    try { await ensureNativeHarness(harness, { quiet: Boolean(TERMINAL.active) }); } finally { TERMINAL.active?.stopWaiting(); }
   }
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);

@@ -141,7 +141,7 @@ async function inspectNativeHarnessUncached(
 }
 
 /** Install only a vendor-declared npm package; never infer package names from user input. */
-export async function ensureNativeHarness(spec: NativeHarnessSpec): Promise<void> {
+export async function ensureNativeHarness(spec: NativeHarnessSpec, options: { quiet?: boolean } = {}): Promise<void> {
   if (spec.surface === 'editor-extension') {
     throw new Error(`${spec.displayName} is an editor extension, not a standalone terminal harness; ClikCode cannot broker it as a native TUI.`);
   }
@@ -150,7 +150,9 @@ export async function ensureNativeHarness(spec: NativeHarnessSpec): Promise<void
   // Captured, not inherited: npm's progress bars, deprecation warnings and
   // audit footer used to land in the middle of the UI, several screens of it
   // on a phone, for a decision the user has already made.
-  const spinner = startSpinner(`Installing ${spec.displayName}…`);
+  // `quiet`: the caller shows its own "installing…" (the app's waiting line);
+  // a second, raw spinner was drawn over it.
+  const spinner = options.quiet ? { stop: () => undefined } : startSpinner(`Installing ${spec.displayName}…`);
   let result;
   try { result = await runCaptured('npm', ['install', '--global', spec.npmPackage]); }
   catch (error) { spinner.stop(); throw error; }
