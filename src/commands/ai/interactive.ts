@@ -560,7 +560,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
             redraw: async () => { rl.render?.(commandSession, commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId)?.label : undefined); },
             provider: async () => ({ id: await interactiveEnginePicker(config, rl, id) ?? id }),
-            account: async () => args ? viaHeadless(text) : { id: await interactiveAccountPicker(rl, id) ?? id },
             accounts: async () => {
               // `/accounts login <harness>` and `/accounts add <harness>` sign in
               // here, with the terminal handed over, the same as + Add
