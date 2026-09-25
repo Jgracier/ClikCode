@@ -146,7 +146,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),
-  entry('settings', 'Settings', 'configure this workspace', { argHint: '[route|account|model|effort|permissions|option|global|provider …]' }),
+  entry('settings', 'Settings', 'configure this workspace', { argHint: '[model|effort|permissions|failover|option|global|provider …]' }),
 
   entry('sessions', 'Sessions', 'manage conversations', { argHint: '[list|show|open|close <id>]' }),
   entry('resume', 'Sessions', 'resume another conversation'),

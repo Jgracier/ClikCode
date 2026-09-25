@@ -55,7 +55,7 @@ import { compactConversation } from '../../tui/slash/compact.js';
 import { exportTranscript } from '../../tui/slash/export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory.js';
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
-import { addAccountForHarness, interactiveAccountPicker, manageAccountAction } from '../../tui/pickers/account.js';
+import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
 import { interactiveHarnessOptionPicker } from '../../tui/pickers/options.js';
@@ -196,12 +196,19 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     });
   if (rl instanceof TerminalHarnessPrompter) TERMINAL.active = rl;
   rl.render?.(session);
+  let selectionNotice: string | undefined;
   if (!session.nativeHarness && session.route !== 'gateway') {
-    const auto = await autoSelectSessionHarness(id);
-    if (!auto) {
-      const selected = await interactiveEnginePicker(config, rl, id);
-      if (!selected) return;
-      if (selected !== id) id = selected;
+    // Nothing here ends ClikCode: Esc on the picker leaves the chat with no
+    // provider (the first message or command that needs one asks again), and
+    // a harness that cannot be installed from here says how, on screen.
+    try {
+      const auto = await autoSelectSessionHarness(id);
+      if (!auto) {
+        const selected = await interactiveEnginePicker(config, rl, id);
+        if (selected && selected !== id) id = selected;
+      }
+    } catch (error) {
+      selectionNotice = error instanceof Error ? error.message : String(error);
     }
     // The picker and auto-select each ran their own read/write cycle, so the
     // snapshot above is stale. Adopt the current one wholesale.
@@ -236,7 +243,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   stateChanged = true;
   if (stateChanged) await writeState(state);
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
-  if (rl.render) rl.render(session, initialAccount);
+  if (rl.render) rl.render(session, initialAccount, selectionNotice);
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
   const refreshUsage = (target: HarnessSession, targetState: HarnessState): void => {
     if (!(rl instanceof TerminalHarnessPrompter)) return;
@@ -547,7 +554,20 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             redraw: async () => { rl.render?.(commandSession, commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId)?.label : undefined); },
             provider: async () => ({ id: await interactiveEnginePicker(config, rl, id) ?? id }),
             account: async () => args ? viaHeadless(text) : { id: await interactiveAccountPicker(rl, id) ?? id },
-            accounts: async () => args ? viaHeadless(text) : { id: await interactiveAccountPicker(rl, id) ?? id },
+            accounts: async () => {
+              // `/accounts login <harness>` and `/accounts add <harness>` sign in
+              // here, with the terminal handed over, the same as + Add
+              // account -- run headless, the vendor's login fought ClikCode's
+              // own screen for the terminal.
+              const [action, name] = args.split(/\s+/);
+              const target = (action === 'login' || action === 'add') && name ? localHarnessForCommand(name.toLowerCase()) : undefined;
+              if (target?.surface === 'terminal') {
+                const added = await addAccountForHarness(rl, target);
+                if (added && target.provider === commandSession.provider) await useAddedAccount(id, target, added);
+                return {};
+              }
+              return args ? viaHeadless(text) : { id: await interactiveAccountPicker(rl, id) ?? id };
+            },
             model: async () => args ? viaHeadless(text) : interactiveModelPicker(rl, id),
             effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),
             permissions: async () => args ? viaHeadless(text) : interactivePermissionPicker(rl, id),
@@ -638,9 +658,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             },
             login: async () => {
               if (!commandHarness) throw new Error('Choose a provider before signing in.');
-              if (commandSession.accountId) await manageAccountAction(rl, commandSession.accountId, 'reauthenticate');
-              else await addAccountForHarness(rl, commandHarness);
-              // The account is on the status line; a failed sign-in throws.
+              // Sign the current account in again only when it needs it;
+              // otherwise /login means another account, which becomes this
+              // chat's. Re-running the sign-in of a working account did
+              // nothing useful, and an API-key account did nothing at all.
+              const current = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
+              if (current?.authKind === 'vendor-cli' && (current.status !== 'ready' || current.verification)) {
+                await manageAccountAction(rl, current.id, 'reauthenticate');
+                return {};
+              }
+              const added = await addAccountForHarness(rl, commandHarness);
+              if (added) await useAddedAccount(id, commandHarness, added);
               return {};
             },
             logout: async () => {

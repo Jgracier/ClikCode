@@ -202,6 +202,11 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     return emitHarnessOutput({ panel: 'session-forked', text: `Conversation forked as ${fork.id.slice(0, 8)}. Use /resume to open it.`, session: fork });
   },
   model: async ({ state, session, words }) => {
+    // `--any`: an id typed on purpose (the picker's "Enter a model ID…") is
+    // taken as given. The published-list check catches a typo in `/model x`;
+    // it made "Enter a model ID…" able to enter only ids already listed.
+    const trusted = words[0] === '--any';
+    if (trusted) words.shift();
     const value = words.join(' ').trim();
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     // No value: show what there is to choose from, which is what
@@ -231,7 +236,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // Typed the way the picker shows it (`claude-code:sonnet`), stored the
     // way the harness takes it (`claude-code/sonnet`).
     const requested = normalizeModelWord(harness ? modelIdFromDisplay(harness, value) : value);
-    if (requested) await assertRealModel(harness, account, requested);
+    if (requested && !trusted) await assertRealModel(harness, account, requested);
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
     session.model = model;
@@ -386,9 +391,12 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!harness || !optionId || !optionValue.length) throw new Error('usage: /settings option <id> <value>');
       setSessionHarnessOption(session, harness, optionId, optionValue.join(' '));
-    } else if (setting === 'accountfailover' || setting === 'account-failover') {
-      if (value !== 'never' && value !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
-      session.accountFailover = value;
+    } else if (setting === 'failover' || setting === 'accountfailover' || setting === 'account-failover') {
+      // One vocabulary with `/settings global failover` (auto/never); the
+      // stored words are still accepted.
+      const on = ['auto', 'on', 'on-quota-exhausted'].includes(value);
+      if (!on && value !== 'never' && value !== 'off') throw new Error('failover must be auto or never');
+      session.accountFailover = on ? 'on-quota-exhausted' : 'never';
     } else if (setting === 'native-session') {
       if (!session.nativeHarness) throw new Error('select a native harness before attaching its session id');
       const selectedHarness = localHarnessForCommand(session.nativeHarness);

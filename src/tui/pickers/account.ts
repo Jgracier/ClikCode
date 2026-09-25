@@ -24,6 +24,14 @@ import { hasLocalDisplay, openLoginUrl } from '../../gateway/login/url.js';
 import { verificationNotice } from '../../turn/failover.js';
 import { chooseOption } from './choose.js';
 
+/** Makes the account just added (by label) the conversation's own. */
+export async function useAddedAccount(id: string, harness: AiLocalHarnessDefinition, label: string): Promise<string> {
+  const state = await readState();
+  const added = state.accounts.find((account) => account.provider === harness.provider && account.label === label);
+  if (added) await aiSessionCommand(id, `/settings account ${added.id}`);
+  return id;
+}
+
 export async function interactiveAccountPicker(
   rl: HarnessPrompter,
   id: string,
@@ -44,8 +52,10 @@ export async function interactiveAccountPicker(
     if (await refreshPlaceholderAccountLabels(state)) await writeState(state);
     const providerAccounts = state.accounts.filter((account) => account.provider === harness.provider);
     if (!providerAccounts.length) {
-      rl.panel?.(`${harness.displayName} accounts`, `No accounts are connected. Use /accounts login ${harness.command} <label> to add one.`);
-      return undefined;
+      // Nothing to list: connecting one is the only thing to do here, so do
+      // it, rather than naming a command to type.
+      const added = await addAccountForHarness(rl, harness);
+      return added ? useAddedAccount(id, harness, added) : undefined;
     }
     // Only spin where a figure can actually arrive. A harness that reports on
     // its own turn stream has no probe to wait on, so the row shows what its
@@ -83,9 +93,9 @@ export async function interactiveAccountPicker(
     }
     if (actionPerformed) continue;
     if (selected?.kind === 'add-account') {
-      // Connect one, then come back to the list with it in place rather than
-      // dropping the user out of the picker they were working in.
-      await addAccountForHarness(rl, harness);
+      // The account just connected is the one the user meant to use.
+      const added = await addAccountForHarness(rl, harness);
+      if (added) return useAddedAccount(id, harness, added);
       continue;
     }
     if (!selected || selected.kind !== 'account') return undefined;
@@ -208,7 +218,11 @@ export async function addAccountForHarness(rl: HarnessPrompter, harness: AiLocal
   // same "if (!authKind) return" as a real cancel, indistinguishable from
   // one).
   if (choices.length === 0) throw new Error(`${harness.displayName} doesn't publish a login command or a supported API-key auth mode yet -- nothing here can add an account for it.`);
-  const authKind = choices.length > 1
+  // "API key" can only work with the key already exported (ClikCode never
+  // takes the key itself), so without one it is not a choice -- it was a
+  // path that always ended in "export it first". Asked only when both work.
+  const keyOnHand = [...(harness.authEnv ?? []), PROVIDER_API_KEY_ENV[harness.provider]].some((name) => name && process.env[name]);
+  const authKind = choices.length > 1 && !keyOnHand && choices.includes('vendor-cli') ? 'vendor-cli' : choices.length > 1
     ? await chooseOption(rl, `Sign in to ${harness.displayName} with`, [
         { label: 'Vendor login', detail: 'opens the CLI’s own sign-in flow', value: 'vendor-cli' as const },
         { label: 'API key', detail: 'reference an environment variable, never typed here', value: 'api-key' as const },
@@ -253,9 +267,13 @@ export async function manageAccountAction(rl: HarnessPrompter, accountId: string
     await writeState(state);
     return;
   }
-  if (account.authKind !== 'vendor-cli') return;
+  if (account.authKind !== 'vendor-cli') {
+    if (action === 'disconnect') throw new Error(`${account.label} is an API key, not a sign-in -- remove it from /account (Del) instead.`);
+    return;
+  }
   const environment = nativeProfileEnvironment(account.nativeProfile);
-  if (action === 'disconnect' && harnessCanLogout(harness)) {
+  if (action === 'disconnect' && !harnessCanLogout(harness)) throw new Error(`${harness.displayName} has no way to sign out from outside its own session.`);
+  if (action === 'disconnect') {
     if (harness.logoutArgv) await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
     else await logoutNativeHarness(harness, environment);
     account.status = 'needs_login';
