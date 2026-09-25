@@ -201,6 +201,11 @@ describe('local harness catalog', () => {
     const claw = localHarnessForCommand('openclaw')!;
     expect(harnessLoginArgvForModel(claw, 'openai/gpt-5.5')).toEqual(['models', 'auth', 'login', '--provider', 'openai']);
     expect(harnessLoginArgvForModel(claw, 'openrouter/moonshotai/kimi-k2')).toEqual(['models', 'auth', 'login', '--provider', 'openrouter']);
+    for (const command of ['opencode', 'kilo']) {
+      expect(harnessLoginArgvForModel(localHarnessForCommand(command)!, 'anthropic/claude-sonnet-5')).toEqual(['auth', 'login', '--provider', 'anthropic']);
+    }
+    expect(localHarnessForCommand('goose')!.loginArgv).toEqual(['configure']);
+    expect(localHarnessForCommand('pi')!.loginArgv, 'Pi signs in inside its own session').toEqual([]);
     expect(nativeHarnessTurnArgv(claw, { prompt: 'hi', model: 'openai/gpt-5.5', nativeSessionId: 's-1', createdHere: true }))
       .toEqual(['agent', '--local', '--json', '--agent', 'main', '--session-id', 's-1', '--model', 'openai/gpt-5.5', '--message', 'hi']);
 
