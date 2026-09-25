@@ -378,7 +378,7 @@ describe('local harness catalog', () => {
 
   it('declares transport, integration, tier, parser and memory file on every entry', () => {
     const transports = ['codex-app-server', 'acp', 'structured-cli', 'text-cli'];
-    const parsers = ['claude-stream-json', 'codex-items', 'opencode-json', 'gemini-stream-json', 'cursor-stream-json', 'pi-json', 'cline-json', 'antigravity', 'goose', 'generic-json', 'text'];
+    const parsers = ['claude-stream-json', 'codex-items', 'opencode-json', 'gemini-stream-json', 'cursor-stream-json', 'pi-json', 'cline-json', 'antigravity', 'goose', 'generic-json', 'text', 'aider'];
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(transports, harness.command).toContain(harness.transport);
       expect(['native', 'structured', 'compatibility'], harness.command).toContain(harness.integration);
@@ -389,8 +389,9 @@ describe('local harness catalog', () => {
       expect(harnessIntegrationLevel(harness), harness.command).toBe(harness.integration);
       // The declared level agrees with the structural reading of the contract.
       expect(harnessIntegrationLevel({ ...harness, integration: undefined }), harness.command).toBe(harness.integration);
-      // A text parser and a text contract are the same statement.
-      expect(harness.parser === 'text', harness.command).toBe(harness.turn?.output === 'text');
+      // A text parser and a text contract are the same statement (Aider's is
+      // text with a banner around the answer).
+      expect(harness.parser === 'text' || harness.parser === 'aider', harness.command).toBe(harness.turn?.output === 'text');
       if (harness.effortArgvPrefix) expect(harness.effortValues?.length, harness.command).toBeGreaterThan(0);
       else expect(harness.effortValues, harness.command).toBeUndefined();
     }

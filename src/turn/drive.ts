@@ -56,6 +56,8 @@ import { prepareAttachments } from '../session/attachments.js';
 import { localApiKey } from '../daemon/server.js';
 import { appServerThreadOverrides, declaredOptionArgv, normalizeTurnUsage, type NormalizedTurnUsage } from '../harness/transport/options.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
+import { aiderHistoryReply, aiderStdoutReply } from '../harness/events/aider.js';
+import { readFile } from 'node:fs/promises';
 
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
@@ -388,7 +390,14 @@ export async function aiSessionSend(
           },
         });
         if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-        const cliResult = nativeTurnResult(cliHarness, turnOutput.stdout);
+        let cliResult = nativeTurnResult(cliHarness, turnOutput.stdout);
+        // Aider's stdout is its banner, the answer and a cost footer; its own
+        // chat history file holds the answer alone (see events/aider.ts).
+        if (cliHarness.parser === 'aider') {
+          const history = session.nativeSessionId ? await readFile(session.nativeSessionId, 'utf8').catch(() => '') : '';
+          const reply = aiderHistoryReply(history) ?? aiderStdoutReply(turnOutput.stdout);
+          if (reply) cliResult = { ...cliResult, text: reply };
+        }
         if (!cliResult.isError) confirmNativeSession();
         noteUsage(cliResult.usage ?? nativeTurnUsage(cliHarness, turnOutput.stdout));
         return cliResult;

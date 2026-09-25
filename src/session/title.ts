@@ -23,8 +23,13 @@ export const SESSION_TITLE_MAX = 20;
 
 /** `vendor` writes its own title into its own session file and ClikCode reads
  * it; `ask` has no such thing, so the turn asks for one. */
-export function sessionTitleSource(harness: AiLocalHarnessDefinition | undefined): 'vendor' | 'ask' {
-  return harness?.command === 'claude' ? 'vendor' : 'ask';
+export function sessionTitleSource(harness: AiLocalHarnessDefinition | undefined): 'vendor' | 'ask' | 'none' {
+  if (harness?.command === 'claude') return 'vendor';
+  // Aider's own system prompt outweighs the request: its models answer with
+  // a bare title line ("Memory note") that cannot be told from the answer.
+  // An untitled chat shows its first message in the resume list instead.
+  if (harness?.command === 'aider') return 'none';
+  return 'ask';
 }
 
 /** How many turns get an embedded title request before ClikCode stops
@@ -117,8 +122,12 @@ export function normalizeSessionTitle(raw: string): string | undefined {
 }
 
 /** The title a reply opens with, and the reply without it. */
+/** A model that drops the tags but keeps the word: `Title: …` (or
+ * `**Title:** …`) on the first line. Explicit enough to remove. */
+const PLAIN_TITLE = /^\s*(?:\*\*)?title:(?:\*\*)?[ \t]*([^\r\n]+?)(?:\*\*)?[ \t]*\r?\n(?:[ \t]*\r?\n)?/i;
+
 export function extractSessionTitle(answer: string): { title?: string; text: string } {
-  const match = new RegExp(`^\\s*${OPEN}([\\s\\S]*?)${CLOSE}[ \\t]*\\r?\\n?`).exec(answer);
+  const match = new RegExp(`^\\s*${OPEN}([\\s\\S]*?)${CLOSE}[ \\t]*\\r?\\n?`).exec(answer) ?? PLAIN_TITLE.exec(answer);
   if (!match) return { text: answer };
   const title = normalizeSessionTitle(match[1] ?? '');
   const text = answer.slice(match[0].length);
@@ -186,6 +195,11 @@ export class StreamingTitle {
 
   private couldStillOpen(): boolean {
     const head = this.buffer.replace(/^\s+/, '');
+    // `Title: …` is settled by its line ending; until then it may be one.
+    const plain = head.replace(/^\*\*/, '').toLowerCase();
+    if (plain.length < 'title:'.length ? 'title:'.startsWith(plain) : plain.startsWith('title:') && !/\r?\n/.test(head)) {
+      return this.buffer.length < DECIDE_AFTER + OPEN.length;
+    }
     if (head.length < OPEN.length) return OPEN.startsWith(head);
     return head.startsWith(OPEN) && this.buffer.length < DECIDE_AFTER + OPEN.length;
   }
