@@ -272,6 +272,8 @@ export interface AiRouterRuntime {
   harnessLoginArgvForModel(harness: AiLocalHarnessDefinition, model: string | null | undefined): readonly string[] | undefined;
   harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { statusCode?: number } | undefined;
   modelProvider(harness: AiLocalHarnessDefinition, model: string): string | undefined;
+  modelDisplayId(harness: AiLocalHarnessDefinition, model: string): string;
+  modelIdFromDisplay(harness: AiLocalHarnessDefinition, typed: string): string;
   harnessAcpLaunch(harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode }): AiHarnessAcpLaunch | undefined;
   harnessTurnTransport(harness: AiLocalHarnessDefinition, input?: { hasImages?: boolean; allowExperimentalAcp?: boolean }): AiHarnessTransport;
   harnessCanRunTurns(harness: AiLocalHarnessDefinition): boolean;

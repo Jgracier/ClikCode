@@ -40,7 +40,9 @@ describe('hermes discovery', () => {
     const inventory = hermesInventory(output)!;
     expect(inventory.models).toEqual(['openai-codex:gpt-6-astra', 'anthropic:claude-sonnet-5']);
     expect(inventory.configured).toBe('openai-codex:gpt-6-astra');
-    expect(inventory.labels['anthropic:claude-sonnet-5']).toBe('claude-sonnet-5 · Anthropic');
+    // The id already says provider and model; a label repeating them was
+    // the picker's duplicated row.
+    expect(inventory.labels['anthropic:claude-sonnet-5']).toBeUndefined();
     expect(inventory.connect.map((item) => [item.id, item.argv.join(' ')])).toEqual([
       ['nous', 'auth add nous'],
       ['xai-oauth', 'auth add xai-oauth'],

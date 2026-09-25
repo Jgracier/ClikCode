@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv } from './ai-local-harness';
+import { modelDisplayId, modelIdFromDisplay, AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv } from './ai-local-harness';
 
 
 describe('local harness catalog', () => {
@@ -223,6 +223,18 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(goose, { prompt: 'hi', model: 'claude-code/sonnet' })).toEqual(expect.arrayContaining(['--provider', 'claude-code', '--model', 'sonnet']));
     expect(nativeHarnessTurnArgv(goose, { prompt: 'hi', model: 'openrouter/anthropic/claude-5' })).toEqual(expect.arrayContaining(['--provider', 'openrouter', '--model', 'anthropic/claude-5']));
     expect(nativeHarnessTurnArgv(goose, { prompt: 'hi', model: 'sonnet' })).not.toContain('--provider');
+    // Every harness that drives providers shows a model as provider:model, and
+    // takes it back typed that way.
+    expect(modelDisplayId(goose, 'claude-code/sonnet')).toBe('claude-code:sonnet');
+    expect(modelDisplayId(goose, 'openrouter/anthropic/claude-5')).toBe('openrouter:anthropic/claude-5');
+    expect(modelDisplayId(hermes, 'nous:z-ai/glm-5.2')).toBe('nous:z-ai/glm-5.2');
+    expect(modelDisplayId(claw, 'openai/gpt-5.5')).toBe('openai:gpt-5.5');
+    expect(modelDisplayId(localHarnessForCommand('pi')!, 'anthropic/claude-fable-5')).toBe('anthropic:claude-fable-5');
+    expect(modelDisplayId(localHarnessForCommand('cline')!, 'anthropic/claude-sonnet-5'), 'Cline is one provider').toBe('anthropic/claude-sonnet-5');
+    expect(modelIdFromDisplay(goose, 'claude-code:sonnet')).toBe('claude-code/sonnet');
+    expect(modelIdFromDisplay(goose, 'ollama/qwen3:8b')).toBe('ollama/qwen3:8b');
+    expect(modelIdFromDisplay(goose, 'ollama:qwen3:8b')).toBe('ollama/qwen3:8b');
+    expect(modelIdFromDisplay(hermes, 'nous:z-ai/glm-5.2')).toBe('nous:z-ai/glm-5.2');
     expect(harnessLoginArgvForModel(goose, 'anthropic/claude-5')).toEqual(['configure']);
     // Goose never hands Claude Code its history; ClikCode carries it instead.
     expect(goose.turn?.statelessProviders).toEqual(['claude-code']);

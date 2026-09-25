@@ -13,7 +13,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { stdin as input } from 'node:process';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
-import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
@@ -228,7 +228,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // really publishes instead of clearing the field to null. A null here is
     // what used to surface as "automatic", then as "default": a session whose
     // real model nobody could name.
-    const requested = normalizeModelWord(value);
+    // Typed the way the picker shows it (`claude-code:sonnet`), stored the
+    // way the harness takes it (`claude-code/sonnet`).
+    const requested = normalizeModelWord(harness ? modelIdFromDisplay(harness, value) : value);
     if (requested) await assertRealModel(harness, account, requested);
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);

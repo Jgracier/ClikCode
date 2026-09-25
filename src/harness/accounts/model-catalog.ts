@@ -17,7 +17,7 @@ import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
 import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache } from './goose-discovery.js';
 import { expandAuthPath } from './auth-files.js';
 import { acpSessionModels, queryAcp } from './acp-query.js';
-import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { localHarnessForCommand, modelDisplayId } from '../../runtime/lazy-bridge.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -31,7 +31,15 @@ export function nativeModelLabel(
   // From the installed Claude Code's own table (claude-models.ts), never a
   // constant: a constant is how the picker kept saying "Opus 5" after Claude
   // Code shipped Opus 5.5.
-  return harnessCommand === 'claude' ? claudeModelLabel(model) ?? model : model;
+  if (harnessCommand === 'claude') return claudeModelLabel(model) ?? model;
+  // A harness that drives other providers names them one way everywhere:
+  // `provider:model`, as the picker shows it.
+  try {
+    const harness = harnessCommand ? localHarnessForCommand(harnessCommand) : undefined;
+    return harness ? modelDisplayId(harness, model) : model;
+  } catch {
+    return model; // fail-open-ok: a label only; without the catalog the id is still the truth.
+  }
 }
 
 /** A catalog is cached for exactly as long as what it was derived from.
@@ -441,8 +449,8 @@ async function nativeModelCatalogUncached(
           const driven = await nativeModelCatalog(drivenHarness).catch(() => undefined);
           for (const model of driven?.models ?? []) {
             models.add(`${provider.id}/${model}`);
-            const via = provider.label === provider.id ? drivenHarness.displayName : provider.label;
-            labels[`${provider.id}/${model}`] = `${driven?.labels?.[model] ?? model} · ${via}`;
+            const name = driven?.labels?.[model];
+            if (name) labels[`${provider.id}/${model}`] = name;
           }
         } else {
           gooseModelsDevModels(modelsDev, provider.id).forEach((model) => models.add(model));
