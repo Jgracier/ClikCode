@@ -240,7 +240,9 @@ export function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { m
   const normalizedKey = key.toLowerCase();
   if (normalizedKey === 'effort') {
     if (harness && !harnessSupportsEffort(harness)) throw new Error(`${harness.displayName} does not publish a configurable reasoning-effort flag; setting one here would silently do nothing.`);
-    if (!VALID_EFFORTS.includes(value as (typeof VALID_EFFORTS)[number])) throw new Error(`effort must be one of ${VALID_EFFORTS.join(', ')}`);
+    // A harness's own levels (Hermes's `ultra`, Codex's per-model ones) are
+    // its to say; the generic list checks only a default for every harness.
+    if (!harness && !VALID_EFFORTS.includes(value as (typeof VALID_EFFORTS)[number])) throw new Error(`effort must be one of ${VALID_EFFORTS.join(', ')}`);
     target.effort = value;
   } else if (normalizedKey === 'permissions' || normalizedKey === 'permissionmode') {
     if (!VALID_PERMISSION_MODES.includes(value as AiHarnessPermissionMode)) throw new Error('permissions must be ask, bypass, or auto');

@@ -15,7 +15,7 @@ import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleS
 import { wrapCodeLine } from './render/wrap.js';
 import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
-import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
@@ -817,7 +817,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // meant a long title truncated whichever of those came after it — the
     // exact information you'd want intact regardless of how long the title
     // is. It gets its own line now (see titleText below).
-    return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
+    // The account and the permission mode are shown too: nothing asks to
+    // confirm either when it changes, so the line is where it is seen done.
+    // Bypass stands out; it is the one that runs tools without asking.
+    const mode = harness && session.route !== 'gateway' && harnessSupportsPermissionMode(harness, session.permissionMode ?? 'ask')
+      ? session.permissionMode === 'bypass' ? chalk.yellow('bypass') : session.permissionMode ?? 'ask' : undefined;
+    const who = this.currentAccount ? `${provider} · ${this.currentAccount}` : provider;
+    return [who, [model, effort].filter(Boolean).join(' '), mode, context].filter(Boolean).join('  •  ');
   }
 
   /** The only other place a chat's title ever appeared was a transient line in

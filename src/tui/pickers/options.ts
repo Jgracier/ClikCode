@@ -8,9 +8,18 @@ import { localHarnessCapabilityManifest, localHarnessForCommand } from '../../ru
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { setSessionHarnessOption } from '../../session/options.js';
+import { lastPickerExit } from '../option-picker.js';
 import { chooseOption } from './choose.js';
 
 export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: string): Promise<void> {
+  // Back to the list after each change, so setting two options is one visit.
+  for (;;) {
+    if (!await harnessOptionPickerOnce(rl, id) || lastPickerExit === 'escape') return;
+  }
+}
+
+/** One pass of the list; false when the user left it. */
+async function harnessOptionPickerOnce(rl: HarnessPrompter, id: string): Promise<boolean> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -32,7 +41,12 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
     const fresh = await readState();
     const target = fresh.sessions.find((item) => item.id === id);
     if (!target) return;
-    setSessionHarnessOption(target, harness, optionId, raw);
+    // `default` (or `-` typed) clears the option: the harness's own default
+    // applies, and nothing is sent.
+    if (raw === 'default' || raw === '-') {
+      const { [optionId]: _cleared, ...rest } = target.harnessOptions ?? {};
+      target.harnessOptions = rest;
+    } else setSessionHarnessOption(target, harness, optionId, raw);
     target.updatedAt = new Date().toISOString();
     await writeState(fresh);
   };
@@ -45,10 +59,15 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
     const values = item.kind === 'boolean' ? ['on', 'off'] : item.values ?? [];
     if (values.length < 2 || values.length > 4) return {};
     const now = current(item);
-    const currentValue = item.kind === 'boolean' ? (now === true ? 'on' : 'off') : String(now ?? values[0]);
+    // Unset is "Default", not the first value: the first value is not what
+    // runs when nothing is set, the harness's own default is.
+    const currentValue = item.kind === 'boolean' ? (now === true ? 'on' : 'off') : now === undefined ? 'default' : String(now);
     return {
       inline: {
-        choices: values.map((value) => ({ label: value[0]!.toUpperCase() + value.slice(1), value })),
+        choices: [
+          ...(item.kind === 'boolean' ? [] : [{ label: 'Default', value: 'default' }]),
+          ...values.map((value) => ({ label: value[0]!.toUpperCase() + value.slice(1), value })),
+        ],
         current: currentValue,
         apply: (value: string) => save(item.id, value),
       },
@@ -58,13 +77,14 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
     label: item.label,
     detail: [
       `· ${item.description}`,
-      ...(item.kind === 'boolean' ? [current(item) === true ? 'on' : 'off'] : []),
+      ...(item.kind === 'boolean' ? [current(item) === true ? 'on' : 'off']
+        : current(item) !== undefined ? [chalk.cyan(Array.isArray(current(item)) ? (current(item) as unknown[]).join(', ') : String(current(item)))] : []),
       ...(item.dangerous ? [chalk.yellow('dangerous')] : []),
     ].join(' · '),
     value: item,
     ...inlineFor(item),
   })));
-  if (!option) return;
+  if (!option) return false;
   let raw: string | undefined;
   if (option.kind === 'boolean') {
     // Reached only for a dangerous switch (the rest flip in the list): off
@@ -72,14 +92,20 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
     const turningOn = current(option) !== true;
     raw = turningOn
       ? await chooseOption(rl, `Turn on ${option.label}?`, [
-        { label: 'Turn on', detail: `· ${chalk.yellow('dangerous')}`, value: 'on' }, { label: 'Cancel', value: '' },
+        // Cancel first, as in every confirmation.
+        { label: 'Cancel', value: '' }, { label: 'Turn on', detail: `· ${chalk.yellow('dangerous')}`, value: 'on' },
       ])
       : 'off';
   } else if (option.values?.length) {
-    raw = await chooseOption(rl, option.label, option.values.map((entry) => ({ label: entry, value: entry })));
+    raw = await chooseOption(rl, option.label, [
+      { label: 'Default', detail: `· ${harness.displayName} decides${current(option) === undefined ? ' · current' : ''}`, value: 'default' },
+      ...option.values.map((entry) => ({ label: entry, detail: current(option) === entry ? '· current' : undefined, value: entry })),
+    ]);
   } else {
-    raw = (await rl.question(`${option.label} › `)).trim();
+    const list = option.kind === 'string-list' || option.kind === 'path-list';
+    raw = (await rl.question(`${option.label}${list ? ' (comma-separated)' : ''}${current(option) !== undefined ? ' · - clears' : ''} › `)).trim();
   }
-  if (raw === undefined || raw === '') return;
+  if (raw === undefined || raw === '') return true;
   await save(option.id, raw);
+  return true;
 }
