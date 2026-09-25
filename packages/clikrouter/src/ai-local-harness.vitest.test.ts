@@ -137,6 +137,22 @@ describe('local harness catalog', () => {
       .toEqual(nativeHarnessTurnArgv(amp, { prompt: 'inspect' }));
   });
 
+  it('drives one Plan mode through each harness’s own planning flag', () => {
+    const expected: Record<string, string[]> = {
+      copilot: ['--plan'], cline: ['--plan'], command: ['--plan'], droid: ['--use-spec'], auggie: ['--ask'],
+      cursor: ['--mode', 'plan'], antigravity: ['--mode', 'plan'],
+    };
+    const planned = AI_LOCAL_HARNESSES.filter((harness) => harness.planMode);
+    expect(planned.map((harness) => harness.command).sort()).toEqual(Object.keys(expected).sort());
+    for (const harness of planned) {
+      const argv = nativeHarnessTurnArgv(harness, { prompt: 'hi', options: { [harness.planMode!.option]: harness.planMode!.value } });
+      const flag = expected[harness.command]!;
+      const at = argv.indexOf(flag[0]!);
+      expect(at, harness.command).toBeGreaterThanOrEqual(0);
+      expect(argv.slice(at, at + flag.length), harness.command).toEqual(flag);
+    }
+  });
+
   it('carries Goose’s permission mode in GOOSE_MODE, adding nothing to argv', () => {
     const goose = localHarnessForCommand('goose')!;
     for (const mode of ['ask', 'bypass', 'auto'] as const) {

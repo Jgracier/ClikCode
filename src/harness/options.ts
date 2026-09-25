@@ -1,3 +1,4 @@
+import type { AiLocalHarnessDefinition } from './definition.js';
 /** How each shared option id relates to ClikCode's own controls.
  *
  * A vendor CLI publishes its own flags; several vendors publish the same idea
@@ -93,6 +94,9 @@ export function optionIdsForControl(control: string): string[] {
 /** Options to show as vendor rows: everything a ClikCode command does not
  * already own. Listing the others here too is how one setting ended up with
  * two interfaces. */
-export function vendorFacingOptions<T extends { id: string }>(options: readonly T[]): T[] {
-  return options.filter((option) => !commonControlFor(option.id));
+export function vendorFacingOptions<T extends { id: string }>(options: readonly T[], harness?: Pick<AiLocalHarnessDefinition, 'planMode'>): T[] {
+  // A plan switch that is only on/off is Settings' Plan mode row; a list that
+  // also holds other values (Cursor's plan|ask) stays, reading the same value.
+  const planSwitch = harness?.planMode?.value === true ? harness.planMode.option : undefined;
+  return options.filter((option) => !commonControlFor(option.id) && option.id !== planSwitch);
 }

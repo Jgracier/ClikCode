@@ -348,8 +348,12 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     } else if (setting === 'option') {
       const [optionId, ...optionValue] = value.split(/\s+/);
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-      if (!harness || !optionId || !optionValue.length) throw new Error('usage: /settings option <id> <value>');
-      setSessionHarnessOption(session, harness, optionId, optionValue.join(' '));
+      if (!harness || !optionId || !optionValue.length) throw new Error('usage: /settings option <id> <value|default>');
+      // `default` clears it: nothing is sent, the harness decides.
+      if (optionValue.join(' ') === 'default') {
+        const { [optionId]: _cleared, ...rest } = session.harnessOptions ?? {};
+        session.harnessOptions = rest;
+      } else setSessionHarnessOption(session, harness, optionId, optionValue.join(' '));
     } else if (setting === 'failover' || setting === 'accountfailover' || setting === 'account-failover') {
       // One vocabulary with `/settings global failover` (auto/never); the
       // stored words are still accepted.
