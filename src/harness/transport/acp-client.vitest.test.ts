@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acpActivityEvent, acpApprovalDetail, acpResponseDelta, acpSpawnArgv } from './acp-client.js';
+import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv } from './acp-client.js';
 
 describe('shared ACP adapter contract', () => {
   it('normalizes agent prose and tool lifecycle events', () => {
@@ -71,5 +71,16 @@ describe('shared ACP adapter contract', () => {
       .toEqual(['exec', '--output-format', 'acp', '--model', 'm']);
     expect(acpSpawnArgv({ command: 'kimi', argv: ['--acp'], extraArgv: ['--model', 'k2'] })).toEqual(['--model', 'k2', '--acp']);
     expect(acpSpawnArgv({ command: 'cursor' }), 'a harness with no catalog ACP launch cannot be spawned').toBeUndefined();
+  });
+
+  it('resolves a chosen model to the agent\'s own id', () => {
+    const models = { currentModelId: 'openai-codex:gpt-6-astra', availableModels: [
+      { modelId: 'openai-codex:gpt-6-astra' }, { modelId: 'opencode-free:nemotron-3-ultra-free' }, { modelId: 'copilot:gpt-5.5' }, { modelId: 'openai-codex:gpt-5.5' },
+    ] };
+    expect(acpModelChoice(models, 'opencode-free:nemotron-3-ultra-free')).toBe('opencode-free:nemotron-3-ultra-free');
+    expect(acpModelChoice(models, 'nemotron-3-ultra-free'), 'a bare id one provider offers').toBe('opencode-free:nemotron-3-ultra-free');
+    expect(acpModelChoice(models, 'gpt-5.5'), 'ambiguous: two providers offer it').toBeUndefined();
+    expect(acpModelChoice(models, 'unknown')).toBeUndefined();
+    expect(acpModelChoice(undefined, 'anything'), 'an agent with no model list').toBeUndefined();
   });
 });

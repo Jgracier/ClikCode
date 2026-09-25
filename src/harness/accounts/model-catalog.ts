@@ -10,7 +10,7 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } from '../definition.js';
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
-import { hermesCachedModels } from './hermes-discovery.js';
+import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -119,7 +119,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     await resolveBinaryPath(harness.binary),
     ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
     ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
-    ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json')] : []),
+    ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json')] : []),
   ];
   const identities = await Promise.all(files.map(fileIdentity));
   return [...identities, (account?.models ?? []).join(',')].join('|');
@@ -362,19 +362,30 @@ async function nativeModelCatalogUncached(
   // still-open gap in Copilot CLI itself: there is no `copilot models`
   // command, only an interactive picker with no scriptable equivalent.
   // Removed rather than kept as a guess.
-  // Hermes has no `models` command. `hermes model` is an interactive picker.
-  // The configured model is this JSON object's `default` field, confirmed
-  // against a live install (`{"default":"stealth/ox-alpha","provider":"nous",...}`).
+  // Hermes has no `models` command. `hermes model` is an interactive picker;
+  // its list (signed-in providers only) is read from the install's inventory,
+  // with the provider cache as the fallback. Every id is `provider:model`, so
+  // the choice keeps its provider. The configured model is `config get model
+  // --json`'s `default` plus `provider` (`{"default":"gpt-6-astra","provider":"openai-codex",...}`).
   if (harness.command === 'hermes') {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
-    if (profileRoot) {
+    const inventory = await discoverHermesModels(harness, account).catch(() => undefined);
+    if (inventory) {
+      inventory.models.forEach((model) => models.add(model));
+      labels = { ...labels, ...inventory.labels };
+      if (inventory.configured) configured = inventory.configured;
+    } else if (profileRoot) {
       try {
         for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) models.add(model);
       } catch { /* The cache is optional and only holds providers that have been fetched. */ }
     }
     try {
-      const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, 12_000)) as { default?: unknown };
-      if (typeof parsed.default === 'string' && parsed.default.trim()) configured = parsed.default.trim();
+      if (!configured) {
+        const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, 12_000)) as { default?: unknown; provider?: unknown };
+        const model = typeof parsed.default === 'string' ? parsed.default.trim() : '';
+        const provider = typeof parsed.provider === 'string' ? parsed.provider.trim() : '';
+        if (model) configured = provider ? `${provider}:${model}` : model;
+      }
     } catch { /* Keep account models. A missing config is not an empty catalog. */ }
   }
   if (harness.modelDiscoveryArgv) {
