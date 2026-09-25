@@ -43,7 +43,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
-import { announceBareInteractiveLogin, harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
+import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
@@ -528,25 +528,26 @@ export async function aiSessionSend(
             await closePersistentTransport(session.id);
             const signIn = { ...harness, loginArgv: signInArgv };
             const signInName = signInArgv === harness.loginArgv ? harness.displayName : `${harness.displayName} › ${model ? modelProvider(harness, model) : ''}`;
-            if (harness.loginCapturable) {
-              prompter.startWaiting(`signing in to ${signInName}…`);
-              try { await loginNativeHarness(signIn, environment); } finally { prompter.stopWaiting(); }
-            } else {
-              prompter.activity(`${chalk.yellow('signing in to')} ${chalk.dim(signInName)}`);
-              await prompter.suspend();
-              try {
-                announceBareInteractiveLogin(signIn);
-                await loginNativeHarness(signIn, environment);
-              } finally {
-                prompter.resume();
-              }
+            // A worker has no terminal: its client runs the sign-in and says
+            // when it is done. Without that the vendor's login ran here, in a
+            // detached process, and could never finish.
+            const signedIn = await (prompter.signIn
+              ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName })
+              : withVendorTerminal(prompter, signIn, () => loginNativeHarness(signIn, environment), signInName))
+              .then(() => true, (error: unknown) => {
+                // The turn then ends on its own authentication error, which
+                // says what to do; this says why the sign-in did not fix it.
+                prompter.activity(chalk.yellow(`sign-in to ${signInName} did not finish: ${error instanceof Error ? error.message : String(error)}`));
+                return false;
+              });
+            if (signedIn) {
+              account = await syncAccountIdentityAfterLogin(harness, account, state);
+              session.accountId = account.id;
+              // The failed reply may already be on screen; the retry replaces it.
+              checkpoint.response('', 'replace');
+              prompter.response('', 'replace');
+              continue;
             }
-            account = await syncAccountIdentityAfterLogin(harness, account, state);
-            session.accountId = account.id;
-            // The failed reply may already be on screen; the retry replaces it.
-            checkpoint.response('', 'replace');
-            prompter.response('', 'replace');
-            continue;
           }
         }
         if (failureKind === 'native-thread-invalid') {

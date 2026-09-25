@@ -311,6 +311,43 @@ export function announceBareInteractiveLogin(harness: Pick<AiLocalHarnessDefinit
   }
 }
 
+/** What a vendor sign-in needs from whatever is on screen. A terminal
+ * prompter has all of it; headless callers pass nothing and the vendor just
+ * runs. */
+export interface SignInSurface {
+  startWaiting(message: string): void;
+  stopWaiting(): void;
+  suspend(): Promise<void>;
+  resume(): void;
+  activity?(message: string): void;
+}
+
+/** Runs `work` -- a vendor's own sign-in -- with the terminal handed to it.
+ * The one copy of what four call sites each did their own way: a sign-in
+ * that needs no terminal (Antigravity's) keeps ClikCode on screen behind a
+ * spinner; every other one gets the real terminal, told first what to type
+ * where the vendor signs in only from inside its own session. */
+export async function withVendorTerminal<T>(
+  surface: SignInSurface | undefined,
+  harness: Pick<AiLocalHarnessDefinition, 'displayName' | 'loginArgv' | 'loginHint' | 'loginCapturable'>,
+  work: () => Promise<T>,
+  name = harness.displayName,
+): Promise<T> {
+  if (!surface) return work();
+  if (harness.loginCapturable) {
+    surface.startWaiting(`signing in to ${name}…`);
+    try { return await work(); } finally { surface.stopWaiting(); }
+  }
+  surface.activity?.(`${chalk.yellow('signing in to')} ${chalk.dim(name)}`);
+  await surface.suspend();
+  try {
+    announceBareInteractiveLogin({ ...harness, displayName: name });
+    return await work();
+  } finally {
+    surface.resume();
+  }
+}
+
 function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {
   const account = state.accounts.find((item) => item.id === labelOrId || item.label.toLowerCase() === labelOrId.toLowerCase());
   if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
