@@ -183,6 +183,13 @@ describe('local harness catalog', () => {
     ]);
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'bypass' })).toContain('--yolo');
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--yolo');
+    // A Hermes model id names its provider; the CLI takes the halves apart,
+    // and a stored provider option cannot override the model's.
+    const turn = nativeHarnessTurnArgv(hermes, { prompt: 'hi', model: 'opencode-free:nemotron-3-ultra-free', options: { provider: 'openai-codex' } });
+    expect(turn).toEqual(expect.arrayContaining(['--provider', 'opencode-free', '--model', 'nemotron-3-ultra-free']));
+    expect(turn).not.toContain('openai-codex');
+    expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', model: 'custom:local:qwen3:8b' })).toEqual(expect.arrayContaining(['--provider', 'custom:local', '--model', 'qwen3:8b']));
+    expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', model: 'anthropic/claude-3.5-sonnet:beta' })).not.toContain('--provider');
 
     const antigravity = localHarnessForCommand('antigravity')!;
     expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--mode');

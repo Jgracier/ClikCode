@@ -282,6 +282,10 @@ export interface AiLocalHarnessDefinition {
   launchArgv?: readonly string[];
   /** Source-backed selectors ClikCode may safely append at launch. */
   modelArgvPrefix?: readonly string[];
+  /** For a harness whose model ids carry their provider (`provider:model`,
+   * Hermes): the flag that takes the provider half. The model flag then gets
+   * the bare model, since the CLI does not parse the combined form. */
+  modelProviderArgvPrefix?: readonly string[];
   /** Side-effect-free vendor command that lists models available to the active account. */
   modelDiscoveryArgv?: readonly string[];
   workspaceArgvPrefix?: readonly string[];
@@ -517,7 +521,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // and there is no `models list`; the configured model is `hermes config get
   // model --json` (`default`). ACP (`hermes acp`) is the turn that streams
   // tool calls. `chat --quiet` is only the text fallback.
-  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
+  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelProviderArgvPrefix: ['--provider'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
   // Same kind of product as Hermes, not a fork. The one-shot turn is
   // `agent --local --json` (docs.openclaw.ai/cli/agent): it returns one JSON
   // envelope with `final` and `sessionId`, not a tool stream. `openclaw acp`
@@ -1093,6 +1097,24 @@ function sessionSelector(
   return idPrefix;
 }
 
+/** `provider:model` split the way Hermes splits it: a `custom:<name>`
+ * provider keeps its own colon, and a left side with `/` or `.` is part of a
+ * model name (`anthropic/claude-3.5-sonnet:beta`), not a provider. */
+export function splitProviderModel(model: string): { provider: string; model: string } | undefined {
+  const match = /^(custom:[^:/]+|[a-z][a-z0-9_-]*):(.+)$/i.exec(model.trim());
+  return match ? { provider: match[1]!, model: match[2]! } : undefined;
+}
+
+/** The model flag, plus the provider flag when the harness takes the provider
+ * separately and the id names one. */
+export function modelSelectorArgv(harness: AiLocalHarnessDefinition, model: string): string[] {
+  if (!harness.modelArgvPrefix) return [];
+  const split = harness.modelProviderArgvPrefix ? splitProviderModel(model) : undefined;
+  return split
+    ? [...harness.modelProviderArgvPrefix!, split.provider, ...harness.modelArgvPrefix, split.model]
+    : [...harness.modelArgvPrefix, model];
+}
+
 /** Build only argv declared by the adapter; user-controlled values never become shell text. */
 export function nativeHarnessLaunchArgv(harness: AiLocalHarnessDefinition, input: AiNativeHarnessLaunchInput): string[] {
   let argv = [...(harness.launchArgv ?? [])];
@@ -1106,7 +1128,7 @@ export function nativeHarnessLaunchArgv(harness: AiLocalHarnessDefinition, input
   } else if (input.launchedBefore && harness.session?.continueArgv) {
     argv = [...harness.session.continueArgv];
   }
-  if (input.model && harness.modelArgvPrefix) argv.push(...harness.modelArgvPrefix, input.model);
+  if (input.model) argv.push(...modelSelectorArgv(harness, input.model));
   if (input.workspace && harness.workspaceArgvPrefix) argv.push(...harness.workspaceArgvPrefix, input.workspace);
   if (input.effort && harness.effortArgvPrefix) argv.push(...harness.effortArgvPrefix, harness.effortConfigKey ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
   return argv;
@@ -1170,7 +1192,7 @@ export function nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: 
     if (prefix) argv.push(...prefix, input.nativeSessionId, ...(input.createdHere ? harness.turn.createIdSuffix ?? [] : harness.turn.resumeIdSuffix ?? []));
     else if (resumed && harness.turn.resumeArgv) argv.push(input.nativeSessionId, ...(harness.turn.resumeIdSuffix ?? []));
   }
-  if (input.model && harness.modelArgvPrefix) argv.push(...harness.modelArgvPrefix, input.model);
+  if (input.model) argv.push(...modelSelectorArgv(harness, input.model));
   if (input.workspace && harness.workspaceArgvPrefix && (!resumed || harness.turn.resumeSupportsWorkspaceSelector !== false)) argv.push(...harness.workspaceArgvPrefix, input.workspace);
   if (input.effort && harness.effortArgvPrefix) argv.push(...harness.effortArgvPrefix, harness.effortConfigKey ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
   if (input.permissionMode && harness.permissionModes?.includes(input.permissionMode)) {
@@ -1179,7 +1201,11 @@ export function nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: 
     if (mapping.placement === 'root') argv.unshift(...mapping.argv);
     else argv.push(...mapping.argv);
   }
-  appendDeclaredHarnessOptions(argv, harness, input.options, resumed);
+  // A model that names its provider already chose it; a separately stored
+  // provider option would come later on the line and win.
+  const carriesProvider = Boolean(input.model && harness.modelProviderArgvPrefix && splitProviderModel(input.model));
+  const { provider: _provider, ...withoutProvider } = input.options ?? {};
+  appendDeclaredHarnessOptions(argv, harness, carriesProvider ? withoutProvider : input.options, resumed);
   if (harness.imageArgvPrefix) for (const image of input.images ?? []) {
     if (harness.imageArgvStyle === 'concatenated') {
       const prefix = harness.imageArgvPrefix.join('');
@@ -1238,7 +1264,7 @@ export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHar
   const acp = harness.acp;
   if (!acp) return undefined;
   const options: string[] = [];
-  if (input.model && harness.modelArgvPrefix) options.push(...harness.modelArgvPrefix, input.model);
+  if (input.model) options.push(...modelSelectorArgv(harness, input.model));
   const effortPrefix = acp.effortArgvPrefix ?? harness.effortArgvPrefix;
   if (input.effort && effortPrefix) options.push(...effortPrefix, harness.effortConfigKey && !acp.effortArgvPrefix ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
   if (input.permissionMode === 'bypass' || input.permissionMode === 'auto') {

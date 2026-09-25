@@ -231,6 +231,18 @@ export function acpSpawnArgv(
   return placement === 'after' ? [...argv, ...options] : [...options, ...argv];
 }
 
+/** The agent's own id for a chosen model. Hermes names models
+ * `provider:model`; a bare model still resolves when exactly one provider
+ * offers it. Undefined when the agent publishes no list, or the choice is not
+ * on it -- the launch flags then stand as the only selector. */
+export function acpModelChoice(models: Json | undefined, model: string): string | undefined {
+  const available: unknown[] = Array.isArray(models?.availableModels) ? models!.availableModels : [];
+  const ids = available.map((entry) => (entry as Json | null)?.modelId).filter((id): id is string => typeof id === 'string');
+  if (ids.includes(model)) return model;
+  const suffixed = ids.filter((id) => id.endsWith(`:${model}`));
+  return suffixed.length === 1 ? suffixed[0] : undefined;
+}
+
 const IMAGE_MIME: Readonly<Record<string, string>> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
 };
@@ -249,6 +261,8 @@ interface LiveAgent {
   capabilities?: Json;
   /** Session currently loaded in this child; it needs no resume/load. */
   sessionId?: string;
+  /** The loaded session's model state (`currentModelId`, `availableModels`). */
+  models?: Json;
 }
 
 interface ActiveTurn {
@@ -398,6 +412,7 @@ class AcpSessionImpl implements AcpSession {
     if (images.length && capabilities.promptCapabilities?.image !== true) {
       throw new Error(`${input.command} ACP does not accept image prompts`);
     }
+    let loaded: Json | undefined;
     const wanted = input.nativeSessionId ?? this.sessionId;
     const created = input.nativeSessionId ? input.sessionCreated !== false : wanted !== undefined;
     if (wanted && created) {
@@ -405,11 +420,12 @@ class AcpSessionImpl implements AcpSession {
         // session/load streams the whole history before it answers, so its
         // timeout is an idle window rather than a wall-clock limit.
         const loading = { ...setup, idleReset: true };
-        if (capabilities.sessionCapabilities?.resume) await peer.request('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
-        else if (capabilities.loadSession) await peer.request('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
+        if (capabilities.sessionCapabilities?.resume) loaded = await peer.request('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
+        else if (capabilities.loadSession) loaded = await peer.request('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
         else throw new Error(`${input.command} ACP cannot load sessions`);
         stillRunning();
         live.sessionId = wanted;
+        live.models = loaded?.models;
       }
       turn.sessionId = wanted;
     } else {
@@ -418,11 +434,21 @@ class AcpSessionImpl implements AcpSession {
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
       live.sessionId = sessionId;
+      live.models = started.models;
       turn.sessionId = sessionId;
       await input.onSessionId?.(sessionId);
       stillRunning();
     }
     this.sessionId = turn.sessionId;
+    // Agents that publish a model list take the choice over the protocol; a
+    // launch flag is not guaranteed to reach the session (`hermes acp` ignores
+    // `--model`, and would silently run its configured default).
+    const modelId = input.model ? acpModelChoice(live.models, input.model) : undefined;
+    if (modelId && modelId !== live.models?.currentModelId) {
+      await peer.request('session/set_model', { sessionId: turn.sessionId, modelId }, setup);
+      stillRunning();
+      live.models = { ...live.models, currentModelId: modelId };
+    }
     const blocks: Json[] = [{ type: 'text', text: input.prompt }, ...await Promise.all(images.map(acpImageBlock))];
     stillRunning();
     turn.promptStarted = true;

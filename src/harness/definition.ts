@@ -169,6 +169,7 @@ export interface AiLocalHarnessDefinition {
   versionArgv?: readonly string[];
   launchArgv?: readonly string[];
   modelArgvPrefix?: readonly string[];
+  modelProviderArgvPrefix?: readonly string[];
   modelDiscoveryArgv?: readonly string[];
   workspaceArgvPrefix?: readonly string[];
   effortArgvPrefix?: readonly string[];
