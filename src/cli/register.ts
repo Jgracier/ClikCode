@@ -78,10 +78,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action((id, prompt: string[]) => aiGatewaySessionSend(config, id, prompt.join(' ')));
   sessions.command('command <id> <slash...>').alias('slash').description('Run /claude, /accounts, or another session slash command')
     .action(async (id, slash: string[]) => { await aiSessionCommand(id, slash.join(' ')); });
-  sessions.command('open <id>').alias('interactive').description('Open a persistent session; use /accounts, /claude, or /exit')
-    .action((id) => aiSessionInteractive(config, id));
-  sessions.command('resume <id>').description('Resume a ClikCode session and its exact native chat when available')
-    .action((id) => aiSessionResume(config, id));
+  // `open` and `resume` were two commands for one thing.
+  sessions.command('resume <chat>').aliases(['open', 'interactive']).description('Resume a chat -- its id or the start of it, its name, or `last` -- and its exact native chat when available')
+    .action((chat) => aiSessionResume(config, chat));
   sessions.command('close <id>').description('Close a session without deleting its local history')
     .action((id) => aiSessionClose(id));
   sessions.command('set <id>').description('Change route, account, provider, model, or effort')

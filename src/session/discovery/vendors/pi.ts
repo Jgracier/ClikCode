@@ -36,7 +36,7 @@ export async function discoverPiFsSessions(workspace: string, environment: Nativ
       else if (!title && typeof record.title === 'string') title = record.title;
     }
     if (workspace && cwd && cwd !== workspace) continue;
-    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs });
+    sessions.push({ nativeId, title, updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs, ...(cwd ? { workspace: cwd } : {}) });
   }
   return sessions;
 }

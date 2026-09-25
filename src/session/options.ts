@@ -59,11 +59,26 @@ export function isBlankConversation(session: HarnessSession): boolean {
 export function chatNamed(sessions: readonly HarnessSession[], typed: string, currentId: string): string | undefined {
   const query = typed.trim().toLowerCase();
   if (!query) return undefined;
-  const candidates = sessions.filter((session) => session.id !== currentId && session.name && !isBlankConversation(session));
-  const exact = candidates.filter((session) => session.name!.toLowerCase() === query);
-  if (exact.length) return [...exact].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]!.id;
-  const partial = candidates.filter((session) => session.name!.toLowerCase().includes(query));
+  const chats = sessions.filter((session) => session.id !== currentId && !isBlankConversation(session));
+  const latest = (list: readonly HarnessSession[]): string => [...list].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]!.id;
+  // `last`: the most recent chat, whatever it is called.
+  if (query === 'last' && chats.length) return latest(chats);
+  // An id, or the start of one (what /fork and `sessions list` print), finds
+  // an unnamed chat too.
+  const byId = query.length >= 4 ? chats.filter((session) => session.id.toLowerCase().startsWith(query)) : [];
+  if (byId.length === 1) return byId[0]!.id;
+  const named = chats.filter((session) => session.name);
+  const exact = named.filter((session) => session.name!.toLowerCase() === query);
+  if (exact.length) return latest(exact);
+  const partial = named.filter((session) => session.name!.toLowerCase().includes(query));
   return partial.length === 1 ? partial[0]!.id : undefined;
+}
+
+/** The chat `clikcode --continue` reopens: the latest in this folder, else
+ * the latest anywhere. */
+export function latestChat(sessions: readonly HarnessSession[], workspace: string): HarnessSession | undefined {
+  const chats = sessions.filter((session) => !isBlankConversation(session)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return chats.find((session) => session.workspace === workspace) ?? chats[0];
 }
 
 export function requiresProviderHandoff(session: HarnessSession, targetHarness: string): boolean {

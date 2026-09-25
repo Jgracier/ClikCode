@@ -1,7 +1,7 @@
 /** Claude Code's own session history: project directories, and the JSONL
  * transcripts inside them. */
 
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { cachedDirectory, discoveryCache, saveDiscoveryCache } from '../cache.js';
@@ -21,9 +21,25 @@ export function claudeProjectDirectoryNames(workspace: string): string[] {
   return [...new Set([workspace.replace(/[^a-zA-Z0-9]/g, '-'), workspace.replace(/\//g, '-')])];
 }
 
+function claudeProjectRoot(environment: NativeSessionEnvironment): string {
+  return join(nativeDataRoot(environment, 'CLAUDE_CONFIG_DIR', join(homedir(), '.claude')), 'projects');
+}
+
 function claudeProjectDirectories(workspace: string, environment: NativeSessionEnvironment): string[] {
-  const root = join(nativeDataRoot(environment, 'CLAUDE_CONFIG_DIR', join(homedir(), '.claude')), 'projects');
-  return claudeProjectDirectoryNames(workspace).map((name) => join(root, name));
+  return claudeProjectDirectoryNames(workspace).map((name) => join(claudeProjectRoot(environment), name));
+}
+
+/** Every project folder, for discovery across all workspaces (`''`). */
+async function allClaudeProjectDirectories(environment: NativeSessionEnvironment): Promise<string[]> {
+  const root = claudeProjectRoot(environment);
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => join(root, entry.name));
+}
+
+/** The folder a chat ran in: every Claude Code record carries `cwd`. */
+async function claudeSessionCwd(path: string): Promise<string | undefined> {
+  const head = await readFilePrefix(path, 16_000).catch(() => '');
+  return /"cwd":"((?:[^"\\]|\\.)+)"/.exec(head)?.[1]?.replace(/\\(.)/g, '$1');
 }
 
 /** The chat's name for the resume list, and whether it is a real one.
@@ -63,7 +79,8 @@ async function claudeSessionTitle(path: string): Promise<{ title?: string; gener
 
 export async function discoverClaudeFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
   const sessions: DiscoveredNativeSession[] = [];
-  for (const dir of claudeProjectDirectories(workspace, environment)) {
+  const everywhere = !workspace;
+  for (const dir of everywhere ? await allClaudeProjectDirectories(environment) : claudeProjectDirectories(workspace, environment)) {
     const listing = await cachedDirectory(dir, '.jsonl');
     if (!listing) continue;
     const recent = await newestFiles(Object.keys(listing.files).map((name) => join(dir, name)), 15);
@@ -72,21 +89,25 @@ export async function discoverClaudeFsSessions(workspace: string, environment: N
       const facts = listing.files[name] ?? {};
       // A title can appear after the first scan (the ai-title record is written
       // once Claude has named the chat), so it is keyed to the file's mtime.
-      if (facts.mtimeMs !== file.mtimeMs) {
+      if (facts.mtimeMs !== file.mtimeMs || (everywhere && facts.cwd === undefined)) {
         const read = await claudeSessionTitle(file.path);
-        listing.files[name] = { title: read.title, generated: read.generated, mtimeMs: file.mtimeMs };
+        const cwd = everywhere ? await claudeSessionCwd(file.path) : facts.cwd;
+        listing.files[name] = { title: read.title, generated: read.generated, mtimeMs: file.mtimeMs, ...(cwd ? { cwd } : {}) };
         discoveryCache!.dirty = true;
       }
+      const known = listing.files[name]!;
       sessions.push({
-        nativeId: name.replace(/\.jsonl$/, ''), title: listing.files[name]!.title,
-        ...(listing.files[name]!.generated ? { titleIsGenerated: true } : {}),
+        nativeId: name.replace(/\.jsonl$/, ''), title: known.title,
+        ...(known.generated ? { titleIsGenerated: true } : {}),
         updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs,
+        ...(known.cwd ? { workspace: known.cwd } : {}),
       });
     }
-    if (sessions.length) break;
+    if (sessions.length && !everywhere) break;
   }
   await saveDiscoveryCache();
-  return sessions;
+  // Across every folder, the newest few overall -- not fifteen per folder.
+  return everywhere ? sessions.sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)).slice(0, 30) : sessions;
 }
 
 /** Reads every user/assistant turn from a Claude Code session's own jsonl file

@@ -1,6 +1,7 @@
 /** Choosing a session to resume, including sessions a vendor CLI started
  * outside ClikCode and that can be adopted. */
 
+import { compactPath } from '../../harness/protocol/labels.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
@@ -74,7 +75,10 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
     const inspection = await inspectNativeHarness(harness, 500);
     if (!inspection.installed) return [];
     return (await Promise.all(discoveryProfiles(harness).map(async (account) => {
-      const found = await discover(workspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => []);
+      // Every folder, not just this one: a chat started in the vendor's own
+      // CLI elsewhere was invisible unless ClikCode opened in that folder.
+      // Its folder is on the row, and adopting it opens it there.
+      const found = await discover('', nativeProfileEnvironment(account?.nativeProfile)).catch(() => []);
       return found.map((item) => ({ harness, item, accountId: account?.id }));
     }))).flat();
   }))).flat())();
@@ -219,7 +223,7 @@ export async function interactiveSessionPicker(
         sortKey: item.updatedAtMs ?? -Infinity,
         options: [{
           label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
-          detail: `· not yet in ClikCode${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
+          detail: `· not yet in ClikCode${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
           value: `native:${index}`,
         }],
       })),
@@ -295,9 +299,10 @@ export async function interactiveSessionPicker(
   // separate, best-effort read: only wired for the harnesses with a confirmed
   // way to read a whole conversation back out (see ADOPTED_TRANSCRIPT_READERS
   // above), and never something continuation itself depends on.
+  const chatWorkspace = match.item.workspace ?? workspace;
   const transcriptReader = ADOPTED_TRANSCRIPT_READERS[match.harness.command];
   const messages = transcriptReader
-    ? await transcriptReader(match.harness, nativeId, workspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => [])
+    ? await transcriptReader(match.harness, nativeId, chatWorkspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => [])
     : [];
   const id = randomUUID();
   const adopted: HarnessSession = {
@@ -311,7 +316,7 @@ export async function interactiveSessionPicker(
     // "we need to have scrolling but we need to not have terminal / co…" --
     // a preview that looks like a name forever, because nameSession returns
     // early on any name at all and can never replace it.
-    workspace, ...(match.item.titleIsGenerated && match.item.title ? { name: match.item.title, nameSource: 'provider' as const } : {}),
+    workspace: chatWorkspace, ...(match.item.titleIsGenerated && match.item.title ? { name: match.item.title, nameSource: 'provider' as const } : {}),
     ...(messages.length ? { messages } : {}),
   };
   state.sessions.push(adopted);

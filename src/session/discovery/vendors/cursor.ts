@@ -45,6 +45,7 @@ export async function discoverCursorFsSessions(workspace: string, environment: N
       title: typeof meta.title === 'string' ? meta.title : undefined,
       updatedAt: new Date(updatedAtMs).toISOString(),
       updatedAtMs,
+      ...(typeof meta.cwd === 'string' ? { workspace: meta.cwd } : {}),
     });
   }
   return sessions.sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)).slice(0, 15);
