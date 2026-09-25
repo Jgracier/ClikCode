@@ -87,11 +87,15 @@ export async function discoverGooseProviders(
 /** The models.dev catalog: OpenCode's copy when it keeps one, else fetched
  * from models.dev and kept a day -- a server's list, so a clock is the only
  * freshness rule there is. Empty when neither is reachable. */
-export async function modelsDevCache(): Promise<string> {
+export function modelsDevFiles(): [opencode: string, own: string] {
   const cacheRoot = process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache');
-  const opencode = await readFile(join(cacheRoot, 'opencode', 'models.json'), 'utf8').catch(() => '');
+  return [join(cacheRoot, 'opencode', 'models.json'), join(stateDirectory(), 'models-dev.json')];
+}
+
+export async function modelsDevCache(): Promise<string> {
+  const [opencodeFile, own] = modelsDevFiles();
+  const opencode = await readFile(opencodeFile, 'utf8').catch(() => '');
   if (opencode) return opencode;
-  const own = join(stateDirectory(), 'models-dev.json');
   const kept = await stat(own).catch(() => undefined);
   if (kept && Date.now() - kept.mtimeMs < 24 * 60 * 60_000) return readFile(own, 'utf8').catch(() => '');
   try {

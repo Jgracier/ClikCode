@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { piConnect, piModels, piProviderLabel } from './pi-discovery';
-import { gooseConnect, gooseModelsDevModels, gooseProviders } from './goose-discovery';
+import { gooseConnect, gooseModelsDevModels, gooseProviders, modelsDevProvider } from './goose-discovery';
 import { acpSessionModels } from './acp-query';
 
 describe('pi discovery', () => {
@@ -81,5 +81,14 @@ describe('ACP session models', () => {
       models: ['anthropic/claude-sonnet-5', 'x-ai/grok-4.7'], labels: { 'anthropic/claude-sonnet-5': 'Claude Sonnet 5' }, current: 'anthropic/claude-sonnet-5',
     });
     expect(acpSessionModels(undefined)).toEqual({ models: [], labels: {} });
+  });
+});
+
+describe('models.dev', () => {
+  it('lists a provider’s models with their names (Copilot’s picker)', () => {
+    const cache = JSON.stringify({ 'github-copilot': { name: 'GitHub Copilot', models: { 'gpt-5.4': { name: 'GPT-5.4' }, 'kimi-k3': {} } } });
+    expect(modelsDevProvider(cache, 'github-copilot')).toEqual({ models: ['gpt-5.4', 'kimi-k3'], labels: { 'gpt-5.4': 'GPT-5.4' } });
+    expect(modelsDevProvider(cache, 'nope')).toEqual({ models: [], labels: {} });
+    expect(modelsDevProvider('offline', 'github-copilot')).toEqual({ models: [], labels: {} });
   });
 });

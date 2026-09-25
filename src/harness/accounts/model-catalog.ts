@@ -14,7 +14,7 @@ import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js'
 import { discoverOpenClawModels } from './openclaw-discovery.js';
 import { discoverOpencodeConnect } from './opencode-discovery.js';
 import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
-import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevProvider } from './goose-discovery.js';
+import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPath } from './auth-files.js';
 import { acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId } from '../../runtime/lazy-bridge.js';
@@ -124,6 +124,9 @@ function catalogProfileRoot(harness: AiLocalHarnessDefinition, account?: AiHarne
           : harness.command === 'openclaw' ? join(homedir(), '.openclaw') : undefined);
 }
 
+/** Harnesses whose list comes from the models.dev catalog. */
+const MODELS_DEV_HARNESSES: ReadonlySet<string> = new Set(['copilot', 'goose']);
+
 /** Every file nativeModelCatalogUncached reads, as identities, plus the
  * account's own model list. Kept beside the reader it describes: a file read
  * there and not listed here is a value that can go stale unnoticed. */
@@ -139,6 +142,8 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     // OpenClaw's sign-ins live in the agent's SQLite auth store.
     ...(harness.command === 'openclaw' && root ? [join(root, 'openclaw.json'), join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')] : []),
     ...(harness.command === 'goose' ? [join(homedir(), '.config', 'goose', 'config.yaml'), join(homedir(), '.config', 'goose', 'secrets.yaml')] : []),
+    // The models.dev catalog a list was read from: a newer copy is a new list.
+    ...(MODELS_DEV_HARNESSES.has(harness.command) ? modelsDevFiles() : []),
     // A sign-in changes which models a vendor lists (Pi, Qwen, Cline): its
     // credential files are part of what the list was read from.
     ...(harness.authFiles ?? []).map((entry) => expandAuthPath(entry.path.replace(/\/$/, ''), {
@@ -292,6 +297,10 @@ export async function nativeModelCatalog(
   // entry that no longer matches rather than one that looks current.
   const fingerprint = await catalogFingerprint(harness, account);
   const result = await nativeModelCatalogUncached(harness, account);
+  // A list read from a server (Copilot's, from models.dev) that came back
+  // empty was offline, not empty: remembered, it stayed empty until Copilot
+  // itself was updated. Asked again next time instead.
+  if (!result.models.length && MODELS_DEV_HARNESSES.has(harness.command)) return result;
   const key = cacheKey(harness, account);
   const entry: CatalogMemoEntry = { at: Date.now(), fingerprint, result };
   modelCatalogCache.set(key, entry);
