@@ -543,7 +543,7 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'antigravity', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'agy', loginArgv: ['-p', '/help', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--dangerously-skip-permissions'] } }, profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
   // Pi signs in only inside its own session (`/login`, OAuth or a key); `pi
   // auth` just prints or checks credentials. So its sign-in opens Pi itself.
-  { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: [], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', loginHint: 'type /login and pick a provider', authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
+  { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: [], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', loginHint: 'type /login and pick a provider', authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
   // Checked against droid 0.223.0: `droid exec` takes -m/--model,
   // -r/--reasoning-effort, --cwd, -s/--session-id, --auto low|medium|high and
   // --skip-permissions-unsafe, all as declared here. Two things were missing:
@@ -1178,6 +1178,34 @@ export function splitHarnessModel(harness: AiLocalHarnessDefinition, model: stri
     return slash > 0 && slash < model.length - 1 ? { provider: model.slice(0, slash), model: model.slice(slash + 1) } : undefined;
   }
   return splitProviderModel(model);
+}
+
+/** Whether a harness's model ids name the provider they run on: the
+ * harnesses that drive other providers (Hermes, OpenClaw, Goose, OpenCode,
+ * Kilo, Pi). */
+export function harnessCarriesProvider(harness: AiLocalHarnessDefinition): boolean {
+  return Boolean(harness.modelProviderSeparator || harness.modelProviderArgvPrefix);
+}
+
+/** One way to show a multi-provider model: `provider:model`. Hermes writes
+ * that already; the rest write `provider/model`, which put
+ * `openrouter/anthropic/claude` beside `nous:z-ai/glm-5.2` in the same kind
+ * of list. Display only -- the vendor still gets its own id. */
+export function modelDisplayId(harness: AiLocalHarnessDefinition, model: string): string {
+  if (!harnessCarriesProvider(harness)) return model;
+  const split = splitHarnessModel(harness, model);
+  return split ? `${split.provider}:${split.model}` : model;
+}
+
+/** The harness's own id for one typed as it is shown (`claude-code:sonnet`
+ * for Goose's `claude-code/sonnet`). An id already in the harness's form
+ * (a `/` before any `:`) is kept, so `ollama/qwen3:8b` stays itself. */
+export function modelIdFromDisplay(harness: AiLocalHarnessDefinition, typed: string): string {
+  const model = typed.trim();
+  if (harness.modelProviderSeparator !== '/') return model;
+  const colon = model.indexOf(':');
+  const slash = model.indexOf('/');
+  return colon > 0 && (slash < 0 || colon < slash) ? `${model.slice(0, colon)}/${model.slice(colon + 1)}` : model;
 }
 
 /** The provider half of a model id, in the harness's own spelling. */

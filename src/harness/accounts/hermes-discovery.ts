@@ -128,7 +128,6 @@ export function hermesInventory(output: string): HermesInventory | undefined {
       for (const model of rowModels) {
         const id = `${row.provider}:${model.trim()}`;
         models.push(id);
-        labels[id] = `${model.trim()} · ${name}`;
       }
     }
     connect.sort((left, right) => CONNECT_ORDER(left) - CONNECT_ORDER(right) || left.label.localeCompare(right.label));

@@ -2,7 +2,7 @@
 
 import type { ModelCatalogResult } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
-import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { localHarnessForCommand, localHarnessForProvider, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
@@ -37,12 +37,21 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
     ...discoveredModels.map((model) => {
+      // A harness that drives other providers shows every model one way,
+      // `provider:model`, and a name only where it says something the id
+      // does not ("Opus 5.5" for `opus`) -- never the id a second time.
+      const shown = harness ? modelDisplayId(harness, model) : model;
+      const name = catalog.labels?.[model];
+      // "Claude Opus 5.5" only respells `claude-opus-5-5`; "Opus 5.5" names
+      // what `opus` is. Compared on letters and digits alone.
+      const bare = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const respells = name !== undefined && [shown, shown.slice(shown.indexOf(':') + 1)].some((id) => bare(id) === bare(name));
       const parts = [
-        catalog.labels?.[model],
+        name && !respells ? name : undefined,
         model === effective ? 'current' : undefined,
         model === effective && !session.model && model === catalog.configured ? 'provider configured' : undefined,
       ].filter((part): part is string => Boolean(part));
-      return { label: model, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
+      return { label: shown, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
     }),
     // A multi-provider harness (Hermes) lists providers it can reach but is
     // not signed in to. Signing in here is the whole connection flow: no
@@ -83,7 +92,8 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     // reopened picker reads the new provider's models.
     return interactiveModelPicker(rl, id);
   }
-  const value = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : selected;
+  const typed = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : undefined;
+  const value = typed !== undefined ? (harness && typed ? modelIdFromDisplay(harness, typed) : typed) : selected;
   // Applies to this chat only, no further "apply to" step: a model choice is
   // read as a per-conversation decision, unlike effort/permissions/failover,
   // which are more often "how I always want this provider to behave" and

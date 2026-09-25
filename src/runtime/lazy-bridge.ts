@@ -83,6 +83,10 @@ export const harnessLoginArgvForModel = (harness: AiLocalHarnessDefinition, mode
   localCatalog().harnessLoginArgvForModel(harness, model);
 export const modelProvider = (harness: AiLocalHarnessDefinition, model: string): string | undefined =>
   localCatalog().modelProvider(harness, model);
+export const modelDisplayId = (harness: AiLocalHarnessDefinition, model: string): string =>
+  localCatalog().modelDisplayId(harness, model);
+export const modelIdFromDisplay = (harness: AiLocalHarnessDefinition, typed: string): string =>
+  localCatalog().modelIdFromDisplay(harness, typed);
 export const harnessReplyError = (harness: AiLocalHarnessDefinition, text: string): { statusCode?: number } | undefined =>
   localCatalog().harnessReplyError(harness, text);
 export const maxPromptArgvBytes = (): number => localCatalog().maxPromptArgvBytes;
