@@ -73,6 +73,7 @@ interface AiHarnessTurnDefinition {
    * in `agent --local`. */
   statelessRoute?: { path: readonly string[]; values: readonly string[] };
   statelessProviders?: readonly string[];
+  outsideRepoArgv?: readonly string[];
   resumeSupportsWorkspaceSelector?: boolean;
 }
 
@@ -216,6 +217,7 @@ export interface AiLocalHarnessDefinition {
     responseFields?: readonly string[];
     statelessRoute?: { path: readonly string[]; values: readonly string[] };
   statelessProviders?: readonly string[];
+  outsideRepoArgv?: readonly string[];
     /** Literal phrases this vendor puts in its OWN result text when an
      *  account is out of usage, while still reporting the turn as a success.
      *  Augment's auggie does exactly that: is_error false, subtype "success",
