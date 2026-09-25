@@ -16,6 +16,7 @@ import { accountUsageLabel, cachedAccountUsageLabel } from '../../harness/accoun
 import { NATIVE_USAGE_PROBES } from '../../harness/accounts/usage-probes.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountRemove, announceBareInteractiveLogin, syncAccountIdentityAfterLogin } from '../../commands/account.js';
 import { refreshPlaceholderAccountLabels } from '../../harness/accounts/labels.js';
+import { harnessCanLogout, logoutNativeHarness } from '../../harness/accounts/auth-files.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { accountPickerOptions, type ProviderAccountChoice } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
@@ -131,7 +132,13 @@ const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
 };
 
 async function addApiKeyAccount(rl: HarnessPrompter, harness: AiLocalHarnessDefinition): Promise<string | undefined> {
-  const suggested = PROVIDER_API_KEY_ENV[harness.provider] ?? `${harness.provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
+  // A variable the vendor itself reads (its catalog `authEnv`) beats a guess;
+  // one already set in this shell beats the rest. Aider reads six and never
+  // the AIDER_API_KEY the generic fallback made up.
+  const suggested = harness.authEnv?.find((name) => process.env[name])
+    ?? PROVIDER_API_KEY_ENV[harness.provider]
+    ?? harness.authEnv?.[0]
+    ?? `${harness.provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
   let entered = '';
   // The provider's standard variable is already set in this shell: that is
   // the key, and asking the user to confirm the name printed in the prompt's
@@ -261,8 +268,9 @@ export async function manageAccountAction(rl: HarnessPrompter, accountId: string
   }
   if (account.authKind !== 'vendor-cli') return;
   const environment = nativeProfileEnvironment(account.nativeProfile);
-  if (action === 'disconnect' && harness.logoutArgv) {
-    await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
+  if (action === 'disconnect' && harnessCanLogout(harness)) {
+    if (harness.logoutArgv) await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
+    else await logoutNativeHarness(harness, environment);
     account.status = 'needs_login';
     await writeState(state);
   } else if (action === 'reauthenticate' && harness.loginArgv) {

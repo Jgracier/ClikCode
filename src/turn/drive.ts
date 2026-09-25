@@ -43,7 +43,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
-import { harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
+import { announceBareInteractiveLogin, harnessNeedsLogin, syncAccountIdentityAfterLogin } from '../commands/account.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
@@ -534,6 +534,7 @@ export async function aiSessionSend(
               prompter.activity(`${chalk.yellow('signing in to')} ${chalk.dim(signInName)}`);
               await prompter.suspend();
               try {
+                announceBareInteractiveLogin(signIn);
                 await loginNativeHarness(signIn, environment);
               } finally {
                 prompter.resume();

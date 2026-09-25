@@ -10,6 +10,7 @@ import { nativeProfileEnvironment } from '../../harness/transport/profile-enviro
 import { TERMINAL } from '../active-terminal.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { aiSessionCommand } from '../slash/handlers.js';
+import { announceBareInteractiveLogin } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 
 export async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<void> {
@@ -65,13 +66,16 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     })));
     const connect = catalog.connect.find((item) => item.id === target);
     if (!connect) return;
-    const signIn = { ...harness, loginArgv: connect.argv };
+    const signIn = { ...harness, loginArgv: connect.argv, ...(connect.hint ? { loginHint: connect.hint } : {}) };
     const environment = nativeProfileEnvironment(account?.nativeProfile);
-    // Hermes asks its own questions (browser code, pasted key), so it gets
-    // the real terminal, exactly like an account sign-in.
+    // The vendor asks its own questions (browser code, pasted key), so it
+    // gets the real terminal, exactly like an account sign-in.
     if (rl instanceof TerminalHarnessPrompter) {
       await rl.suspend();
-      try { await loginNativeHarness(signIn, environment); } finally { rl.resume(); }
+      try {
+        announceBareInteractiveLogin(signIn);
+        await loginNativeHarness(signIn, environment);
+      } finally { rl.resume(); }
     } else {
       await loginNativeHarness(signIn, environment);
     }
