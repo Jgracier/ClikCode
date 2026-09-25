@@ -13,11 +13,10 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
-import { writeState } from '../../session/state/write.js';
 import { newProviderConversation } from '../../commands/ai/conversations.js';
+import { preferredAccountId } from '../../commands/ai/preferred-account.js';
 import { discardInterruptedTurn } from '../../turn/runtime.js';
 import { nextQuotaReset, quotaResetPhrase } from '../../turn/usage-exhausted.js';
-import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 import { modelRow } from './model.js';
 
@@ -58,7 +57,9 @@ export async function interactiveResumeInPicker(rl: HarnessPrompter, id: string,
     })));
     const chosen = candidates.find((candidate) => candidate.harness.command === command);
     if (!chosen) return undefined;
-    const account = chosen.accounts[0]!;
+    const accountId = preferredAccountId(state, chosen.harness.provider, null,
+      (candidate) => chosen.accounts.some((account) => account.id === candidate.id));
+    const account = chosen.accounts.find((candidate) => candidate.id === accountId)!;
     const catalog = await nativeModelCatalogForPicker(chosen.harness, account);
     const current = catalog.configured;
     const models = [...catalog.models].sort((left, right) => left === current ? -1 : right === current ? 1 : left.localeCompare(right));
@@ -67,25 +68,15 @@ export async function interactiveResumeInPicker(rl: HarnessPrompter, id: string,
       ? await chooseOption(rl, `${chosen.harness.displayName} — choose a model`, models.map((item) => modelRow(chosen.harness, catalog, item, current)))
       : null;
     if (model === undefined) continue; // back to the harness list
-    return continueIn(id, chosen.harness, account, model, prompt);
+    return continueIn(id, chosen.harness, account.id, model, prompt);
   }
 }
 
 async function continueIn(
-  id: string, harness: AiLocalHarnessDefinition, account: AiHarnessAccount, model: string | null, prompt: string,
+  id: string, harness: AiLocalHarnessDefinition, accountId: string, model: string | null, prompt: string,
 ): Promise<string> {
   // The message that ran out is sent again on the new harness; it must not
   // also ride along in the history the branch carries.
   await discardInterruptedTurn(id, prompt);
-  const next = await newProviderConversation(id, harness.command);
-  await aiSessionCommand(next, `/settings account ${account.id}`);
-  if (model) await aiSessionCommand(next, `/model --any ${model}`);
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === next);
-  const last = session?.messages?.at(-1);
-  if (session && last?.role === 'user' && last.content.trim() === prompt.trim()) {
-    session.messages = session.messages!.slice(0, -1);
-    await writeState(state);
-  }
-  return next;
+  return newProviderConversation(id, harness.command, { accountId, model });
 }

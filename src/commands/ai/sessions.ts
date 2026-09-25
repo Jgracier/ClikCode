@@ -213,8 +213,8 @@ function firstEverSession(state: HarnessState, workspace: string, now: string): 
 export function launchSession(
   state: HarnessState, workspace: string, now = new Date().toISOString(),
 ): HarnessSession {
-  const previous = [...state.sessions]
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  const recent = [...state.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const previous = recent.find((session) => session.route === 'local' && session.nativeHarness) ?? recent[0];
   return previous
     ? { ...newConversationSession(state, previous, now), workspace }
     : firstEverSession(state, workspace, now);

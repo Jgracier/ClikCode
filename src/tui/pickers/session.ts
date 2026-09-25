@@ -140,20 +140,11 @@ const MANAGE_ACTIONS = [
 
 /** One list for finding a conversation and managing it.
  *
- * `/sessions` used to be a menu -- Resume another / Start clean / Rename /
- * Fork / Archive / Delete -- where "Resume" opened this list, and every other
- * entry acted only on the chat already open. Managing is now done on the rows
- * themselves: Tab on a conversation offers Rename, Fork and Archive, Del
- * deletes it (the picker confirms, as it does for every delete), and the top
- * row starts a new conversation. Any conversation can be managed, not just
- * the current one, and there is one screen instead of two.
- *
- * `manage` is that mode; plain /resume stays a list to pick from, where Tab
- * shows a conversation's provider history instead. */
+ * One list opens, creates, and manages conversations. Row actions also expose
+ * provider history, so finding a branch and managing a chat share one screen. */
 export async function interactiveSessionPicker(
-  rl: HarnessPrompter, currentId: string, options: { manage?: boolean } = {},
+  rl: HarnessPrompter, currentId: string,
 ): Promise<{ id: string } | { new: true } | undefined> {
-  const manageMode = Boolean(options.manage);
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
   // A session with no turns yet has nothing to resume into — showing it here is
@@ -193,6 +184,7 @@ export async function interactiveSessionPicker(
     .then((found) => { discovered = found; })
     .finally(() => { discovering = false; });
 
+  const histories = new Map<string, PickerOption<string>[]>();
   const buildOptions = (): PickerOption<string>[] => {
     // Every option gets a single real recency key so the newest conversation is
     // always near the top regardless of which source found it — grouping by
@@ -203,6 +195,7 @@ export async function interactiveSessionPicker(
     // with no real timestamp (an unparsed vendor display string) sorts last
     // rather than claiming a false position.
     const groupedOptions = sessionPickerOptions(sessions, currentId);
+    histories.clear();
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
     const trackedBlocks = new Map<string, { sortKey: number; options: PickerOption<string>[] }>();
     for (const option of groupedOptions) {
@@ -229,17 +222,17 @@ export async function interactiveSessionPicker(
       })),
     ].sort((left, right) => right.sortKey - left.sortKey);
     // Conversation roots and unadopted native sessions share one recency order.
-    // Provider hops stay behind each root row's Tab history.
+    // Provider hops stay behind each root row's history action.
     const options = optionBlocks.flatMap((block) => block.options);
-    if (manageMode) {
-      for (const option of options) {
-        if (option.value.startsWith('native:')) continue;
-        delete option.alternates;
-        option.actions = MANAGE_ACTIONS;
-        option.deleteAction = { label: 'Delete', value: 'delete' };
-      }
-      options.unshift({ label: 'New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
+    for (const option of options) {
+      if (option.value.startsWith('native:')) continue;
+      const historyAction = option.alternates?.length ? [{ label: 'Provider history', value: 'history' }] : [];
+      if (option.alternates?.length) histories.set(option.value, [...option.alternates]);
+      delete option.alternates;
+      option.actions = [...historyAction, ...MANAGE_ACTIONS];
+      option.deleteAction = { label: 'Delete', value: 'delete' };
     }
+    options.unshift({ label: 'New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
     if (discovering) {
       options.push({
         label: 'Looking for chats from other CLIs…',
@@ -256,6 +249,11 @@ export async function interactiveSessionPicker(
   let actedOn = false;
   const manage = async (targetId: string, action: string): Promise<void> => {
     actedOn = true;
+    if (action === 'history') {
+      const selectedHistory = await chooseOption(rl, 'Provider history', histories.get(targetId) ?? []);
+      if (selectedHistory) replacement = selectedHistory;
+      return;
+    }
     // Putting away the chat that is open lands on a fresh one with the same
     // setup -- staying in ClikCode, not leaving it. Made BEFORE the action,
     // because a deleted chat has no setup left to copy.
@@ -271,18 +269,18 @@ export async function interactiveSessionPicker(
     else if (action === 'archive') await aiSessionCommand(targetId, '/archive');
     else if (action === 'delete') await aiSessionCommand(targetId, '/delete confirm');
   };
-  const selected = await chooseOption(rl, manageMode ? 'Conversations' : 'Resume a session', buildOptions(),
-    manageMode ? (value, action) => manage(value, action) : undefined,
+  const selected = await chooseOption(rl, 'Conversations', buildOptions(),
+    (value, action) => manage(value, action),
     { refreshedOptions: buildOptions, refresh: discovery });
   if (replacement) return { id: replacement };
   // Any other action closes the list on purpose (the picker rebuilds from
   // state rather than show a stale row), so it opens again on what changed.
-  if (!selected && manageMode && actedOn) return interactiveSessionPicker(rl, currentId, options);
+  if (!selected && actedOn) return interactiveSessionPicker(rl, currentId);
   if (!selected) return undefined;
   if (selected === NEW_CONVERSATION_VALUE) return { new: true };
   if (selected === PENDING_DISCOVERY_VALUE) {
     await discovery;
-    return interactiveSessionPicker(rl, currentId, options);
+    return interactiveSessionPicker(rl, currentId);
   }
   if (!selected.startsWith('native:')) return { id: selected };
   const match = discovered[Number.parseInt(selected.slice('native:'.length), 10)];
