@@ -7,7 +7,7 @@ import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
-import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
@@ -28,7 +28,7 @@ import { hasAuthEvidence } from '../../harness/accounts/auth-files.js';
  * isn't authenticated yet. The goal: every harness either works immediately
  * or ClikCode gets you to "working" itself, instead of erroring and telling
  * you to go run something separately. */
-export async function aiHarnessSelect(harnessCommandName: string, sessionId: string): Promise<void> {
+export async function aiHarnessSelect(harnessCommandName: string, sessionId: string, options: { emit?: boolean } = {}): Promise<void> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
@@ -132,6 +132,9 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   }
   session.updatedAt = new Date().toISOString();
   await writeState(state);
+  // A caller that reports the session itself (sessions create, send) says
+  // so; one JSON document per command.
+  if (options.emit === false) return;
   const compatible = state.accounts.filter((account) => account.provider === harness.provider && account.status === 'ready');
   emitHarnessOutput({
     panel: 'provider-selected', harness: harness.command, displayName: harness.displayName, provider: harness.provider,
@@ -139,4 +142,70 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     model: session.model ?? 'provider default', centralized: true,
     ...(session.accountId ? {} : { actionRequired: `Choose one with /accounts use <label>`, accounts: compatible.map(accountView) }),
   });
+}
+
+/** A chat ready for a turn from the command line: bound to a harness and an
+ * account the way the app binds one on launch -- its provider's, else the
+ * installed harness the user is signed in to. Used by `sessions send`,
+ * `send` and `sessions create`, which each failed with "no account selected"
+ * until a separate `accounts add` and `sessions set`. */
+export async function ensureChatReady(id: string): Promise<void> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session || session.route === 'gateway' || session.accountId) return;
+  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
+    : session.provider ? localHarnessForProvider(session.provider) : undefined;
+  if (harness) return aiHarnessSelect(harness.command, id, { emit: false });
+  const { autoSelectSessionHarness } = await import('../../tui/pickers/engine.js');
+  if (!await autoSelectSessionHarness(id)) throw new Error('no harness is installed -- install one, e.g. npm i -g @anthropic-ai/claude-code');
+}
+
+/** A chat named on the command line: its id, the start of one, its name, or
+ * `last`. */
+export async function resolveChat(ref: string): Promise<string> {
+  const state = await readState();
+  if (state.sessions.some((item) => item.id === ref)) return ref;
+  const { chatNamed } = await import('../../session/options.js');
+  const id = chatNamed(state.sessions, ref, '');
+  if (!id) throw new Error(`no chat matches "${ref}" -- use its name, the start of its id, or last`);
+  return id;
+}
+
+/** `clikcode send`: the chat to send in, ready for a turn. */
+export async function startOrResumeChat(options: { harness?: string; chat?: string; model?: string }): Promise<string> {
+  let id: string;
+  if (options.chat) id = await resolveChat(options.chat);
+  else {
+    const { launchSession } = await import('./sessions.js');
+    const state = await readState();
+    const session = launchSession(state, process.cwd());
+    state.sessions.push(session);
+    await writeState(state);
+    id = session.id;
+  }
+  if (options.harness) {
+    const harness = localHarnessForCommand(options.harness) ?? localHarnessForProvider(options.harness);
+    if (!harness) throw new Error(`unknown harness "${options.harness}"`);
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    if (session?.nativeHarness !== harness.command) {
+      // A chat with history moves to the harness as a branch; a new one
+      // simply runs there.
+      const { newProviderConversation } = await import('./conversations.js');
+      id = options.chat ? await newProviderConversation(id, harness.command) : id;
+      if (!options.chat) await aiHarnessSelect(harness.command, id, { emit: false });
+    }
+  }
+  await ensureChatReady(id);
+  if (options.model) {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (session && harness) {
+      const { modelIdFromDisplay } = await import('../../runtime/lazy-bridge.js');
+      session.model = modelIdFromDisplay(harness, options.model);
+      await writeState(state);
+    }
+  }
+  return id;
 }

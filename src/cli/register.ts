@@ -11,7 +11,8 @@ import { aiPermissions } from '../tui/pickers/permissions.js';
 import { aiSessionInteractive, aiSessionResume } from '../commands/ai/interactive.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, announceBareInteractiveLogin } from '../commands/account.js';
-import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
+import { ensureChatReady, resolveChat, startOrResumeChat } from '../commands/ai/harness.js';
 import { aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList } from '../commands/ai/sessions.js';
 import { aiGatewayStatus, aiModelsList, aiUsage } from '../commands/ai/status.js';
 import { aiStart, aiStatus, aiStop } from '../daemon/server.js';
@@ -46,15 +47,33 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   accounts.command('status <labelOrId>').description('Run the vendor’s declared account-status check').action(aiAccountStatus);
   accounts.command('logout <labelOrId>').description('Run vendor logout and retain the local alias as needs-login').action(aiAccountLogout);
   accounts.command('add').description('Register a local provider login reference; credentials remain on this device')
-    .requiredOption('--provider <provider>', 'Provider id, e.g. openai or anthropic')
+    .requiredOption('--provider <provider>', 'Harness (claude, codex) or provider id (anthropic, openai)')
     .requiredOption('--label <label>', 'Local account alias')
     .requiredOption('--auth <kind>', 'oauth, api-key, or vendor-cli')
-    .requiredOption('--credential-ref <ref>', 'OS-keychain or vendor-CLI profile reference; never a token')
+    .option('--credential-ref <ref>', 'OS-keychain or vendor-CLI profile reference; never a token (vendor-cli: defaults to the CLI\'s own sign-in)')
     .option('--model <model...>', 'Model ids available through this account')
-    .action((options) => aiAccountAdd(options));
+    .action((options) => {
+      const harness = localHarnessForCommand(options.provider);
+      const provider = harness?.provider ?? options.provider;
+      const credentialRef = options.credentialRef ?? (options.auth === 'vendor-cli' && (harness ?? localHarnessForProvider(provider))
+        ? `native:${(harness ?? localHarnessForProvider(provider))!.binary}:default` : undefined);
+      if (!credentialRef) throw new Error('--credential-ref is required for oauth and api-key accounts (api-key: env:<VARIABLE>)');
+      return aiAccountAdd({ ...options, provider, credentialRef });
+    });
   accounts.command('remove <labelOrId>').alias('rm').description('Remove a local account alias, not the provider credential').action(aiAccountRemove);
   program.command('models').description('List normalized models available through local accounts').action(aiModelsList);
   program.command('usage').description('Show normalized local AI invocation usage').action(aiUsage);
+  // One command for "ask something from a script": a new chat (or --chat to
+  // continue one), bound to an account, and the message sent. It took four
+  // before -- sessions create, accounts add, sessions set, sessions send.
+  program.command('send <prompt...>').description('Send a message: in a new chat, or --chat <id|name|last> to continue one')
+    .option('--harness <harness>', 'Harness to run it on, e.g. claude or codex (default: the one you are signed in to)')
+    .option('--chat <chat>', 'Continue this chat: its id or the start of it, its name, or last')
+    .option('--model <model>', 'Model to use')
+    .action(async (prompt: string[], options: { harness?: string; chat?: string; model?: string }) => {
+      const id = await startOrResumeChat(options);
+      await aiGatewaySessionSend(config, id, prompt.join(' '));
+    });
   // One MCP server, added once, written into every harness that takes one.
   const mcp = program.command('mcp').description('Share an MCP server with every harness that supports one');
   mcp.command('add')
@@ -74,8 +93,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(aiSessionsList);
   sessions.command('show <id>').description('Show a saved session').action(aiSessionShow);
-  sessions.command('send <id> <prompt...>').alias('chat').description('Send a turn through a saved session')
-    .action((id, prompt: string[]) => aiGatewaySessionSend(config, id, prompt.join(' ')));
+  sessions.command('send <chat> <prompt...>').alias('chat').description('Send a turn through a saved chat (its id or the start of it, its name, or last)')
+    .action(async (chat: string, prompt: string[]) => {
+      const id = await resolveChat(chat);
+      await ensureChatReady(id);
+      await aiGatewaySessionSend(config, id, prompt.join(' '));
+    });
   sessions.command('command <id> <slash...>').alias('slash').description('Run /claude, /accounts, or another session slash command')
     .action(async (id, slash: string[]) => { await aiSessionCommand(id, slash.join(' ')); });
   // `open` and `resume` were two commands for one thing.

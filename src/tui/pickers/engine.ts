@@ -58,7 +58,7 @@ export async function autoSelectSessionHarness(id: string): Promise<boolean> {
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const preferred = localHarnessForProvider(session.provider ?? account?.provider ?? '');
   if (preferred && await isInstalled(preferred)) {
-    await aiHarnessSelect(preferred.command, id);
+    await aiHarnessSelect(preferred.command, id, { emit: false });
     return true;
   }
   const candidates = allLocalHarnesses()
@@ -72,11 +72,11 @@ export async function autoSelectSessionHarness(id: string): Promise<boolean> {
     if (!await isInstalled(harness)) continue;
     fallback ??= harness;
     if (await signedIn(harness)) {
-      await aiHarnessSelect(harness.command, id);
+      await aiHarnessSelect(harness.command, id, { emit: false });
       return true;
     }
   }
   if (!fallback) return false;
-  await aiHarnessSelect(fallback.command, id);
+  await aiHarnessSelect(fallback.command, id, { emit: false });
   return true;
 }

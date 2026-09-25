@@ -100,16 +100,19 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     throw new Error('ClikDeploy Gateway account, provider, model, effort, and failover are selected by platform routing and cannot be overridden per session.');
   }
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
+  // `--provider claude` means Claude Code, the same name /claude and
+  // `accounts login claude` take; the provider id (`anthropic`) still works.
+  const named = options.provider ? localHarnessForCommand(options.provider) : undefined;
   const state = await readState();
-  const account = options.account ? findAccount(state, options.account, options.provider) : undefined;
+  const account = options.account ? findAccount(state, options.account, named?.provider ?? options.provider) : undefined;
   if (options.route === 'local' && options.account && !account) throw new Error(`local AI account "${options.account}" was not found`);
   // The same guard aiSessionSet already applied. Without it, a label that
   // exists under several providers silently bound the session to the wrong
   // one instead of saying so.
-  if (account && options.provider && options.provider !== account.provider) {
+  if (account && options.provider && (named?.provider ?? options.provider) !== account.provider) {
     throw new Error(`account "${account.label}" belongs to ${account.provider}, not ${options.provider}`);
   }
-  const provider = options.provider ?? account?.provider ?? null;
+  const provider = named?.provider ?? options.provider ?? account?.provider ?? null;
   const harness = provider ? localHarnessForProvider(provider) : undefined;
   if (provider && !harness && options.route === 'local') throw new Error(`unknown local provider "${provider}"`);
   const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
@@ -136,7 +139,10 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   };
   state.sessions.push(session);
   await writeState(state);
-  emitJson({ session });
+  // Bound to an account now, as the app binds one, so the next command can
+  // send; without it every created chat failed "no account selected".
+  if (options.route === 'local') await (await import('./harness.js')).ensureChatReady(id);
+  emitJson({ session: (await readState()).sessions.find((item) => item.id === id) ?? session });
 }
 
 export async function aiSessionsList(): Promise<void> {
