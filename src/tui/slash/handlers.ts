@@ -260,9 +260,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
   },
-  account: async ({ id, words }) => {
-    return aiSessionCommand(id, words.length ? `/accounts use ${words.join(' ')}` : '/accounts');
-  },
   sessions: async ({ id, state, session, words }) => {
     const action = words.shift()?.toLowerCase();
     const targetId = words.shift();
@@ -284,13 +281,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         provider: item.provider, model: item.model, workspace: item.workspace, updatedAt: item.updatedAt,
       })),
       controls: ['sessions list', 'sessions open <id>', 'sessions close <id>'],
-    });
-  },
-  models: async ({ state, session }) => {
-    return emitHarnessOutput({
-      panel: 'models',
-      models: state.accounts.flatMap((account) => account.models.map((model) => ({ account: account.label, provider: account.provider, model }))),
-      selected: session.model,
     });
   },
   usage: async ({ state, session }) => {
@@ -328,45 +318,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       else if (session.route === 'gateway') applyFreshLocalSessionPolicy(state, session);
       else session.route = 'local';
     } else if (setting === 'account') {
-      const account = state.accounts.find((item) => item.id === value || item.label.toLowerCase() === value.toLowerCase());
-      if (!account) throw new Error(`local AI account "${value}" was not found`);
-      const leavingGateway = session.route === 'gateway';
-      if (leavingGateway) applyFreshLocalSessionPolicy(state, session);
-      const accountHarness = localHarnessForProvider(account.provider);
-      if (accountHarness && harnessCanRunTurns(accountHarness) && session.nativeHarness !== accountHarness.command) {
-        session.nativeHarness = accountHarness.command;
-        session.nativeSessionId = undefined;
-        session.nativeStartedAt = undefined;
-      } else if (session.accountId !== account.id) {
-        // A native thread id is only valid within the specific account's
-        // own isolated profile it was created under -- switching to a
-        // DIFFERENT account of the SAME provider left it untouched here,
-        // even though it's now meaningless (points at a rollout file that
-        // exists only under the old account's profile, not this one).
-        // Confirmed live: this produced exactly "no rollout found for
-        // thread id ..." on the next resume. Clearing it here means the
-        // existing failoverPrompt rehydration path (which already handles
-        // "no native thread yet, but real prior messages exist") takes
-        // over on the next turn instead of failing outright.
-        session.nativeSessionId = undefined;
-        session.nativeStartedAt = undefined;
-      }
-      session.accountId = account.id;
-      session.provider = account.provider;
-      session.route = 'local';
-      if (leavingGateway) {
-        const defaults = resolveDefaultSettings(state, account.provider);
-        // Coming back from the gateway the session has no local model yet. A
-        // remembered provider setting wins; otherwise resolve a real one from
-        // the harness rather than leaving null for the UI to paper over.
-        session.model = state.providerSettings[account.provider]?.model
-          ?? await resolveLocalModelFor(account, state) ?? null;
-        session.effort = defaults.effort;
-        session.permissionMode = defaults.permissionMode;
-        session.accountFailover = defaults.accountFailover;
-      }
-      account.quotaState = 'available';
-      account.quotaRetryAt = undefined;
+      // One way to switch accounts, with /account's checks -- this copy of it
+      // had none, and moved a conversation with content to another harness.
+      return aiSessionCommand(id, `/accounts use ${value}`);
     } else if (setting === 'model') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
@@ -410,7 +364,10 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
   },
   accounts: async ({ id, state, session, words }) => {
-    const action = words.shift()?.toLowerCase();
+    // `/account work` and `/accounts use work` are one command: a word that
+    // is not an action is the account to use.
+    const ACTIONS = ['use', 'select', 'login', 'add', 'remove', 'rm', 'failover'];
+    const action = words.length && !ACTIONS.includes(words[0]!.toLowerCase()) ? 'use' : words.shift()?.toLowerCase();
     if (action === 'use' || action === 'select') {
       const labelOrId = words.join(' ').trim();
       if (!labelOrId) throw new Error('usage: /accounts use <label-or-id>');
@@ -428,9 +385,13 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         // branching is /<harness>'s decision to make, not a side effect of
         // choosing an account. An empty conversation has nothing to branch,
         // so it simply moves.
+        // A conversation with content moves to another harness as a branch
+        // -- the one /<harness> makes -- on the account named.
         if (selectedHarness && selectedHarness.provider !== account.provider
           && requiresProviderHandoff(session, accountCommand)) {
-          throw new Error(`account "${account.label}" belongs to ${account.provider}; use /${accountCommand} to hand this conversation off -- a provider change always branches.`);
+          const next = await newProviderConversation(id, accountCommand);
+          await aiSessionCommand(next, `/accounts use ${account.id}`);
+          return next;
         }
       }
       const accountHarness = localHarnessForProvider(account.provider);
@@ -512,7 +473,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     await writeState(state);
     return emitHarnessOutput({ panel: 'provider-selected', harness: 'gateway', displayName: 'ClikDeploy Gateway', provider: 'gateway', account: null, model: 'platform', centralized: true });
   },
-  attachments: (context) => HEADLESS_SLASH_HANDLERS.mention(context),
   init: (context) => HEADLESS_SLASH_HANDLERS.review(context),
   redraw: async () => emitHarnessOutput({ panel: 'redraw', text: 'Nothing to repaint outside the interactive session.' }),
   exit: async ({ id }) => aiSessionLeave(id),

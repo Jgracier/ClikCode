@@ -33,9 +33,9 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
  * is a compile error as well as a parity-test failure. */
 export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'undo',
-  'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention', 'attachments',
-  'provider', 'account', 'accounts', 'login', 'logout', 'gateway',
-  'model', 'models', 'effort', 'permissions', 'options', 'capabilities', 'settings',
+  'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
+  'provider', 'accounts', 'login', 'logout', 'gateway',
+  'model', 'effort', 'permissions', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'rename', 'fork', 'archive', 'delete',
   'usage', 'doctor',
 ] as const;
@@ -122,12 +122,10 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('diff', 'Workspace', 'changes against HEAD, staged included, plus untracked files'),
   entry('cwd', 'Workspace', 'show or change the working directory', { argHint: '[dir]' }),
   entry('add-dir', 'Workspace', 'give the harness another writable directory', { argHint: '<dir>', availability: bothRoutes('adding directories') }),
-  entry('mention', 'Workspace', 'attach a file to the next request', { argHint: '[path]' }),
-  entry('attachments', 'Workspace', 'queued files; `clear` empties them', { argHint: '[clear]' }),
+  entry('mention', 'Workspace', 'attach a file to the next request; alone, lists what is attached', { aliases: ['attachments'], argHint: '[path|clear]' }),
 
   entry('provider', 'Provider', 'choose a provider', { aliases: ['switch', 'engine'] }),
-  entry('account', 'Provider', 'switch accounts', { argHint: '[label]', duringTurn: 'apply' }),
-  entry('accounts', 'Provider', 'list and manage accounts', { argHint: '[use|login|add|remove|failover …]' }),
+  entry('account', 'Provider', 'switch, add or remove accounts', { aliases: ['accounts'], handlerKey: 'accounts', argHint: '[label|login|add|remove|failover …]', duringTurn: 'apply' }),
   entry('login', 'Provider', 'sign in to the current provider', { availability: needsHarness('signing in') }),
   entry('logout', 'Provider', 'sign the current account out', { availability: needsHarness('signing out') }),
   entry('gateway', 'Provider', 'route this conversation through ClikDeploy Gateway'),
@@ -141,7 +139,6 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       return harness!.modelArgvPrefix ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
     },
   }),
-  entry('models', 'Settings', 'list models configured on local accounts'),
   entry('effort', 'Settings', 'reasoning level', { argHint: '[level]', availability: needsHarness('setting effort'), duringTurn: 'apply' }),
   entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
