@@ -128,6 +128,9 @@ export async function aiSessionResume(config: Conf, ref: string): Promise<void> 
 
 
 export async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
+  // Fetched while the app starts, so Copilot's model list is there the first
+  // time the picker opens rather than racing the picker's short wait.
+  void import('../../harness/accounts/goose-discovery.js').then(({ modelsDevCache }) => modelsDevCache()).catch(() => undefined);
   // A long-lived interactive session should survive a transient terminal
   // hangup (a flaky/mobile SSH connection dropping and reconnecting mid-use
   // is exactly the kind of thing this hits), not die from it. Node's
