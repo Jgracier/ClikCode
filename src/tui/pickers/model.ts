@@ -63,11 +63,11 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   // user could see -- it set session.model to null and left the real model
   // whatever the vendor happened to pick -- and it sat at the top of the list
   // looking like a choice. A model picker lists models.
-  const selected = await chooseOption(
-    rl,
-    discoveredModels.length ? 'Choose a model' : `${harness?.displayName ?? 'This provider'} reported no models — enter one`,
-    options,
-  );
+  // Nothing to list and nothing to connect: the one thing left to do is type
+  // an id, so ask for it rather than showing a one-row list first.
+  const selected = !discoveredModels.length && !catalog.connect?.length
+    ? '__custom__'
+    : await chooseOption(rl, discoveredModels.length ? 'Choose a model' : `${harness?.displayName ?? 'This provider'} reported no models — enter one`, options);
   if (!selected) return;
   if (selected === '__connect__' && harness && catalog.connect?.length) {
     const target = await chooseOption(rl, `Connect ${harness.displayName} to`, catalog.connect.map((item) => ({
@@ -84,11 +84,11 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     // reopened picker reads the new provider's models.
     return interactiveModelPicker(rl, id);
   }
-  const typed = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : undefined;
+  const typed = selected === '__custom__' ? (await rl.question(discoveredModels.length ? 'Model ID › ' : `${harness?.displayName ?? 'This provider'} lists no models — model ID › `)).trim() : undefined;
   const value = typed !== undefined ? (harness && typed ? modelIdFromDisplay(harness, typed) : typed) : selected;
   // Applies to this chat only, no further "apply to" step: a model choice is
   // read as a per-conversation decision, unlike effort/permissions/failover,
   // which are more often "how I always want this provider to behave" and
   // genuinely benefit from a scope choice.
-  if (value) await aiSessionCommand(id, `/model ${value}`);
+  if (value) await aiSessionCommand(id, typed !== undefined ? `/model --any ${value}` : `/model ${value}`);
 }
