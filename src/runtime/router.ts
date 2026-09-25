@@ -15,6 +15,7 @@ export {
   harnessAcpLaunch,
   harnessLoginArgvForModel,
   harnessReplyError,
+  modelProvider,
   harnessCanRunTurns,
   harnessTierRank,
   harnessTurnTransport,

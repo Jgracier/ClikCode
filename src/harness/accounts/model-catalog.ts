@@ -11,6 +11,7 @@ import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect, ModelCatalogResult } from '../definition.js';
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
 import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js';
+import { discoverOpenClawModels } from './openclaw-discovery.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -105,7 +106,8 @@ function catalogProfileRoot(harness: AiLocalHarnessDefinition, account?: AiHarne
     ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined)
     ?? (harness.command === 'codex' ? join(homedir(), '.codex')
       : harness.command === 'claude' ? join(homedir(), '.claude')
-        : harness.command === 'hermes' ? join(homedir(), '.hermes') : undefined);
+        : harness.command === 'hermes' ? join(homedir(), '.hermes')
+          : harness.command === 'openclaw' ? join(homedir(), '.openclaw') : undefined);
 }
 
 /** Every file nativeModelCatalogUncached reads, as identities, plus the
@@ -120,6 +122,8 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
     ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
     ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json'), join(root, '.env')] : []),
+    // OpenClaw's sign-ins live in the agent's SQLite auth store.
+    ...(harness.command === 'openclaw' && root ? [join(root, 'openclaw.json'), join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')] : []),
   ];
   const identities = await Promise.all(files.map(fileIdentity));
   return [...identities, (account?.models ?? []).join(',')].join('|');
@@ -392,6 +396,16 @@ async function nativeModelCatalogUncached(
         if (model) configured = provider ? `${provider}:${model}` : model;
       }
     } catch { /* Keep account models. A missing config is not an empty catalog. */ }
+  }
+  if (harness.command === 'openclaw') {
+    const inventory = await discoverOpenClawModels(harness, account).catch(() => undefined);
+    if (inventory) {
+      models.clear();
+      inventory.models.forEach((model) => models.add(model));
+      labels = { ...labels, ...inventory.labels };
+      if (inventory.configured) configured = inventory.configured;
+      connect = inventory.connect;
+    }
   }
   if (harness.modelDiscoveryArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);

@@ -126,7 +126,8 @@ async function inspectNativeHarnessUncached(
     child.stdout!.on('data', collect);
     child.stderr!.on('data', collect);
     child.once('error', (error) => finish({ installed: true, error: error.message }));
-    child.once('exit', (code, signal) => {
+    // `close`: exit can fire before the pipes drain (see captureNativeHarnessOutput).
+    child.once('close', (code, signal) => {
       const version = text.trim().split(/\r?\n/).find(Boolean)?.trim();
       if (code === 0) finish({ installed: true, ...(version ? { version } : {}) });
       else finish({ installed: true, ...(version ? { version } : {}), error: signal ? `version probe stopped (${signal})` : `version probe exited ${code ?? 1}` });

@@ -54,7 +54,10 @@ interface AccountFailureSignals {
 // missing/unselected credential rather than an expired or rejected one, so
 // none of the other AUTH_TEXT wordings matched it and it fell through as
 // 'other'.
-const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected)/i;
+// "No API key found for provider …" and "No route-compatible authentication
+// source is configured for openai." are OpenClaw's (2026.9.6); "No access
+// token found for Nous Portal login." is Hermes's.
+const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected|no (?:api[ _-]?key|access token) found|no (?:route-compatible )?authentication source is configured)/i;
 // Both halves of "ran out" matter, because vendors write it either way
 // round. Captured verbatim from real refusals on this machine:
 //   antigravity  'RESOURCE_EXHAUSTED (code 429): Individual quota reached.

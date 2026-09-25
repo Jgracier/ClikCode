@@ -65,6 +65,12 @@ interface AiHarnessTurnDefinition {
   promptGuard?: 'double-dash' | 'space';
   output: 'text' | 'json' | 'json-lines';
   responseFields?: readonly string[];
+  /** A route that keeps no history between one-shot turns: when the turn
+   * result's value at `path` is one of `values`, the session it names cannot
+   * be resumed with context, so ClikCode carries its own transcript next turn
+   * instead. OpenClaw's CLI back ends (`claude-cli`) refuse to reseed history
+   * in `agent --local`. */
+  statelessRoute?: { path: readonly string[]; values: readonly string[] };
   resumeSupportsWorkspaceSelector?: boolean;
 }
 
@@ -171,6 +177,7 @@ export interface AiLocalHarnessDefinition {
   modelArgvPrefix?: readonly string[];
   modelProviderArgvPrefix?: readonly string[];
   providerLoginArgv?: readonly string[];
+  modelProviderSeparator?: ':' | '/';
   replyErrorPatterns?: readonly { pattern: string; status?: number }[];
   modelDiscoveryArgv?: readonly string[];
   workspaceArgvPrefix?: readonly string[];
@@ -201,6 +208,7 @@ export interface AiLocalHarnessDefinition {
     promptGuard?: 'double-dash' | 'space';
     output: 'text' | 'json' | 'json-lines';
     responseFields?: readonly string[];
+    statelessRoute?: { path: readonly string[]; values: readonly string[] };
     /** Literal phrases this vendor puts in its OWN result text when an
      *  account is out of usage, while still reporting the turn as a success.
      *  Augment's auggie does exactly that: is_error false, subtype "success",
@@ -257,6 +265,7 @@ export interface AiRouterRuntime {
   customAcpHarness(definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition;
   harnessLoginArgvForModel(harness: AiLocalHarnessDefinition, model: string | null | undefined): readonly string[] | undefined;
   harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { statusCode?: number } | undefined;
+  modelProvider(harness: AiLocalHarnessDefinition, model: string): string | undefined;
   harnessAcpLaunch(harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode }): AiHarnessAcpLaunch | undefined;
   harnessTurnTransport(harness: AiLocalHarnessDefinition, input?: { hasImages?: boolean; allowExperimentalAcp?: boolean }): AiHarnessTransport;
   harnessCanRunTurns(harness: AiLocalHarnessDefinition): boolean;

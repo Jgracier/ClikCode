@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nativeTurnResult } from './turn-result';
+import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { codex } from './vendor-fixtures.vitest';
 
 describe('native harness turn results', () => {
@@ -63,5 +64,16 @@ describe('native harness turn results', () => {
       expect(nativeTurnResult(candidate, JSON.stringify(envelope)).text, command).toBe('done');
     }
   });
-});
 
+  it('reads OpenClaw\'s answer, not its execution trace, and knows a CLI route keeps no history', () => {
+    const openclaw = localHarnessForCommand('openclaw')!;
+    // Real `openclaw agent --local --json` output (2026.9.6), trimmed. The
+    // trace's `result: "success"` used to become the reply.
+    const stdout = JSON.stringify({"payloads": [{"text": "Hello, Justin. Ready.", "mediaUrl": null}], "meta": {"durationMs": 3208, "finalAssistantVisibleText": "Hello, Justin. Ready.", "systemPromptReport": {"sessionId": "88a55c28-c093-49a8-a4b0-c39d1548d756", "sessionKey": "agent:main:main", "provider": "claude-cli", "model": "claude-haiku-4-5"}, "executionTrace": {"winnerProvider": "claude-cli", "winnerModel": "claude-haiku-4-5", "attempts": [{"provider": "claude-cli", "model": "claude-haiku-4-5", "result": "success"}], "fallbackUsed": false, "runner": "cli"}}});
+    expect(nativeTurnResult(openclaw, stdout)).toEqual({
+      text: 'Hello, Justin. Ready.', nativeSessionId: '88a55c28-c093-49a8-a4b0-c39d1548d756', nativeSessionStateless: true,
+    });
+    const failed = JSON.stringify({ ok: false, error: { type: 'cli_error', message: 'No API key found for provider "anthropic".' } });
+    expect(nativeTurnResult(openclaw, failed)).toMatchObject({ isError: true, errorKind: 'cli_error', text: 'No API key found for provider "anthropic".' });
+  });
+});
