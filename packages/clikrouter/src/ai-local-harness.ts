@@ -282,6 +282,11 @@ export interface AiLocalHarnessDefinition {
   launchArgv?: readonly string[];
   /** Source-backed selectors ClikCode may safely append at launch. */
   modelArgvPrefix?: readonly string[];
+  /** Sign-in for one provider inside a multi-provider harness; `{provider}`
+   * is replaced with the provider half of a `provider:model` id. */
+  providerLoginArgv?: readonly string[];
+  /** Replies that are really a failed call (see AiHarnessReplyErrorPattern). */
+  replyErrorPatterns?: readonly AiHarnessReplyErrorPattern[];
   /** For a harness whose model ids carry their provider (`provider:model`,
    * Hermes): the flag that takes the provider half. The model flag then gets
    * the bare model, since the CLI does not parse the combined form. */
@@ -389,6 +394,14 @@ const OPENCODE_FAMILY = {
 } as const satisfies Partial<AiLocalHarnessDefinition>;
 // OpenCode-only declarations a fork must not inherit by accident.
 const { customCommandDirs: _openCodeCommandDirs, normalizedPermissionOptionIds: _openCodePermissionAliases, ...OPENCODE_FORK_BASE } = OPENCODE_FAMILY;
+
+/** Hermes ends a failed call as an ordinary turn whose whole reply is the
+ * error -- over ACP too, with stop reason `end_turn` -- so the words are the
+ * only signal. Read from agent/conversation_loop.py and hermes_cli/auth.py. */
+const HERMES_REPLY_ERRORS: readonly AiHarnessReplyErrorPattern[] = [
+  { pattern: '^(?:API call failed after \\d+ retries: )?HTTP (\\d{3})\\b' },
+  { pattern: '^No access token found for .+ login', status: 401 },
+];
 
 export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'] }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'] } }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptInput: 'stdin', stdinArgv: [], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
@@ -521,7 +534,13 @@ export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // and there is no `models list`; the configured model is `hermes config get
   // model --json` (`default`). ACP (`hermes acp`) is the turn that streams
   // tool calls. `chat --quiet` is only the text fallback.
-  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelProviderArgvPrefix: ['--provider'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
+  // Hermes is one ClikCode account over many inference providers. A model id
+  // is `provider:model`, so choosing a model chooses the provider, and the old
+  // separate provider option is retired. `hermes login` was removed upstream
+  // (it prints a notice and exits 0), so signing in is `hermes model`, and a
+  // single provider is `hermes auth add <provider>`, which picks OAuth or an
+  // API key for that provider itself.
+  { command: 'hermes', provider: 'nous', displayName: 'Hermes', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', loginArgv: ['model'], providerLoginArgv: ['auth', 'add', '{provider}'], statusArgv: ['status'], logoutArgv: ['logout'], retiredOptionIds: ['provider'], replyErrorPatterns: HERMES_REPLY_ERRORS, modelArgvPrefix: ['--model'], modelProviderArgvPrefix: ['--provider'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text' } },
   // Same kind of product as Hermes, not a fork. The one-shot turn is
   // `agent --local --json` (docs.openclaw.ai/cli/agent): it returns one JSON
   // envelope with `final` and `sessionId`, not a tool stream. `openclaw acp`
@@ -997,7 +1016,6 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
   },
   hermes: {
     options: [
-      value('provider', 'Inference provider', 'Override the inference provider', 'model', ['--provider']),
       value('toolsets', 'Toolsets', 'Toolsets enabled for the turn, from hermes tools list', 'tools', ['--toolsets'], 'string-list', { argvStyle: 'csv' }),
       value('skills', 'Preloaded skills', 'Skills loaded for this session', 'tools', ['--skills'], 'string-list', { argvStyle: 'csv' }),
       value('max-turns', 'Maximum turns', 'Maximum tool-calling iterations in one turn', 'safety', ['--max-turns'], 'number'),
@@ -1113,6 +1131,29 @@ export function modelSelectorArgv(harness: AiLocalHarnessDefinition, model: stri
   return split
     ? [...harness.modelProviderArgvPrefix!, split.provider, ...harness.modelArgvPrefix, split.model]
     : [...harness.modelArgvPrefix, model];
+}
+
+/** A reply that is a failed call. `pattern` is matched against the whole
+ * trimmed reply; the status is the first capture group, else `status`. */
+export interface AiHarnessReplyErrorPattern { pattern: string; status?: number }
+
+export function harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { statusCode?: number } | undefined {
+  const reply = text.trim();
+  for (const entry of harness.replyErrorPatterns ?? []) {
+    const match = new RegExp(entry.pattern).exec(reply);
+    if (!match) continue;
+    const captured = match[1] ? Number(match[1]) : undefined;
+    const statusCode = captured !== undefined && Number.isFinite(captured) ? captured : entry.status;
+    return statusCode !== undefined ? { statusCode } : {};
+  }
+  return undefined;
+}
+
+/** The sign-in to run for a model: its own provider's when the harness has
+ * one and the id names a provider, else the harness's whole sign-in. */
+export function harnessLoginArgvForModel(harness: AiLocalHarnessDefinition, model: string | null | undefined): readonly string[] | undefined {
+  const provider = model && harness.providerLoginArgv ? splitProviderModel(model)?.provider : undefined;
+  return provider ? harness.providerLoginArgv!.map((part) => part === '{provider}' ? provider : part) : harness.loginArgv;
 }
 
 /** Build only argv declared by the adapter; user-controlled values never become shell text. */

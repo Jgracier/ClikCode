@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv } from './ai-local-harness';
+import { AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv } from './ai-local-harness';
 
 
 describe('local harness catalog', () => {
@@ -190,6 +190,14 @@ describe('local harness catalog', () => {
     expect(turn).not.toContain('openai-codex');
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', model: 'custom:local:qwen3:8b' })).toEqual(expect.arrayContaining(['--provider', 'custom:local', '--model', 'qwen3:8b']));
     expect(nativeHarnessTurnArgv(hermes, { prompt: 'hi', model: 'anthropic/claude-3.5-sonnet:beta' })).not.toContain('--provider');
+    // Signing in follows the model's provider; a reply that is a failed call
+    // is read as one.
+    expect(harnessLoginArgvForModel(hermes, 'opencode-free:hy3-free')).toEqual(['auth', 'add', 'opencode-free']);
+    expect(harnessLoginArgvForModel(hermes, undefined)).toEqual(['model']);
+    expect(harnessReplyError(hermes, 'API call failed after 3 retries: HTTP 429: The usage limit has been reached')).toEqual({ statusCode: 429 });
+    expect(harnessReplyError(hermes, 'HTTP 400: {"detail":"not supported"}')).toEqual({ statusCode: 400 });
+    expect(harnessReplyError(hermes, 'No access token found for Nous Portal login. Run `hermes model` to\r\nre-authenticate.')).toEqual({ statusCode: 401 });
+    expect(harnessReplyError(hermes, 'The fix returns HTTP 400: when the body is empty.')).toBeUndefined();
 
     const antigravity = localHarnessForCommand('antigravity')!;
     expect(nativeHarnessTurnArgv(antigravity, { prompt: 'hi', permissionMode: 'ask' })).not.toContain('--mode');

@@ -170,6 +170,8 @@ export interface AiLocalHarnessDefinition {
   launchArgv?: readonly string[];
   modelArgvPrefix?: readonly string[];
   modelProviderArgvPrefix?: readonly string[];
+  providerLoginArgv?: readonly string[];
+  replyErrorPatterns?: readonly { pattern: string; status?: number }[];
   modelDiscoveryArgv?: readonly string[];
   workspaceArgvPrefix?: readonly string[];
   effortArgvPrefix?: readonly string[];
@@ -253,6 +255,8 @@ export interface AiRouterRuntime {
   allLocalHarnesses(): readonly AiLocalHarnessDefinition[];
   registerCustomHarnesses(definitions: readonly AiLocalHarnessDefinition[]): readonly AiLocalHarnessDefinition[];
   customAcpHarness(definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition;
+  harnessLoginArgvForModel(harness: AiLocalHarnessDefinition, model: string | null | undefined): readonly string[] | undefined;
+  harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { statusCode?: number } | undefined;
   harnessAcpLaunch(harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode }): AiHarnessAcpLaunch | undefined;
   harnessTurnTransport(harness: AiLocalHarnessDefinition, input?: { hasImages?: boolean; allowExperimentalAcp?: boolean }): AiHarnessTransport;
   harnessCanRunTurns(harness: AiLocalHarnessDefinition): boolean;
@@ -261,6 +265,10 @@ export interface AiRouterRuntime {
   promptExceedsArgvLimit(harness: AiLocalHarnessDefinition, prompt: string): boolean;
 }
 
-export type ModelCatalogResult = { configured?: string; models: string[]; labels?: Readonly<Record<string, string>> };
+/** A provider the harness can reach but is not signed in to: the picker
+ * offers `argv` (a vendor sign-in command) instead of models. Only
+ * multi-provider harnesses (Hermes) publish these. */
+export type ModelCatalogConnect = { id: string; label: string; detail?: string; argv: readonly string[] };
+export type ModelCatalogResult = { configured?: string; models: string[]; labels?: Readonly<Record<string, string>>; connect?: readonly ModelCatalogConnect[] };
 
 export type NativeUsageProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<string | undefined>;

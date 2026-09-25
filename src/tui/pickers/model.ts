@@ -5,7 +5,10 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
+import { loginNativeHarness } from '../../harness/transport/native/login.js';
+import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { TERMINAL } from '../active-terminal.js';
+import { TerminalHarnessPrompter } from '../prompter.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 
@@ -40,6 +43,10 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
       ].filter((part): part is string => Boolean(part));
       return { label: model, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
     }),
+    // A multi-provider harness (Hermes) lists providers it can reach but is
+    // not signed in to. Signing in here is the whole connection flow: no
+    // command to know, and the picker comes back with that provider's models.
+    ...(catalog.connect?.length ? [{ label: 'Connect a provider…', detail: `· ${catalog.connect.length} more in ${harness?.displayName ?? 'this harness'}`, value: '__connect__' }] : []),
     { label: 'Enter a model ID…', value: '__custom__' },
   ];
   // No synthetic "Automatic provider default" row. It resolved to nothing the
@@ -52,6 +59,26 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     options,
   );
   if (!selected) return;
+  if (selected === '__connect__' && harness && catalog.connect?.length) {
+    const target = await chooseOption(rl, `Connect ${harness.displayName} to`, catalog.connect.map((item) => ({
+      label: item.label, detail: item.detail ? `· ${item.detail}` : undefined, value: item.id,
+    })));
+    const connect = catalog.connect.find((item) => item.id === target);
+    if (!connect) return;
+    const signIn = { ...harness, loginArgv: connect.argv };
+    const environment = nativeProfileEnvironment(account?.nativeProfile);
+    // Hermes asks its own questions (browser code, pasted key), so it gets
+    // the real terminal, exactly like an account sign-in.
+    if (rl instanceof TerminalHarnessPrompter) {
+      await rl.suspend();
+      try { await loginNativeHarness(signIn, environment); } finally { rl.resume(); }
+    } else {
+      await loginNativeHarness(signIn, environment);
+    }
+    // Signing in rewrites the files the catalog is fingerprinted on, so the
+    // reopened picker reads the new provider's models.
+    return interactiveModelPicker(rl, id);
+  }
   const value = selected === '__custom__' ? (await rl.question('Model ID › ')).trim() : selected;
   // Applies to this chat only, no further "apply to" step: a model choice is
   // read as a per-conversation decision, unlike effort/permissions/failover,

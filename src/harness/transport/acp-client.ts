@@ -234,13 +234,20 @@ export function acpSpawnArgv(
 /** The agent's own id for a chosen model. Hermes names models
  * `provider:model`; a bare model still resolves when exactly one provider
  * offers it. Undefined when the agent publishes no list, or the choice is not
- * on it -- the launch flags then stand as the only selector. */
+ * on it and not a `provider:model` id the agent can parse -- the launch flags
+ * then stand as the only selector. */
 export function acpModelChoice(models: Json | undefined, model: string): string | undefined {
   const available: unknown[] = Array.isArray(models?.availableModels) ? models!.availableModels : [];
   const ids = available.map((entry) => (entry as Json | null)?.modelId).filter((id): id is string => typeof id === 'string');
   if (ids.includes(model)) return model;
   const suffixed = ids.filter((id) => id.endsWith(`:${model}`));
-  return suffixed.length === 1 ? suffixed[0] : undefined;
+  if (suffixed.length === 1) return suffixed[0];
+  // An agent whose ids are `provider:model` parses any such id, including a
+  // provider its list leaves out -- Hermes lists only providers configured in
+  // its config, but also runs ones it found signed in elsewhere (Claude
+  // Code's sign-in, a `gh` token). The provider half is sent as chosen.
+  const providerShaped = /^[a-z][a-z0-9_-]*:[^:]/i;
+  return ids.length && ids.every((id) => providerShaped.test(id)) && providerShaped.test(model) ? model : undefined;
 }
 
 const IMAGE_MIME: Readonly<Record<string, string>> = {

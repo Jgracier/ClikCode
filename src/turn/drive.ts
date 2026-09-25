@@ -50,7 +50,7 @@ import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
 import { harnessTurnTransport } from '../harness/transport/select.js';
-import { harnessAcpLaunch, harnessCanRunTurns, isDirectModelProvider, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
+import { harnessAcpLaunch, harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, isDirectModelProvider, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { localApiKey } from '../daemon/server.js';
@@ -469,6 +469,10 @@ export async function aiSessionSend(
       result = caughtTurnFailure
         ? { isError: true, text: caughtTurnFailure.message }
         : result!;
+      // A harness that reports a failed call as its reply (Hermes, over ACP
+      // and the CLI alike) declares what those replies look like.
+      const replyError = !result.isError ? harnessReplyError(harness, result.text ?? '') : undefined;
+      if (replyError) result = { ...result, isError: true, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
       if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
       // A non-zero exit code alone is not treated as failure here: by this
       // point nativeTurnResult has already thrown if it found neither assistant
@@ -508,23 +512,31 @@ export async function aiSessionSend(
           // N: {...}" message with no attempt to actually fix it. Same
           // suspend/login/resume mechanism aiHarnessSelect uses, triggered
           // here instead of only at provider-switch time.
-          if (!authRetried && prompter && harness.loginArgv) {
+          // A multi-provider harness signs in to the provider the model runs
+          // on (`hermes auth add opencode-free`), not the whole harness.
+          const signInArgv = harnessLoginArgvForModel(harness, model);
+          if (!authRetried && prompter && signInArgv) {
             authRetried = true;
             await closePersistentTransport(session.id);
+            const signIn = { ...harness, loginArgv: signInArgv };
+            const signInName = signInArgv === harness.loginArgv ? harness.displayName : `${harness.displayName} › ${model?.split(':')[0]}`;
             if (harness.loginCapturable) {
-              prompter.startWaiting(`signing in to ${harness.displayName}…`);
-              try { await loginNativeHarness(harness, environment); } finally { prompter.stopWaiting(); }
+              prompter.startWaiting(`signing in to ${signInName}…`);
+              try { await loginNativeHarness(signIn, environment); } finally { prompter.stopWaiting(); }
             } else {
-              prompter.activity(`${chalk.yellow('signing in to')} ${chalk.dim(harness.displayName)}`);
+              prompter.activity(`${chalk.yellow('signing in to')} ${chalk.dim(signInName)}`);
               await prompter.suspend();
               try {
-                await loginNativeHarness(harness, environment);
+                await loginNativeHarness(signIn, environment);
               } finally {
                 prompter.resume();
               }
             }
             account = await syncAccountIdentityAfterLogin(harness, account, state);
             session.accountId = account.id;
+            // The failed reply may already be on screen; the retry replaces it.
+            checkpoint.response('', 'replace');
+            prompter.response('', 'replace');
             continue;
           }
         }

@@ -13,6 +13,8 @@ export {
   customAcpHarness,
   guardedPromptArgv,
   harnessAcpLaunch,
+  harnessLoginArgvForModel,
+  harnessReplyError,
   harnessCanRunTurns,
   harnessTierRank,
   harnessTurnTransport,
