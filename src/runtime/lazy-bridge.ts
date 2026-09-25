@@ -79,6 +79,10 @@ export const harnessTierRank = (harness: AiLocalHarnessDefinition): number => wi
 export const nativeHarnessTurnArgv = (
   harness: AiLocalHarnessDefinition, input: Parameters<AiRouterRuntime['nativeHarnessTurnArgv']>[1],
 ): string[] => localCatalog().nativeHarnessTurnArgv(harness, input);
+export const harnessLoginArgvForModel = (harness: AiLocalHarnessDefinition, model: string | null | undefined): readonly string[] | undefined =>
+  localCatalog().harnessLoginArgvForModel(harness, model);
+export const harnessReplyError = (harness: AiLocalHarnessDefinition, text: string): { statusCode?: number } | undefined =>
+  localCatalog().harnessReplyError(harness, text);
 export const maxPromptArgvBytes = (): number => localCatalog().maxPromptArgvBytes;
 export const promptExceedsArgvLimit = (harness: AiLocalHarnessDefinition, prompt: string): boolean => localCatalog().promptExceedsArgvLimit(harness, prompt);
 export const harnessCanRunTurns = (harness: AiLocalHarnessDefinition): boolean =>

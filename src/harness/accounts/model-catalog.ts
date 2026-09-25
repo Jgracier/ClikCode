@@ -8,7 +8,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogResult } from '../definition.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect, ModelCatalogResult } from '../definition.js';
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
 import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js';
 import { atomicWriteFile } from '../../session/store/files.js';
@@ -119,7 +119,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     await resolveBinaryPath(harness.binary),
     ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
     ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
-    ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json')] : []),
+    ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json'), join(root, '.env')] : []),
   ];
   const identities = await Promise.all(files.map(fileIdentity));
   return [...identities, (account?.models ?? []).join(',')].join('|');
@@ -324,6 +324,7 @@ async function nativeModelCatalogUncached(
   const profileRoot = catalogProfileRoot(harness, account);
   let labels: Record<string, string> | undefined;
   let configured: string | undefined;
+  let connect: ModelCatalogConnect[] | undefined;
   if (profileRoot && harness.command === 'codex') {
     try {
       const config = await readFile(join(profileRoot, 'config.toml'), 'utf8');
@@ -371,9 +372,13 @@ async function nativeModelCatalogUncached(
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     const inventory = await discoverHermesModels(harness, account).catch(() => undefined);
     if (inventory) {
+      // The inventory is the whole truth; ids remembered on the account from
+      // before (bare, or from a provider since signed out) would run wrong.
+      models.clear();
       inventory.models.forEach((model) => models.add(model));
       labels = { ...labels, ...inventory.labels };
       if (inventory.configured) configured = inventory.configured;
+      connect = inventory.connect;
     } else if (profileRoot) {
       try {
         for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) models.add(model);
@@ -399,5 +404,6 @@ async function nativeModelCatalogUncached(
     ...(configured ? { configured } : {}),
     models: [...models],
     ...(labels ? { labels } : {}),
+    ...(connect?.length ? { connect } : {}),
   };
 }

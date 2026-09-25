@@ -21,7 +21,6 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
   const discovered = harness.command === 'hermes' ? await discoverHermesChoices(harness, account).catch(() => undefined) : undefined;
   const options = manifest.options.map((item) => {
     if (!discovered) return item;
-    if (item.id === 'provider' && discovered.providers.length) return { ...item, kind: 'enum' as const, values: discovered.providers };
     if (item.id === 'toolsets' && discovered.toolsets.length) return { ...item, values: discovered.toolsets };
     return item;
   });
