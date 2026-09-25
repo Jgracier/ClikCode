@@ -56,6 +56,7 @@ export const OPTION_NORMALIZATION: Readonly<Record<string, OptionNormalization>>
   'fork-native-session': shared('fork before continuing the selected session.'),
   share: shared('publish the native session through the vendor.'),
   'max-turns': shared('maximum autonomous turns without user input.'),
+  timeout: shared('maximum run time for one turn, in seconds.'),
   'data-dir': shared('isolated vendor state directory.'),
   'disallowed-tools': shared('tool patterns that must not run; the deny spelling differs per vendor.'),
   'disabled-tools': shared('disable selected tool ids or name patterns outright.'),
@@ -67,7 +68,7 @@ export const OPTION_NORMALIZATION: Readonly<Record<string, OptionNormalization>>
   'system-prompt': shared('override the default system prompt; the flag spelling differs.'),
 
   // --- the id coincides; the meaning does not --------------------------------
-  provider: vendor('an inference provider INSIDE a harness (Goose, Pi, Cline, Hermes), not ClikCode\'s provider. Promoting it would collide with /provider and mean something else.'),
+  provider: vendor('an inference provider INSIDE a harness (Goose, Pi, Cline), not ClikCode\'s provider. Promoting it would collide with /provider and mean something else.'),
   agent: vendor('every vendor has "agents" and none of them are the same thing; the value space is vendor-bound even though the flag name is not.'),
   mode: vendor('Antigravity means edit-accepting versus planning; Cursor means plan versus question. Shared name, different enums.'),
   ask: vendor('Auggie\'s --ask is read-only retrieval mode; Continue\'s --ask names tools the model must ask about. Same flag, opposite shapes.'),
