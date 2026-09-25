@@ -14,7 +14,8 @@ import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificat
 import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir, open } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import { stdout as output } from 'node:process';
 import type Conf from 'conf';
 import chalk from 'chalk';
@@ -63,6 +64,14 @@ import { readFile } from 'node:fs/promises';
  * Runs one durable local session turn. Local sessions resolve an env reference
  * only in this process and record normalized, credential-free usage.
  */
+/** Whether `folder` is inside a git work tree (a `.git` here or above). */
+function insideGitRepository(folder: string): boolean {
+  for (let directory = resolve(folder); ; directory = dirname(directory)) {
+    if (existsSync(join(directory, '.git'))) return true;
+    if (dirname(directory) === directory) return false;
+  }
+}
+
 export async function aiSessionSend(
   id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
 ): Promise<void> {
@@ -330,6 +339,7 @@ export async function aiSessionSend(
           launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
           permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
         });
+        if (turn.outsideRepoArgv && !insideGitRepository(session.workspace ?? process.cwd())) argv.unshift(...turn.outsideRepoArgv);
         // Persist an allocated native identity before the provider starts so an
         // interrupted turn cannot accidentally fork the centralized conversation.
         if (createdHere) await checkpoint.persistNow();

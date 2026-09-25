@@ -16,6 +16,7 @@ import { discoverOpencodeConnect } from './opencode-discovery.js';
 import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
 import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPath } from './auth-files.js';
+import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
 import { acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId } from '../../runtime/lazy-bridge.js';
 import { atomicWriteFile } from '../../session/store/files.js';
@@ -144,6 +145,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     ...(harness.command === 'goose' ? [join(homedir(), '.config', 'goose', 'config.yaml'), join(homedir(), '.config', 'goose', 'secrets.yaml')] : []),
     // The models.dev catalog a list was read from: a newer copy is a new list.
     ...(MODELS_DEV_HARNESSES.has(harness.command) ? modelsDevFiles() : []),
+    ...(harness.command === 'aider' ? [openRouterCacheFile()] : []),
     // A sign-in changes which models a vendor lists (Pi, Qwen, Cline): its
     // credential files are part of what the list was read from.
     ...(harness.authFiles ?? []).map((entry) => expandAuthPath(entry.path.replace(/\/$/, ''), {
@@ -300,7 +302,7 @@ export async function nativeModelCatalog(
   // A list read from a server (Copilot's, from models.dev) that came back
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead.
-  if (!result.models.length && MODELS_DEV_HARNESSES.has(harness.command)) return result;
+  if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider')) return result;
   const key = cacheKey(harness, account);
   const entry: CatalogMemoEntry = { at: Date.now(), fingerprint, result };
   modelCatalogCache.set(key, entry);
@@ -441,6 +443,15 @@ async function nativeModelCatalogUncached(
       labels = { ...labels, ...inventory.labels };
       if (inventory.configured) configured = inventory.configured;
       connect = inventory.connect;
+    }
+  }
+  // Aider: the models of each provider it has a key for (aider-discovery.ts).
+  if (harness.command === 'aider') {
+    const found = await discoverAiderModels(harness, nativeProfileEnvironment(account?.nativeProfile)).catch(() => undefined);
+    if (found) {
+      found.models.forEach((model) => models.add(model));
+      labels = { ...labels, ...found.labels };
+      if (found.connect.length) connect = found.connect;
     }
   }
   // Copilot publishes no model list anywhere ClikCode can read it: no
