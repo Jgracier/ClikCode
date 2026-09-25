@@ -32,7 +32,10 @@ export function newConversationSession(
   return {
     id, conversationId: id, route: source.route,
     accountId: source.route === 'gateway' ? null : source.accountId ?? null,
-    provider: source.provider, model: source.model ?? null,
+    provider: source.provider,
+    model: source.provider
+      ? state.providerSettings[source.provider]?.model ?? (source.nativeHarness === 'claude' ? 'opus' : null)
+      : null,
     ...(source.route !== 'gateway' && source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
     ...(source.harnessOptions ? { harnessOptions: { ...source.harnessOptions } } : {}),
     effort: source.effort ?? defaults.effort,
@@ -63,7 +66,11 @@ export async function newConversation(currentId: string): Promise<string> {
   return created.id;
 }
 
-export async function newProviderConversation(currentId: string, harnessCommandName: string): Promise<string> {
+export async function newProviderConversation(
+  currentId: string,
+  harnessCommandName: string,
+  selection: { accountId?: string | null; model?: string | null } = {},
+): Promise<string> {
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
   if (!current) throw new Error(`AI session "${currentId}" was not found`);
@@ -79,8 +86,10 @@ export async function newProviderConversation(currentId: string, harnessCommandN
     ? localHarnessForCommand(current.nativeHarness)?.displayName
     : sessionProviderLabel(current);
   const session = createHandoffBranch({
-    source: current, target: harness, accountId: preferredAccountId(state, harness.provider),
-    model: state.providerSettings[harness.provider]?.model ?? null, defaults, now, sourceDisplayName,
+    source: current, target: harness,
+    accountId: selection.accountId ?? preferredAccountId(state, harness.provider),
+    model: selection.model ?? state.providerSettings[harness.provider]?.model ?? null,
+    defaults, now, sourceDisplayName,
   });
   state.sessions.push(session);
   await writeState(state);

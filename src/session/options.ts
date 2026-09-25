@@ -86,7 +86,7 @@ export function requiresProviderHandoff(session: HarnessSession, targetHarness: 
 }
 
 /** One row per ClikCode conversation. Provider-native hops stay available via
- * the row's Tab history instead of appearing as duplicate/fork rows. */
+ * the row's Provider history action instead of appearing as duplicate rows. */
 export function sessionPickerOptions(
   sessions: readonly HarnessSession[],
   currentId: string,
@@ -138,7 +138,7 @@ export function sessionPickerOptions(
       detail: [
         `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''}`,
         model, new Date(latest.updatedAt).toLocaleString(),
-        ...(history.length > 1 ? [`Tab: ${history.length} history entries`] : []),
+        ...(history.length > 1 ? [`${history.length} history entries · Tab options`] : []),
       ].filter(Boolean).join(' · '),
       value: latest.id,
       alternates: history.length > 1 ? history.map((session) => ({

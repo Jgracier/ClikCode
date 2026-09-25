@@ -14,13 +14,12 @@ import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
-import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, modelDisplayId } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { VALID_PERMISSION_MODES } from '../../session/options.js';
 import { readState } from '../../session/state/read.js';
-import { resolveDefaultSettings } from '../../session/state/settings.js';
-import { aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
+import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
 import { lastPickerExit } from '../option-picker.js';
 import { chooseOption } from './choose.js';
 import { interactiveAccountPicker } from './account.js';
@@ -69,7 +68,28 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     };
 
     const rows: PickerOption<string>[] = [
-      { label: 'Provider', detail: harness?.displayName ?? (session.route === 'gateway' ? 'ClikDeploy Gateway' : 'none chosen'), value: 'provider' },
+      {
+        label: 'Provider', detail: harness?.displayName ?? (session.route === 'gateway' ? 'ClikDeploy Gateway' : 'none chosen'), value: 'provider',
+        ...(harness ? { actions: [{ label: `Use global defaults for ${harness.displayName}`, value: 'clear-provider' }] } : {}),
+      },
+      ...(!harness ? [
+        {
+          label: 'Every harness · permissions', detail: settingLabel(state.globalSettings.permissionMode), value: 'global-permissions',
+          inline: {
+            choices: VALID_PERMISSION_MODES.map((value) => ({ label: settingLabel(value), value })),
+            current: state.globalSettings.permissionMode,
+            apply: (value: string) => aiSettingsSetGlobal('permissions', value, false),
+          },
+        },
+        {
+          label: 'Every harness · failover', detail: settingLabel(state.globalSettings.accountFailover === 'never' ? 'never' : 'auto'), value: 'global-failover',
+          inline: {
+            choices: [{ label: 'Auto', value: 'auto' }, { label: 'Never', value: 'never' }],
+            current: state.globalSettings.accountFailover === 'never' ? 'never' : 'auto',
+            apply: (value: string) => aiSettingsSetGlobal('failover', value, false),
+          },
+        },
+      ] : []),
       ...(harness ? [{ label: 'Account', detail: account?.label ?? 'none', value: 'account' }] : []),
       ...(harness?.modelArgvPrefix ? [{
         label: 'Model', detail: session.model ? nativeModelLabel(harness.command, session.model) ?? session.model : 'harness default', value: 'model',
@@ -102,10 +122,14 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
       }] : []),
       ...(harness && optionCount ? [{ label: `${harness.displayName} options`, detail: setOptions ? `${setOptions} set` : `${optionCount} available`, value: 'options' }] : []),
       ...(harness ? [{ label: 'Tools & integrations', detail: harnessManagers(harness).map(([, manager]) => manager.label).join(', ') || 'MCP servers', value: 'tools' }] : []),
-      { label: 'Defaults for new chats', detail: harness ? `every harness, and ${harness.displayName}` : 'every harness', value: 'defaults' },
     ];
 
     const selected = await chooseOption(rl, 'Settings', rows, async (_row, action) => {
+      if (action === 'clear-provider' && harness) {
+        await aiSettingsClearProvider(harness.command, false);
+        rl.panel?.('Defaults cleared', `${harness.displayName} now uses every-harness defaults.`);
+        return;
+      }
       const [scope, key] = action.split(':') as ['provider' | 'global', DefaultKey];
       const value = values[key];
       if (!value) return;
@@ -121,61 +145,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     else if (selected === 'permissions') await interactivePermissionPicker(rl, id);
     else if (selected === 'options') await interactiveHarnessOptionPicker(rl, id);
     else if (selected === 'tools' && harness) await interactiveToolsPicker(rl, id, harness);
-    else if (selected === 'defaults') await interactiveDefaultsPicker(rl, harness);
     // Esc in a sub-list leaves Settings; ← or a choice comes back here.
     if (lastPickerExit === 'escape') return id;
-  }
-}
-
-/** The values new chats start from: for every harness, and for this one.
- * (A new chat also carries the last chat's settings; these are what a
- * harness starts with when a chat moves to it, or is new to it.) */
-async function interactiveDefaultsPicker(rl: HarnessPrompter, harness: AiLocalHarnessDefinition | undefined): Promise<void> {
-  for (;;) {
-    const state = await readState();
-    const global = state.globalSettings;
-    const own = harness ? resolveDefaultSettings(state, harness.provider) : undefined;
-    const overrides = harness ? state.providerSettings[harness.provider] ?? {} : {};
-    const failoverWord = (value: string | undefined): string => value === 'never' ? 'never' : 'auto';
-    const permissionChoices = VALID_PERMISSION_MODES.map((value) => ({ label: settingLabel(value), value }));
-    const failoverChoices = [{ label: 'Auto', value: 'auto' }, { label: 'Never', value: 'never' }];
-    const rows: PickerOption<string>[] = [
-      {
-        label: 'Every harness · permissions', detail: settingLabel(global.permissionMode), value: 'g-permissions',
-        inline: { choices: permissionChoices, current: global.permissionMode, apply: (value) => aiSettingsSetGlobal('permissions', value, false) },
-      },
-      {
-        label: 'Every harness · failover', detail: failoverWord(global.accountFailover), value: 'g-failover',
-        inline: { choices: failoverChoices, current: failoverWord(global.accountFailover), apply: (value) => aiSettingsSetGlobal('failover', value, false) },
-      },
-      ...(harness && own ? [
-        { label: `${harness.displayName} · model`, detail: overrides.model ? modelDisplayId(harness, overrides.model) : 'harness default', value: 'p-model' },
-        {
-          label: `${harness.displayName} · permissions`, detail: settingLabel(own.permissionMode), value: 'p-permissions',
-          inline: {
-            choices: permissionChoices.filter((choice) => harnessSupportsPermissionMode(harness, choice.value as never)),
-            current: own.permissionMode, apply: (value: string) => aiSettingsSetProvider(harness.command, 'permissions', value, false),
-          },
-        },
-        {
-          label: `${harness.displayName} · failover`, detail: failoverWord(own.accountFailover), value: 'p-failover',
-          inline: { choices: failoverChoices, current: failoverWord(own.accountFailover), apply: (value: string) => aiSettingsSetProvider(harness.command, 'failover', value, false) },
-        },
-        { label: `Clear ${harness.displayName} defaults`, detail: 'use the every-harness values', value: 'p-clear' },
-      ] : []),
-    ];
-    const selected = await chooseOption(rl, 'Defaults for new chats', rows);
-    if (selected === undefined) return;
-    if (selected === 'p-model' && harness) {
-      const { nativeModelCatalogForPicker } = await import('../../harness/accounts/model-catalog.js');
-      const { modelRow } = await import('./model.js');
-      const catalog = await nativeModelCatalogForPicker(harness);
-      const model = await chooseOption(rl, `${harness.displayName} default model`, catalog.models.map((item) => modelRow(harness, catalog, item, overrides.model)));
-      if (model) await aiSettingsSetProvider(harness.command, 'model', model, false);
-    } else if (selected === 'p-clear' && harness) {
-      const { aiSettingsClearProvider } = await import('../../commands/ai/settings.js');
-      await aiSettingsClearProvider(harness.command, false);
-    }
-    if (lastPickerExit === 'escape') return;
   }
 }

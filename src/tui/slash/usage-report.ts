@@ -24,7 +24,7 @@ function tokenCount(invocation: Invocation): number {
 }
 
 function sumInvocations(invocations: readonly Invocation[]): UsageReportTotals {
-  return invocations.reduce((total, invocation) => ({
+  return invocations.reduce<UsageReportTotals>((total, invocation) => ({
     accounts: total.accounts,
     turns: total.turns + 1,
     inputTokens: total.inputTokens + (invocation.inputTokens ?? 0),
