@@ -12,6 +12,7 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect, M
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
 import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js';
 import { discoverOpenClawModels } from './openclaw-discovery.js';
+import { discoverOpencodeConnect } from './opencode-discovery.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -410,7 +411,13 @@ async function nativeModelCatalogUncached(
   if (harness.modelDiscoveryArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
-      addDiscoveredModels(await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, 12_000));
+      const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, 12_000);
+      addDiscoveredModels(printed);
+      // OpenCode and Kilo print only connected providers' models; the rest of
+      // what they know is offered as a sign-in.
+      if (harness.command === 'opencode' || harness.command === 'kilo') {
+        connect = await discoverOpencodeConnect(harness, discoveredModelsFrom(printed));
+      }
     } catch { /* Keep configured/account models and the custom-ID option available. */ }
   }
   if (configured) models.add(configured);
