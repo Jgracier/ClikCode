@@ -71,3 +71,18 @@ describe('the highlight', () => {
     expect(highlighted.slice(1)).toEqual(rows.slice(1));
   });
 });
+
+describe('a selection kept in conversation lines', () => {
+  it('highlights the lines it covers wherever they are on screen', async () => {
+    const { highlightSelectionAt } = await import('./selection');
+    // Screen rows 0..2 show lines 41..43 after the view scrolled; the
+    // selection began on line 40, now off screen above.
+    const rows = ['alpha', 'bravo', 'charlie'];
+    const out = highlightSelectionAt(rows, [41, 42, 43], { anchor: { row: 40, col: 2 }, head: { row: 42, col: 1 } });
+    expect(out[0]).toContain('\u001b[7m');
+    expect(out[1]).toContain('\u001b[7m');
+    expect(out[2]).toBe('charlie');
+    // Blank rows above a short transcript show no line.
+    expect(highlightSelectionAt(['', 'x'], [Number.NEGATIVE_INFINITY, 0], { anchor: { row: 0, col: 0 }, head: { row: 0, col: 0 } })[0]).toBe('');
+  });
+});

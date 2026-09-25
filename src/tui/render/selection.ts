@@ -92,6 +92,18 @@ function highlightRow(value: string, from: number, to: number): string {
   return result;
 }
 
+/** Like highlightSelection, for a selection kept in conversation lines rather
+ * than screen rows: `rowIds[i]` is the line screen row `i` shows (-Infinity
+ * for a row that shows none), so the highlight follows the text as it
+ * scrolls, and a selection longer than the screen stays whole. */
+export function highlightSelectionAt(rows: readonly string[], rowIds: readonly number[], selection: Selection): string[] {
+  const range = orderedRange(selection);
+  return rows.map((row, index) => {
+    const span = rowSpan(rowIds[index] ?? Number.NEGATIVE_INFINITY, range);
+    return span ? highlightRow(row, span.from, span.to) : row;
+  });
+}
+
 export function highlightSelection(rows: readonly string[], selection: Selection): string[] {
   const range = orderedRange(selection);
   return rows.map((row, index) => {
