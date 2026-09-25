@@ -22,7 +22,9 @@ export async function aiSettingsSetProvider(providerOrHarness: string, key: stri
   const state = await readState();
   const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
   if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
-  const entry: Partial<HarnessDefaultSettings & { model: string }> = { ...state.providerSettings[harness.provider] };
+  // `model` present (even unset) marks this as a provider entry, where a
+  // model default is allowed; a provider with no entry yet refused one.
+  const entry: Partial<HarnessDefaultSettings & { model: string }> = { model: undefined, ...state.providerSettings[harness.provider] };
   applyDefaultSetting(entry, key, value, harness);
   if (key.toLowerCase() === 'model' && entry.model) await assertRealModel(harness, undefined, entry.model);
   state.providerSettings[harness.provider] = entry;

@@ -19,3 +19,9 @@ export async function applyToChat(
 ): Promise<void> {
   await aiSessionCommand(id, key === 'failover' ? `/accounts failover ${value}` : `/${key} ${value}`);
 }
+
+/** How a setting's value reads in every list: `xhigh` as `Xhigh`, the same in
+ * Settings and in the picker it opens. */
+export function settingLabel(value: string): string {
+  return value ? value[0]!.toUpperCase() + value.slice(1) : 'Default';
+}

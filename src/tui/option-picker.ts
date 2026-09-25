@@ -43,12 +43,18 @@ export interface OptionPickerSettings {
   refresh?: Promise<unknown>;
 }
 
+/** How the last picker closed. A menu that opened a sub-picker reopens
+ * itself unless the user left with Esc (see the Settings loop): ← goes back
+ * one level, Esc leaves them all. */
+export let lastPickerExit: 'choose' | 'back' | 'escape' = 'choose';
+
 /** The value an inline row moves to: the next one, wrapping. Two values is a
  * flip; three or four cycle. A current value that is not among the choices
  * (stale state, a level the vendor dropped) moves to the first. */
-export function nextInlineChoice<C extends { value: string }>(choices: readonly C[], current: string): C {
+export function nextInlineChoice<C extends { value: string }>(choices: readonly C[], current: string, step = 1): C {
   const at = choices.findIndex((choice) => choice.value === current);
-  return choices[(at + 1) % choices.length]!;
+  const from = at < 0 ? (step > 0 ? -1 : 0) : at;
+  return choices[(from + step + choices.length) % choices.length]!;
 }
 
 export function runOptionPicker<T>(
@@ -97,7 +103,7 @@ export function runOptionPicker<T>(
       if (selectedOption?.inline) {
         host.paint(title, renderOptions, selected, '', 0, {
           capacity, hideCursor: true,
-          hint: `\u2192/Enter switch · \u2191\u2193 move · \u2190 back · Esc exit`,
+          hint: `\u2190\u2192 or 1-${selectedOption.inline.choices.length} choose · \u2191\u2193 move · Esc done`,
         });
         return;
       }
@@ -110,13 +116,16 @@ export function runOptionPicker<T>(
       host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, hint });
     };
     let finished = false;
-    const finish = (value: T | undefined): void => {
+    const finish = (value: T | undefined, exit: typeof lastPickerExit = 'choose'): void => {
       if (finished) return;
       finished = true;
       host.setSelecting(false);
       stopInput();
       host.clearFrame();
-      resolveSelection(value);
+      lastPickerExit = exit;
+      // Values chosen on inline rows land before whoever opened the picker
+      // reads the settings back.
+      void commitAll().then(() => resolveSelection(value));
     };
     // Tab opens optional non-destructive management actions. Right Arrow is
     // deliberately identical to Enter for every picker.
@@ -132,7 +141,7 @@ export function runOptionPicker<T>(
       );
       if (escaped) {
         settings?.onEscape?.();
-        finish(undefined);
+        finish(undefined, 'escape');
         return;
       }
       if (actionValue) {
@@ -179,35 +188,57 @@ export function runOptionPicker<T>(
       stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
       draw();
     };
-    /** Move an inline row to its next value and apply it. The list stays
-     * open: flipping a setting is not leaving the menu. */
-    let flipping = false;
-    const flip = async (option: PickerOption<T>): Promise<void> => {
-      if (flipping) return;
-      const next = nextInlineChoice(option.inline!.choices, inlineValue(option));
-      const previous = inlineValue(option);
-      inlineNow.set(option, next.value);
+    /** An inline row's choice is shown at once and applied when the cursor
+     * leaves the row or the picker closes -- not on every step, which turned
+     * Bypass on for a moment on the way from Ask to Auto. */
+    const applied = new Map<PickerOption<T>, string>();
+    const choose = (option: PickerOption<T>, value: string): void => {
+      if (!applied.has(option)) applied.set(option, option.inline!.current);
+      inlineNow.set(option, value);
       draw();
-      flipping = true;
-      try {
-        await option.inline!.apply(next.value);
-      } catch {
-        // Not applied -- show what is actually in effect, not what was hoped.
-        inlineNow.set(option, previous);
-      } finally {
-        flipping = false;
-        if (!finished) draw();
-      }
     };
+    const step = (option: PickerOption<T>, by: number): void => choose(option, nextInlineChoice(option.inline!.choices, inlineValue(option), by).value);
+    let committing = Promise.resolve();
+    const commit = (option: PickerOption<T> | undefined): Promise<void> => {
+      if (!option?.inline) return committing;
+      committing = committing.then(async () => {
+        const was = applied.get(option);
+        const value = inlineValue(option);
+        if (was === undefined || was === value) return;
+        applied.set(option, value);
+        try {
+          await option.inline!.apply(value);
+        } catch {
+          // Not applied -- show what is actually in effect, not what was hoped.
+          inlineNow.set(option, was);
+          applied.set(option, was);
+          if (!finished) draw();
+        }
+      });
+      return committing;
+    };
+    const commitAll = async (): Promise<void> => { for (const option of applied.keys()) await commit(option); };
     const handleKey = (key: string): void => {
       const visible = visibleOptions();
+      const current = visible[selected];
+      if (current?.inline) {
+        // On a row of a few values, ←/→ and the digits choose among them.
+        if (key === '\u001b[D') { step(current, -1); return; }
+        if (key === '\u001b[C') { step(current, 1); return; }
+        const digit = /^[1-9]$/.test(key) ? Number(key) - 1 : -1;
+        if (digit >= 0 && digit < current.inline.choices.length) { choose(current, current.inline.choices[digit]!.value); return; }
+        if (pickerConfirmsSelection(key)) {
+          if (!applied.has(current) || inlineValue(current) === applied.get(current)) step(current, 1);
+          void commit(current);
+          return;
+        }
+      }
+      if (key === '\u001b[A' || key === '\u001b[B') void commit(current);
       if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
       else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
-      else if (key === '\u001b[D') { settings?.onBack?.(); finish(undefined); return; }
+      else if (key === '\u001b[D') { settings?.onBack?.(); finish(undefined, 'back'); return; }
       else if (pickerConfirmsSelection(key)) {
-        const option = visible[selected];
-        if (option?.inline) { void flip(option); return; }
-        if (option) finish(option.value);
+        if (current) finish(current.value);
         return;
       }
       else if (key === '\t') {
@@ -217,8 +248,8 @@ export function runOptionPicker<T>(
         return;
       }
       else if (pickerDeletesSelection(key)) { if (visible[selected]?.deleteAction) void confirmDelete(visible[selected]); return; }
-      else if (key === '\u0003') return finish(undefined);
-      else if (key === '\u001b') { settings?.onEscape?.(); return finish(undefined); }
+      else if (key === '\u0003') return finish(undefined, 'escape');
+      else if (key === '\u001b') { settings?.onEscape?.(); return finish(undefined, 'escape'); }
       else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; }
       else if (key.length === 1 && key >= ' ') { query += key; selected = 0; }
       else return;
