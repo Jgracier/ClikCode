@@ -13,6 +13,11 @@ import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude
 import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js';
 import { discoverOpenClawModels } from './openclaw-discovery.js';
 import { discoverOpencodeConnect } from './opencode-discovery.js';
+import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
+import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache } from './goose-discovery.js';
+import { expandAuthPath } from './auth-files.js';
+import { acpSessionModels, queryAcp } from './acp-query.js';
+import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -125,9 +130,22 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json'), join(root, '.env')] : []),
     // OpenClaw's sign-ins live in the agent's SQLite auth store.
     ...(harness.command === 'openclaw' && root ? [join(root, 'openclaw.json'), join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')] : []),
+    ...(harness.command === 'goose' ? [join(homedir(), '.config', 'goose', 'config.yaml'), join(homedir(), '.config', 'goose', 'secrets.yaml')] : []),
+    // A sign-in changes which models a vendor lists (Pi, Qwen, Cline): its
+    // credential files are part of what the list was read from.
+    ...(harness.authFiles ?? []).map((entry) => expandAuthPath(entry.path.replace(/\/$/, ''), {
+      ...process.env, ...(account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {}),
+    })),
   ];
   const identities = await Promise.all(files.map(fileIdentity));
-  return [...identities, (account?.models ?? []).join(',')].join('|');
+  // Goose lists the models of the CLIs it drives, so their lists are its too.
+  const driven = harness.command === 'goose'
+    ? await Promise.all([...new Set(Object.values(GOOSE_DRIVEN_HARNESSES))].map(async (command) => {
+      const drivenHarness = localHarnessForCommand(command);
+      return drivenHarness ? catalogFingerprint(drivenHarness) : '';
+    }))
+    : [];
+  return [...identities, ...driven, (account?.models ?? []).join(',')].join('|');
 }
 
 function cacheKey(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): string {
@@ -408,6 +426,42 @@ async function nativeModelCatalogUncached(
       connect = inventory.connect;
     }
   }
+  // Goose: its configured providers' models, and the rest to set up. A
+  // provider that is another agent CLI (claude-code) lists that harness's own
+  // models, so its sign-in carries over with nothing more to do.
+  if (harness.command === 'goose') {
+    const providers = await discoverGooseProviders(harness, nativeProfileEnvironment(account?.nativeProfile)).catch(() => undefined);
+    if (providers) {
+      const modelsDev = await modelsDevCache();
+      labels = { ...labels };
+      for (const provider of providers.filter((item) => item.configured)) {
+        const drivenCommand = GOOSE_DRIVEN_HARNESSES[provider.id];
+        const drivenHarness = drivenCommand ? localHarnessForCommand(drivenCommand) : undefined;
+        if (drivenHarness) {
+          const driven = await nativeModelCatalog(drivenHarness).catch(() => undefined);
+          for (const model of driven?.models ?? []) {
+            models.add(`${provider.id}/${model}`);
+            const via = provider.label === provider.id ? drivenHarness.displayName : provider.label;
+            labels[`${provider.id}/${model}`] = `${driven?.labels?.[model] ?? model} · ${via}`;
+          }
+        } else {
+          gooseModelsDevModels(modelsDev, provider.id).forEach((model) => models.add(model));
+        }
+      }
+      connect = gooseConnect(providers);
+    }
+  }
+  // No list command, but the ACP session says (Cline: 318 models through its
+  // own gateway, none of which ClikCode could offer before).
+  if (harness.acp?.listsModels && !harness.modelDiscoveryArgv) {
+    const listed = await queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, nativeProfileEnvironment(account?.nativeProfile),
+      async (request) => acpSessionModels(await request('session/new', { cwd: homedir(), mcpServers: [] })), 30_000).catch(() => undefined);
+    if (listed?.models.length) {
+      listed.models.forEach((model) => models.add(model));
+      labels = { ...labels, ...listed.labels };
+      configured ??= listed.current;
+    }
+  }
   if (harness.modelDiscoveryArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
@@ -417,6 +471,14 @@ async function nativeModelCatalogUncached(
       // what they know is offered as a sign-in.
       if (harness.command === 'opencode' || harness.command === 'kilo') {
         connect = await discoverOpencodeConnect(harness, discoveredModelsFrom(printed));
+      }
+      // Pi prints a provider/model table; the generic reader cannot see a
+      // model in it. Its other providers are signed in to inside Pi.
+      if (harness.command === 'pi') {
+        const piListed = piModels(printed);
+        for (const model of [...discoveredModelsFrom(printed), ...models]) if (model.startsWith('/')) models.delete(model);
+        piListed.forEach((model) => models.add(model));
+        connect = piConnect(await discoverPiProviders(harness), piListed);
       }
     } catch { /* Keep configured/account models and the custom-ID option available. */ }
   }

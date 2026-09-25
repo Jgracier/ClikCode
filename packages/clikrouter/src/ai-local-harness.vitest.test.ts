@@ -204,7 +204,24 @@ describe('local harness catalog', () => {
     for (const command of ['opencode', 'kilo']) {
       expect(harnessLoginArgvForModel(localHarnessForCommand(command)!, 'anthropic/claude-sonnet-5')).toEqual(['auth', 'login', '--provider', 'anthropic']);
     }
-    expect(localHarnessForCommand('goose')!.loginArgv).toEqual(['configure']);
+    const goose = localHarnessForCommand('goose')!;
+    expect(goose.loginArgv).toEqual(['configure']);
+    // Goose drives other CLIs as providers: `claude-code/sonnet` is Claude Code's
+    // own sign-in, split at the first slash into Goose's two flags.
+    expect(nativeHarnessTurnArgv(goose, { prompt: 'hi', model: 'claude-code/sonnet' })).toEqual(expect.arrayContaining(['--provider', 'claude-code', '--model', 'sonnet']));
+    expect(nativeHarnessTurnArgv(goose, { prompt: 'hi', model: 'openrouter/anthropic/claude-5' })).toEqual(expect.arrayContaining(['--provider', 'openrouter', '--model', 'anthropic/claude-5']));
+    expect(nativeHarnessTurnArgv(goose, { prompt: 'hi', model: 'sonnet' })).not.toContain('--provider');
+    expect(harnessLoginArgvForModel(goose, 'anthropic/claude-5')).toEqual(['configure']);
+    // Every harness either says whether it is signed in or cannot be asked
+    // (Antigravity keeps its token in the system keyring only; the drivers
+    // sign in per provider from the model picker).
+    const unknowable = ['antigravity', 'goose', 'opencode', 'kilo'];
+    for (const harness of AI_LOCAL_HARNESSES) {
+      if (unknowable.includes(harness.command)) continue;
+      expect(Boolean(harness.statusArgv || harness.authFiles?.length || harness.authEnv?.length), `${harness.command} sign-in state`).toBe(true);
+      expect(harness.loginArgv, `${harness.command} sign-in`).toBeDefined();
+    }
+    expect(localHarnessForCommand('cn')!.loginArgv, 'cn 1.5 has no login subcommand').toEqual([]);
     expect(localHarnessForCommand('pi')!.loginArgv, 'Pi signs in inside its own session').toEqual([]);
     expect(nativeHarnessTurnArgv(claw, { prompt: 'hi', model: 'openai/gpt-5.5', nativeSessionId: 's-1', createdHere: true }))
       .toEqual(['agent', '--local', '--json', '--agent', 'main', '--session-id', 's-1', '--model', 'openai/gpt-5.5', '--message', 'hi']);
