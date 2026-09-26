@@ -290,6 +290,13 @@ export interface AiRouterRuntime {
  * multi-provider harnesses publish these. `hint` is what to do once the
  * vendor opens, for one that signs in only from its own session (Pi). */
 export type ModelCatalogConnect = { id: string; label: string; detail?: string; argv: readonly string[]; hint?: string };
-export type ModelCatalogResult = { configured?: string; models: string[]; labels?: Readonly<Record<string, string>>; connect?: readonly ModelCatalogConnect[] };
+export type ModelCatalogResult = {
+  configured?: string;
+  models: string[];
+  labels?: Readonly<Record<string, string>>;
+  connect?: readonly ModelCatalogConnect[];
+  /** Hardware-fit model configurations exposed by Hermes local runtimes. */
+  localRecommendations?: readonly { id: string; label: string; detail: string }[];
+};
 
 export type NativeUsageProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<string | undefined>;

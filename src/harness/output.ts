@@ -93,6 +93,11 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
     write(`\n${chalk.red('Error:')} ${payload.message}\n\n`);
     return;
   }
+  // Something worth knowing that did not stop anything.
+  if (payload.panel === 'notice' && typeof payload.message === 'string') {
+    write(`\n${chalk.yellow('Note:')} ${payload.message}\n\n`);
+    return;
+  }
   if (payload.panel === 'help' && typeof payload.helpText === 'string') {
     write(`\n${chalk.bold('Commands')}\n\n${payload.helpText}\n\n`);
     return;

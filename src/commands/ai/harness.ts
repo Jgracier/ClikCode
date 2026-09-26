@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { ensureNativeHarness, inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
-import type { AiHarnessAccount } from '../../harness/definition.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
+import { hermesTurboFitInstalled, installHermesTurboFit, registerHermesTurboFitProvider, restoreHermesPluginScan } from '../../harness/accounts/hermes-discovery.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
@@ -124,6 +125,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       }
     }
   }
+  if (harness.command === 'hermes') await ensureHermesTurboFit(harness, nativeProfileEnvironment(account?.nativeProfile));
   // Always a real model, never a placeholder -- see resolveNativeModel.
   if (!session.model) {
     session.model = state.providerSettings[harness.provider]?.model
@@ -142,6 +144,28 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     model: session.model ?? 'provider default', centralized: true,
     ...(session.accountId ? {} : { actionRequired: `Choose one with /accounts use <label>`, accounts: compatible.map(accountView) }),
   });
+}
+
+/** TurboFit is Hermes' local-model provider: its modes and hardware-fit
+ * recommendations are what /model lists under Hermes. Choosing Hermes is the
+ * whole decision -- it is installed with Hermes, no second question. Tried
+ * once per run, so an install that fails (offline, say) is reported once
+ * rather than on every /hermes. */
+let turboFitTried = false;
+async function ensureHermesTurboFit(harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>): Promise<void> {
+  if (turboFitTried) return;
+  turboFitTried = true;
+  // A run killed mid-install left Hermes' scan setting changed; put it back
+  // whether or not TurboFit needs installing now.
+  await restoreHermesPluginScan(harness, environment).catch(() => undefined);
+  const installed = await hermesTurboFitInstalled(environment);
+  TERMINAL.active?.startWaiting(installed ? 'connecting TurboFit to Hermes…' : 'installing TurboFit local models for Hermes…');
+  try {
+    if (!installed) await installHermesTurboFit(harness, environment);
+    await registerHermesTurboFitProvider(harness, environment);
+  }
+  catch (error) { emitHarnessOutput({ panel: 'error', message: error instanceof Error ? error.message : String(error) }); }
+  finally { TERMINAL.active?.stopWaiting(); }
 }
 
 /** A chat ready for a turn from the command line: bound to a harness and an

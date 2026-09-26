@@ -7,6 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import { ensureTurboFitForTurn } from './turbofit.js';
 import { chatNamed, latestChat } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { discardIfBlank } from '../../session/blank.js';
@@ -352,6 +353,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const activeState = await readState();
         const active = activeState.sessions.find((item) => item.id === targetId);
         const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
+        // Held from this process, not the turn's worker: the worker outlives
+        // the terminal, and a TurboFit model stops when the terminal closes.
+        const activeHarness = active?.nativeHarness ? localHarnessForCommand(active.nativeHarness) : undefined;
+        if (active && activeHarness) {
+          await ensureTurboFitForTurn(activeHarness, activeState.accounts.find((item) => item.id === active.accountId), targetId, active.model);
+        }
         const run = {
           persistentTransports: true,
           ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}),
