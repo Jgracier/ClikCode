@@ -10,7 +10,7 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect, ModelCatalogResult } from '../definition.js';
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
-import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js';
+import { discoverHermesModels, hermesCachedModels, hermesTurboFitCatalogFiles } from './hermes-discovery.js';
 import { discoverOpenClawModels } from './openclaw-discovery.js';
 import { discoverOpencodeConnect } from './opencode-discovery.js';
 import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
@@ -140,6 +140,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
     ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
     ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json'), join(root, '.env')] : []),
+    ...(harness.command === 'hermes' ? await hermesTurboFitCatalogFiles(nativeProfileEnvironment(account?.nativeProfile)) : []),
     // OpenClaw's sign-ins live in the agent's SQLite auth store.
     ...(harness.command === 'openclaw' && root ? [join(root, 'openclaw.json'), join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')] : []),
     ...(harness.command === 'goose' ? [join(homedir(), '.config', 'goose', 'config.yaml'), join(homedir(), '.config', 'goose', 'secrets.yaml')] : []),
@@ -368,6 +369,7 @@ async function nativeModelCatalogUncached(
   let labels: Record<string, string> | undefined;
   let configured: string | undefined;
   let connect: ModelCatalogConnect[] | undefined;
+  let localRecommendations: ModelCatalogResult['localRecommendations'];
   if (profileRoot && harness.command === 'codex') {
     try {
       const config = await readFile(join(profileRoot, 'config.toml'), 'utf8');
@@ -422,6 +424,7 @@ async function nativeModelCatalogUncached(
       labels = { ...labels, ...inventory.labels };
       if (inventory.configured) configured = inventory.configured;
       connect = inventory.connect;
+      localRecommendations = inventory.localRecommendations;
     } else if (profileRoot) {
       try {
         for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) models.add(model);
@@ -527,5 +530,6 @@ async function nativeModelCatalogUncached(
     models: [...models],
     ...(labels ? { labels } : {}),
     ...(connect?.length ? { connect } : {}),
+    ...(localRecommendations?.length ? { localRecommendations } : {}),
   };
 }

@@ -1,6 +1,7 @@
 /** `clikcode session`: creating, listing, showing, closing and leaving a
  * session, and the policy each kind of session starts with. */
 
+import { turboFitSessionClosed } from './turbofit.js';
 import { isBlankConversation } from '../../session/options.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { randomUUID } from 'node:crypto';
@@ -248,6 +249,10 @@ async function endSession(id: string, intent: 'close' | 'leave'): Promise<void> 
   const announce = (): void => {
     if (intent === 'close') emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
   };
+  // A closed session no longer holds a TurboFit local model running.
+  if (intent === 'close') {
+    await turboFitSessionClosed(state.accounts.find((item) => item.id === session.accountId), session.id).catch(() => undefined);
+  }
   // Never started: not kept, by the same rule /resume hides it by.
   if (isBlankConversation(session)) {
     state.sessions = state.sessions.filter((item) => item.id !== id);

@@ -7,6 +7,8 @@
  * need live beside this file, one concern each.
  */
 
+import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
+import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
 import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
@@ -241,6 +243,10 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (requested && !trusted) await assertRealModel(harness, account, requested);
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
+    // A TurboFit model is running before it is chosen: if its setup fails,
+    // the session keeps the model it had.
+    const previous = session.model;
+    if (isTurboFitModel(model)) await turboFitModelChanged(harness, account, session.id, previous, model);
     session.model = model;
     // What the vendor reported running answered the PREVIOUS request. The
     // status line prefers it (a vendor that substitutes a model says so), so
@@ -250,6 +256,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     await keepEffortValidFor(session, harness, account);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
+    if (!isTurboFitModel(model)) await turboFitModelChanged(harness, account, session.id, previous, model);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
   },
   effort: async ({ state, session, words }) => {

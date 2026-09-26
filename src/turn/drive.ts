@@ -46,6 +46,7 @@ import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
+import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
@@ -139,6 +140,9 @@ export async function aiSessionSend(
       model = await resolveNativeModel(harness, account) ?? null;
       if (model) session.model = model;
     }
+    // A TurboFit local model is running before its turn (a headless send, a
+    // worker picking up a session whose terminal took the lease).
+    await ensureTurboFitForTurn(harness, account, session.id, model);
     // An unnamed chat gets a title from the harness that writes one, and asks
     // the model for one where the harness does not. The request rides on this
     // turn's text only -- never on what is stored as the user's message -- and

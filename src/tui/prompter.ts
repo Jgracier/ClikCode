@@ -630,6 +630,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return false;
   }
 
+  /** Progress on a wait already showing ("downloading… 42%"), without
+   * restarting it the way startWaiting does. */
+  updateWaitingLabel(message: string): void {
+    if (!this.waitingLabel) return;
+    this.waitingLabel = message;
+    this.updateWaiting();
+  }
+
   startWaiting(
     message: string,
     onCancel?: (restoreDraft: boolean) => void,

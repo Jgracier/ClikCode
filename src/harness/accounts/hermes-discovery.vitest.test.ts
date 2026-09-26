@@ -51,4 +51,20 @@ describe('hermes discovery', () => {
     ]);
     expect(hermesInventory('Traceback: no module'), 'an install without the inventory').toBeUndefined();
   });
+
+  it('lists TurboFit\'s local modes even though its placeholder key reads as not ready', () => {
+    const output = '\x00HERMES_INVENTORY' + JSON.stringify({
+      providers: [
+        { provider: 'custom:turbofit', name: 'TurboFit', ready: false, authType: 'api_key', models: ['auto', 'active:main', 'active:aux'] },
+      ],
+    }) + '\n';
+    const inventory = hermesInventory(output)!;
+    expect(inventory.models).toEqual(['custom:turbofit:auto', 'custom:turbofit:active:main', 'custom:turbofit:active:aux']);
+    expect(inventory.labels).toEqual({
+      'custom:turbofit:auto': 'TurboFit Auto mode',
+      'custom:turbofit:active:main': 'TurboFit Main mode',
+      'custom:turbofit:active:aux': 'TurboFit Auxiliary mode',
+    });
+    expect(inventory.connect).toEqual([]);
+  });
 });
