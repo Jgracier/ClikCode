@@ -295,6 +295,24 @@ describe('runGatewayHarnessTurn', () => {
     expect(plans).toEqual([[{ content: 'step', status: 'in_progress' }]]);
   });
 
+  it('adds deferred MCP schemas once the model loads them, and keeps them on later turns', async () => {
+    const mcp = Array.from({ length: 30 }, (_, i) => defineTool({
+      name: `mcp__big__t${i}`, description: 'x'.repeat(300), parameters: { type: 'object', properties: {} },
+      class: 'read', mcp: { server: 'big', tool: `t${i}` }, label: () => `t${i}`, run: async () => ({ output: `ran t${i}` }),
+    }));
+    const h = harness([
+      { toolCalls: [{ name: 'load_mcp_tools', args: { server: 'big', tools: ['t4'] } }] },
+      { toolCalls: [{ name: 'mcp__big__t4', args: {} }] },
+      { text: 'done' },
+    ], { extraTools: mcp });
+    await runGatewayHarnessTurn(h.input);
+    const toolNames = h.client.requests.map((request) => request.tools.map((tool) => tool.name).filter((name) => name.startsWith('mcp__')));
+    expect(toolNames).toEqual([[], ['mcp__big__t4'], ['mcp__big__t4']]);
+    const later = harness([{ text: 'again' }], { extraTools: mcp, sessionId: h.input.sessionId, prompt: 'more' });
+    await runGatewayHarnessTurn(later.input);
+    expect(later.client.requests[0].tools.map((tool) => tool.name)).toContain('mcp__big__t4');
+  });
+
   it('resumes a session from its transcript', async () => {
     const first = harness([{ text: 'first answer' }]);
     await runGatewayHarnessTurn(first.input);
