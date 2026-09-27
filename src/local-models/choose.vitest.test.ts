@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { memoryBudget, ramReserve, vramReserve } from './budget';
+import { memoryBudget, memoryBuffer, startMargin, vramReserve } from './budget';
 import { LOCAL_MODEL_CATALOG, catalogModel, type CatalogModel } from './catalog';
 import {
-  chooseCacheType, chooseModel, estimateSpeed, fitModel, kvCacheBytes, meetsBar, rankModels, MIN_CONTEXT,
+  chooseCacheType, chooseModel, contextsToTry, estimateSpeed, fitModel, kvCacheBytes, measuredNeed, meetsBar, rankModels, MIN_CONTEXT,
+  PROMPT_CACHE_ALLOWANCE, type Footprint,
 } from './choose';
 import type { HardwareProfile } from './hardware';
 import { buildServerArgs, threadPlan } from './launch';
@@ -47,16 +48,25 @@ describe('catalog', () => {
 });
 
 describe('budget', () => {
-  it('leaves a reserve of 10% of RAM, between 2 and 6 GiB', () => {
-    expect(ramReserve(8 * GIB)).toBe(2 * GIB);
-    expect(ramReserve(32 * GIB)).toBeCloseTo(3.2 * GIB);
-    expect(ramReserve(128 * GIB)).toBe(6 * GIB);
+  it('keeps a buffer of 10% of RAM, at least 4 GiB (a quarter of a small machine), at most 8 GiB', () => {
+    expect(memoryBuffer(8 * GIB)).toBe(2 * GIB);
+    expect(memoryBuffer(16 * GIB)).toBe(4 * GIB);
+    expect(memoryBuffer(32 * GIB)).toBe(4 * GIB);
+    expect(memoryBuffer(57.6 * GIB)).toBeCloseTo(5.76 * GIB);
+    expect(memoryBuffer(128 * GIB)).toBe(8 * GIB);
   });
 
-  it('is available memory less the reserve, capped at 80% of RAM', () => {
-    expect(memoryBudget(ZEN4).ramBytes).toBeCloseTo(40 * GIB - 5.76 * GIB);
+  it('adds a start margin of 5% of RAM, 1 to 4 GiB', () => {
+    expect(startMargin(8 * GIB)).toBe(1 * GIB);
+    expect(startMargin(57.6 * GIB)).toBeCloseTo(2.88 * GIB);
+    expect(startMargin(128 * GIB)).toBe(4 * GIB);
+  });
+
+  it('is available memory less the buffer and the margin, with no fixed ceiling', () => {
+    expect(memoryBudget(ZEN4).ramBytes).toBeCloseTo(40 * GIB - 5.76 * GIB - 2.88 * GIB);
+    expect(memoryBudget(ZEN4).bufferBytes).toBeCloseTo(5.76 * GIB);
     const idle = { ...ZEN4, availableRamBytes: 56 * GIB };
-    expect(memoryBudget(idle).ramBytes).toBeCloseTo(57.6 * GIB * 0.8);
+    expect(memoryBudget(idle).ramBytes).toBeCloseTo(56 * GIB - 8.64 * GIB);
     expect(memoryBudget({ ...ZEN4, availableRamBytes: 1 * GIB }).ramBytes).toBe(0);
   });
 
@@ -113,20 +123,39 @@ describe('KV cache', () => {
 });
 
 describe('fit', () => {
-  it('fits Ornith on the Zen 4 on the CPU at its default context', () => {
+  it('fits Ornith on the Zen 4 on the CPU, by the estimate before it has run', () => {
     const fit = fitModel(model('ornith-1.5-35b-a3b'), memoryBudget(ZEN4));
-    expect(fit).toMatchObject({ fits: true, placement: 'cpu', context: 65_536, cacheType: 'q8_0' });
-    expect(fit.needBytes).toBeLessThan(25 * GIB);
+    expect(fit).toMatchObject({ fits: true, placement: 'cpu', cacheType: 'q8_0' });
+    expect(fit.measured).toBeUndefined();
+    expect(fit.context).toBeGreaterThanOrEqual(65_536);
   });
 
   it('shrinks the context before giving up, but not below the minimum', () => {
     const ornith = model('ornith-1.5-35b-a3b');
-    const full = fitModel(ornith, { ramBytes: 1e12, ramReserveBytes: 0 });
-    const kvAt64k = full.needBytes - fitModel(ornith, { ramBytes: 1e12, ramReserveBytes: 0 }, { context: MIN_CONTEXT }).needBytes;
-    const tight = fitModel(ornith, { ramBytes: full.needBytes - kvAt64k / 2, ramReserveBytes: 0 });
+    const at64k = fitModel(ornith, { ramBytes: 1e12, bufferBytes: 0, ramReserveBytes: 0 }, { context: 65_536 });
+    const at16k = fitModel(ornith, { ramBytes: 1e12, bufferBytes: 0, ramReserveBytes: 0 }, { context: MIN_CONTEXT });
+    const tight = fitModel(ornith, { ramBytes: at64k.needBytes - (at64k.needBytes - at16k.needBytes) / 2, bufferBytes: 0, ramReserveBytes: 0 });
     expect(tight.fits).toBe(true);
     expect(tight.context).toBeLessThan(65_536);
     expect(tight.context).toBeGreaterThanOrEqual(MIN_CONTEXT);
+  });
+
+  it('tries the model\'s maximum context first, halving down to the minimum, default included', () => {
+    expect(contextsToTry({ defaultContext: 65_536, maxContext: 262_144 })).toEqual([262_144, 131_072, 65_536, 32_768, 16_384]);
+    expect(contextsToTry({ defaultContext: 40_000, maxContext: 131_072 })).toEqual([131_072, 65_536, 40_000, 32_768, 16_384]);
+    expect(contextsToTry({ defaultContext: 65_536, maxContext: 262_144 }, 100_000)).toEqual([100_000]);
+  });
+
+  it('uses spare memory for a longer context, leaving the prompt cache its room past the default', () => {
+    const qwen = model('qwen3.5-4b');
+    // A budget this size gets a q8_0 cache (under 16 GiB beyond the weights).
+    const at256k = fitModel(qwen, { ramBytes: 10 * GIB, bufferBytes: 0, ramReserveBytes: 0 }, { context: 262_144 });
+    expect(at256k.cacheType).toBe('q8_0');
+    const roomy = fitModel(qwen, { ramBytes: at256k.needBytes + PROMPT_CACHE_ALLOWANCE, bufferBytes: 0, ramReserveBytes: 0 });
+    expect(roomy.context).toBe(262_144);
+    // Without the prompt cache's room the maximum is given up for the next step down.
+    const short = fitModel(qwen, { ramBytes: at256k.needBytes + PROMPT_CACHE_ALLOWANCE - 1, bufferBytes: 0, ramReserveBytes: 0 });
+    expect(short.context).toBe(131_072);
   });
 
   it('says why a model does not fit', () => {
@@ -143,6 +172,62 @@ describe('fit', () => {
     expect(fitModel(model('qwen3.5-9b'), budget(22 * GIB)).placement).toBe('gpu');
     expect(fitModel(model('ornith-1.5-35b-a3b'), budget(10 * GIB)).placement).toBe('gpu-partial');
     expect(fitModel(model('ornith-1.5-35b-a3b'), budget(2 * GIB)).placement).toBe('cpu');
+  });
+});
+
+describe('fit from a measured footprint', () => {
+  // Ornith 35B-A3B at 64K, f16, measured on the Zen 4: 15.2 GB RssAnon
+  // (repacked weights, KV, buffers) plus 20.5 GB of mmapped weights resident.
+  const ornithRun: Footprint = {
+    context: 65_536, cacheType: 'f16', parallel: 2, vision: false, anonBytes: 15.2e9, fileBytes: 20.5e9, at: '2026-09-27T00:00:00Z',
+  };
+
+  it('is the estimate until the model has run', () => {
+    expect(measuredNeed(model('ornith-1.5-35b-a3b'), [], 65_536, 'f16', 2, false)).toBeUndefined();
+  });
+
+  it('is the measured peak at the measured configuration', () => {
+    expect(measuredNeed(model('ornith-1.5-35b-a3b'), [ornithRun], 65_536, 'f16', 2, false)).toBeCloseTo(35.7e9);
+  });
+
+  it('adjusts by the KV cache difference for another context or cache type', () => {
+    const ornith = model('ornith-1.5-35b-a3b');
+    const at32k = measuredNeed(ornith, [ornithRun], 32_768, 'q8_0', 2, false)!;
+    expect(at32k).toBeCloseTo(35.7e9 + kvCacheBytes(ornith.kv, 32_768, 'q8_0', 2) - kvCacheBytes(ornith.kv, 65_536, 'f16', 2));
+    expect(at32k).toBeLessThan(35.7e9);
+    // A different slot count changes buffers the adjustment does not model.
+    expect(measuredNeed(ornith, [ornithRun], 65_536, 'f16', 4, false)).toBeUndefined();
+    // Vision adds the projector.
+    expect(measuredNeed(ornith, [ornithRun], 65_536, 'f16', 2, true)).toBeCloseTo(35.7e9 + ornith.projector!.sizeBytes);
+  });
+
+  it('prefers the nearest run: same cache type, then nearest context', () => {
+    const ornith = model('ornith-1.5-35b-a3b');
+    const other: Footprint = { ...ornithRun, cacheType: 'q8_0', context: 16_384, anonBytes: 10e9 };
+    const need = measuredNeed(ornith, [other, ornithRun], 131_072, 'f16', 2, false)!;
+    expect(need).toBeCloseTo(35.7e9 + kvCacheBytes(ornith.kv, 131_072, 'f16', 2) - kvCacheBytes(ornith.kv, 65_536, 'f16', 2));
+  });
+
+  it('decides the fit by what the model really held, not the estimate', () => {
+    const ornith = model('ornith-1.5-35b-a3b');
+    // 39 GB available, as measured before the run: the estimate says it
+    // fits at 64K; the measured 35.7 GB says it does not fit at any context
+    // once the buffer and margin are kept.
+    const machine = { ...ZEN4, availableRamBytes: 39e9 };
+    const estimated = fitModel(ornith, memoryBudget(machine));
+    expect(estimated.fits).toBe(true);
+    const measured = fitModel(ornith, memoryBudget(machine), { footprints: [ornithRun] });
+    expect(measured).toMatchObject({ fits: false, measured: true });
+    // With enough free, the measured need decides the context instead.
+    const roomy = fitModel(ornith, memoryBudget({ ...ZEN4, availableRamBytes: 50 * GIB }), { footprints: [ornithRun] });
+    expect(roomy).toMatchObject({ fits: true, measured: true });
+    expect(roomy.needBytes + (roomy.context > 65_536 ? PROMPT_CACHE_ALLOWANCE : 0)).toBeLessThanOrEqual(memoryBudget({ ...ZEN4, availableRamBytes: 50 * GIB }).ramBytes);
+  });
+
+  it('ranks with the measured footprint', () => {
+    const machine = { ...ZEN4, availableRamBytes: 39e9 };
+    const ranked = rankModels(LOCAL_MODEL_CATALOG, machine, memoryBudget(machine), {}, { 'ornith-1.5-35b-a3b': [ornithRun] });
+    expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b')!.fit.fits).toBe(false);
   });
 });
 

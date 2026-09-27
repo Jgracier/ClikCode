@@ -10,10 +10,10 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { Measurement } from './choose.js';
+import type { Footprint, Measurement } from './choose.js';
 import type { HardwareProfile } from './hardware.js';
 import { httpJson } from './launch.js';
-import { measurementsFile } from './paths.js';
+import { footprintsFile, measurementsFile } from './paths.js';
 
 export function machineKey(hardware: HardwareProfile, runtimeKey: string): string {
   const identity = [
@@ -44,6 +44,25 @@ export async function writeMeasurement(machine: string, modelId: string, measure
   const temporary = `${measurementsFile()}.${process.pid}.tmp`;
   await writeFile(temporary, JSON.stringify(store, null, 2));
   await rename(temporary, measurementsFile());
+}
+
+/** The footprints the supervisor recorded for a model on this machine
+ * (keyed as footprintKey), in the store's own words. */
+export type FootprintStore = Record<string, Record<string, Footprint>>;
+
+export function footprintKey(config: Pick<Footprint, 'context' | 'cacheType' | 'parallel' | 'vision'>): string {
+  return `${config.context}|${config.cacheType}|${config.parallel}|${config.vision ? 'vision' : 'text'}`;
+}
+
+export async function readFootprints(machine: string, modelIds: readonly string[]): Promise<Record<string, Footprint[]>> {
+  const result: Record<string, Footprint[]> = {};
+  for (const modelId of modelIds) {
+    let store: FootprintStore = {};
+    try { store = JSON.parse(await readFile(footprintsFile(modelId), 'utf8')) as FootprintStore; } catch { /* Never run here. */ }
+    const entries = Object.values(store[machine] ?? {}).filter((entry) => entry && typeof entry.anonBytes === 'number');
+    if (entries.length) result[modelId] = entries;
+  }
+  return result;
 }
 
 /** About 700 tokens: 240 numbers of one to four digits with separators. */
