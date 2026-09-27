@@ -275,8 +275,10 @@ export async function captureNativeHarnessTurn(
       later(1_000, 'SIGTERM');
       later(3_000, 'SIGKILL');
     };
-    const onTerminate = () => { forward('SIGTERM'); later(2_000, 'SIGKILL'); };
-    const onHangup = () => { forward('SIGHUP'); later(2_000, 'SIGKILL'); };
+    // Terminating or hanging up is stopping, as much as Ctrl+C is: the turn is
+    // cancelled, never read as a vendor failure for failover to retry.
+    const onTerminate = () => { interrupted = true; forward('SIGTERM'); later(2_000, 'SIGKILL'); };
+    const onHangup = () => { interrupted = true; forward('SIGHUP'); later(2_000, 'SIGKILL'); };
     const cleanup = (): void => {
       process.off('SIGINT', onInterrupt);
       process.off('SIGTERM', onTerminate);
