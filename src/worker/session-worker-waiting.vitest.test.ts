@@ -20,7 +20,7 @@ import { WorkerClient } from './client.js';
 import { readWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
-import { closeAllWorkerClients, followWorkerTurn, questionOrWorker } from './turn-bridge.js';
+import { closeAllWorkerClients, followWorkerTurn, questionOrWorker, workerQueueMark } from './turn-bridge.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
@@ -350,6 +350,21 @@ describe('a window at its prompt', () => {
     (await gateway!.next()).respond(text('answered'));
     await followed;
     expect(rl.calls.filter((entry) => entry.startsWith('response(')).join('')).toContain('answered');
+  }, 60_000);
+
+  it('does not miss a queue change that landed before its prompt opened', async () => {
+    const session = await gatewaySession();
+    const other = await attach(session.id);
+    // A first prompt attaches this window's own connection.
+    await questionOrWorker(session.id, async () => 'typed');
+    const mark = workerQueueMark(session.id);
+    const answered = new Promise<void>((resolve) => other.once('event', () => resolve()));
+    other.send({ type: 'steer', text: 'queued before the prompt', id: 'late-2' });
+    await answered;
+    // Wait until this window's connection has seen it too, then open the prompt.
+    const deadline = Date.now() + 10_000;
+    while (workerQueueMark(session.id) === mark && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect(questionOrWorker(session.id, idlePrompt, mark)).resolves.toEqual({ woke: 'queue' });
   }, 60_000);
 
   it('answers a key normally when nothing happens', async () => {

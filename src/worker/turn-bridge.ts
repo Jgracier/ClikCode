@@ -48,6 +48,9 @@ interface WorkerTracker {
   prompt?: string;
   liveText: string;
   wake?: (reason: 'turn' | 'queue') => void;
+  /** Counts queue-changed events, so a change that lands between the loop
+   * reading the queue and its prompt opening is not missed (workerQueueMark). */
+  queueVersion: number;
   /** A turn is being shown (driveWorkerTurn), which answers requests itself. */
   driving: boolean;
   /** Approvals and sign-ins asked while no turn was being shown -- re-offered
@@ -59,7 +62,7 @@ const trackers = new WeakMap<WorkerClient, WorkerTracker>();
 const connecting = new Map<string, Promise<WorkerClient | undefined>>();
 
 function track(sessionId: string, client: WorkerClient): void {
-  const tracker: WorkerTracker = { running: false, liveText: '', driving: false, unanswered: [] };
+  const tracker: WorkerTracker = { running: false, liveText: '', driving: false, unanswered: [], queueVersion: 0 };
   trackers.set(client, tracker);
   const initial = client.initialEvent;
   if (initial?.type === 'snapshot' && initial.live) Object.assign(tracker, { running: true, prompt: initial.live.prompt, liveText: initial.live.text });
@@ -79,6 +82,7 @@ function track(sessionId: string, client: WorkerClient): void {
     } else if (event.type === 'delta') {
       tracker.liveText = event.mode === 'replace' ? event.text : tracker.liveText + event.text;
     } else if (event.type === 'queue-changed') {
+      tracker.queueVersion++;
       tracker.wake?.('queue');
     }
   });
@@ -156,11 +160,13 @@ export type IdleWake = { line: string } | { woke: 'turn'; prompt?: string } | { 
  * The window used to sit at its prompt through both, showing neither -- a
  * reopened conversation mid-turn looked idle, and a queued message waited
  * for a keypress. Attaches only to a worker that is already running. */
-export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSignal) => Promise<string>): Promise<IdleWake> {
+export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSignal) => Promise<string>, queueMark?: number): Promise<IdleWake> {
   const client = await connect(sessionId, false).catch(() => undefined);
   const tracker = client ? trackers.get(client) : undefined;
   if (!tracker) return { line: await ask() };
   if (tracker.running) return { woke: 'turn', ...(tracker.prompt !== undefined ? { prompt: tracker.prompt } : {}) };
+  // The queue changed after the caller read it: read it again first.
+  if (queueMark !== undefined && tracker.queueVersion !== queueMark) return { woke: 'queue' };
   const controller = new AbortController();
   let reason: 'turn' | 'queue' | undefined;
   tracker.wake = (why) => { reason ??= why; controller.abort(); };
@@ -172,6 +178,12 @@ export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSi
   } finally {
     tracker.wake = undefined;
   }
+}
+
+/** Taken BEFORE reading the queue from state, and handed to questionOrWorker. */
+export function workerQueueMark(sessionId: string): number | undefined {
+  const client = clients.get(sessionId);
+  return client ? trackers.get(client)?.queueVersion : undefined;
 }
 
 /** Follows the turn the worker is running to its end, exactly as if this
