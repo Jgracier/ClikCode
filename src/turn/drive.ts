@@ -1071,6 +1071,9 @@ export async function aiGatewaySessionSend(
       id: randomUUID(), sessionId: session.id, accountId: attributedTo,
       provider: session.provider ?? attributedTo, ...(session.model ? { model: session.model } : {}),
       at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
+      // Which context profile the agent ran under, so an evaluation can
+      // attribute time and quality to it (agent/context-profile.ts).
+      ...(harnessTurn.contextProfile ? { contextProfile: harnessTurn.contextProfile } : {}),
     };
     state.invocations.push(harnessInvocation);
     session.attachments = [];
@@ -1081,7 +1084,11 @@ export async function aiGatewaySessionSend(
     await checkpoint.complete(named.text);
     if (!prompter) {
       emitHarnessOutput({
-        session, text: named.text, usage: { attributedBy: attributedTo }, invocation: harnessInvocation,
+        session, text: named.text, invocation: harnessInvocation,
+        usage: {
+          attributedBy: attributedTo, ...harnessTurn.usage,
+          ...(harnessTurn.contextProfile ? { contextProfile: harnessTurn.contextProfile } : {}),
+        },
       });
     }
     await checkpoint.flush();

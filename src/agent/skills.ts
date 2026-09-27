@@ -19,7 +19,8 @@ import { parse as parseYaml } from 'yaml';
 
 export const SKILL_FILE = 'SKILL.md';
 export const SKILL_TOOL = 'skill';
-/** Caps on the prompt section: small local models pay for every token. */
+/** Caps on the prompt section: small local models pay for every token. The
+ * lean profile's; a context profile may pass its own (context-profile.ts). */
 export const MAX_LISTED_SKILLS = 20;
 export const MAX_DESCRIPTION_CHARS = 150;
 /** Per location. A skills directory with thousands of entries is not a skills directory. */
@@ -214,14 +215,17 @@ function clip(text: string, max: number): string {
 }
 
 /** Empty string when there are no skills: no section at all, not an empty one. */
-export function skillsPromptSection(skills: readonly Skill[]): string {
+export function skillsPromptSection(
+  skills: readonly Skill[],
+  limits: { maxListedSkills: number; skillDescriptionChars: number } = { maxListedSkills: MAX_LISTED_SKILLS, skillDescriptionChars: MAX_DESCRIPTION_CHARS },
+): string {
   if (!skills.length) return '';
-  const listed = skills.slice(0, MAX_LISTED_SKILLS);
+  const listed = skills.slice(0, limits.maxListedSkills);
   const more = skills.length - listed.length;
   return [
     '# Skills',
     `Skills are instructions for specific kinds of task. When one fits the task, call ${SKILL_TOOL} with its name before starting and follow what it says.`,
-    ...listed.map((skill) => `- ${skill.name}: ${clip(skill.description, MAX_DESCRIPTION_CHARS)}`),
+    ...listed.map((skill) => `- ${skill.name}: ${clip(skill.description, limits.skillDescriptionChars)}`),
     ...(more > 0 ? [`(${more} more not listed; ${SKILL_TOOL} with an unknown name lists them all.)`] : []),
   ].join('\n');
 }

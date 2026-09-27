@@ -3,6 +3,7 @@
  * `POST {baseUrl}/v1/chat/completions` with `stream: true`. */
 import type { ConversationItem, ImageInput, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage, ToolSpec } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
+import type { ContextHints } from '../context-profile.js';
 import { ModelClientError, parseRetryAfter, SseParser, type SseEvent } from './gateway-client.js';
 
 /** llama-server's per-request timings, passed through for callers that show speed. */
@@ -23,6 +24,9 @@ export interface OpenAIModelClientOptions {
   model: string;
   /** The window the server was started with; reported back to the loop. */
   contextWindow?: number;
+  /** Measured prompt reading speed, tokens/s, when the server's owner knows
+   * it (ClikCode Local); with the window it picks the context profile. */
+  promptPerSecond?: number;
   /** Send user images as `image_url` parts. Off by default: a text-only
    * server either rejects them or silently drops them. */
   vision?: boolean;
@@ -130,9 +134,14 @@ interface PendingCall { id?: string; name: string; arguments: string; argsObject
 
 export class OpenAIModelClient implements ModelClient {
   readonly acceptsImages: boolean;
+  readonly contextHints: ContextHints;
 
   constructor(private readonly options: OpenAIModelClientOptions) {
     this.acceptsImages = options.vision === true;
+    this.contextHints = {
+      ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}),
+      ...(options.promptPerSecond ? { promptPerSecond: options.promptPerSecond } : {}),
+    };
   }
 
   private get label(): string { return this.options.label ?? 'The model server'; }
