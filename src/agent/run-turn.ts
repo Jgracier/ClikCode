@@ -17,6 +17,9 @@ import type { ToolCategory } from '../harness/prompter.js';
 import { emptyLedger, recordUsage } from './usage.js';
 
 const DEFAULT_MAX_STEPS = 60;
+/** Retries of one model step that failed before saying anything. */
+const MAX_STEP_RETRIES = 2;
+const STEP_RETRY_CAP_SECONDS = 30;
 const NO_PROGRESS_LIMIT = 3;
 const STREAM_EVENT_INTERVAL_MS = 150;
 
@@ -42,6 +45,36 @@ function classifyModelError(error: unknown): { kind: HarnessErrorKind; retryAfte
   if (status === 401 || status === 403) return { kind: 'auth' };
   if (status === 402 || status === 429) return { kind: 'quota', ...(retryAfter !== undefined ? { retryAfter } : {}) };
   return { kind: 'other', ...(retryAfter !== undefined ? { retryAfter } : {}) };
+}
+
+/** Codes the Gateway sends for a step that is worth sending again as it is:
+ * its own words for these are "Please retry" (turn-stream.ts). */
+const RETRYABLE_STEP_CODES = new Set(['MODEL_ERROR', 'INTERNAL_ERROR', 'MODEL_RATE_LIMITED', 'RATE_LIMIT_EXCEEDED', 'incomplete_stream']);
+
+/** What to do about a model step that failed before streaming anything.
+ * `compact`: the request did not fit the model (the Gateway's
+ * CONTEXT_TOO_LARGE, "Compact and retry"). `retry`: a transient failure --
+ * a retryable code, a 5xx, or no response at all. Everything else -- credit,
+ * sign-in, a rejected request, no model, the kill switch -- is the answer. */
+export function stepRecovery(error: unknown): 'compact' | 'retry' | undefined {
+  const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown };
+  const code = typeof record.code === 'string' ? record.code : undefined;
+  if (code === 'CONTEXT_TOO_LARGE') return 'compact';
+  if (code && RETRYABLE_STEP_CODES.has(code)) return 'retry';
+  if (code) return undefined;
+  const status = typeof record.statusCode === 'number' ? record.statusCode : undefined;
+  if (status === undefined) return record.kind === 'other' ? 'retry' : undefined;
+  return status >= 500 && status !== 501 ? 'retry' : undefined;
+}
+
+/** Waits, unless the turn is cancelled first. */
+function pause(seconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(turnCancelledError()); return; }
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, seconds * 1000);
+    const onAbort = (): void => { clearTimeout(timer); reject(turnCancelledError()); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function stableStringify(value: unknown): string {
@@ -115,6 +148,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   let approvalChain: Promise<unknown> = Promise.resolve();
   const failures = new Map<string, number>();
   let stalledCall: ModelToolCall | undefined;
+  let stepRetries = 0;
+  let compactedForSize = false;
 
   const toolContext = (callId: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs, sessionId: input.sessionId, turnId, stateDir: input.stateDir, homeDir, signal, checkpoints, session, callId, emitOutput,
@@ -260,11 +295,39 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         }), signal);
       } catch (error) {
         if (isTurnCancelled(error) || signal?.aborted) throw turnCancelledError();
+        // Once text has streamed the step belongs to what was said; sending it
+        // again would say it twice. Before that, a step is safe to resend: the
+        // Gateway is stateless and no tool has run.
+        const recovery = streamedThisStep ? undefined : stepRecovery(error);
+        if (recovery === 'compact' && !compactedForSize) {
+          compactedForSize = true;
+          input.onPhase?.('compacting context');
+          // No size target: the Gateway measured the real model and said it
+          // does not fit, which outranks this side's estimate of whether it does.
+          const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system }), signal);
+          if (compacted.stage !== 'none') {
+            items = compacted.items;
+            lastStepUsage = undefined;
+            if (compacted.stage === 'summarized') await store.appendCompaction(compacted.summary!, compacted.kept!);
+            if (compacted.usage) ledger = recordUsage(ledger, { step: steps, usage: compacted.usage });
+            continue;
+          }
+        }
+        if (recovery === 'retry' && stepRetries < MAX_STEP_RETRIES) {
+          stepRetries++;
+          const after = (error as { retryAfter?: unknown }).retryAfter;
+          const wait = Math.min(STEP_RETRY_CAP_SECONDS, typeof after === 'number' && after >= 0 ? after : 2 ** stepRetries);
+          input.onPhase?.(`retrying in ${Math.ceil(wait)}s`);
+          await pause(wait, signal);
+          continue;
+        }
         const classified = classifyModelError(error);
         const message = error instanceof Error ? error.message : String(error);
         return result({ text: message, isError: true, errorKind: classified.kind, stopReason: 'model-error', ...(classified.retryAfter !== undefined ? { retryAfter: classified.retryAfter } : {}) });
       }
       steps++;
+      stepRetries = 0;
+      compactedForSize = false;
 
       // A client without a delta channel still has to reach the UI.
       if (step.text && step.text.length > streamedThisStep.length && step.text.startsWith(streamedThisStep)) {

@@ -328,4 +328,56 @@ describe('runGatewayHarnessTurn', () => {
     expect(history.filter((item) => item.type === 'tool_result')).toHaveLength(4);
     expect(history.every((item) => item.type !== 'tool_result' || !/elided/.test(item.output))).toBe(true);
   });
+
+  describe('a model step that fails before saying anything', () => {
+    const gatewayError = (code: string, extra: Record<string, unknown> = {}) => Object.assign(new Error(`gateway: ${code}`), { code, kind: 'other', retryAfter: 0, ...extra });
+
+    it('is sent again on a transient failure, and the turn completes', async () => {
+      const phases: string[] = [];
+      const h = harness([{ error: gatewayError('MODEL_ERROR') }, { error: gatewayError('incomplete_stream') }, { text: 'PONG' }], { onPhase: (phase) => phases.push(phase) });
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result).toMatchObject({ text: 'PONG', stopReason: 'completed' });
+      expect(h.client.requests).toHaveLength(3);
+      expect(phases.filter((phase) => phase.startsWith('retrying'))).toEqual(['retrying in 0s', 'retrying in 0s']);
+    });
+
+    it('gives up after two retries and reports the failure', async () => {
+      const h = harness([], {}, { error: gatewayError('MODEL_RATE_LIMITED') });
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result).toMatchObject({ isError: true, stopReason: 'model-error', text: 'gateway: MODEL_RATE_LIMITED' });
+      expect(h.client.requests).toHaveLength(3);
+    });
+
+    it('is never resent once text has streamed', async () => {
+      const h = harness([{ before: (request) => request.onTextDelta('Half an ans'), error: gatewayError('MODEL_ERROR') }, { text: 'never asked' }]);
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result.isError).toBe(true);
+      expect(h.client.requests).toHaveLength(1);
+    });
+
+    it('is the answer when the failure is about the account, not the moment', async () => {
+      for (const code of ['AI_CREDIT_EXHAUSTED', 'NO_MODEL_AVAILABLE', 'VALIDATION_ERROR', 'CLIKCODE_DISABLED', 'MODEL_REJECTED_REQUEST']) {
+        const h = harness([{ error: gatewayError(code) }, { text: 'never asked' }]);
+        expect((await runGatewayHarnessTurn(h.input)).isError, code).toBe(true);
+        expect(h.client.requests, code).toHaveLength(1);
+      }
+    });
+
+    it('compacts and resends when the conversation no longer fits the model', async () => {
+      await fs.writeFile(path.join(cwd, 'a.txt'), 'alpha\n');
+      const phases: string[] = [];
+      const read = (id: string) => ({ toolCalls: [{ id, name: 'read_file', args: { path: 'a.txt' } }] });
+      const h = harness([
+        read('r1'), read('r2'), read('r3'), read('r4'), read('r5'), read('r6'), read('r7'), read('r8'),
+        { error: gatewayError('CONTEXT_TOO_LARGE') },
+        (request) => (request.tools.length === 0 ? { text: 'SUMMARY: read a.txt eight times' } : { text: 'done' }),
+      ], { onPhase: (phase) => phases.push(phase) }, { text: 'done' });
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result).toMatchObject({ text: 'done', stopReason: 'completed' });
+      expect(phases).toContain('compacting context');
+      const resent = h.client.requests.at(-1)!;
+      expect(resent.items.some((item) => item.type === 'summary' || (item.type === 'tool_result' && /elided/.test(item.output)))).toBe(true);
+    });
+  });
 });
+

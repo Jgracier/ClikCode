@@ -38,7 +38,9 @@ function errorKindForStatus(status: number | undefined): HarnessErrorKind {
 }
 
 const AUTH_CODES = new Set(['unauthorized', 'unauthenticated', 'forbidden', 'auth', 'invalid_api_key', 'auth_required']);
-const QUOTA_CODES = new Set(['quota', 'quota_exceeded', 'quota_exhausted', 'rate_limited', 'rate_limit', 'insufficient_credits', 'payment_required']);
+// The Gateway's own codes are upper case (RATE_LIMIT_EXCEEDED, AI_CREDIT_EXHAUSTED,
+// MODEL_RATE_LIMITED); they are compared lower-cased.
+const QUOTA_CODES = new Set(['quota', 'quota_exceeded', 'quota_exhausted', 'rate_limited', 'rate_limit', 'insufficient_credits', 'payment_required', 'rate_limit_exceeded', 'ai_credit_exhausted', 'model_rate_limited']);
 
 function errorKindForCode(code: unknown): HarnessErrorKind {
   if (typeof code === 'number') return errorKindForStatus(code);
