@@ -11,6 +11,8 @@ import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } f
 import { categoryOf, isAgentToolName } from '../protocol/tools.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
+import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
+import { createTurnWatchdog, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 
 type Json = Record<string, any>;
 
@@ -74,7 +76,14 @@ export interface AcpSession {
   close(): Promise<void>;
 }
 
-interface AcpSessionOptions { spawn?: AcpSpawn }
+interface AcpSessionOptions {
+  spawn?: AcpSpawn;
+  /** Receives work the agent does between ClikCode turns. */
+  backgroundTurns?: VendorBackgroundTurnHandler;
+  /** Watchdog budgets (see turn-watchdog.ts); tests shorten them. */
+  idleMs?: number;
+  toolIdleMs?: number;
+}
 
 export function acpResponseDelta(update: Json): string | undefined {
   return update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && typeof update.content.text === 'string'
@@ -298,11 +307,19 @@ interface LiveAgent {
   configOptions?: Json[];
 }
 
-interface ActiveTurn {
-  input: AcpTurnInput;
+/** Whatever is receiving the agent's session/update right now: the user's
+ * turn, or a background turn when there is none. */
+interface Stream {
+  observer: HarnessTurnObserver;
+  command: string;
   text: string;
   vibeMessageText: string;
   sawActivity: boolean;
+  watchdog?: TurnWatchdog;
+}
+
+interface ActiveTurn extends Stream {
+  input: AcpTurnInput;
   promptStarted: boolean;
   done: boolean;
   sessionId?: string;
@@ -312,16 +329,43 @@ interface ActiveTurn {
   throttled?: NodeJS.Timeout;
 }
 
+interface BackgroundRun extends Stream {
+  channel: BackgroundTurnChannel;
+}
+
+/** Updates that carry the agent's work and so can open a background turn.
+ * Session bookkeeping (usage, titles, modes, command palettes) never does. */
+const CONTENT_UPDATES: ReadonlySet<string> = new Set(['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan']);
+/** What agents publish as a prompt winds up (cline and hermes send
+ * `session_info_update`, kimi and hermes `usage_update`). ACP has no
+ * turn-completed notification outside session/prompt, so for a background
+ * turn with no tool left running this is the end marker. */
+const TURN_BOOKKEEPING_UPDATES: ReadonlySet<string> = new Set(['usage_update', 'session_info_update']);
+
+const toolRunning = (update: Json): boolean => update.status === 'pending' || update.status === 'in_progress' || update.status === undefined;
+const toolSettled = (update: Json): boolean => update.status === 'completed' || update.status === 'failed';
+
 class AcpSessionImpl implements AcpSession {
   private live?: LiveAgent;
   private turn?: ActiveTurn;
+  private background?: BackgroundRun;
+  /** Tool calls the agent started and has not settled, within the turn or
+   * background turn that is receiving updates. */
+  private readonly pendingTools = new Map<string, string>();
   private settling?: Promise<void>;
   private sessionId?: string;
+  private lastCommand = 'agent';
   private isClosed = false;
   private readonly spawn: AcpSpawn;
+  private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
+  private readonly idleMs?: number;
+  private readonly toolIdleMs?: number;
 
   constructor(options: AcpSessionOptions) {
     this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
+    this.onBackgroundTurn = options.backgroundTurns;
+    this.idleMs = options.idleMs;
+    this.toolIdleMs = options.toolIdleMs;
   }
 
   async runTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
@@ -329,10 +373,15 @@ class AcpSessionImpl implements AcpSession {
     if (this.turn) throw new Error(`${input.command} ACP session already has an active turn`);
     const argv = acpSpawnArgv(input);
     if (!argv) throw new Error(`${input.command} has no ACP adapter`);
+    // From here on the user's turn receives what the agent says.
+    this.finishBackground('superseded');
+    this.lastCommand = input.command;
     let fail!: (error: Error) => void;
     const failure = new Promise<never>((_, reject) => { fail = reject; });
     failure.catch(() => undefined);
-    const turn: ActiveTurn = { input, text: '', vibeMessageText: '', sawActivity: false, promptStarted: false, done: false, fail };
+    const turn: ActiveTurn = {
+      input, observer: input, command: input.command, text: '', vibeMessageText: '', sawActivity: false, promptStarted: false, done: false, fail,
+    };
     this.turn = turn;
     const onAbort = (): void => this.cancelTurn(turn);
     input.signal?.addEventListener('abort', onAbort, { once: true });
@@ -352,10 +401,16 @@ class AcpSessionImpl implements AcpSession {
       throw failureError;
     } finally {
       turn.done = true;
+      turn.watchdog?.stop();
       if (turn.throttled) clearTimeout(turn.throttled);
       input.signal?.removeEventListener('abort', onAbort);
       if (this.turn === turn) this.turn = undefined;
       this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
+      // ACP defines the answer to session/prompt as the end of the turn: a
+      // tool call it left unsettled is not waited for (agents do leave some,
+      // and waiting would hold a background turn open for the whole ceiling).
+      // Anything the agent reports about it later opens a background turn.
+      this.pendingTools.clear();
     }
   }
 
@@ -366,6 +421,8 @@ class AcpSessionImpl implements AcpSession {
   async close(): Promise<void> {
     this.isClosed = true;
     if (this.turn) this.cancelTurn(this.turn);
+    this.finishBackground('closed');
+    this.pendingTools.clear();
     if (this.settling) await this.settling;
     const live = this.live;
     this.live = undefined;
@@ -398,8 +455,43 @@ class AcpSessionImpl implements AcpSession {
     const live = this.live;
     if (!live) return;
     this.live = undefined;
+    this.finishBackground('closed');
+    this.pendingTools.clear();
     live.peer.rejectPending(error);
     void live.peer.shutdown();
+  }
+
+  private watchdog(onIdle: (afterMs: number) => void): TurnWatchdog {
+    return createTurnWatchdog({
+      ...(this.idleMs !== undefined ? { idleMs: this.idleMs } : {}),
+      ...(this.toolIdleMs !== undefined ? { toolIdleMs: this.toolIdleMs } : {}),
+      onIdle,
+    });
+  }
+
+  /** Open a background turn and hand it to the owner. Without an owner the
+   * agent's out-of-turn updates are not surfaced, exactly as before. */
+  private openBackground(): BackgroundRun | undefined {
+    if (!this.onBackgroundTurn || this.isClosed) return undefined;
+    if (this.background && !this.background.channel.done) return this.background;
+    const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
+    const run: BackgroundRun = { channel, observer: channel.observer, command: this.lastCommand, text: '', vibeMessageText: '', sawActivity: false };
+    run.watchdog = this.watchdog(() => {
+      if (this.background !== run) return;
+      this.pendingTools.clear();
+      this.finishBackground('idle-timeout');
+    });
+    this.background = run;
+    try { this.onBackgroundTurn(channel); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+    return run;
+  }
+
+  private finishBackground(ended: BackgroundTurnEnd): void {
+    const run = this.background;
+    if (!run) return;
+    this.background = undefined;
+    run.watchdog?.stop();
+    run.channel.finish(ended);
   }
 
   private ensureLive(input: AcpTurnInput, argv: readonly string[]): LiveAgent {
@@ -423,7 +515,11 @@ class AcpSessionImpl implements AcpSession {
           else if (method === '_session/retrying') this.retrying(params);
         },
         onClose: (error) => {
-          if (this.live === live) this.live = undefined;
+          if (this.live === live) {
+            this.live = undefined;
+            this.finishBackground('closed');
+            this.pendingTools.clear();
+          }
           if (this.turn && !this.turn.done) this.turn.fail(error);
         },
       }),
@@ -498,6 +594,9 @@ class AcpSessionImpl implements AcpSession {
     const blocks: Json[] = [{ type: 'text', text: input.prompt }, ...await Promise.all(images.map(acpImageBlock))];
     stillRunning();
     turn.promptStarted = true;
+    // The turn ends with the agent's answer to session/prompt. This is only
+    // the ceiling for an agent that has stopped talking without answering.
+    turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError(input.command, afterMs)));
     turn.prompt = peer.request('session/prompt', { sessionId: turn.sessionId, prompt: blocks });
     const completed = await turn.prompt as Json;
     if (completed.stopReason === 'cancelled') throw cancelledError();
@@ -510,33 +609,73 @@ class AcpSessionImpl implements AcpSession {
     return { text, nativeSessionId: turn.sessionId! };
   }
 
+  /** Where an update goes: the user's turn while one runs, otherwise a
+   * background turn, opened by an update that carries work. */
+  private targetFor(update: Json): Stream | undefined {
+    if (this.turn) return this.turn.done ? undefined : this.turn;
+    if (this.background && !this.background.channel.done) return this.background;
+    return CONTENT_UPDATES.has(String(update.sessionUpdate)) ? this.openBackground() : undefined;
+  }
+
   private update(params: Json): void {
-    const turn = this.turn;
-    if (!turn || turn.done) return;
     const update: Json = params.update ?? {};
-    if (typeof params.sessionId === 'string' && turn.sessionId && params.sessionId !== turn.sessionId) return;
-    const { input } = turn;
-    // Command palettes are session state, not history, and usually arrive
-    // right after session/new -- before the prompt.
+    const turn = this.turn && !this.turn.done ? this.turn : undefined;
+    const expected = turn?.sessionId ?? this.sessionId;
+    if (typeof params.sessionId === 'string' && expected && params.sessionId !== expected) return;
+    // session/load replays the old conversation as ordinary updates. Nothing
+    // before our own prompt belongs to this turn -- but command palettes are
+    // session state, and usually arrive right after session/new.
+    if (turn && !turn.promptStarted) {
+      const commands = acpAvailableCommands(update);
+      if (commands) turn.input.onAvailableCommands?.(commands);
+      return;
+    }
+    const target = this.targetFor(update);
+    target?.watchdog?.activity();
+    this.trackTool(target, update);
+    if (target) this.deliver(target, update);
+    const run = this.background;
+    if (run && target === run && this.pendingTools.size === 0) {
+      // Event-driven end of a background turn: the last tool it was waiting
+      // for settled, or (no tool involved) the agent's own end-of-turn
+      // bookkeeping arrived.
+      const settledLastTool = update.sessionUpdate === 'tool_call_update' && toolSettled(update);
+      if (settledLastTool || TURN_BOOKKEEPING_UPDATES.has(String(update.sessionUpdate))) this.finishBackground('completed');
+    }
+  }
+
+  private trackTool(target: Stream | undefined, update: Json): void {
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return;
+    const id = typeof update.toolCallId === 'string' ? update.toolCallId : undefined;
+    if (!id) return;
+    if (toolSettled(update)) {
+      this.pendingTools.delete(id);
+      target?.watchdog?.toolFinished(id);
+    } else if (update.sessionUpdate === 'tool_call' ? toolRunning(update) : update.status === 'in_progress' || update.status === 'pending') {
+      if (!this.pendingTools.has(id)) this.pendingTools.set(id, String(update.title ?? 'tool'));
+      target?.watchdog?.toolStarted(id);
+    }
+  }
+
+  private deliver(target: Stream, update: Json): void {
+    const input = target.observer;
     const commands = acpAvailableCommands(update);
     if (commands) return input.onAvailableCommands?.(commands);
-    // session/load replays the old conversation as ordinary updates. Nothing
-    // before our own prompt belongs to this turn.
-    if (!turn.promptStarted) return;
-    if (turn.throttled && update.sessionUpdate !== 'usage_update' && update.sessionUpdate !== 'user_message_chunk') {
+    const turn = target === this.turn ? this.turn : undefined;
+    if (turn?.throttled && update.sessionUpdate !== 'usage_update' && update.sessionUpdate !== 'user_message_chunk') {
       clearTimeout(turn.throttled);
       turn.throttled = undefined;
     }
     const delta = acpResponseDelta(update);
     if (delta) {
-      if (input.command === 'vibe' && typeof update.messageId === 'string') {
-        const change = acpVibeResponseChange(turn.vibeMessageText, delta);
-        turn.vibeMessageText = change.current;
-        if (change.mode === 'replace') turn.text = change.current;
-        else turn.text += change.text;
+      if (target.command === 'vibe' && typeof update.messageId === 'string') {
+        const change = acpVibeResponseChange(target.vibeMessageText, delta);
+        target.vibeMessageText = change.current;
+        if (change.mode === 'replace') target.text = change.current;
+        else target.text += change.text;
         input.onResponseDelta?.(change.text, change.mode);
       } else {
-        turn.text += delta;
+        target.text += delta;
         input.onResponseDelta?.(delta);
       }
       return;
@@ -544,7 +683,7 @@ class AcpSessionImpl implements AcpSession {
     const thought = acpThoughtDelta(update);
     if (thought) return input.onThought?.(thought);
     const activity = acpActivityEvent(update);
-    if (activity) { turn.sawActivity = true; input.onActivity?.(activity); return; }
+    if (activity) { target.sawActivity = true; input.onActivity?.(activity); return; }
     const plan = acpPlanEntries(update);
     if (plan) return input.onPlan?.(plan);
     if (update.sessionUpdate === 'usage_update' || (update.usage && typeof update.usage === 'object')) {
@@ -560,6 +699,7 @@ class AcpSessionImpl implements AcpSession {
     const turn = this.turn;
     if (!turn || turn.done || !turn.promptStarted) return;
     if (typeof params.sessionId === 'string' && turn.sessionId && params.sessionId !== turn.sessionId) return;
+    turn.watchdog?.activity();
     const category = typeof params.category === 'string' ? params.category : '';
     const detail = typeof params.detail === 'string' ? params.detail : '';
     turn.input.onPhase?.(`${turn.input.command} is retrying${detail ? ` (${detail})` : ''}`);
@@ -578,10 +718,12 @@ class AcpSessionImpl implements AcpSession {
   }
 
   private async permission(params: Json): Promise<Json> {
-    const turn = this.turn;
+    const turn = this.turn && !this.turn.done ? this.turn : undefined;
     const cancelled = { outcome: { outcome: 'cancelled' } };
-    if (!turn || turn.done) return cancelled;
-    const plan = acpPermissionPlan(turn.input.permissionMode, params);
+    // Out of turn the agent still asks -- through the background turn.
+    const stream: Stream | undefined = turn ?? (this.turn ? undefined : this.background ?? this.openBackground());
+    if (!stream) return cancelled;
+    const plan = acpPermissionPlan(turn?.input.permissionMode ?? 'ask', params);
     let accepted = plan.action === 'allow';
     if (!accepted) {
       const title = String(params.toolCall?.title ?? params.toolCall?.name ?? 'Approve tool');
@@ -589,10 +731,16 @@ class AcpSessionImpl implements AcpSession {
         acpApprovalDetail(params.toolCall),
         plan.allowIsPersistent ? 'Approving grants this permanently: the agent offers no one-time option.' : undefined,
       ].filter(Boolean).join('\n') || undefined;
-      accepted = plan.allowOptionId !== undefined && await turn.input.onApproval?.(title, detail) === true;
+      // The agent is waiting on the user, not wedged.
+      const resume = stream.watchdog?.pause();
+      try {
+        accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail) === true;
+      } finally {
+        resume?.();
+      }
     }
     // ACP requires `cancelled` for requests outstanding when a turn is cancelled.
-    if (turn.done) return cancelled;
+    if (turn?.done) return cancelled;
     const optionId = accepted ? plan.allowOptionId : plan.rejectOptionId;
     return optionId !== undefined ? { outcome: { outcome: 'selected', optionId } } : cancelled;
   }
