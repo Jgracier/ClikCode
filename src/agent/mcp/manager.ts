@@ -191,8 +191,20 @@ let shared: { stateDir: string; manager: McpManager } | undefined;
  *
  * Under vitest with no CLIKCODE_HOME the answer is always empty, so a test
  * of the turn wiring never starts the developer's real servers. */
-export async function mcpToolsForTurn(stateDir: string): Promise<McpToolset> {
+export async function mcpToolsForTurn(stateDir: string, signal?: AbortSignal): Promise<McpToolset> {
   if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return { tools: [], notes: [] };
+  if (!signal) return sharedToolset(stateDir);
+  // A cancel while a slow server is still starting ends the wait at once;
+  // the start carries on in the background and serves the next turn.
+  return new Promise((resolve) => {
+    const onAbort = (): void => resolve({ tools: [], notes: [] });
+    if (signal.aborted) return onAbort();
+    signal.addEventListener('abort', onAbort, { once: true });
+    void sharedToolset(stateDir).then(resolve).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+async function sharedToolset(stateDir: string): Promise<McpToolset> {
   if (shared?.stateDir !== stateDir) {
     await shared?.manager.shutdown();
     shared = { stateDir, manager: new McpManager(() => loadMcpServers(stateDir)) };

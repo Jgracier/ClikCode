@@ -42,6 +42,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
+import { MCP_SERVERS_KEY, mcpConfigFilePath } from '../agent/mcp/config.js';
+import { stateDirectory } from '../session/store/paths.js';
 
 /** What a user asked ClikCode to make available, in the one shape both
  * grammars can be produced from. */
@@ -300,7 +302,7 @@ export async function installMcpServerEverywhere(
   entry: McpServerEntry, accounts: readonly AiHarnessAccount[],
 ): Promise<McpInstallResult[]> {
   const harnesses = await harnessesAcceptingMcp();
-  const results: McpInstallResult[] = [];
+  const results: McpInstallResult[] = [await recordForClikCodeAgent(entry)];
   for (const harness of harnesses) {
     const profiles = harness.profileEnv
       ? accounts.filter((account) => account.provider === harness.provider && account.nativeProfile)
@@ -313,4 +315,17 @@ export async function installMcpServerEverywhere(
     }
   }
   return results;
+}
+
+/** ClikCode's own agent (the Gateway and local routes) has no vendor config
+ * to write into, so the server is recorded in ClikCode's state directory, in
+ * the same `mcpServers` shape and through the same merge that preserves
+ * whatever else the file holds. See agent/mcp/config.ts, which reads it. */
+async function recordForClikCodeAgent(entry: McpServerEntry): Promise<McpInstallResult> {
+  try {
+    await writeMcpConfigEntry(mcpConfigFilePath(stateDirectory()), MCP_SERVERS_KEY, entry);
+    return { harness: 'clikcode', ok: true };
+  } catch (error) {
+    return { harness: 'clikcode', ok: false, detail: error instanceof Error ? error.message : 'could not write config' };
+  }
 }

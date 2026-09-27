@@ -16,6 +16,7 @@ import type { ToolContext, ToolDefinition } from '../tool-contract.js';
 import { loadMcpServers, parseMcpServerEntry, type McpServerSpec } from './config.js';
 import { McpManager } from './manager.js';
 import { formatMcpResult, mcpToolName, mcpToolParameters } from './tools.js';
+import { writeMcpConfigEntry } from '../../harness/mcp-registry.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-mcp-server.mjs', import.meta.url));
 
@@ -106,6 +107,16 @@ describe('config', () => {
     expect(parseMcpServerEntry('c', { type: 'sse', url: 'https://x.test/sse' })).toMatchObject({ transport: 'sse' });
     expect(parseMcpServerEntry('d', { command: 'x', disabled: true })).toBeUndefined();
     expect(parseMcpServerEntry('e', { args: ['nothing to run'] })).toBeUndefined();
+  });
+
+  it('reads back exactly what the harness registry writes for clikcode mcp add', async () => {
+    const path = join(dir, 'mcp.json');
+    await writeMcpConfigEntry(path, 'mcpServers', { name: 'files', target: 'npx', args: ['-y', 'pkg', '/tmp'] });
+    await writeMcpConfigEntry(path, 'mcpServers', { name: 'remote', target: 'https://mcp.example.com/mcp' });
+    expect((await loadMcpServers(dir)).servers).toEqual([
+      { name: 'files', transport: 'stdio', command: 'npx', args: ['-y', 'pkg', '/tmp'], env: {} },
+      { name: 'remote', transport: 'http', url: 'https://mcp.example.com/mcp', headers: {} },
+    ]);
   });
 
   it('treats a missing file as no servers and a broken one as a note', async () => {
@@ -324,5 +335,29 @@ describe('in a turn', () => {
     const results = client.requests[2].items.filter((item) => item.type === 'tool_result');
     expect(results.map((item) => item.type === 'tool_result' && [item.output.split('\n')[0], item.isError ?? false]))
       .toEqual([['echo: hello', false], ['the widget is jammed', true]]);
+  });
+
+  it('remembers "always" for exactly that MCP tool, from the next turn on', async () => {
+    const { tools } = await manager([fake('fake')]).toolset();
+    const rules: Array<string | undefined> = [];
+    const stateDir = join(dir, 'state');
+    const turn = async (id: string) => {
+      await runGatewayHarnessTurn({
+        sessionId: id, cwd: dir, stateDir, homeDir: dir, prompt: 'go', permissionMode: 'ask', extraTools: tools,
+        modelClient: new ScriptedModelClient([
+          { toolCalls: [{ id: 'c1', name: 'mcp__fake__fail', args: {} }] },
+          { toolCalls: [{ id: 'c2', name: 'mcp__fake__picture', args: {} }] },
+          { text: 'done' },
+        ]),
+        onApproval: async (_title, _detail, rule) => { rules.push(rule); return 'always'; },
+      });
+      disposeSessionState(stateDir, id);
+    };
+    await turn('mcp-always-1');
+    expect(rules).toEqual(['mcp__fake__fail', 'mcp__fake__picture']);
+    const saved = JSON.parse(await readFile(join(dir, '.clikcode', 'settings.local.json'), 'utf8'));
+    expect(saved.permissions.allow).toEqual(['mcp__fake__fail', 'mcp__fake__picture']);
+    await turn('mcp-always-2');
+    expect(rules).toHaveLength(2);
   });
 });
