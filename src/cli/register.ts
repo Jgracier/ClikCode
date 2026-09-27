@@ -27,6 +27,11 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // (binds a socket, writes a runtime record) that only makes sense as a
   // spawn target.
   program.command('session-worker <id>', { hidden: true }).action((id: string) => runSessionWorker(id));
+  // An editor extension's client (ide/bridge.ts), over an IPC channel the
+  // extension opens; and the terminal it runs a vendor sign-in in. Hidden for
+  // the same reason as session-worker: neither is anything to type.
+  program.command('ide-bridge', { hidden: true }).action(async () => (await import('../ide/bridge.js')).runIdeBridge(config));
+  program.command('ide-terminal <spec>', { hidden: true }).action(async (spec: string) => (await import('../ide/terminal.js')).runIdeTerminal(spec));
   program.command('start').description('Start the optional loopback-only control API')
     .option('--port <port>', 'Optional explicit loopback port; default is OS-assigned')
     .action((options) => aiStart(config, options));
