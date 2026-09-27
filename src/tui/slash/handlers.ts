@@ -7,6 +7,7 @@
  * need live beside this file, one concern each.
  */
 
+import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';
 import { hermesTurboFitModelId } from '../../harness/accounts/hermes-discovery.js';
 import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
 import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
@@ -40,7 +41,7 @@ import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
-import { aiSessionClose, aiSessionLeave, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, assertRealModel } from '../../commands/ai/sessions.js';
+import { aiSessionClose, aiSessionLeave, applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, assertRealModel } from '../../commands/ai/sessions.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
 import { capabilitiesText } from './capabilities-text.js';
 import { compactConversation } from './compact.js';
@@ -55,7 +56,7 @@ import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNot
 
 function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
-  const who = session.route === 'gateway' ? 'ClikDeploy Gateway' : harness?.displayName ?? 'This provider';
+  const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : harness?.displayName ?? 'This provider';
   return `${who} does not expose an undo/rewind operation to ClikCode, so /undo is not available here. ClikCode will not fake it: use /diff to see what changed and git to revert it${harness?.nativeSlashPassthrough ? `, or send the vendor's own command with //rewind` : ''}.`;
 }
 
@@ -107,15 +108,17 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   permissions: async ({ state, session, words }) => {
     const value = words.shift()?.toLowerCase();
-    const gateway = session.route === 'gateway';
-    const harness = !gateway && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-    if (!gateway && !harness) throw new Error('Choose a provider before setting permissions.');
+    // ClikCode's own agent implements every mode itself; a vendor harness
+    // only the ones it carries to a real flag.
+    const agent = isClikCodeAgent(session);
+    const harness = !agent && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!agent && !harness) throw new Error('Choose a provider before setting permissions.');
     const controls = sessionPermissionModes(session, harness);
     if (!value) {
       if (!controls.length) throw new Error(`${harness!.displayName} does not map ClikCode's permission modes to a real flag.`);
       return emitHarnessOutput({ panel: 'permissions', session, controls });
     }
-    if (gateway) {
+    if (agent) {
       if (!controls.includes(value as AiHarnessPermissionMode)) throw new Error('permissions must be ask, bypass, or auto');
       session.permissionMode = value as AiHarnessPermissionMode;
     } else setSessionHarnessOption(session, harness!, 'permissions', value);
@@ -334,9 +337,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     }
     if (!value) throw new Error(`usage: /settings ${setting} <value>`);
     if (setting === 'route') {
-      if (value !== 'local' && value !== 'gateway') throw new Error('route must be local or gateway');
-      if (value === 'gateway') applyGatewaySessionPolicy(session);
-      else if (session.route === 'gateway') applyFreshLocalSessionPolicy(state, session);
+      if (!isAiHarnessRoute(value)) throw new Error(ROUTE_CHOICES_TEXT);
+      if (value === 'gateway' || value === 'clikcode-local') applyClikCodeAgentSessionPolicy(session, value);
+      else if (isClikCodeAgent(session)) applyFreshLocalSessionPolicy(state, session);
       else session.route = 'local';
     } else if (setting === 'account') {
       // One way to switch accounts, with /account's checks -- this copy of it
@@ -398,8 +401,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       if (!labelOrId) throw new Error('usage: /accounts use <label-or-id>');
       const account = state.accounts.find((item) => item.id === labelOrId || item.label.toLowerCase() === labelOrId.toLowerCase());
       if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
-      const leavingGateway = session.route === 'gateway';
-      if (leavingGateway) applyFreshLocalSessionPolicy(state, session);
+      // Leaving either agent route: an account means a vendor harness.
+      const leavingAgentRoute = isClikCodeAgent(session);
+      if (leavingAgentRoute) applyFreshLocalSessionPolicy(state, session);
       if (session.nativeHarness) {
         const selectedHarness = localHarnessForCommand(session.nativeHarness);
         const accountCommand = localHarnessForProvider(account.provider)?.command ?? account.provider;
@@ -445,7 +449,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       account.quotaRetryAt = undefined;
       session.provider = account.provider;
       session.route = 'local';
-      if (leavingGateway) {
+      if (leavingAgentRoute) {
         const defaults = resolveDefaultSettings(state, account.provider);
         // Coming back from the gateway the session has no local model yet. A
         // remembered provider setting wins; otherwise resolve a real one from
@@ -507,7 +511,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   capabilities: async ({ session }) => emitHarnessOutput({ panel: 'capabilities', text: capabilitiesText(session) }),
   native: async ({ id, session, args }) => {
     if (!args) throw new Error('usage: /native <text>  (or //text)');
-    if (session.route === 'gateway') throw new Error('Native harness commands apply only to local harnesses.');
+    if (isClikCodeAgent(session)) throw new Error('Native harness commands apply only to local harnesses.');
     await sendSessionTurn(id, args);
   },
   compact: async ({ id, session, args }) => compactConversation(id, session, args, sendSessionTurn),
@@ -563,7 +567,7 @@ async function keepEffortValidFor(
 }
 
 /** A real model for a local account's harness, or undefined when its harness
- * publishes none. Shared by both leavingGateway branches so they cannot
+ * publishes none. Shared by both leavingAgentRoute branches so they cannot
  * disagree about what "no model yet" resolves to. */
 async function resolveLocalModelFor(
   account: { provider: string; id: string },
@@ -637,7 +641,7 @@ export async function aiSessionCommand(id: string, input: string, inferred = fal
     return id;
   }
   if (route.kind === 'native') {
-    if (session.route === 'gateway') throw new Error('Native harness commands apply only to local harnesses.');
+    if (isClikCodeAgent(session)) throw new Error('Native harness commands apply only to local harnesses.');
     await sendSessionTurn(id, route.prompt);
     return id;
   }

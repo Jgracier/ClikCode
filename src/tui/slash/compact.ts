@@ -8,6 +8,7 @@ import { conversationIdFor, hasConversationContent } from '../../session/options
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession } from '../../commands/ai/conversations.js';
 import { sessionHarness } from './context.js';
+import { AGENT_COMPACTS_ITSELF, isClikCodeAgent } from '../../session/route.js';
 
 const COMPACT_PROMPT = 'Summarize this conversation so far for a fresh session that will continue the work. Include: the goal, decisions made and why, files created or changed (with paths), commands that matter, the current state, and the concrete next steps. Be complete but concise. Output only the summary.';
 
@@ -19,7 +20,9 @@ const COMPACT_PROMPT = 'Summarize this conversation so far for a fresh session t
 export async function compactConversation(
   id: string, session: HarnessSession, focus: string, send: (id: string, prompt: string) => Promise<void>,
 ): Promise<string | void> {
-  if (session.route === 'gateway') throw new Error('ClikDeploy Gateway manages its own context; /compact applies only to local harnesses.');
+  // ClikCode's own agent (Gateway or ClikCode Local) compacts its context
+  // locally as it nears the window; this command is the vendor-harness path.
+  if (isClikCodeAgent(session)) throw new Error(AGENT_COMPACTS_ITSELF);
   if (!hasConversationContent(session)) throw new Error('There is nothing to compact yet.');
   const harness = sessionHarness(session);
   if (harness?.nativeSlashPassthrough && session.nativeSessionId) {
