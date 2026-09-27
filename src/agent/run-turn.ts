@@ -11,6 +11,7 @@ import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
 import { sessionState } from './session-state.js';
 import { discoverSkills, SKILL_TOOL, skillsPromptSection } from './skills.js';
 import { defaultTools, mergeTools, toolSpecs } from './tools/registry.js';
+import { exposeTools } from './mcp/deferred.js';
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
 import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind, type ModelStepResult, type ModelToolCall, type TokenUsage } from './model-client.js';
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
@@ -121,7 +122,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   if (input.planMode !== undefined) session.plan = { active: input.planMode };
   const checkpoints = new FileCheckpointStore(input.stateDir);
   const store = input.subagent ? memoryConversationStore(input.subagent.transcript) : new ConversationStore(input.stateDir, input.sessionId);
-  const tools = mergeTools(input.tools ?? defaultTools(), input.extraTools);
+  const exposure = exposeTools(mergeTools(input.tools ?? defaultTools(), input.extraTools));
+  const tools = exposure.all;
   const maxSteps = Math.max(1, Math.floor(input.maxSteps ?? DEFAULT_MAX_STEPS));
 
   const [loaded, rules, baseSystem] = await abortable(Promise.all([
@@ -208,7 +210,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       return { ...result, output: capHeadTail(result.output).text };
     };
     if (!tool) {
-      return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(tools, session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
+      return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(exposure.advertised(items), session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
     }
     if (call.argumentsError) {
       return finish({ output: `The arguments for ${tool.name} were not a valid JSON object (${call.argumentsError}). Call the tool again with a single JSON object.`, isError: true });
@@ -321,7 +323,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       try {
         step = await abortable(input.modelClient.step({
           system, items, signal,
-          tools: finalOnly ? [] : toolSpecs(visibleTools(tools, session.plan.active)),
+          tools: finalOnly ? [] : toolSpecs(visibleTools(exposure.advertised(items), session.plan.active)),
           onTextDelta: (text) => {
             if (!text || signal?.aborted) return;
             if (!streamedThisStep && needsSeparator) input.onResponseDelta?.('\n\n', 'append');

@@ -82,7 +82,11 @@ export class McpManager {
     await Promise.all([...this.servers.values()].map((state) => this.ensureReady(state)));
     const tools: ToolDefinition[] = [];
     const taken = new Set<string>();
-    for (const state of this.servers.values()) {
+    // By name, not by connection order: a server restarted or reconnected
+    // would otherwise move, changing the tool list and with it the prompt
+    // prefix every cache depends on.
+    const ordered = [...this.servers.values()].sort((a, b) => (a.spec.name < b.spec.name ? -1 : a.spec.name > b.spec.name ? 1 : 0));
+    for (const state of ordered) {
       if (!state.client || !state.tools) {
         // Said once per failure, not on every turn: a server that stays down
         // (one needing a login the agent cannot do) would otherwise add the

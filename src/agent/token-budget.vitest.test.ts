@@ -60,11 +60,11 @@ export function syntheticMcpTools(): ToolDefinition[] {
       type: 'object', required: ['id'],
       properties: {
         id: { type: 'string', description: 'Identifier of the object to act on, as returned by the list tools.' },
-        title: { type: 'string', description: 'Optional new title.' },
         filters: { type: 'object', properties: { status: { type: 'string', enum: ['open', 'closed', 'all'] }, owner: { type: 'string' } } },
       },
     },
     class: 'exec',
+    mcp: { server, tool: `tool_${String(index).padStart(2, '0')}` },
     label: () => `${server} tool ${index}`,
     run: async () => ({ output: `result of ${server} tool ${index}` }),
   });
@@ -186,6 +186,13 @@ describe('token budget of a 20-step coding session', () => {
     result.reusedPrefix.forEach((reused, index) => {
       expect({ step: index + 2, reused }).toEqual({ step: index + 2, reused: result.previousSize[index] });
     });
+  });
+
+  it('keeps large MCP tool sets out of the prompt until the model asks for them', async () => {
+    const withMcp = measure(await runSession({ sessionId: 'mcp', extraTools: syntheticMcpTools() }));
+    const without = measure(await runSession({ sessionId: 'plain' }));
+    // A listing of the servers costs a little; their schemas do not ride along.
+    expect(withMcp.firstStep.tools - without.firstStep.tools).toBeLessThan(1_200);
   });
 
   it('writes the measured table when TOKEN_REPORT is set', async () => {
