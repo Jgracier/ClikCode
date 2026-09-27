@@ -96,7 +96,7 @@ export const QUOTA_MARK_DEFAULT_MS = 5 * 60 * 60 * 1000;
 /** When the refusal was recorded. Marks written before `quotaExhaustedAt`
  * existed are dated by the refusal the usage learner stored with them --
  * recordRefused runs at the same moment the mark is set. */
-function quotaMarkedAt(account: AiHarnessAccount): number | undefined {
+export function quotaMarkedAt(account: AiHarnessAccount): number | undefined {
   const explicit = Date.parse(account.quotaExhaustedAt ?? '');
   if (Number.isFinite(explicit)) return explicit;
   const last = Date.parse(account.usageLearning?.hits?.at(-1)?.at ?? '');
