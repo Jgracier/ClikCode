@@ -2,6 +2,8 @@
  * session, and the policy each kind of session starts with. */
 
 import { turboFitSessionClosed } from './turbofit.js';
+import { releaseHeldLocalModel } from './local-model.js';
+import { catalogModel, resolveLocalModelId } from '../../local-models/catalog.js';
 import { isBlankConversation } from '../../session/options.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { randomUUID } from 'node:crypto';
@@ -24,7 +26,7 @@ import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession } from './conversations.js';
 import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';
 
-const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, model, effort, failover, and native sessions cannot be set per session yet.';
+const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, effort, failover, and native sessions cannot be set per session (a model can, from ClikCode Local\'s catalog).';
 
 /** A model a user names on `sessions create`/`sessions set` must be one the
  * harness actually publishes -- the same catalog its own picker draws from
@@ -63,13 +65,16 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
 /** ClikCode Local runs the same agent as the Gateway route, on a model this
  * machine serves, so it sheds the same vendor-harness fields. What differs is
  * everything the Gateway service decided: there is no platform routing to own
- * the model or effort, so `model` stays unset (the engine's own default) and
- * effort is `auto` until the engine publishes a control for it. */
+ * the model or effort. The model is one of the engine's catalog, kept when
+ * the session already names one (a `sessions set --model` re-applies this
+ * policy) and otherwise unset until the engine picks on the first turn; a
+ * vendor's model id never survives the move. Effort is `auto` until the
+ * engine publishes a control for it. */
 export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
   session.route = 'clikcode-local';
   session.accountId = null;
   session.provider = 'clikcode-local';
-  session.model = null;
+  session.model = session.model && catalogModel(session.model) ? session.model : null;
   session.effort = 'auto';
   session.accountFailover = 'never';
   // gatewayConfirmed marks an explicit Gateway choice; this is not one.
@@ -130,9 +135,10 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   if (options.route === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
     throw new Error('ClikDeploy Gateway account, provider, model, effort, and failover are selected by platform routing and cannot be overridden per session.');
   }
-  if (options.route === 'clikcode-local' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
+  if (options.route === 'clikcode-local' && (options.account || options.provider || options.effort || options.accountFailover)) {
     throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
   }
+  const localModel = options.route === 'clikcode-local' && options.model ? resolveLocalModelId(options.model) : undefined;
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   // `--provider claude` means Claude Code, the same name /claude and
   // `accounts login claude` take; the provider id (`anthropic`) still works.
@@ -177,7 +183,10 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     ...(options.route === 'gateway' ? { gatewayConfirmed: true as const } : {}),
     createdAt: now, updatedAt: now, status: 'active',
   };
-  if (options.route === 'clikcode-local') applyClikCodeLocalSessionPolicy(session);
+  if (options.route === 'clikcode-local') {
+    applyClikCodeLocalSessionPolicy(session);
+    if (localModel) session.model = localModel;
+  }
   state.sessions.push(session);
   await writeState(state);
   // Bound to an account now, as the app binds one, so the next command can
@@ -292,6 +301,8 @@ async function endSession(id: string, intent: 'close' | 'leave'): Promise<void> 
   // A closed session no longer holds a TurboFit local model running.
   if (intent === 'close') {
     await turboFitSessionClosed(state.accounts.find((item) => item.id === session.accountId), session.id).catch(() => undefined);
+    // Nor a ClikCode Local one, if this process held it.
+    await releaseHeldLocalModel(session.id);
   }
   // Never started: not kept, by the same rule /resume hides it by.
   if (isBlankConversation(session)) {
@@ -334,7 +345,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (effectiveRoute === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
     throw new Error('ClikDeploy Gateway account, provider, model, effort, failover, and native sessions are selected by platform routing and cannot be overridden per session.');
   }
-  if (effectiveRoute === 'clikcode-local' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
+  if (effectiveRoute === 'clikcode-local' && (options.account || options.provider || options.effort || options.accountFailover || options.nativeSession)) {
     throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
   }
   const account = options.account === undefined
@@ -364,7 +375,8 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (effectiveRoute === 'local' && (options.account || options.provider) && !selectedHarness) {
     throw new Error(`unknown local provider "${options.provider ?? account?.provider}"`);
   }
-  const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
+  const model = options.model === undefined ? undefined
+    : effectiveRoute === 'clikcode-local' ? resolveLocalModelId(options.model) : normalizeModelWord(options.model);
   if (model && selectedHarness && !(selectedHarness.modelArgvPrefix !== undefined || selectedHarness.acp?.listsModels)) {
     throw new Error(`${selectedHarness.displayName} does not publish a model selector.`);
   }

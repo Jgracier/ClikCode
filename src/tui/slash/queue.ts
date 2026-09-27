@@ -76,7 +76,7 @@ export async function commandDuringTurn(sessionId: string, line: string): Promis
   const route = routeSlashInput(line, slashRouteContextFor(
     session, sessionHarness(session), (path) => existsSync(expandHomePath(path)),
   ));
-  if (slashRouteAppliesDuringTurn(route)) {
+  if (slashRouteAppliesDuringTurn(route, session)) {
     // Straight through to the same handler the composer would reach between
     // turns. It reads state itself, so nothing here writes first.
     await aiSessionCommand(sessionId, line);

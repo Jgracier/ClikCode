@@ -76,6 +76,7 @@ interface SlashCommandEntry {
 const always = (): SlashAvailability => ({ available: true });
 const GATEWAY_MANAGED = 'ClikDeploy Gateway selects this by platform policy; it applies only to local harnesses.';
 const CLIKCODE_LOCAL_AGENT = "ClikCode Local runs ClikCode's own agent; this applies only to vendor harnesses.";
+const CLIKCODE_LOCAL_NO_EFFORT = 'ClikCode Local runs each model with its own default reasoning; llama.cpp publishes no effort control to set.';
 /** Vendor-harness commands: neither route that runs ClikCode's own agent has
  * a harness for them to reach. The reason names why for each route. */
 const localOnly = (session: HarnessSession | undefined): SlashAvailability => {
@@ -147,12 +148,19 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
     argHint: '[name]',
     duringTurn: 'apply',
     availability: (session, harness) => {
+      // ClikCode Local's models are its engine's catalog, not a harness's.
+      if (session?.route === 'clikcode-local') return { available: true };
       const base = needsHarness('choosing a model')(session, harness);
       if (!base.available) return base;
       return (harness!.modelArgvPrefix !== undefined || harness!.acp?.listsModels) ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
     },
   }),
-  entry('effort', 'Settings', 'reasoning level', { argHint: '[level]', availability: needsHarness('setting effort'), duringTurn: 'apply' }),
+  entry('effort', 'Settings', 'reasoning level', {
+    argHint: '[level]', duringTurn: 'apply',
+    availability: (session, harness) => (session?.route === 'clikcode-local'
+      ? { available: false, reason: CLIKCODE_LOCAL_NO_EFFORT }
+      : needsHarness('setting effort')(session, harness)),
+  }),
   entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),
@@ -364,7 +372,11 @@ type SlashRoute =
 /** Whether this route can be applied to a session while a turn is streaming.
  * Only the argument form: without one, `/model` is a picker and a picker
  * needs the screen the answer is being written on. */
-export function slashRouteAppliesDuringTurn(route: SlashRoute): boolean {
+export function slashRouteAppliesDuringTurn(route: SlashRoute, session?: HarnessSession): boolean {
+  // `/model <id>` on ClikCode Local is not a state write: it loads a model,
+  // which needs the waiting line the answer is using, and moving the lease
+  // mid-turn could stop the server the running turn is talking to.
+  if (route.kind === 'command' && route.entry.name === 'model' && session?.route === 'clikcode-local') return false;
   return route.kind === 'command' && route.entry.duringTurn === 'apply' && route.args.trim().length > 0;
 }
 

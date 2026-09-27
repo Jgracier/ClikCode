@@ -24,7 +24,7 @@ import { formatBytes } from './download.js';
 import { probeHardware, type HardwareProfile } from './hardware.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, waitForHealth } from './launch.js';
 import {
-  processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, startSupervisor, stopServer, sweepOrphan,
+  processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer, sweepOrphan,
   withStartLock, writeLease, type ServerRecord,
 } from './lifecycle.js';
 import { machineKey, measureServer, readMeasurements, writeMeasurement } from './measure.js';
@@ -32,7 +32,7 @@ import { ensureModelFile, missingBytes } from './models.js';
 import { preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
 
-export { LOCAL_MODEL_CATALOG } from './catalog.js';
+export { LOCAL_MODEL_CATALOG, localModelLabel, resolveLocalModelId } from './catalog.js';
 export type { CatalogModel } from './catalog.js';
 
 export interface LocalModelProgress {
@@ -146,11 +146,14 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
 
   // Already running: joined as it is, with no probe and no fit check (its
   // own memory would count against it). With no pick, any running catalog
-  // model is used rather than loading a second one beside it.
+  // model is used rather than loading a second one beside it. A session
+  // another live process already holds (the terminal, for its turn worker)
+  // is joined without a lease of this process's own: the model follows the
+  // process that took it.
   const running = pick ? [await liveServer(pick)].filter((record): record is ServerRecord => Boolean(record)) : await runningModels();
   const joinable = running.sort((left, right) => (catalogModel(right.modelId)?.quality ?? 0) - (catalogModel(left.modelId)?.quality ?? 0))[0];
   if (joinable && (await httpJson(joinable.port, 'GET', '/health', undefined, 3000)).status === 200) {
-    await writeLease(joinable.modelId, options.sessionId);
+    if (!await sessionHeldElsewhere(joinable.modelId, options.sessionId)) await writeLease(joinable.modelId, options.sessionId);
     await removeLeases(options.sessionId, joinable.modelId);
     return { baseUrl: `http://127.0.0.1:${joinable.port}/v1`, model: joinable.alias, contextWindow: joinable.context };
   }
@@ -236,10 +239,16 @@ export async function stopLocalModel(modelId: string): Promise<void> {
   await stopServer(modelId);
 }
 
+let exitHookInstalled = false;
+
 /** Call once at startup: every lease this process holds is removed as it
  * exits. The supervisor would notice the dead process anyway; this makes
  * it immediate. */
 export function releaseLocalModelsOnExit(): void {
+  // Idempotent, so every entry point that may take a lease can call it
+  // without stacking one exit listener per call.
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
   process.once('exit', removeAllOwnLeasesSync);
 }
 
