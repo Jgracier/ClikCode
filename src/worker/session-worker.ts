@@ -22,6 +22,9 @@ import { BroadcastObserver } from './broadcast-observer.js';
 import { decodeFrames, encodeFrame, type ClientCommand } from './protocol.js';
 import { disposeSessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
+import { isClikCodeAgent, isGatewayService } from '../session/route.js';
+import { gatewayModels } from '../gateway/models.js';
 import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socketPathFor, writeWorkerRecord, currentWorkerBuild } from './registry.js';
 
 /** No attached client and no turn running, for this long: the worker exits
@@ -74,6 +77,17 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (!found) throw new Error(`AI session "${sessionId}" was not found`);
     const account = found.accountId ? latest.accounts.find((item) => item.id === found.accountId)?.label : undefined;
     return { session: found, account };
+  };
+
+  /** Ready for the route the conversation is on now -- or, off an agent
+   * route, nothing left running that only an agent turn would use. */
+  const prepareForRoute = async (): Promise<void> => {
+    const { session: current } = await currentSessionAndAccount();
+    if (!isClikCodeAgent(current)) { await releaseMcp(); return; }
+    prepareMcp(stateDirectory());
+    // Opens the connection the first step will reuse, and has the model list
+    // ready for the picker.
+    if (isGatewayService(current)) void gatewayModels({ config }).catch(() => undefined);
   };
 
   const broadcastNotice = (message: string): void => {
@@ -136,6 +150,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       observer.render((await currentSessionAndAccount()).session);
       observer.stopWaiting();
       turnRunning = false;
+      // Everyone left while it ran: now nothing is using what it started.
+      if (observer.attachedCount === 0) void releaseMcp();
       scheduleIdleExit();
     }
   };
@@ -160,6 +176,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (command.type === 'approval-response') { observer.resolveApproval(command.id, command.approved); return; }
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
     if (command.type === 'refresh') { observer.render((await currentSessionAndAccount()).session); return; }
+    if (command.type === 'prepare') { await prepareForRoute(); return; }
+    if (command.type === 'release') { await releaseMcp(); return; }
     if (command.type === 'detach') { socket.end(); return; }
     if (command.type === 'cancel') {
       // Nothing running is not an error -- a cancel racing the turn's own
@@ -214,6 +232,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     socket.on('close', () => {
       connections.delete(socket);
       observer.detach(socket);
+      // The conversation is closed on every terminal that had it: nothing
+      // local stays running for it. A running turn keeps what it is using;
+      // the next turn starts servers again if it needs them.
+      if (observer.attachedCount === 0 && !turnRunning) void releaseMcp();
       scheduleIdleExit();
     });
     socket.on('error', () => socket.destroy());

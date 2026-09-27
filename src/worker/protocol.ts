@@ -37,6 +37,12 @@ export type ClientCommand =
    * synchronize field-by-field -- the source of truth is the state file
    * either way, this just says "yours might be stale now." */
   | { type: 'refresh' }
+  /** Get ready for the conversation's route: on an agent route (the Gateway,
+   * ClikCode Local) start its MCP servers and, for the Gateway, open the
+   * connection and fetch its model list; on any other route stop them. */
+  | { type: 'prepare' }
+  /** Stop everything local this worker started for the conversation. */
+  | { type: 'release' }
   | { type: 'detach' };
 
 /** What the worker tells an attached client. `snapshot` is always the first

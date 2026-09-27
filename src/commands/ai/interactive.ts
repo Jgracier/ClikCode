@@ -70,7 +70,7 @@ import { interactiveSessionPicker } from '../../tui/pickers/session.js';
 import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
-import { closeAllWorkerClients, runTurnThroughWorker } from '../../worker/turn-bridge.js';
+import { closeAllWorkerClients, prepareSessionWorker, releaseSessionWorker, runTurnThroughWorker } from '../../worker/turn-bridge.js';
 
 // The CLIKCODE_USE_WORKER escape hatch is gone: an ANSI terminal always runs
 // its turns through a session worker now. What remains below is not a
@@ -279,6 +279,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let autoResent: string | undefined;
   let synchronizedSessionId = id;
   let transportSessionId = id;
+  /** `<session id> <route>` this terminal last prepared a worker for. */
+  let preparedRoute: string | undefined;
   try {
     while (true) {
       let line: string;
@@ -301,6 +303,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // Whatever the last command or turn did to the conversation this
         // terminal shows, it holds a local model for that one alone.
         await reconcileLocalModelLeases(latest);
+        // The same for ClikCode's own agent: a conversation that is now on the
+        // Gateway (or ClikCode Local) has its MCP servers started and the
+        // Gateway connection opened before the first message; one that moved
+        // to a vendor harness, or that this terminal left, stops them.
+        const routeKey = `${latest.id} ${latest.route}`;
+        if (routeKey !== preparedRoute) {
+          const leftId = preparedRoute?.split(' ')[0];
+          if (leftId && leftId !== latest.id) releaseSessionWorker(leftId);
+          preparedRoute = routeKey;
+          void prepareSessionWorker(latest.id, { spawn: isClikCodeAgent(latest) }).catch(() => undefined);
+        }
         activeWorkspace = latest.workspace ?? process.cwd();
         if (synchronizedSessionId !== id) {
           if (await synchronizeNativeTranscript(latestState, latest)) await writeState(latestState);

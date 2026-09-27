@@ -28,7 +28,10 @@ const TOOLS = [
 
 let cancelled = [];
 
+// FAKE_MCP_SILENT: alive, reading, never answering -- a server still starting
+// (an `npx -y` download) or one that cannot reach what it needs.
 createInterface({ input: process.stdin }).on('line', (line) => {
+  if (process.env.FAKE_MCP_SILENT) return;
   if (!line.trim()) return;
   const message = JSON.parse(line);
   if (message.method === 'notifications/cancelled') { cancelled.push(message.params.requestId); return; }
