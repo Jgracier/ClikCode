@@ -136,11 +136,17 @@ async function searchTavily(key: string, call: BackendCall): Promise<SearchResul
 }
 
 async function searchDuckDuckGo(call: BackendCall): Promise<SearchResult[]> {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(call.query)}`;
-  // DuckDuckGo serves its bot check to browser-looking user agents far more
-  // often than to an honest one, so the plain ClikCode agent is deliberate.
-  const { status, text } = await request('DuckDuckGo', url, call, { headers: { accept: 'text/html' } });
-  if (status === 202 || /anomaly-modal|anomaly\.js/.test(text)) throw new BackendError('DuckDuckGo answered with its bot check instead of results; try again shortly, or set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY');
+  // A POST of the search form, as the page itself submits it: measured from
+  // this machine, a GET of /html/?q= drew the bot check on 3 of 5 queries
+  // while the same queries POSTed drew it on none.
+  const { status, text } = await request('DuckDuckGo', 'https://html.duckduckgo.com/html/', call, {
+    method: 'POST',
+    headers: { accept: 'text/html', 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ q: call.query }).toString(),
+  });
+  // No retry: measured here, four quick searches trip a lockout that lasts
+  // well past 30 s, and retrying inside it only prolongs it.
+  if (status === 202 || /anomaly-modal|anomaly\.js/.test(text)) throw new BackendError('DuckDuckGo answered with its bot check instead of results (it does this after a burst of searches); wait a minute before searching again, or set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY');
   if (status !== 200) throw httpFailure('DuckDuckGo', status, '');
   const results = parseDuckDuckGoHtml(text);
   if (!results.length && !/class="no-results"|No\s+results\./i.test(text) && /<div class="result\b/.test(text)) {

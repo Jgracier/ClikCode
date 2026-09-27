@@ -133,7 +133,10 @@ describe('web_search tool', () => {
     const result = await tool().run({ query: 'typescript satisfies operator' }, context(net));
     expect(result.isError).toBeFalsy();
     expect(net.calls).toHaveLength(1);
-    expect(net.calls[0].url.toString()).toBe('https://html.duckduckgo.com/html/?q=typescript%20satisfies%20operator');
+    expect(net.calls[0].url.toString()).toBe('https://html.duckduckgo.com/html/');
+    expect(net.calls[0].options.method).toBe('POST');
+    expect(net.calls[0].options.headers['content-type']).toBe('application/x-www-form-urlencoded');
+    expect(net.calls[0].options.body).toBe('q=typescript+satisfies+operator');
     expect(net.calls[0].options.headers['user-agent']).toBe('ClikCode/1');
     const lines = result.output.split('\n');
     expect(lines[0]).toBe('Search results for "typescript satisfies operator" via DuckDuckGo:');
@@ -211,7 +214,7 @@ describe('web_search tool', () => {
     expect(result.output).toBe([
       'Web search failed.',
       '- Tavily returned HTTP 429 (rate limited or out of quota): slow down',
-      '- DuckDuckGo answered with its bot check instead of results; try again shortly, or set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY',
+      '- DuckDuckGo answered with its bot check instead of results (it does this after a burst of searches); wait a minute before searching again, or set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY',
     ].join('\n'));
   });
 
