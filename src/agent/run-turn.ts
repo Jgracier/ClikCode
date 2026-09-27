@@ -3,7 +3,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { ConversationStore, memoryConversationStore } from './conversation.js';
-import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, COMPACTION_THRESHOLD } from './context.js';
+import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, toolOutputCap } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, suggestPermissionRule, visibleTools, type PermissionRules } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
@@ -191,6 +191,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
 
   const toolContext = (callId: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs, sessionId: input.sessionId, turnId, stateDir: input.stateDir, homeDir, signal, checkpoints, session, callId, emitOutput,
+    outputCap: toolOutputCap(contextWindow),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
     ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
@@ -207,7 +208,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
         ...(output ? { output } : {}), ...(result.diff ? { diff: result.diff } : {}),
       });
-      return { ...result, output: capHeadTail(result.output).text };
+      return { ...result, output: capHeadTail(result.output, toolOutputCap(contextWindow), 'narrow the request to see the middle').text };
     };
     if (!tool) {
       return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(exposure.advertised(items), session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
@@ -306,7 +307,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       const system = session.plan.active ? `${baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : baseSystem;
       if (shouldCompact(estimateContextTokens(system, items, lastStepUsage, items.slice(itemsAtLastUsage)), window)) {
         input.onPhase?.('compacting context');
-        const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, targetTokens: window * COMPACTION_THRESHOLD * 0.75 }), signal);
+        const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, targetTokens: compactionThreshold(window) * 0.75 }), signal);
         if (compacted.stage !== 'none') {
           items = compacted.items;
           lastStepUsage = undefined;

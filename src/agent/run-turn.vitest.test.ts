@@ -313,6 +313,28 @@ describe('runGatewayHarnessTurn', () => {
     expect(later.client.requests[0].tools.map((tool) => tool.name)).toContain('mcp__big__t4');
   });
 
+  it('sizes tool output to a small window: read_file pages instead of losing its middle', async () => {
+    await fs.writeFile(path.join(cwd, 'long.txt'), Array.from({ length: 2000 }, (_, i) => `line ${i} ${'z'.repeat(30)}`).join('\n'));
+    const h = harness([
+      { toolCalls: [{ id: 'r', name: 'read_file', args: { path: 'long.txt' } }], contextWindow: 16_384 },
+      { toolCalls: [{ id: 'b', name: 'bash', args: { command: 'seq 1 20000' } }] },
+      { text: 'ok' },
+    ]);
+    await runGatewayHarnessTurn(h.input);
+    const results = h.client.requests[2].items.filter((item) => item.type === 'tool_result');
+    const read = results[0].type === 'tool_result' ? results[0].output : '';
+    expect(Buffer.byteLength(read)).toBeLessThanOrEqual(8 * 1024);
+    expect(read).toMatch(/^1\tline 0 /);
+    expect(read).toMatch(/\[Showing lines 1-\d+ of 2000\. Continue with offset=\d+\.\]$/);
+    expect(read).not.toContain('truncated');
+    // bash keeps its head, tail and where the full log went.
+    const bash = results[1].type === 'tool_result' ? results[1].output : '';
+    expect(Buffer.byteLength(bash)).toBeLessThanOrEqual(8 * 1024 + 300);
+    expect(bash).toMatch(/^1\n2\n/);
+    expect(bash).toMatch(/full output saved to .*\.log/);
+    expect(bash).toMatch(/20000$/);
+  });
+
   it('resumes a session from its transcript', async () => {
     const first = harness([{ text: 'first answer' }]);
     await runGatewayHarnessTurn(first.input);

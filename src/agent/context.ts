@@ -15,6 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnPortable, terminatePortable } from '../harness/transport/spawn.js';
 import type { ConversationItem, ModelClient, TokenUsage } from './model-client.js';
+import { OUTPUT_CAPS } from './security.js';
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const COMPACTION_THRESHOLD = 0.8;
@@ -214,8 +215,29 @@ export function estimateContextTokens(system: string, items: readonly Conversati
   return estimateTextTokens(system) + items.reduce((sum, item) => sum + estimateItemTokens(item), 0);
 }
 
+/** Where compaction starts, in tokens. 80% of a large window, but never
+ * less than ~8k tokens of headroom below the top: the check runs BEFORE a
+ * step, and that step's reply plus the next tool result must still fit. On
+ * the 16-32k windows a local model runs with, 20% is 3-6k tokens, which one
+ * file read overflows -- and an overflow costs a failed request (seconds to
+ * minutes of prompt reading on a CPU) before compaction runs anyway. */
+export function compactionThreshold(contextWindow: number | undefined): number {
+  const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
+  const headroom = Math.max(window * (1 - COMPACTION_THRESHOLD), Math.min(8_192, window * 0.3));
+  return Math.floor(window - headroom);
+}
+
 export function shouldCompact(contextTokens: number, contextWindow: number | undefined): boolean {
-  return contextTokens >= (contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW) * COMPACTION_THRESHOLD;
+  return contextTokens >= compactionThreshold(contextWindow);
+}
+
+/** Largest tool result handed to the model, in bytes: the usual 30 KB, but
+ * at most about a tenth of a small window (~4 bytes a token), so one bash
+ * log or file read cannot fill a local model's context by itself. Tools that
+ * can page (read_file) stop at this size and say how to continue. */
+export function toolOutputCap(contextWindow: number | undefined): number {
+  const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
+  return Math.min(OUTPUT_CAPS.toolOutputBytes, Math.max(8 * 1024, Math.floor(window * 4 * 0.1)));
 }
 
 // ── compaction ───────────────────────────────────────────────────────────────

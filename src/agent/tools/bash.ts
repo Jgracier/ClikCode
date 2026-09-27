@@ -26,6 +26,8 @@ function shellEnvironment(): Record<string, string> {
   return { ...scrubEnvironment(process.env), CLIKCODE: '1', TERM: 'dumb', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', PAGER: 'cat' };
 }
 
+const NOTE_ROOM = 512;
+
 /** Head + rolling tail in memory, everything on disk once the cap is passed. */
 class CappedOutput {
   private head = '';
@@ -39,8 +41,10 @@ class CappedOutput {
 
   async push(chunk: string): Promise<void> {
     this.total += Buffer.byteLength(chunk);
-    const half = Math.floor(this.cap / 2);
-    if (!this.spill && this.total > this.cap) {
+    // Head and tail leave room for the note naming the spill file: at the full
+    // cap, the loop's own cap would cut that note out of the middle.
+    const half = Math.floor((this.cap - NOTE_ROOM) / 2);
+    if (!this.spill && this.total > this.cap - NOTE_ROOM) {
       await fs.mkdir(path.dirname(this.spillTarget), { recursive: true, mode: 0o700 });
       this.spill = createWriteStream(this.spillTarget, { mode: 0o600 });
       this.spill.on('error', () => undefined);
@@ -131,7 +135,7 @@ export const bashTool = defineTool<BashArgs>({
     const detached = process.platform !== 'win32';
     const { file, args: argv } = shellInvocation(args.command);
     const spillTarget = path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${(ctx.callId ?? `call-${Date.now()}`).replace(/[^A-Za-z0-9._-]/g, '_')}.log`);
-    const output = new CappedOutput(spillTarget);
+    const output = new CappedOutput(spillTarget, ctx.outputCap);
     return new Promise((resolve, reject) => {
       const child = spawnPortable(file, argv, { cwd: ctx.cwd, env: shellEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], detached, windowsHide: true });
       let timedOut = false;

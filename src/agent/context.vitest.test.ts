@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt, environmentNote, needsEnvironmentNote } from './context.js';
+import { buildSystemPrompt, compactionThreshold, environmentNote, needsEnvironmentNote, toolOutputCap } from './context.js';
 import type { ConversationItem } from './model-client.js';
 
 /** A fake git whose answers can change between calls, as a real repo's do. */
@@ -43,5 +43,22 @@ describe('environment note', () => {
     expect(needsEnvironmentNote([user('<environment>\nDate: 2026-09-26\n</environment>\n\nfix it')], now)).toBe(true);
     // Compaction summarized the note away: say it again.
     expect(needsEnvironmentNote([{ type: 'summary', text: 'earlier work' }, user('go on')], now)).toBe(true);
+  });
+});
+
+describe('window-sized limits', () => {
+  it('compacts at 80% of a large window but keeps ~8k tokens of headroom in a small one', () => {
+    expect(compactionThreshold(200_000)).toBe(160_000);
+    expect(compactionThreshold(undefined)).toBe(102_400);
+    expect(compactionThreshold(32_768)).toBe(32_768 - 8_192);
+    // Tiny windows: 30% headroom rather than nothing left at all.
+    expect(compactionThreshold(8_192)).toBe(Math.floor(8_192 * 0.7));
+  });
+
+  it('caps one tool result at a tenth of a small window, never above 30 KB', () => {
+    expect(toolOutputCap(undefined)).toBe(30 * 1024);
+    expect(toolOutputCap(1_000_000)).toBe(30 * 1024);
+    expect(toolOutputCap(32_768)).toBe(Math.floor(32_768 * 0.4));
+    expect(toolOutputCap(4_096)).toBe(8 * 1024);
   });
 });
