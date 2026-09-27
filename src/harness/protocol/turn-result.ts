@@ -5,6 +5,7 @@ import { parseNativeActivityEventsFromValue } from './activity-events.js';
 import { nativeSessionIdsFromValues } from './session-ids.js';
 import { claudeShaped, JsonRecord, asRecord, parseJsonDocument, parseJsonLines } from './json-lines.js';
 import { NativeTurnUsage, nativeTurnUsage } from './turn-usage.js';
+import { firstUsefulLine } from './stderr-line.js';
 
 export interface NativeTurnResult {
   text: string;
@@ -44,10 +45,51 @@ function claudeShapedText(values: readonly JsonRecord[]): string {
   return blocks.join('\n\n');
 }
 
-export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string): NativeTurnResult {
+/** How the vendor process ended. Absent for transports with no process of
+ * their own to report (fixtures, replays). */
+export interface NativeTurnProcess { exitCode?: number; stderr?: string }
+
+/** A failure the process itself reported, carrying its streams the way a
+ * transport failure does, so classification reads stderr rather than a
+ * message that may quote the model. */
+function processFailure(message: string, process: NativeTurnProcess, stdout: string, stdoutIsDiagnostic = false): Error {
+  const stderr = process.stderr?.trim() ?? '';
+  return Object.assign(new Error(message), {
+    stderrTail: (stdoutIsDiagnostic ? [stderr, stdout.trim()].filter(Boolean).join('\n') : stderr).slice(-4000),
+    stdoutTail: stdout.trim().slice(-4000),
+    ...(process.exitCode !== undefined ? { exitCode: process.exitCode } : {}),
+  });
+}
+
+/** Records written by someone other than the assistant. Their text is the
+ * prompt echoed back (Cursor's `{type:"user"}`, Vibe's CLI stream), a system
+ * banner, or a tool's output -- never the reply. */
+function authoredByOthers(record: Record<string, unknown>): boolean {
+  const role = typeof record.role === 'string' ? record.role : undefined;
+  if (role && /^(user|system|tool|developer)$/i.test(role)) return true;
+  return typeof record.type === 'string' && /^(user|user_message|system)$/i.test(record.type);
+}
+
+/**
+ * One completed turn, from what the vendor wrote and how its process ended.
+ *
+ * The rule is the same for every harness:
+ *  - an answer is text the assistant wrote. Text inside a user, system or
+ *    tool record is never the answer, whatever field it sits in;
+ *  - a turn with neither an answer nor tool work failed, and says why in the
+ *    vendor's words: its declared error first, then its stderr;
+ *  - plain-text output has no structure to declare failure with, so there a
+ *    non-zero exit IS the failure and the output is its explanation.
+ */
+export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: string, process: NativeTurnProcess = {}): NativeTurnResult {
   if (!harness.turn) throw new Error(`${harness.displayName} has no centralized turn adapter`);
+  const exitedBadly = process.exitCode !== undefined && process.exitCode !== 0;
   if (harness.turn.output === 'text') {
     const text = stdout.trim();
+    if (exitedBadly) {
+      const reason = firstUsefulLine(process.stderr ?? '') || firstUsefulLine(text);
+      throw processFailure(`${harness.displayName}: ${reason || `exited ${process.exitCode}`}`, process, stdout, true);
+    }
     if (!text) throw new Error(`${harness.displayName} returned no assistant text`);
     const nativeSessionId = /(?:session|thread|chat)(?:\s+id)?\s*[:=]\s*([\w-]{8,})/i.exec(stdout)?.[1];
     return { text, ...(nativeSessionId ? { nativeSessionId } : {}) };
@@ -74,11 +116,12 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   // error:"API error...", response:""}) surfaced only as a generic
   // "returned no assistant text", discarding the real reason entirely.
   let errorMessage: string | undefined;
-  const visit = (value: unknown, parentType?: string): void => {
-    if (Array.isArray(value)) return value.forEach((item) => visit(item, parentType));
+  const visit = (value: unknown, parentType?: string, othersText = false): void => {
+    if (Array.isArray(value)) return value.forEach((item) => visit(item, parentType, othersText));
     if (!value || typeof value !== 'object') return;
     const record = value as Record<string, unknown>;
     const type = typeof record.type === 'string' ? record.type : parentType;
+    const notTheAssistant = othersText || authoredByOthers(record);
     // A failed tool/command item is not a failed turn. Codex's public JSONL
     // stream does not preserve the internal `source` field we previously
     // used to distinguish those cases: it emits an item.completed envelope
@@ -123,8 +166,9 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
       if (fields.has(key) && typeof child === 'string' && child.trim()) {
         // JSON event streams often contain tool input and user echoes. Only
         // accept generic text/content from assistant/result-shaped events.
+        if (notTheAssistant) continue;
         if (!['text', 'content'].includes(key) || !type || /assistant|agent|message|result|complete|text|say/i.test(type)) messages.push(child.trim());
-      } else visit(child, type);
+      } else visit(child, type, notTheAssistant);
     }
   };
   values.forEach((value) => visit(value));
@@ -171,10 +215,14 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     if (!isError && didToolWork) return { text: '', noAssistantText: true, ...extras };
     // Say what the harness said. "No assistant text" describes the symptom;
     // the reason it gave -- a balance, a quota, an expired key -- is the only
-    // part anyone can act on, and it is right there in the stream.
-    throw new Error(errorMessage
-      ? `${harness.displayName}: ${errorMessage}`
-      : `${harness.displayName} returned no assistant text in its structured output`);
+    // part anyone can act on, and it is right there in the stream, or else
+    // on stderr (Cursor's "Named models unavailable" is only there).
+    if (errorMessage) throw new Error(`${harness.displayName}: ${errorMessage}`);
+    const stderrReason = firstUsefulLine(process.stderr ?? '');
+    if (exitedBadly || stderrReason) {
+      throw processFailure(`${harness.displayName}: ${stderrReason || `exited ${process.exitCode} with no reply`}`, process, stdout);
+    }
+    throw new Error(`${harness.displayName} returned no assistant text in its structured output`);
   }
   // A vendor that answers "you are out of usage" while reporting SUCCESS.
   // Augment's auggie does this: is_error false, subtype "success", exit 0,
