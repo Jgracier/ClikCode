@@ -47,10 +47,13 @@ export const readFileTool = defineTool<ReadFileArgs>({
     const slice = lines.slice(start - 1, start - 1 + limit);
     let bytes = 0;
     const body: string[] = [];
+    // Stop at the loop's output cap (less room for the note) so the model gets
+    // whole lines and a "continue with offset=" rather than a cut-out middle.
+    const budget = (ctx.outputCap ?? OUTPUT_CAPS.toolOutputBytes) - 200;
     for (const [index, line] of slice.entries()) {
       const clipped = line.length > OUTPUT_CAPS.readFileLineChars ? `${line.slice(0, OUTPUT_CAPS.readFileLineChars)}… [line truncated]` : line;
-      bytes += clipped.length + 8;
-      if (bytes > 256 * 1024) break;
+      bytes += Buffer.byteLength(clipped) + 8;
+      if (bytes > budget && body.length) break;
       body.push(`${start + index}\t${clipped}`);
     }
     const end = start + body.length - 1;

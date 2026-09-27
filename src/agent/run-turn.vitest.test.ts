@@ -295,14 +295,55 @@ describe('runGatewayHarnessTurn', () => {
     expect(plans).toEqual([[{ content: 'step', status: 'in_progress' }]]);
   });
 
+  it('adds deferred MCP schemas once the model loads them, and keeps them on later turns', async () => {
+    const mcp = Array.from({ length: 30 }, (_, i) => defineTool({
+      name: `mcp__big__t${i}`, description: 'x'.repeat(300), parameters: { type: 'object', properties: {} },
+      class: 'read', mcp: { server: 'big', tool: `t${i}` }, label: () => `t${i}`, run: async () => ({ output: `ran t${i}` }),
+    }));
+    const h = harness([
+      { toolCalls: [{ name: 'load_mcp_tools', args: { server: 'big', tools: ['t4'] } }] },
+      { toolCalls: [{ name: 'mcp__big__t4', args: {} }] },
+      { text: 'done' },
+    ], { extraTools: mcp });
+    await runGatewayHarnessTurn(h.input);
+    const toolNames = h.client.requests.map((request) => request.tools.map((tool) => tool.name).filter((name) => name.startsWith('mcp__')));
+    expect(toolNames).toEqual([[], ['mcp__big__t4'], ['mcp__big__t4']]);
+    const later = harness([{ text: 'again' }], { extraTools: mcp, sessionId: h.input.sessionId, prompt: 'more' });
+    await runGatewayHarnessTurn(later.input);
+    expect(later.client.requests[0].tools.map((tool) => tool.name)).toContain('mcp__big__t4');
+  });
+
+  it('sizes tool output to a small window: read_file pages instead of losing its middle', async () => {
+    await fs.writeFile(path.join(cwd, 'long.txt'), Array.from({ length: 2000 }, (_, i) => `line ${i} ${'z'.repeat(30)}`).join('\n'));
+    const h = harness([
+      { toolCalls: [{ id: 'r', name: 'read_file', args: { path: 'long.txt' } }], contextWindow: 16_384 },
+      { toolCalls: [{ id: 'b', name: 'bash', args: { command: 'seq 1 20000' } }] },
+      { text: 'ok' },
+    ]);
+    await runGatewayHarnessTurn(h.input);
+    const results = h.client.requests[2].items.filter((item) => item.type === 'tool_result');
+    const read = results[0].type === 'tool_result' ? results[0].output : '';
+    expect(Buffer.byteLength(read)).toBeLessThanOrEqual(8 * 1024);
+    expect(read).toMatch(/^1\tline 0 /);
+    expect(read).toMatch(/\[Showing lines 1-\d+ of 2000\. Continue with offset=\d+\.\]$/);
+    expect(read).not.toContain('truncated');
+    // bash keeps its head, tail and where the full log went.
+    const bash = results[1].type === 'tool_result' ? results[1].output : '';
+    expect(Buffer.byteLength(bash)).toBeLessThanOrEqual(8 * 1024 + 300);
+    expect(bash).toMatch(/^1\n2\n/);
+    expect(bash).toMatch(/full output saved to .*\.log/);
+    expect(bash).toMatch(/20000$/);
+  });
+
   it('resumes a session from its transcript', async () => {
     const first = harness([{ text: 'first answer' }]);
     await runGatewayHarnessTurn(first.input);
     const second = harness([{ text: 'second answer' }], { sessionId: first.input.sessionId, prompt: 'follow up' });
     await runGatewayHarnessTurn(second.input);
     expect(second.client.requests[0].items).toEqual([
-      { type: 'text', role: 'user', text: 'do the thing' },
+      { type: 'text', role: 'user', text: expect.stringMatching(/^<environment>\nDate: [\d-]+\n[\s\S]*<\/environment>\n\ndo the thing$/) },
       { type: 'text', role: 'assistant', text: 'first answer' },
+      // Same day, so no second note: the first one still holds.
       { type: 'text', role: 'user', text: 'follow up' },
     ]);
   });

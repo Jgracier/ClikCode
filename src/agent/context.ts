@@ -1,14 +1,21 @@
 /** System prompt assembly, token estimation and compaction.
  *
- * ORDER IS LOAD-BEARING for prompt caching: the static instructions come
- * first and never vary, then the slow-changing project memory, and only then
- * the volatile environment block. Anything that changes per turn must stay at
- * the end or it invalidates the cached prefix for everything after it. */
+ * THE SYSTEM PROMPT MUST BE BYTE-STABLE ACROSS TURNS. A provider's prompt
+ * cache and llama.cpp's KV-cache reuse skip only the identical prefix of a
+ * request, and the system prompt (with the tool schemas) is the start of
+ * every request: one changed byte there makes the whole conversation after
+ * it be read again -- cost on the Gateway, and on a CPU 10-20 s per 1,000
+ * tokens. So it holds only what is fixed for the session (instructions,
+ * project memory, skills, cwd, platform). What changes -- the date, the git
+ * branch and status -- goes in an <environment> note on a user message
+ * (`environmentNote`), which lands at the END of the conversation where it
+ * breaks nothing. token-budget.vitest.test.ts fails if this regresses. */
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnPortable, terminatePortable } from '../harness/transport/spawn.js';
 import type { ConversationItem, ModelClient, TokenUsage } from './model-client.js';
+import { OUTPUT_CAPS } from './security.js';
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const COMPACTION_THRESHOLD = 0.8;
@@ -45,7 +52,8 @@ const STATIC_INSTRUCTIONS = `You are ClikCode, a coding agent working directly i
 - Be concise. Lead with what you did or found; skip preamble and do not restate the request.
 - Reference code as path:line. Do not paste large files back to the user.
 - When the task is done, stop calling tools and give a short summary of what changed and anything the user should check. If you are blocked, say precisely what is blocking you.
-- A tool result starting with "Tool result for" in the conversation is the harness reporting a tool's output, not a message typed by the user.`;
+- A tool result starting with "Tool result for" in the conversation is the harness reporting a tool's output, not a message typed by the user.
+- An <environment> block in a user message is the harness reporting the date and git state at that moment, not text the user typed.`;
 
 export const PLAN_MODE_INSTRUCTIONS = `# Plan mode is ACTIVE
 You may only research: read, search and fetch. File changes and commands are disabled. Investigate until you can write a concrete plan, then call exit_plan_mode with it. Do not ask the user whether to proceed in prose; exit_plan_mode is how approval is requested.`;
@@ -58,10 +66,11 @@ interface SystemPromptInput {
   planMode?: boolean;
   /** Rendered "# Skills" section (skills.ts); empty or absent adds nothing. */
   skillsSection?: string;
-  now?: Date;
   /** Injected for tests; defaults to a real `git` spawn with a 2s timeout. */
-  git?: (args: readonly string[], cwd: string) => Promise<string | undefined>;
+  git?: GitRunner;
 }
+
+type GitRunner = (args: readonly string[], cwd: string) => Promise<string | undefined>;
 
 function runGit(args: readonly string[], cwd: string, timeoutMs = 2000): Promise<string | undefined> {
   return new Promise((resolve) => {
@@ -121,12 +130,7 @@ async function loadMemoryChain(input: { cwd: string; userConfigDir: string; repo
 
 export async function buildSystemPrompt(input: SystemPromptInput): Promise<string> {
   const git = input.git ?? runGit;
-  const [rootRaw, branchRaw, statusRaw] = await Promise.all([
-    git(['rev-parse', '--show-toplevel'], input.cwd),
-    git(['rev-parse', '--abbrev-ref', 'HEAD'], input.cwd),
-    git(['status', '--porcelain', '--untracked-files=normal'], input.cwd),
-  ]);
-  const repoRoot = rootRaw?.trim() || undefined;
+  const repoRoot = (await git(['rev-parse', '--show-toplevel'], input.cwd))?.trim() || undefined;
   const memory = await loadMemoryChain({ cwd: input.cwd, userConfigDir: input.userConfigDir, repoRoot });
 
   const sections: string[] = [STATIC_INSTRUCTIONS];
@@ -137,25 +141,55 @@ export async function buildSystemPrompt(input: SystemPromptInput): Promise<strin
       ...memory.map((entry) => `<instructions file="${entry.file}">\n${entry.text.trim()}\n</instructions>`),
     ].join('\n\n'));
   }
-  // After memory, before the volatile environment: skills change rarely.
   if (input.skillsSection) sections.push(input.skillsSection);
-  const environment = [
+  // Only what cannot change during a session: see the header comment.
+  sections.push([
     '# Environment',
     `Working directory: ${input.cwd}`,
     ...(input.addDirs?.length ? [`Additional directories: ${input.addDirs.join(', ')}`] : []),
     `Platform: ${process.platform} (${os.release()})`,
-    `Date: ${(input.now ?? new Date()).toISOString().slice(0, 10)}`,
-  ];
-  if (repoRoot) {
-    const changed = (statusRaw ?? '').split('\n').filter(Boolean);
-    environment.push(`Git repository: ${repoRoot}`, `Git branch: ${branchRaw?.trim() || 'unknown'}`);
-    environment.push(changed.length
-      ? `Git status: ${changed.length} changed path(s)\n${changed.slice(0, 20).join('\n')}${changed.length > 20 ? `\n… ${changed.length - 20} more` : ''}`
-      : 'Git status: clean');
-  } else environment.push('Git repository: no');
-  sections.push(environment.join('\n'));
+    repoRoot ? `Git repository: ${repoRoot}` : 'Git repository: no',
+  ].join('\n'));
   if (input.planMode) sections.push(PLAN_MODE_INSTRUCTIONS);
   return sections.join('\n\n');
+}
+
+const ENVIRONMENT_DATE = /<environment>\nDate: (\d{4}-\d{2}-\d{2})\n/;
+
+/** Whether this turn's user message needs a fresh <environment> note: the
+ * conversation has none yet (a new session, or compaction summarized it
+ * away), or the last one is from another day. Derived from the items, not
+ * from process memory, so a resumed session decides the same way. */
+export function needsEnvironmentNote(items: readonly ConversationItem[], now: Date = new Date()): boolean {
+  const today = now.toISOString().slice(0, 10);
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index];
+    if (item.type !== 'text' || item.role !== 'user') continue;
+    const match = ENVIRONMENT_DATE.exec(item.text);
+    if (match) return match[1] !== today;
+  }
+  return true;
+}
+
+/** The volatile facts the system prompt deliberately leaves out, as of now.
+ * Sent once per conversation (and again on a new day), on a user message. */
+export async function environmentNote(input: { cwd: string; now?: Date; git?: GitRunner }): Promise<string> {
+  const git = input.git ?? runGit;
+  const [rootRaw, branchRaw, statusRaw] = await Promise.all([
+    git(['rev-parse', '--show-toplevel'], input.cwd),
+    git(['rev-parse', '--abbrev-ref', 'HEAD'], input.cwd),
+    git(['status', '--porcelain', '--untracked-files=normal'], input.cwd),
+  ]);
+  const lines = ['<environment>', `Date: ${(input.now ?? new Date()).toISOString().slice(0, 10)}`];
+  if (rootRaw?.trim()) {
+    const changed = (statusRaw ?? '').split('\n').filter(Boolean);
+    lines.push(`Git branch: ${branchRaw?.trim() || 'unknown'}`);
+    lines.push(changed.length
+      ? `Git status: ${changed.length} changed path(s)\n${changed.slice(0, 20).join('\n')}${changed.length > 20 ? `\n… ${changed.length - 20} more` : ''}`
+      : 'Git status: clean');
+  }
+  lines.push('</environment>');
+  return lines.join('\n');
 }
 
 // ── token estimation ─────────────────────────────────────────────────────────
@@ -181,8 +215,29 @@ export function estimateContextTokens(system: string, items: readonly Conversati
   return estimateTextTokens(system) + items.reduce((sum, item) => sum + estimateItemTokens(item), 0);
 }
 
+/** Where compaction starts, in tokens. 80% of a large window, but never
+ * less than ~8k tokens of headroom below the top: the check runs BEFORE a
+ * step, and that step's reply plus the next tool result must still fit. On
+ * the 16-32k windows a local model runs with, 20% is 3-6k tokens, which one
+ * file read overflows -- and an overflow costs a failed request (seconds to
+ * minutes of prompt reading on a CPU) before compaction runs anyway. */
+export function compactionThreshold(contextWindow: number | undefined): number {
+  const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
+  const headroom = Math.max(window * (1 - COMPACTION_THRESHOLD), Math.min(8_192, window * 0.3));
+  return Math.floor(window - headroom);
+}
+
 export function shouldCompact(contextTokens: number, contextWindow: number | undefined): boolean {
-  return contextTokens >= (contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW) * COMPACTION_THRESHOLD;
+  return contextTokens >= compactionThreshold(contextWindow);
+}
+
+/** Largest tool result handed to the model, in bytes: the usual 30 KB, but
+ * at most about a tenth of a small window (~4 bytes a token), so one bash
+ * log or file read cannot fill a local model's context by itself. Tools that
+ * can page (read_file) stop at this size and say how to continue. */
+export function toolOutputCap(contextWindow: number | undefined): number {
+  const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
+  return Math.min(OUTPUT_CAPS.toolOutputBytes, Math.max(8 * 1024, Math.floor(window * 4 * 0.1)));
 }
 
 // ── compaction ───────────────────────────────────────────────────────────────
