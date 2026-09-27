@@ -186,6 +186,16 @@ export function workerQueueMark(sessionId: string): number | undefined {
   return client ? trackers.get(client)?.queueVersion : undefined;
 }
 
+/** The prompt of the turn this window's worker is running, when one is --
+ * `{}` for a worker too old to name it -- so the loop follows that turn
+ * instead of sending the queue's head into it. */
+export function workerRunningTurn(sessionId: string): { prompt?: string } | undefined {
+  const client = clients.get(sessionId);
+  const tracker = client ? trackers.get(client) : undefined;
+  if (!tracker?.running) return undefined;
+  return tracker.prompt !== undefined ? { prompt: tracker.prompt } : {};
+}
+
 /** Follows the turn the worker is running to its end, exactly as if this
  * window had sent it: what has streamed so far, then every event, with
  * cancel and typed messages going to the worker. */
@@ -304,6 +314,13 @@ async function driveWorkerTurn(
             // Another turn was already running; this message waits behind it
             // and the loop sends it when its turn comes.
             notice = 'Queued behind the turn already running';
+            // That turn is shown here until it ends -- the snapshot the worker
+            // sends next brings up what it has streamed. Returning at once
+            // sent the loop straight back with the queued message, to be
+            // queued again: a tight loop for the whole of the other turn, and
+            // the turn itself never shown. A turn that already ended (its
+            // waiting-stop came first) leaves nothing to follow.
+            if (tracker?.running) { rl.submitted?.(tracker.prompt); return; }
             finish(() => resolveTurn());
             return;
           case 'queue-changed':

@@ -20,7 +20,7 @@ import { WorkerClient } from './client.js';
 import { readWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
-import { closeAllWorkerClients, followWorkerTurn, questionOrWorker, workerQueueMark } from './turn-bridge.js';
+import { closeAllWorkerClients, followWorkerTurn, questionOrWorker, runTurnThroughWorker, workerQueueMark, workerRunningTurn } from './turn-bridge.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
@@ -311,7 +311,7 @@ function recordingPrompter(): TerminalHarnessPrompter & { calls: string[] } {
     calls, render: record('render'), response: record('response'), activity: record('activity'), activityEvent: record('activityEvent'),
     phase: record('phase'), setPlan: record('setPlan'), setTurnUsage: record('setTurnUsage'), startWaiting: record('startWaiting'), stopWaiting: record('stopWaiting'),
     approval: async (...args: unknown[]) => { record('approval')(...args); return true; },
-    suspend: async () => undefined, resume: record('resume'), restoreDraft: record('restoreDraft'),
+    suspend: async () => undefined, resume: record('resume'), restoreDraft: record('restoreDraft'), submitted: record('submitted'),
   } as unknown as TerminalHarnessPrompter & { calls: string[] };
 }
 
@@ -371,5 +371,47 @@ describe('a window at its prompt', () => {
     const session = await gatewaySession();
     await attach(session.id);
     await expect(questionOrWorker(session.id, async () => 'typed')).resolves.toEqual({ line: 'typed' });
+  }, 60_000);
+});
+
+describe('a message sent while another window\'s turn runs', () => {
+  it('is queued once, the running turn is shown to its end, and the message runs after it', async () => {
+    const session = await gatewaySession();
+    const other = await attach(session.id);
+    let queueChanges = 0;
+    other.on('event', (event: WorkerEvent) => { if (event.type === 'queue-changed') queueChanges++; });
+    other.send({ type: 'submit', text: 'the other window asks', echo: true });
+    const held = await gateway!.next();
+    // This window had no worker connection when its prompt opened: it sends
+    // its message straight into the running turn.
+    const rl = recordingPrompter();
+    let finished = false;
+    const sent = runTurnThroughWorker(session.id, rl, 'my message', { echo: true }).finally(() => { finished = true; });
+    const deadline = Date.now() + 10_000;
+    while (!(await storedSession(session.id)).queuedTurns?.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    const queued = (await storedSession(session.id)).queuedTurns ?? [];
+    expect(queued).toEqual([expect.objectContaining({ text: 'my message' })]);
+    // It stays on the running turn instead of handing the loop the queued
+    // message to send again (and again) while that turn runs.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(finished).toBe(false);
+    expect(queueChanges).toBe(1);
+    expect(workerRunningTurn(session.id)).toEqual({ prompt: 'the other window asks' });
+    held.respond(text('the other answer'));
+    expect(await sent).toEqual({ notice: 'Queued behind the turn already running' });
+    expect(rl.calls).toContain('submitted("the other window asks")');
+    expect(rl.calls.filter((entry) => entry.startsWith('response(')).join('')).toContain('the other answer');
+    expect(workerRunningTurn(session.id)).toBeUndefined();
+
+    // The loop then sends the queued message, once, and it runs.
+    const mine = runTurnThroughWorker(session.id, recordingPrompter(), 'my message', { echo: true, queuedTurnId: queued[0]!.id });
+    const request = await gateway!.next();
+    expect(JSON.stringify(request.items)).toContain('my message');
+    request.respond(text('my answer'));
+    await mine;
+    expect(gateway!.requests).toHaveLength(2);
+    const saved = await storedSession(session.id);
+    expect(saved.queuedTurns ?? []).toEqual([]);
+    expect(JSON.stringify(saved.messages)).toContain('my answer');
   }, 60_000);
 });
