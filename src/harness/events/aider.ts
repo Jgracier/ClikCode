@@ -64,3 +64,17 @@ export function aiderStdoutReply(stdout: string): string | undefined {
   const text = stdout.split(/\r?\n/).map((line) => aiderLine(line, state).response?.text ?? '').join('').trim();
   return text || undefined;
 }
+
+/** Why the last turn in an Aider chat history file has no reply: the notice
+ * Aider quoted under its heading (`> litellm.NotFoundError: …`), preferring
+ * the one that names an error. Undefined when there is nothing quoted. */
+export function aiderHistoryNotice(markdown: string): string | undefined {
+  const lines = markdown.split(/\r?\n/);
+  let start = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index]!.startsWith('#### ')) { start = index + 1; break; }
+  }
+  if (start < 0) return undefined;
+  const notices = lines.slice(start).filter((line) => line.startsWith('> ')).map((line) => line.slice(2).trim()).filter(Boolean);
+  return notices.find((line) => /error/i.test(line)) ?? notices[0];
+}

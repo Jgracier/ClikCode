@@ -59,7 +59,7 @@ import { prepareAttachments } from '../session/attachments.js';
 import { localApiKey } from '../daemon/server.js';
 import { appServerThreadOverrides, declaredOptionArgv, normalizeTurnUsage, type NormalizedTurnUsage } from '../harness/transport/options.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
-import { aiderHistoryReply, aiderStdoutReply } from '../harness/events/aider.js';
+import { aiderHistoryNotice, aiderHistoryReply, aiderStdoutReply } from '../harness/events/aider.js';
 import { readFile } from 'node:fs/promises';
 
 /**
@@ -414,10 +414,21 @@ export async function aiSessionSend(
         let cliResult = nativeTurnResult(cliHarness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });
         // Aider's stdout is its banner, the answer and a cost footer; its own
         // chat history file holds the answer alone (see events/aider.ts).
+        // When that file exists it alone decides: a turn with no reply in it
+        // failed, and the notice Aider quoted there says why. Stdout is only
+        // read when there is no file, since there the error sits where an
+        // answer would.
         if (cliHarness.parser === 'aider') {
           const history = session.nativeSessionId ? await readFile(session.nativeSessionId, 'utf8').catch(() => '') : '';
-          const reply = aiderHistoryReply(history) ?? aiderStdoutReply(turnOutput.stdout);
-          if (reply) cliResult = { ...cliResult, text: reply };
+          const reply = history ? aiderHistoryReply(history) : aiderStdoutReply(turnOutput.stdout);
+          if (!reply) {
+            const notice = history ? aiderHistoryNotice(history) : undefined;
+            throw Object.assign(new Error(`${cliHarness.displayName}: ${notice ?? 'returned no reply'}`), {
+              stderrTail: [notice, turnOutput.stderr.trim()].filter(Boolean).join('\n').slice(-4000),
+              stdoutTail: turnOutput.stdout.trim().slice(-4000),
+            });
+          }
+          cliResult = { ...cliResult, text: reply };
         }
         if (!cliResult.isError) confirmNativeSession();
         noteUsage(cliResult.usage ?? nativeTurnUsage(cliHarness, turnOutput.stdout));

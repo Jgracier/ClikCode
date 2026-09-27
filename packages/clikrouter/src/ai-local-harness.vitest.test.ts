@@ -580,3 +580,22 @@ describe('custom ACP harnesses', () => {
     expect(allLocalHarnesses()).toBe(AI_LOCAL_HARNESSES);
   });
 });
+
+describe('replies that are really a failed call', () => {
+  const harness = (command: string) => AI_LOCAL_HARNESSES.find((entry) => entry.command === command)!;
+
+  it('reads Copilot\'s request-id error as a failure, and not an answer that mentions one', () => {
+    // Verbatim from Copilot 1.0.88 over ACP, stop reason end_turn.
+    expect(harnessReplyError(harness('copilot'), 'Error: You have exceeded your monthly quota (Request ID: 4755:2BCAD5:424FACB:4F41C2D:6AB87680)')).toEqual({});
+    expect(harnessReplyError(harness('copilot'), 'PONG')).toBeUndefined();
+    expect(harnessReplyError(harness('copilot'), 'Error: handling is done in parse(); see the Request ID header.')).toBeUndefined();
+  });
+
+  it('reads Goose\'s framed provider failure as a failure', () => {
+    // Verbatim from goose 1.51.
+    const failure = 'Ran into this error: Request failed: Claude CLI error: Fable 5.1 requires usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue..\n\nPlease retry if you think this is a transient or recoverable error.';
+    expect(harnessReplyError(harness('goose'), failure)).toEqual({});
+    expect(harnessReplyError(harness('goose'), 'I ran into this error: the test fails on line 3. Fixed it.')).toBeUndefined();
+  });
+});
+

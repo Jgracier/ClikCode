@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aiderHistoryReply, aiderLine, aiderStdoutReply } from './aider';
+import { aiderHistoryNotice, aiderHistoryReply, aiderLine, aiderStdoutReply } from './aider';
 import { createStreamState } from './adapters';
 
 // Real Aider 0.86.2 output for `--message "Reply with only the word ok"`.
@@ -46,3 +46,26 @@ describe('session titles from models that drop the tags', () => {
     expect(extractSessionTitle('The title: of the book is Dune.').title).toBeUndefined();
   });
 });
+
+describe('a failed Aider turn', () => {
+  // Verbatim from Aider 0.86.2: the heading, then only the quoted error.
+  const history = [
+    '# aider chat started at 2026-09-26 19:27:47',
+    '',
+    '> Aider v0.86.2  ',
+    '> Model: openrouter/anthropic/claude-3-haiku with whole edit format  ',
+    '',
+    '#### Reply with exactly the word PONG and nothing else.  ',
+    '> litellm.NotFoundError: NotFoundError: OpenrouterException - {"error":{"message":"Claude 3 Haiku was deprecated on Sep 10, 2026.","code":404}}  ',
+  ].join('\n');
+
+  it('has no reply, and its notice says why', () => {
+    expect(aiderHistoryReply(history)).toBeUndefined();
+    expect(aiderHistoryNotice(history)).toMatch(/^litellm\.NotFoundError: .*deprecated/);
+  });
+
+  it('has no notice to report when the turn answered', () => {
+    expect(aiderHistoryNotice('#### hi  \nHello there.')).toBeUndefined();
+  });
+});
+
