@@ -71,6 +71,41 @@ export function createTurnIdleController(): NativeTurnIdleController {
   return controller;
 }
 
+/** A vendor's stdin, held open after the prompt so later messages can follow
+ * it (see background-wait.ts). Created by the caller, bound by the turn. */
+interface NativeTurnInput {
+  /** Write to the running vendor; false once stdin is closed or gone. */
+  write(text: string): boolean;
+  /** Close stdin: the vendor's signal that no more input is coming. */
+  end(): void;
+}
+
+interface BoundTurnInput extends NativeTurnInput {
+  bind(stream: NodeJS.WritableStream | undefined): void;
+}
+
+export function createTurnInput(): NativeTurnInput {
+  let stream: NodeJS.WritableStream | undefined;
+  let ended = false;
+  const input: BoundTurnInput = {
+    write: (text) => {
+      if (!stream || ended) return false;
+      try { stream.write(text); return true; } catch { return false; }
+    },
+    end: () => {
+      if (ended) return;
+      ended = true;
+      try { stream?.end(); } catch { /* the vendor already exited */ }
+    },
+    bind: (next) => {
+      stream = next;
+      // Closed before the vendor even started: close it on arrival.
+      if (ended && next) try { next.end(); } catch { /* already gone */ }
+    },
+  };
+  return input;
+}
+
 /** Feed a parsed activity event to the watchdog: the one call a streaming
  * caller needs to keep long-running tools from being mistaken for a hang. */
 export function noteTurnActivityEvent(
@@ -86,6 +121,9 @@ export function noteTurnActivityEvent(
 interface NativeHarnessTurnOptions {
   cwd?: string;
   stdinText?: string;
+  /** Hold stdin open after `stdinText` instead of closing it; the caller
+   * closes it through this once the vendor has nothing more to do. */
+  input?: NativeTurnInput;
   signal?: AbortSignal;
   onStdoutLine?: (line: string) => void;
   onStderrLine?: (line: string) => void;
@@ -275,7 +313,13 @@ export async function captureNativeHarnessTurn(
       // reading its prompt. Its exit status and stderr carry the real reason;
       // an unhandled stream error here would crash ClikCode instead.
       child.stdin.on('error', () => undefined);
-      try { child.stdin.end(options.stdinText); } catch { /* reported through the child's exit */ }
+      const input = options.input as BoundTurnInput | undefined;
+      if (input) {
+        try { child.stdin.write(options.stdinText); } catch { /* reported through the child's exit */ }
+        input.bind(child.stdin);
+      } else {
+        try { child.stdin.end(options.stdinText); } catch { /* reported through the child's exit */ }
+      }
     }
     const onInterrupt = () => { interrupted = true; forward('SIGINT'); later(1_000, 'SIGTERM'); later(3_000, 'SIGKILL'); };
     const onAbort = () => {
@@ -297,6 +341,7 @@ export async function captureNativeHarnessTurn(
       if (idleTimer) clearTimeout(idleTimer);
       if (closeGraceTimer) clearTimeout(closeGraceTimer);
       controller?.bind?.(undefined);
+      options.input?.end();
     };
     process.once('SIGINT', onInterrupt);
     process.once('SIGTERM', onTerminate);

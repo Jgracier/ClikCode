@@ -196,6 +196,11 @@ export interface AiHarnessTurnDefinition {
   createIdSuffix?: readonly string[];
   promptArgvPrefix?: readonly string[];
   promptInput?: 'argv' | 'stdin';
+  /** A piped prompt is a stream-json user message, and stdin stays open after
+   * it while the vendor reports background work, so a task that finishes
+   * after the turn's `result` still gets its follow-up turn. Claude Code only:
+   * its `-p` mode kills background tasks the moment stdin closes. */
+  stdinFormat?: 'stream-json';
   /** Argv standing in for the prompt when it is piped. Defaults to `['-']`
    * (Codex). `[]` is for a vendor that reads stdin when no prompt is given. */
   stdinArgv?: readonly string[];
@@ -457,7 +462,7 @@ const GOOSE_REPLY_ERRORS: readonly AiHarnessReplyErrorPattern[] = [
 ];
 
 const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
-  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', authFiles: [{ path: '${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json' }], authEnv: ['ANTHROPIC_API_KEY'], npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'] }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'] } }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptInput: 'stdin', stdinArgv: [], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', authFiles: [{ path: '${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json' }], authEnv: ['ANTHROPIC_API_KEY'], npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'] }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'] } }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptInput: 'stdin', stdinFormat: 'stream-json', stdinArgv: [], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // Grok Build speaks Claude Code's stream-json shape exactly -- verified live
   // against `grok -p --output-format streaming-messages-json`, whose first
   // line is {"type":"system","subtype":"init","session_id":…} and whose last

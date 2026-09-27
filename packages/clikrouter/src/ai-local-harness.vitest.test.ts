@@ -80,7 +80,7 @@ describe('local harness catalog', () => {
   it('maps only declared provider options into argv and rejects unknown values', () => {
     const claude = localHarnessForCommand('claude')!;
     expect(nativeHarnessTurnArgv(claude, { prompt: 'inspect', options: { 'safe-mode': true, 'add-dir': ['/one', '/two'] } }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--safe-mode', '--add-dir', '/one', '--add-dir', '/two']);
+      .toEqual(['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--safe-mode', '--add-dir', '/one', '--add-dir', '/two']);
     expect(() => nativeHarnessTurnArgv(claude, { prompt: 'inspect', options: { invented: true } }))
       .toThrow('does not declare option "invented"');
     const cursor = localHarnessForCommand('cursor')!;
@@ -115,11 +115,11 @@ describe('local harness catalog', () => {
   it('builds headless Claude create and resume turns', () => {
     const claude = localHarnessForCommand('claude')!;
     expect(nativeHarnessTurnArgv(claude, { prompt: 'hello', nativeSessionId: 'new-id', createdHere: true, effort: 'high' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--session-id', 'new-id', '--effort', 'high']);
+      .toEqual(['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--session-id', 'new-id', '--effort', 'high']);
     expect(nativeHarnessTurnArgv(claude, { prompt: 'again', nativeSessionId: 'old-id' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--resume', 'old-id']);
+      .toEqual(['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--resume', 'old-id']);
     expect(nativeHarnessTurnArgv(claude, { prompt: 'safe edit', permissionMode: 'ask' }))
-      .toEqual(['-p', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', '--permission-mode', 'manual', '--permission-prompts', 'none']);
+      .toEqual(['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--permission-mode', 'manual', '--permission-prompts', 'none']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'inspect', permissionMode: 'ask' }))
       .toEqual(['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request', 'exec', '--json', '--skip-git-repo-check', '-']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('codex')!, { prompt: 'continue', nativeSessionId: 'thread-id', permissionMode: 'bypass' }))
