@@ -51,6 +51,12 @@ export async function aiAccountsList(): Promise<void> {
   const state = await readState();
   const accounts = await Promise.all(state.accounts.map(async (account) => ({
     ...accountView(account), usage: await accountUsageLabel(account, state),
+    // An account kept from a harness the catalog has since retired (Crush)
+    // can run nothing. Its stored status is the user's, so it stays; this
+    // says what it is worth.
+    ...(localHarnessForProvider(account.provider) ? {} : {
+      supported: false, note: `${account.provider} is no longer a supported tool; remove this account with \`clikcode accounts remove ${account.id}\``,
+    }),
   })));
   emitJson({ accounts });
 }

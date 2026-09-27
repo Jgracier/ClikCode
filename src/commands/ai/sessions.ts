@@ -115,7 +115,11 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   }
   const provider = named?.provider ?? options.provider ?? account?.provider ?? null;
   const harness = provider ? localHarnessForProvider(provider) : undefined;
-  if (provider && !harness && options.route === 'local') throw new Error(`unknown local provider "${provider}"`);
+  if (provider && !harness && options.route === 'local') {
+    throw new Error(account && account.provider === provider
+      ? `${provider} is no longer a supported tool; remove the account "${account.label}" with \`clikcode accounts remove ${account.id}\``
+      : `unknown local provider "${provider}"`);
+  }
   const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
   if (model && harness && !(harness.modelArgvPrefix !== undefined || harness.acp?.listsModels)) throw new Error(`${harness.displayName} does not publish a model selector.`);
   if (model) await assertRealModel(harness, account, model);
