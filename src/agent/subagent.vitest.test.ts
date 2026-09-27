@@ -87,7 +87,7 @@ describe('task sub-agents', () => {
     expect(toolResults(client.requests(PARENT_PROMPT)[1])).toEqual(['a.txt:1 says the answer is 42.']);
 
     const child = client.requests('What does a.txt say?');
-    expect(child[0].tools.map((tool) => tool.name).sort()).toEqual(['glob', 'grep', 'list_dir', 'read_file', 'web_fetch']);
+    expect(child[0].tools.map((tool) => tool.name).sort()).toEqual(['glob', 'grep', 'list_dir', 'read_file', 'web_fetch', 'web_search']);
     expect(child[0].system).toMatch(/^You are a sub-agent/);
     expect(child[0].system.length).toBeLessThan(1000);
     // A fresh conversation: nothing of the parent's leaks in.
