@@ -19,7 +19,8 @@ import { existsSync } from 'node:fs';
 import { stdout as output } from 'node:process';
 import type Conf from 'conf';
 import chalk from 'chalk';
-import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
+import { gatewayConnection, modelClientForSession } from '../agent/models/for-session.js';
+import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { CLIKCODE_USER_AGENT, CLIKCODE_VERSION } from '../version.js';
 import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
@@ -91,7 +92,7 @@ export async function aiSessionSend(
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route === 'gateway') throw new Error('use aiGatewaySessionSend for gateway sessions');
+  if (isClikCodeAgent(session)) throw new Error('use aiGatewaySessionSend for gateway and ClikCode Local sessions');
   if (!session.accountId) throw new Error('local AI session has no account selected');
   let account = state.accounts.find((item) => item.id === session.accountId);
   if (!account) throw new Error('local AI session account was removed');
@@ -185,7 +186,7 @@ export async function aiSessionSend(
     session.workspace ??= process.cwd();
     const baseMessages = sessionTranscriptMessages(session);
     const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
-    run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+  run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
     let switchedFrom: string | undefined;
     /** Why the turn left that account: the failure it met there. */
@@ -991,7 +992,9 @@ function gatewayResultNotice(data: unknown): string | undefined {
   return `The platform is holding ${what} for your confirmation and has NOT run ${pending.length === 1 || !pending.length ? 'it' : 'them'}. ClikCode cannot confirm ClikDeploy Gateway actions yet — approve ${pending.length === 1 || !pending.length ? 'it' : 'them'} in the ClikDeploy dashboard assistant.`;
 }
 
-/** Send a gateway session through the existing authenticated platform assistant stream. */
+/** Send a turn on a route that runs ClikCode's own agent: the Gateway, or
+ * ClikCode Local. Any other session goes to aiSessionSend. Only the Gateway
+ * has a platform assistant to fall back to. */
 export async function aiGatewaySessionSend(
   config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
 ): Promise<void> {
@@ -999,7 +1002,11 @@ export async function aiGatewaySessionSend(
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route !== 'gateway') return aiSessionSend(id, prompt, signal, run);
+  if (!isClikCodeAgent(session)) return aiSessionSend(id, prompt, signal, run);
+  const gatewayService = isGatewayService(session);
+  // Attribution for the invocation log and the output payload: the route's
+  // own name, so ClikCode Local turns are never counted as Gateway usage.
+  const attributedTo = gatewayService ? 'gateway' : 'clikcode-local';
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
   const prepared = await prepareAttachments(session.attachments ?? []);
@@ -1017,9 +1024,10 @@ export async function aiGatewaySessionSend(
   let titleStream = shouldRequestTitle(session) ? new StreamingTitle() : undefined;
   const turnText = titleStream ? withTitleRequest(`${text}${prepared.textContext}`) : `${text}${prepared.textContext}`;
   if (titleStream) session.titleAttempts = (session.titleAttempts ?? 0) + 1;
-  const baseUrl = getApiUrl(config).replace(/\/$/, '');
-  const apiKey = getApiKeyForUrl(config, baseUrl);
-  if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
+  // Before the checkpoint, so a route that cannot serve a turn (the Gateway
+  // not signed in, ClikCode Local's engine absent) fails without recording
+  // a turn that never ran.
+  const modelClient = await modelClientForSession(session, config);
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
@@ -1029,16 +1037,16 @@ export async function aiGatewaySessionSend(
   // falls back to the platform assistant below, and says so when it does.
   try {
     const harnessTurn = await runGatewayHarnessSessionTurn({
-      session, prompt: turnText, baseUrl, apiKey, version: CLIKCODE_VERSION,
+      session, prompt: turnText, modelClient,
       ...(prompter ? { prompter } : {}),
       ...(signal ? { signal } : {}),
       ...(prepared.images.length ? { images: prepared.images } : {}),
       onActivity: (event) => checkpoint.activity(event),
     });
-    if (harnessTurn.isError) throw new Error(harnessTurn.text || 'gateway harness turn failed');
+    if (harnessTurn.isError) throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
     const harnessInvocation = {
-      id: randomUUID(), sessionId: session.id, accountId: 'gateway',
-      provider: session.provider ?? 'gateway', ...(session.model ? { model: session.model } : {}),
+      id: randomUUID(), sessionId: session.id, accountId: attributedTo,
+      provider: session.provider ?? attributedTo, ...(session.model ? { model: session.model } : {}),
       at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
     };
     state.invocations.push(harnessInvocation);
@@ -1049,13 +1057,15 @@ export async function aiGatewaySessionSend(
     await nameSession(session, { title: titleStream?.title ?? named.title });
     if (!prompter) {
       emitHarnessOutput({
-        session, text: named.text, usage: { attributedBy: 'gateway' }, invocation: harnessInvocation,
+        session, text: named.text, usage: { attributedBy: attributedTo }, invocation: harnessInvocation,
       });
     }
     await checkpoint.flush();
     return;
   } catch (error) {
-    if (!gatewayHarnessUnavailable(error)) { await checkpoint.flush(); throw error; }
+    // The platform assistant is the Gateway's; a local model server's 404 is
+    // a real failure of a real turn, never a reason to call the platform.
+    if (!gatewayService || !gatewayHarnessUnavailable(error)) { await checkpoint.flush(); throw error; }
     const notice = gatewayHarnessFallbackNotice(error);
     // The assistant below is a second attempt at the same prompt, not a
     // continuation of the abandoned one.
@@ -1063,6 +1073,9 @@ export async function aiGatewaySessionSend(
     if (prompter) prompter.activity(chalk.dim(notice));
     else if (!isJsonDefaultMode()) output.write(`${chalk.yellow('ClikDeploy Gateway:')} ${notice}\n`);
   }
+  // Only a Gateway session reaches here, and it is the same connection the
+  // model client was built from.
+  const { baseUrl, apiKey } = gatewayConnection(config);
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   try {
