@@ -29,6 +29,7 @@ import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
+import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { noteStoredQuota } from './account-switch.js';
 import { clearQuotaMark, markQuotaExhausted } from '../harness/accounts/usage-reading.js';
@@ -392,6 +393,7 @@ export async function aiSessionSend(
         // conversation instead of being killed at exit (background-wait.ts).
         // Its follow-up text streams into the same reply, and a message typed
         // meanwhile goes straight to the vendor rather than waiting behind it.
+        const vendorBackground = new Set<string>();
         const heldInput = turn.promptInput === 'stdin' && turn.stdinFormat === 'stream-json' ? createTurnInput() : undefined;
         const background = heldInput ? createBackgroundWait({
           onSettled: () => {
@@ -424,6 +426,16 @@ export async function aiSessionSend(
           onStdoutLine: (lineText) => {
             if (background && lineText.trimStart().startsWith('{')) {
               try { background.note(JSON.parse(lineText) as Record<string, unknown>); } catch { /* fail-open-ok: not a record; the parser below says the same */ }
+            } else if (/"task_notification"|"isBackground":true/.test(lineText)) {
+              // A vendor that waits for its own background work in-process
+              // (Cursor) is silent meanwhile: that silence gets the running-tool
+              // budget, not the ordinary one. See background-task.ts.
+              let event: ReturnType<typeof vendorBackgroundEvent>;
+              try { event = vendorBackgroundEvent(JSON.parse(lineText) as Record<string, unknown>); } catch { event = undefined; }
+              if (event?.kind === 'started' && !vendorBackground.has(event.id)) {
+                vendorBackground.add(event.id);
+                idle.toolStarted(`background:${event.id}`);
+              } else if (event?.kind === 'finished' && vendorBackground.delete(event.id)) idle.toolFinished(`background:${event.id}`);
             }
             // The same observer every other transport is handed. What is left
             // here is the turn loop's own bookkeeping, which no line parser
