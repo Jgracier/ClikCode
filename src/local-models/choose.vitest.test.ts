@@ -402,6 +402,10 @@ describe('launch settings', () => {
     });
     expect(args.join(' ')).toBe('--host 127.0.0.1 --port 43210 -m /m.gguf -a qwen3.5-4b -c 65536 -np 2 --kv-unified --jinja -fa on -t 8 -tb 12 '
       + '-ctk f16 -ctv f16 --cache-ram 2048 --no-webui --load-mode none -ngl 0');
+    expect(buildServerArgs({
+      modelPath: '/m.gguf', port: 1, alias: 'a', cacheRamMib: 0, slotSavePath: '/s/prefix-cache/f16',
+      fit: { placement: 'cpu', context: 8192, cacheType: 'f16', parallel: 2 }, threads: { threads: 8, threadsBatch: 12 },
+    }).join(' ')).toContain('--slot-save-path /s/prefix-cache/f16');
   });
 
   it('reads the weights into memory on the CPU and maps them on a GPU', () => {
