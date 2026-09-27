@@ -26,6 +26,7 @@ beforeAll(async () => {
       const current = reply;
       if ('status' in current) { res.writeHead(current.status, { 'content-type': 'application/json', ...current.headers }); res.end(current.body); return; }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.flushHeaders();
       for (const chunk of current.chunks) {
         if (res.destroyed) return;
         res.write(typeof chunk === 'string' ? chunk : `data: ${JSON.stringify(chunk)}\n\n`);
@@ -161,6 +162,28 @@ describe('OpenAIModelClient', () => {
   it('treats a stream cut off before finishing as incomplete', async () => {
     reply = { chunks: [delta({ content: 'par' })] };
     await expect(new OpenAIModelClient({ baseUrl, model: 'm' }).step(request())).rejects.toMatchObject({ code: 'incomplete_stream' });
+  });
+
+  it('drops a stream that goes silent mid-answer and fails it as retryable incomplete_stream', async () => {
+    reply = { chunks: [delta({ content: 'par' })], hang: true };
+    const closed = new Promise<void>((resolve) => server.once('request', (_req, res: http.ServerResponse) => res.once('close', () => resolve())));
+    const error = await new OpenAIModelClient({ baseUrl, model: 'm', idleTimeoutMs: 200 }).step(request()).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: 'incomplete_stream', kind: 'other' });
+    expect((error as Error).message).toMatch(/sent nothing for 0s/);
+    // The connection is let go, not left open behind the error.
+    await closed;
+  });
+
+  it('waits far longer for the first chunk than between chunks, and still gives up', async () => {
+    reply = { chunks: [], hang: true };
+    const error = await new OpenAIModelClient({ baseUrl, model: 'm', idleTimeoutMs: 50, firstChunkTimeoutMs: 300 }).step(request()).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: 'incomplete_stream' });
+  });
+
+  it('never cuts a slow answer that keeps arriving', async () => {
+    reply = { chunks: [delta({ content: 'a' }), delta({ content: 'b' }), delta({ content: 'c' }), delta({ content: 'd' }), delta({}, 'stop')], gapMs: 80 };
+    const result = await new OpenAIModelClient({ baseUrl, model: 'm', idleTimeoutMs: 250 }).step(request());
+    expect(result.text).toBe('abcd');
   });
 
   it('reports an unreachable server as a retryable failure', async () => {
