@@ -289,6 +289,11 @@ interface ParsedHarnessLine {
   usage?: NativeTurnUsage;
   sessionId?: string;
   error?: HarnessLineError;
+  /** The vendor's own end-of-turn record (`{type:"result"}` on Claude-shaped
+   * streams, Cursor and Grok; `{event:"result"}` on Antigravity): whether the
+   * turn it closes succeeded. A process still alive after a successful one has
+   * already delivered its answer. */
+  result?: 'success' | 'error';
 }
 
 const FAILED_STATUS = /^(?:error|failed)$/i;
@@ -343,7 +348,12 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Record<stri
   const usage = nativeUsageFromValue(value);
   const error = lineError(value);
   const sessionId = sessionIdOf(harness, value);
+  // Antigravity nests its status: {event:"result", result:{status:"ERROR"}}.
+  const nested = object(value.result);
+  const nestedFailed = typeof nested?.status === 'string' && FAILED_STATUS.test(nested.status);
+  const result = value.type === 'result' || value.event === 'result' ? (error || nestedFailed ? 'error' : 'success') : undefined;
   return {
+    ...(result ? { result } : {}),
     ...(response ? { response } : {}),
     ...(activities.length ? { activity: activities[0], activities } : {}),
     ...(phase ? { phase } : {}), ...(usage ? { usage } : {}),

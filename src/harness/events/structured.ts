@@ -33,6 +33,8 @@ interface StructuredLineOutcome {
    * mode it applied. The caller persists these; the commands go to the
    * observer like anything else it reports. */
   selfReport?: NativeSelfReport;
+  /** The line was the vendor's end-of-turn record, and how that turn ended. */
+  result?: 'success' | 'error';
 }
 
 /** Report one stdout line. Returns only what the turn loop still has to do
@@ -46,6 +48,7 @@ export function reportStructuredLine(
   const outcome: StructuredLineOutcome = {
     live: Boolean(parsed.sessionId || parsed.response || parsed.activities?.length),
     ...(parsed.error ? { error: parsed.error } : {}),
+    ...(parsed.result ? { result: parsed.result } : {}),
   };
   if (parsed.sessionId) void observer.onSessionId?.(parsed.sessionId);
   if (parsed.response) observer.onResponseDelta?.(parsed.response.text, parsed.response.mode);
