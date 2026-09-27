@@ -31,3 +31,16 @@ describe('whether another process holds a session', () => {
     expect(await sessionHeldElsewhere('gpt-oss-20b', 'abc-123')).toBe(false);
   });
 });
+
+describe('measured footprints', () => {
+  it('are read per machine and model, keyed by configuration', async () => {
+    const { footprintKey, readFootprints } = await import('./measure');
+    const { footprintsFile } = await import('./paths');
+    const run = { context: 65_536, cacheType: 'f16', parallel: 2, vision: false, anonBytes: 3.9e9, fileBytes: 2.1e9, at: 'now' };
+    mkdirSync(serverDir('qwen3.5-4b'), { recursive: true });
+    writeFileSync(footprintsFile('qwen3.5-4b'), JSON.stringify({ here: { [footprintKey(run)]: run }, elsewhere: { x: { ...run, anonBytes: 1 } } }));
+    expect(footprintKey(run)).toBe('65536|f16|2|text');
+    expect(await readFootprints('here', ['qwen3.5-4b', 'gpt-oss-20b'])).toEqual({ 'qwen3.5-4b': [run] });
+    expect(await readFootprints('new-machine', ['qwen3.5-4b'])).toEqual({});
+  });
+});

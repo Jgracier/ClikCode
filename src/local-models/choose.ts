@@ -3,7 +3,8 @@
  *
  * Everything here is pure -- hardware and budget in, a decision out -- so
  * every rule is unit-tested. Estimates only order the models; once a model
- * has run here, its measurement replaces the estimate. */
+ * has run here, its measurements replace the estimates: its speed, and
+ * the memory it really held (see measuredNeed). */
 
 import type { MemoryBudget } from './budget.js';
 import type { CatalogModel, KvGeometry } from './catalog.js';
@@ -70,6 +71,25 @@ export interface FitOptions {
   context?: number;
   vision?: boolean;
   parallel?: number;
+  /** What this model really held on this machine in earlier runs. */
+  footprints?: readonly Footprint[];
+}
+
+/** A model's peak resident memory in one configuration, as the supervisor
+ * measured it: RssAnon (its allocations: weights read into memory, the KV
+ * cache, the prompt cache, buffers) plus, for a server that maps its
+ * weights, RssFile (the mapped weights). */
+export interface Footprint {
+  context: number;
+  cacheType: string;
+  parallel: number;
+  vision: boolean;
+  anonBytes: number;
+  fileBytes: number;
+  /** Whether the weights were mapped. Records without it predate reading
+   * weights into memory on the CPU and are ignored there (see measuredNeed). */
+  mmap?: boolean;
+  at: string;
 }
 
 export interface Fit {
@@ -82,6 +102,8 @@ export interface Fit {
   weightBytes: number;
   /** Everything the server will hold: weights, cache, buffers. */
   needBytes: number;
+  /** needBytes comes from a measured footprint, not the estimate. */
+  measured?: boolean;
   /** The part of needBytes on the GPU (0 on a CPU). */
   gpuBytes: number;
   parallel: number;
@@ -91,15 +113,59 @@ export interface Fit {
  * is several thousand tokens. */
 export const MIN_CONTEXT = 16_384;
 
-function contextsToTry(model: CatalogModel, requested: number | undefined): number[] {
+/** Memory set aside for llama.cpp's prompt cache before a context beyond
+ * the model's default is granted: a longer context is a nice-to-have, and
+ * the prompt cache (which saves re-reading a session's prompt when two
+ * sessions take turns) is worth more than it. Matches the 2 GiB cap on
+ * --cache-ram the engine starts servers with. */
+export const PROMPT_CACHE_ALLOWANCE = 2 * GIB;
+
+/** Largest first: the model's maximum context, halved down to MIN_CONTEXT,
+ * with its default among them. An explicit context is tried as given. */
+export function contextsToTry(model: Pick<CatalogModel, 'defaultContext' | 'maxContext'>, requested?: number): number[] {
   if (requested) return [Math.min(requested, model.maxContext)];
-  const list: number[] = [];
-  for (let context = model.defaultContext; context >= MIN_CONTEXT; context = Math.floor(context / 2)) list.push(context);
-  return list;
+  const list = new Set<number>();
+  for (let context = model.maxContext; context >= MIN_CONTEXT; context = Math.floor(context / 2)) list.add(context);
+  if (model.defaultContext >= MIN_CONTEXT && model.defaultContext <= model.maxContext) list.add(model.defaultContext);
+  if (!list.size) list.add(Math.min(model.defaultContext, model.maxContext));
+  return [...list].sort((left, right) => right - left);
+}
+
+/** What the model needs at this context and cache type, from the nearest
+ * measured run: that run's peak, adjusted by the estimated difference in
+ * KV cache (and projector, for vision) between the two configurations. The
+ * measured part carries everything the estimate gets wrong -- repacked
+ * weights held twice, compute buffers, a prompt cache that filled -- and
+ * the adjustment is the one part the estimate gets right, since the KV
+ * cache's size follows from the model's geometry. Undefined before the
+ * first run. A run at the same parallelism is required: a different slot
+ * count changes buffers the adjustment does not model.
+ *
+ * Only runs that read the weights into memory count (this is the CPU fit,
+ * and CPU servers do that; see usesMmap). A run that mapped them on the CPU
+ * counted repacked tensors twice, once in its own memory and once as
+ * mapped file, so its footprint overstates what the model needs. */
+export function measuredNeed(
+  model: CatalogModel, footprints: readonly Footprint[] | undefined, context: number, cacheType: CacheType, parallel: number, vision: boolean,
+): number | undefined {
+  const candidates = (footprints ?? []).filter((item) => item.mmap === false && item.parallel === parallel && item.anonBytes > 0 && item.context > 0);
+  if (!candidates.length) return undefined;
+  const distance = (item: Footprint): number => (item.cacheType === cacheType ? 0 : 100) + (item.vision === vision ? 0 : 10)
+    + Math.abs(Math.log2(context / item.context));
+  const nearest = candidates.reduce((best, item) => (distance(item) < distance(best) ? item : best));
+  const projector = model.projector?.sizeBytes ?? 0;
+  const itemType: CacheType = nearest.cacheType === 'q8_0' ? 'q8_0' : 'f16';
+  return nearest.anonBytes + nearest.fileBytes
+    + kvCacheBytes(model.kv, context, cacheType, parallel) - kvCacheBytes(model.kv, nearest.context, itemType, parallel)
+    + (Number(vision) - Number(nearest.vision)) * projector;
 }
 
 /** Whether a model fits the budget, where, and at what context: the
- * default context first, halved down to MIN_CONTEXT before giving up. On a
+ * largest context that fits, from the model's maximum down to MIN_CONTEXT;
+ * one beyond the model's default also has to leave the prompt cache its
+ * room. On the CPU the need is the measured footprint once there is one,
+ * so a model that turned out bigger (or smaller) than estimated is fitted
+ * by what it really took. On a
  * discrete GPU the whole model goes on the card when it fits there; failing
  * that, as many layers as fit (llama.cpp's --fit places them) with the rest
  * in RAM, provided the card takes a useful share. */
@@ -107,6 +173,11 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
   const parallel = options.parallel ?? (budget.gpu && !budget.gpu.unified ? 4 : 2);
   const weightBytes = model.weights.sizeBytes + (options.vision && model.projector ? model.projector.sizeBytes : 0);
   const overhead = runtimeOverheadBytes(weightBytes);
+  const vision = Boolean(options.vision && model.projector);
+  // Past the default a context is extra, so it must also leave the prompt
+  // cache its room; an explicit context is the caller's call.
+  const extra = (context: number): boolean => !options.context && context > model.defaultContext;
+  const allowance = (context: number): number => (extra(context) ? PROMPT_CACHE_ALLOWANCE : 0);
   let smallest: Fit | undefined;
   for (const context of contextsToTry(model, options.context)) {
     const gpu = budget.gpu;
@@ -114,7 +185,7 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
       // Apple Silicon: the GPU works from RAM, so its budget is the only one.
       const cacheType = chooseCacheType(gpu.bytes, weightBytes);
       const needBytes = weightBytes + kvCacheBytes(model.kv, context, cacheType, parallel) + overhead;
-      const fit: Fit = { fits: needBytes <= gpu.bytes, placement: 'gpu', context, cacheType, weightBytes, needBytes, gpuBytes: needBytes, parallel };
+      const fit: Fit = { fits: needBytes + allowance(context) <= gpu.bytes, placement: 'gpu', context, cacheType, weightBytes, needBytes, gpuBytes: needBytes, parallel };
       if (fit.fits) return fit;
       smallest = fit;
       continue;
@@ -125,6 +196,10 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
       if (needBytes <= gpu.bytes) {
         return { fits: true, placement: 'gpu', context, cacheType, weightBytes, needBytes, gpuBytes: needBytes, parallel };
       }
+      // A context beyond the default is taken only whole on the card: bought
+      // with layers moved to the CPU, or with a CPU-only run, it would cost
+      // speed on every token for room most turns never use.
+      if (extra(context)) continue;
       // Partial offload only when the card holds at least a quarter of the
       // model: below that the PCIe traffic eats what the GPU adds.
       if (gpu.bytes >= needBytes * 0.25 && needBytes - gpu.bytes <= budget.ramBytes) {
@@ -132,9 +207,14 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
       }
     }
     const cacheType = chooseCacheType(budget.ramBytes, weightBytes);
-    const needBytes = weightBytes + kvCacheBytes(model.kv, context, cacheType, parallel) + overhead;
-    const fit: Fit = { fits: needBytes <= budget.ramBytes, placement: 'cpu', context, cacheType, weightBytes, needBytes, gpuBytes: 0, parallel };
+    const measured = measuredNeed(model, options.footprints, context, cacheType, parallel, vision);
+    const needBytes = measured ?? weightBytes + kvCacheBytes(model.kv, context, cacheType, parallel) + overhead;
+    const fit: Fit = {
+      fits: needBytes + allowance(context) <= budget.ramBytes, placement: 'cpu', context, cacheType, weightBytes, needBytes, gpuBytes: 0, parallel,
+      ...(measured !== undefined ? { measured: true } : {}),
+    };
     if (fit.fits) return fit;
+    // The last (smallest) context tried is what the reason quotes.
     smallest = fit;
   }
   const where = budget.gpu?.unified ? 'unified memory' : 'RAM';
@@ -240,10 +320,10 @@ export interface RankedModel {
  * measurement stands in for the estimate wherever there is one. */
 export function rankModels(
   catalog: readonly CatalogModel[], hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>, budget: MemoryBudget,
-  measurements: Readonly<Record<string, Measurement>>,
+  measurements: Readonly<Record<string, Measurement>>, footprints: Readonly<Record<string, readonly Footprint[]>> = {},
 ): RankedModel[] {
   const ranked = catalog.map((model): RankedModel => {
-    const fit = fitModel(model, budget);
+    const fit = fitModel(model, budget, { footprints: footprints[model.id] ?? [] });
     const estimate = estimateSpeed(model, hardware, fit, budget.gpu?.backend);
     const measured = measurements[model.id];
     const speed = measured?.promptPerSecond && measured.generatePerSecond
