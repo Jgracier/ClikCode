@@ -223,8 +223,9 @@ when you would rather type than pick.
 | `clikcode gateway login [--github]` / `gateway status` | ClikDeploy Gateway sign-in (Google by default) |
 
 Output is JSON when it is not going to a terminal, so ClikCode scripts
-cleanly, and readable text when it is. `--json` or `--human` forces one, and
-`--debug` adds the stack and HTTP detail when something fails.
+cleanly -- one record per line, so a command that reports twice is still
+parseable -- and readable text when it is. `--json` or `--human` forces one,
+and `--debug` adds the stack and HTTP detail when something fails.
 
 ## Inside a session
 

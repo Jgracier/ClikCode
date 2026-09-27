@@ -9,7 +9,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
-import { emitJson } from '../cli/structured-output.js';
+import { emitResult } from '../cli/structured-output.js';
 import { captureNativeHarnessOutput, runNativeHarnessCommand } from '../harness/transport/native/command.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
@@ -58,12 +58,12 @@ export async function aiAccountsList(): Promise<void> {
       supported: false, note: `${account.provider} is no longer a supported tool; remove this account with \`clikcode accounts remove ${account.id}\``,
     }),
   })));
-  emitJson({ accounts });
+  emitResult({ accounts });
 }
 
 /** Lists the normalized local account surfaces without probing provider credentials. */
 export async function aiAccountProviders(): Promise<void> {
-  emitJson({ harnesses: localRouter().AI_LOCAL_HARNESSES });
+  emitResult({ harnesses: localRouter().AI_LOCAL_HARNESSES });
 }
 
 /** Read-only compatibility report for every catalog entry. */
@@ -106,7 +106,7 @@ export async function aiDoctor(): Promise<void> {
     };
   }));
   await flush();
-  emitJson({ adapterVersion: localRouter().AI_LOCAL_HARNESS_ADAPTER_VERSION, harnesses });
+  emitResult({ adapterVersion: localRouter().AI_LOCAL_HARNESS_ADAPTER_VERSION, harnesses });
 }
 
 /**
@@ -376,7 +376,7 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
     ? (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim()
     : await authEvidencePresent(harness, environment) ? 'signed in' : 'not signed in';
   const usage = await accountUsageLabel(account, state);
-  emitJson({ account: { ...accountView(account), usage }, nativeStatus, credentialBoundary: 'local-only' });
+  emitResult({ account: { ...accountView(account), usage }, nativeStatus, credentialBoundary: 'local-only' });
 }
 
 export async function aiAccountLogout(labelOrId: string): Promise<void> {
@@ -387,7 +387,7 @@ export async function aiAccountLogout(labelOrId: string): Promise<void> {
   else await logoutNativeHarness(harness, environment);
   account.status = 'needs_login';
   await writeState(state);
-  emitJson({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
+  emitResult({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
 }
 
 /** A login can succeed while the vendor still refuses to serve the account
@@ -482,7 +482,7 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   };
   state.accounts.push(account);
   await writeState(state);
-  emitJson({ account: accountView(account), credentialBoundary: 'local-only' });
+  emitResult({ account: accountView(account), credentialBoundary: 'local-only' });
 }
 
 interface AccountRemoveOptions {

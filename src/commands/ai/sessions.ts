@@ -5,7 +5,7 @@ import { turboFitSessionClosed } from './turbofit.js';
 import { isBlankConversation } from '../../session/options.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { randomUUID } from 'node:crypto';
-import { emitJson } from '../../cli/structured-output.js';
+import { emitResult } from '../../cli/structured-output.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
@@ -147,7 +147,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   // Bound to an account now, as the app binds one, so the next command can
   // send; without it every created chat failed "no account selected".
   if (options.route === 'local') await (await import('./harness.js')).ensureChatReady(id);
-  emitJson({ session: (await readState()).sessions.find((item) => item.id === id) ?? session });
+  emitResult({ session: (await readState()).sessions.find((item) => item.id === id) ?? session });
 }
 
 export async function aiSessionsList(): Promise<void> {
@@ -168,7 +168,7 @@ export async function aiSessionsList(): Promise<void> {
   // file has never made a session look live, because claimIsHeld judges the
   // heartbeat and the pid instead of trusting the file's existence.
   await pruneSessionClaims(new Set(state.sessions.map((session) => session.id))).catch(() => 0);
-  emitJson({ sessions });
+  emitResult({ sessions });
 }
 
 /** Which sessions still have a worker process behind them: one directory pass
@@ -229,7 +229,7 @@ export async function aiSessionShow(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  emitJson({ session });
+  emitResult({ session });
 }
 
 
@@ -371,5 +371,5 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   }
   state.sessions[index] = next;
   await writeState(state);
-  emitJson({ session: next });
+  emitResult({ session: next });
 }

@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { stdout as output } from 'node:process';
 import { readState } from '../session/state/read.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
-import { emitJson } from '../cli/structured-output.js';
+import { emitResult } from '../cli/structured-output.js';
 import {
   harnessesAcceptingMcp, installMcpServerEverywhere, mcpAddArgv, mcpAddGrammar,
   type McpServerEntry,
@@ -21,7 +21,7 @@ export async function mcpAdd(name: string, target: string, args: readonly string
   const state = await readState();
   const results = await installMcpServerEverywhere(entry, state.accounts);
   const installed = results.filter((result) => result.ok);
-  if (isJsonDefaultMode()) return emitJson({ mcp: 'add', server: entry, results });
+  if (isJsonDefaultMode()) return emitResult({ mcp: 'add', server: entry, results });
   if (!results.length) {
     output.write(`\n${chalk.yellow('No installed harness records an "mcp add" command.')}\n\n`);
     return;
@@ -44,7 +44,7 @@ export async function mcpTargets(): Promise<void> {
     harness: harness.command,
     argv: (mcpAddArgv(mcpAddGrammar(harness), { name: '<name>', target: '<command-or-url>' }) ?? []).join(' '),
   }));
-  if (isJsonDefaultMode()) return emitJson({ mcp: 'targets', harnesses: rows });
+  if (isJsonDefaultMode()) return emitResult({ mcp: 'targets', harnesses: rows });
   output.write(`\n${chalk.bold('Harnesses that would receive an MCP server')}\n`);
   for (const row of rows) output.write(`  ${row.harness.padEnd(12)}${chalk.dim(row.argv)}\n`);
   if (!rows.length) output.write(`  ${chalk.dim('none installed')}\n`);

@@ -13,7 +13,7 @@ import { compactPath, sessionProviderLabel } from './protocol/labels.js';
 import { nativeModelLabel } from './accounts/model-catalog.js';
 import type { HarnessSession } from '../session/model.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
-import { emitJson } from '../cli/structured-output.js';
+import { emitResult } from '../cli/structured-output.js';
 
 export function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
@@ -46,7 +46,7 @@ const CONFIRMATION_PANELS: ReadonlySet<string> = new Set([
 ]);
 
 export function emitHarnessOutput(payload: Record<string, unknown>): void {
-  if (isJsonDefaultMode()) return emitJson(payload);
+  if (isJsonDefaultMode()) return emitResult(payload);
   // In the TUI nothing may be written at the composer cursor: every human
   // rendering below goes through the prompter's panel instead of raw stdout.
   const write = (text: string): void => {
@@ -177,5 +177,5 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
     return;
   }
   if (TERMINAL.active) return write(`\n${JSON.stringify(payload, null, 2)}\n`);
-  emitJson(payload);
+  emitResult(payload);
 }
