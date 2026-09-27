@@ -19,17 +19,17 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
 import { memoryBudget, type MemoryBudget } from './budget.js';
 import { LOCAL_MODEL_CATALOG, catalogModel, type CatalogModel } from './catalog.js';
-import { chooseModel, fitModel, meetsBar, rankModels, type Measurement, type RankedModel } from './choose.js';
+import { chooseModel, fitModel, kvCacheBytes, meetsBar, rankModels, MIN_CONTEXT, type Fit, type Footprint, type Measurement, type RankedModel } from './choose.js';
 import { formatBytes } from './download.js';
 import { probeHardware, type HardwareProfile } from './hardware.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, waitForHealth } from './launch.js';
 import {
-  processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer, sweepOrphan,
-  withStartLock, writeLease, type ServerRecord,
+  memoryStopFile, processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
+  sweepOrphan, withStartLock, writeLease, type MemoryEvent, type ServerRecord, type ShrinkStep,
 } from './lifecycle.js';
-import { machineKey, measureServer, readMeasurements, writeMeasurement } from './measure.js';
+import { footprintKey, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
 import { ensureModelFile, missingBytes } from './models.js';
-import { preferencesFile, serversDir } from './paths.js';
+import { footprintsFile, preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
 
 export { LOCAL_MODEL_CATALOG, localModelLabel, resolveLocalModelId } from './catalog.js';
@@ -93,6 +93,7 @@ interface MachineView {
   build: RuntimeBuild;
   machine: string;
   measurements: Record<string, Measurement>;
+  footprints: Record<string, Footprint[]>;
 }
 
 async function viewMachine(): Promise<MachineView> {
@@ -103,13 +104,19 @@ async function viewMachine(): Promise<MachineView> {
   // The GPU budget only counts if the runtime drives that GPU.
   const effective = budget.gpu && build.backend !== budget.gpu.backend ? { ...budget, gpu: undefined } : budget;
   const machine = machineKey(hardware, build.key);
-  return { hardware, budget: effective, build, machine, measurements: await readMeasurements(machine) };
+  return {
+    hardware, budget: effective, build, machine, measurements: await readMeasurements(machine),
+    footprints: await readFootprints(machine, LOCAL_MODEL_CATALOG.map((model) => model.id)),
+  };
 }
 
-/** A running, answering server for this model, if there is one. */
+/** A running server for this model, if there is one: its process is
+ * alive, or its supervisor is restarting it (smaller, to give memory back),
+ * which a caller waits for rather than starting a second one beside it. */
 async function liveServer(modelId: string): Promise<ServerRecord | undefined> {
   const record = await readServerRecord(modelId);
-  if (!record || !processAlive(record.supervisorPid) || !processAlive(record.serverPid)) return undefined;
+  if (!record || !processAlive(record.supervisorPid)) return undefined;
+  if (!record.restarting && !processAlive(record.serverPid)) return undefined;
   return record;
 }
 
@@ -139,6 +146,58 @@ function describe(model: CatalogModel, measured: Measurement | undefined): strin
   return notes.length ? notes.join(' ') : undefined;
 }
 
+function contextLabel(tokens: number): string {
+  return `${Math.round(tokens / 1024)}K`;
+}
+
+/** The supervisor's note of a restart it made to give memory back, as the
+ * user reads it. */
+function shrinkNotice(event: MemoryEvent | undefined): string | undefined {
+  if (event?.action !== 'shrink' || !event.toContext) return undefined;
+  const label = catalogModel(event.modelId)?.label ?? event.modelId;
+  return `${label} was restarted at ${contextLabel(event.toContext)} context (from ${contextLabel(event.fromContext)}) to leave memory for other programs: ${event.reason}.`;
+}
+
+/** Stops the supervisors made to leave memory for other programs, oldest
+ * first, each reported once: read and removed. */
+async function takeMemoryStops(): Promise<MemoryEvent[]> {
+  const events: MemoryEvent[] = [];
+  for (const model of LOCAL_MODEL_CATALOG) {
+    const file = memoryStopFile(model.id);
+    const event = await readFile(file, 'utf8').then((text) => JSON.parse(text) as MemoryEvent, () => undefined);
+    if (!event) continue;
+    await rm(file, { force: true });
+    events.push(event);
+  }
+  return events.sort((left, right) => left.at.localeCompare(right.at));
+}
+
+function stopNotice(stops: readonly MemoryEvent[], chosen: CatalogModel, fit: Pick<Fit, 'context'> | undefined): string | undefined {
+  const last = stops.at(-1);
+  if (!last) return undefined;
+  const label = catalogModel(last.modelId)?.label ?? last.modelId;
+  const when = new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const stopped = `${label} was stopped at ${when} to leave memory for other programs (${last.reason}).`;
+  if (!fit) return stopped;
+  if (last.modelId === chosen.id) return `${stopped} Restarted with ${contextLabel(fit.context)} context, which fits what is free now.`;
+  return `${stopped} Chose ${chosen.label} at ${contextLabel(fit.context)} context because it fits what is free now.`;
+}
+
+/** The restarts the supervisor may make to give memory back, least
+ * drastic first: the same context without the prompt cache, then each
+ * halving down to MIN_CONTEXT, all without it. A step that would free
+ * nothing is left out. */
+function shrinkSteps(model: CatalogModel, fit: Fit, cacheRamMib: number, vision: boolean, args: (context: number, cacheRamMib: number) => string[]): ShrinkStep[] {
+  const steps: ShrinkStep[] = [];
+  const step = (context: number): ShrinkStep => ({
+    context, cacheRamMib: 0, kvBytes: kvCacheBytes(model.kv, context, fit.cacheType, fit.parallel), args: args(context, 0),
+    footprintKey: footprintKey({ context, cacheType: fit.cacheType, parallel: fit.parallel, vision }),
+  });
+  if (cacheRamMib > 0) steps.push(step(fit.context));
+  for (let context = Math.floor(fit.context / 2); context >= MIN_CONTEXT; context = Math.floor(context / 2)) steps.push(step(context));
+  return steps;
+}
+
 export async function ensureLocalModel(options: EnsureLocalModelOptions): Promise<LocalModelEndpoint> {
   const progress = options.progress ?? (() => {});
   if (options.modelId) await setLocalModelPreference(options.modelId);
@@ -155,14 +214,21 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
   if (joinable && (await httpJson(joinable.port, 'GET', '/health', undefined, 3000)).status === 200) {
     if (!await sessionHeldElsewhere(joinable.modelId, options.sessionId)) await writeLease(joinable.modelId, options.sessionId);
     await removeLeases(options.sessionId, joinable.modelId);
-    return { baseUrl: `http://127.0.0.1:${joinable.port}/v1`, model: joinable.alias, contextWindow: joinable.context };
+    const notice = shrinkNotice(joinable.memoryEvent);
+    return { baseUrl: `http://127.0.0.1:${joinable.port}/v1`, model: joinable.alias, contextWindow: joinable.context, ...(notice ? { notice } : {}) };
   }
 
   progress({ stage: 'probe', message: 'checking this machine…' });
   const view = await viewMachine();
-  const ranked = rankModels(LOCAL_MODEL_CATALOG, view.hardware, view.budget, view.measurements);
-  const choice = chooseModel(ranked, pick);
+  const stops = await takeMemoryStops();
+  const ranked = rankModels(LOCAL_MODEL_CATALOG, view.hardware, view.budget, view.measurements, view.footprints);
+  let choice: ReturnType<typeof chooseModel>;
+  try { choice = chooseModel(ranked, pick); } catch (error) {
+    const stopped = stopNotice(stops, ranked[0]!.model, undefined);
+    throw stopped ? new Error(`${stopped} ${(error as Error).message}`) : error;
+  }
   const model = choice.row.model;
+  let startedFit: Fit | undefined;
 
   const record = await withStartLock(model.id, async () => {
     // Another process may have started it while this one waited.
@@ -172,8 +238,12 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
       return started;
     }
     await sweepOrphan(model.id);
-    const fit = fitModel(model, view.budget, { ...(options.context ? { context: options.context } : {}), vision: Boolean(options.vision) });
+    const vision = Boolean(options.vision && model.projector);
+    const fit = fitModel(model, view.budget, {
+      ...(options.context ? { context: options.context } : {}), vision, footprints: view.footprints[model.id] ?? [],
+    });
     if (!fit.fits) throw new Error(`${model.label} would exceed the memory this machine can spare: ${fit.reason}.`);
+    startedFit = fit;
 
     const runtime = await ensureRuntime(view.build, (update) => progress({ stage: 'runtime', ...update }));
     const modelPath = await ensureModelFile(model.weights, (update) => progress({ stage: 'download', ...update }), options.signal);
@@ -187,11 +257,16 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
       const port = await freePort();
       const ramPart = fit.needBytes - fit.gpuBytes;
       const cacheRamMib = Math.max(0, Math.min(2048, Math.floor((view.budget.ramBytes - ramPart) / 1024 ** 2)));
-      const args = buildServerArgs({
-        modelPath, ...(projectorPath ? { projectorPath } : {}), port, alias: model.id, fit,
-        threads: threadPlan(view.hardware), cacheRamMib,
+      const argsFor = (context: number, cacheRam: number): string[] => buildServerArgs({
+        modelPath, ...(projectorPath ? { projectorPath } : {}), port, alias: model.id, fit: { ...fit, context },
+        threads: threadPlan(view.hardware), cacheRamMib: cacheRam,
         ...(view.budget.gpu ? { fitTargetMib: view.budget.gpu.fitTargetMib } : {}),
       });
+      const args = argsFor(fit.context, cacheRamMib);
+      // Watched only on the CPU: a model on a discrete card holds VRAM,
+      // which neither MemAvailable nor its RSS shows, and restarting it
+      // smaller would free card memory other programs are not short of.
+      const watched = fit.placement === 'cpu' || Boolean(view.budget.gpu?.unified);
       const libraryVariable = process.platform === 'win32' ? 'PATH' : process.platform === 'darwin' ? 'DYLD_LIBRARY_PATH' : 'LD_LIBRARY_PATH';
       progress({ stage: 'start', message: `starting ${model.label}…` });
       const started = await startSupervisor({
@@ -199,6 +274,17 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
         command: runtime.serverPath, args,
         env: { [libraryVariable]: [runtime.directory, process.env[libraryVariable] ?? ''].filter(Boolean).join(delimiter) },
         dir: serverDir(model.id), idleMs: idleMs(options.idleMinutes), pollMs: 2000,
+        ...(watched ? {
+          memory: {
+            bufferBytes: view.budget.bufferBytes, sampleMs: 2000, footprintsFile: footprintsFile(model.id), machine: view.machine,
+            cacheType: fit.cacheType, parallel: fit.parallel, vision,
+            current: {
+              context: fit.context, cacheRamMib, kvBytes: kvCacheBytes(model.kv, fit.context, fit.cacheType, fit.parallel),
+              footprintKey: footprintKey({ context: fit.context, cacheType: fit.cacheType, parallel: fit.parallel, vision }),
+            },
+            shrinks: shrinkSteps(model, fit, cacheRamMib, vision, argsFor),
+          },
+        } : {}),
       });
       await waitForHealth(port, () => processAlive(started.supervisorPid),
         (seconds) => progress({ stage: 'start', message: `loading ${model.label}… ${seconds}s` }));
@@ -221,7 +307,8 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     measured = await measureServer(record.port, record.alias);
     await writeMeasurement(view.machine, model.id, measured);
   }
-  const notice = [choice.notice, describe(model, measured)].filter(Boolean).join(' ') || undefined;
+  const notice = [stopNotice(stops, model, startedFit ?? { context: record.context }), choice.notice, describe(model, measured)]
+    .filter(Boolean).join(' ') || undefined;
   return {
     baseUrl: `http://127.0.0.1:${record.port}/v1`, model: record.alias, contextWindow: record.context,
     ...(notice ? { notice } : {}),
@@ -273,7 +360,7 @@ function placementLabel(row: RankedModel, view: MachineView): string {
 export async function localModelChoices(): Promise<LocalModelChoice[]> {
   const view = await viewMachine();
   const rows: LocalModelChoice[] = [];
-  for (const row of rankModels(LOCAL_MODEL_CATALOG, view.hardware, view.budget, view.measurements)) {
+  for (const row of rankModels(LOCAL_MODEL_CATALOG, view.hardware, view.budget, view.measurements, view.footprints)) {
     const downloadBytes = await missingBytes([row.model.weights]);
     const speed = row.measured?.promptPerSecond
       ? `measured ${Math.round(row.speed.promptPerSecond)} tok/s reading, ${Math.round(row.speed.generatePerSecond)} writing${row.measured.toolCalls ? '' : ', no tool calls'}`
