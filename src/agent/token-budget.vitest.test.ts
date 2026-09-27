@@ -19,6 +19,7 @@ import type { ModelStepRequest } from './model-client.js';
 import { runGatewayHarnessTurn } from './run-turn.js';
 import { disposeSessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptedStep } from './testing.js';
+import { CONTEXT_PROFILE_ENV, type ContextHints, type ContextProfileName } from './context-profile.js';
 import { defineTool, type ToolDefinition } from './tool-contract.js';
 
 let root: string;
@@ -153,23 +154,56 @@ function measure(requests: readonly ModelStepRequest[]): SessionMeasure {
   };
 }
 
-async function runSession(options: { extraTools?: ToolDefinition[]; contextWindow?: number; sessionId: string }): Promise<ModelStepRequest[]> {
+/** Project skills with realistic, long descriptions, so the profiles' skill
+ * limits show in the numbers. */
+async function writeSkills(count: number): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    const dir = path.join(cwd, '.clikcode', 'skills', `skill-${String(i).padStart(2, '0')}`);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'SKILL.md'), `---\nname: skill-${i}\ndescription: Use when the task involves area ${i} of the project -- ${'building, testing and releasing the component, including its configuration files, deployment scripts and the checks that guard them '.repeat(2)}\n---\nBody ${i}.\n`);
+  }
+}
+
+interface SessionOptions {
+  extraTools?: ToolDefinition[];
+  contextWindow?: number;
+  sessionId: string;
+  profile?: ContextProfileName;
+  /** What the model client says about its model (context-profile.ts). */
+  hints?: ContextHints;
+  /** Project skills to create before the session (writeSkills). */
+  skills?: number;
+  onUsage?: (usage: Record<string, unknown>) => void;
+}
+
+async function runSession(options: SessionOptions): Promise<ModelStepRequest[]> {
   // Usage as a server would report it, so the loop's compaction trigger sees
   // the real size of what it sends.
   const client = new ScriptedModelClient([...TURN_ONE, ...TURN_TWO].map((step) => (request: ModelStepRequest) => ({
     ...step, usage: { input: tokens(renderRequest(request).all), output: 50 },
   })));
+  if (options.hints) Object.assign(client, { contextHints: options.hints });
+  await fs.rm(path.join(cwd, '.clikcode'), { recursive: true, force: true });
+  if (options.skills) await writeSkills(options.skills);
+  // Each session starts from the committed files: an earlier session in the
+  // same test has already applied its edits.
+  execFileSync('git', ['checkout', '-q', '--', '.'], { cwd, stdio: 'ignore' });
   const base = {
     sessionId: options.sessionId, cwd, stateDir, homeDir: path.join(root, 'home'), userConfigDir: path.join(root, 'config'),
     permissionMode: 'bypass' as const, modelClient: client,
     ...(options.extraTools ? { extraTools: options.extraTools } : {}),
     ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}),
+    ...(options.profile ? { contextProfile: options.profile } : {}),
+    ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   };
   try {
     const first = await runGatewayHarnessTurn({ ...base, prompt: 'Fix the off-by-one in paginate and add a test.' });
     expect(first.stopReason).toBe('completed');
     const second = await runGatewayHarnessTurn({ ...base, prompt: 'Also rename helper1..3 to words.' });
     expect(second.stopReason).toBe('completed');
+    // The profile is recorded on the result, and a session keeps one.
+    expect(second.contextProfile).toBe(first.contextProfile);
+    if (options.profile && !process.env[CONTEXT_PROFILE_ENV]) expect(first.contextProfile).toBe(options.profile);
   } finally {
     disposeSessionState(stateDir, options.sessionId);
   }
@@ -199,16 +233,97 @@ describe('token budget of a 20-step coding session', () => {
     const report = process.env.TOKEN_REPORT;
     if (!report) return;
     const rows: string[] = [];
-    for (const [label, options] of [
+    const scenarios: [string, Omit<SessionOptions, 'sessionId'>][] = [
       ['builtin tools only', {}],
       ['with 76 MCP tools', { extraTools: syntheticMcpTools() }],
       ['with 76 MCP tools, 32k window', { extraTools: syntheticMcpTools(), contextWindow: 32_768 }],
-    ] as const) {
+    ];
+    for (const profile of ['minimal', 'lean', 'full'] as const) {
+      scenarios.push([`${profile}: builtin tools only`, { profile }]);
+      scenarios.push([`${profile}: 76 MCP tools, 30 skills`, { profile, extraTools: syntheticMcpTools(), skills: 30 }]);
+    }
+    for (const [label, options] of scenarios) {
       const result = measure(await runSession({ sessionId: `report-${rows.length}`, ...options }));
       const stable = result.reusedPrefix.filter((reused, index) => reused === result.previousSize[index]).length;
       rows.push(`| ${label} | ${result.firstStep.total} (sys ${result.firstStep.system}, tools ${result.firstStep.tools}) | ${result.laterStepAvg} | ${result.sessionTotal} | ${result.sessionUncached} | ${stable}/${result.steps - 1} |`);
       rows.push(`|   prefix reuse per step | ${result.reusedPrefix.map((reused, index) => `${reused}/${result.previousSize[index]}`).join(' ')} |`);
     }
     await fs.writeFile(report, ['| session | first step | later step avg | 20-step total | 20-step uncached | steps reusing full prefix |', ...rows].join('\n'));
+  });
+});
+
+describe('context profiles', () => {
+  const heavy = (profile: ContextProfileName): SessionOptions => ({ sessionId: `heavy-${profile}`, profile, extraTools: syntheticMcpTools(), skills: 30 });
+
+  it('reuses the whole previous request as the prefix in every profile', async () => {
+    for (const profile of ['minimal', 'lean', 'full'] as const) {
+      const result = measure(await runSession(heavy(profile)));
+      result.reusedPrefix.forEach((reused, index) => {
+        expect({ profile, step: index + 2, reused }).toEqual({ profile, step: index + 2, reused: result.previousSize[index] });
+      });
+    }
+  });
+
+  it('lean is exactly the behavior before profiles: the same requests as a session with no profile', async () => {
+    const plain = (await runSession({ sessionId: 'unprofiled', extraTools: syntheticMcpTools(), skills: 30 })).map((request) => renderRequest(request).all);
+    const lean = (await runSession(heavy('lean'))).map((request) => renderRequest(request).all);
+    expect(lean).toEqual(plain);
+  });
+
+  it('spends the least in minimal and the most in full, where each is meant to', async () => {
+    const minimal = measure(await runSession(heavy('minimal')));
+    const lean = measure(await runSession(heavy('lean')));
+    const full = measure(await runSession(heavy('full')));
+    // Measured: minimal 3,078 / lean 4,098 / full 13,807 first-step tokens.
+    expect(minimal.firstStep.total).toBeLessThan(lean.firstStep.total - 900);
+    // Minimal: no tool-usage sections, shorter and fewer skills...
+    expect(lean.firstStep.system - minimal.firstStep.system).toBeGreaterThan(700);
+    // ...and schemas without additionalProperties:false, terser rare tools.
+    expect(lean.firstStep.tools - minimal.firstStep.tools).toBeGreaterThan(200);
+    // Full: the 76 MCP schemas (~7,900 tokens) go up front instead of the loader...
+    expect(full.firstStep.tools - lean.firstStep.tools).toBeGreaterThan(7_000);
+    // ...and more of the 30 skills are listed, at more length.
+    expect(full.firstStep.system - lean.firstStep.system).toBeGreaterThan(1_000);
+  });
+
+  it('gives full a larger tool-output cap, still bounded by the window', async () => {
+    const bigRead = (requests: ModelStepRequest[]): number => {
+      const item = requests.at(-1)!.items.find((entry) => entry.type === 'tool_result' && entry.name === 'read_file' && entry.output.includes('value0 '));
+      return item?.type === 'tool_result' ? item.output.length : 0;
+    };
+    const lean = bigRead(await runSession({ sessionId: 'out-lean', profile: 'lean' }));
+    const full = bigRead(await runSession({ sessionId: 'out-full', profile: 'full' }));
+    const fullSmall = bigRead(await runSession({ sessionId: 'out-full-32k', profile: 'full', contextWindow: 32_768 }));
+    expect(lean).toBeLessThanOrEqual(30 * 1024);
+    // 10% of the default 128K window, ~4 bytes a token: ~51 KB.
+    expect(full).toBeGreaterThan(45 * 1024);
+    expect(full).toBeLessThanOrEqual(52 * 1024);
+    expect(fullSmall).toBeLessThanOrEqual(13 * 1024);
+  });
+
+  it('chooses the profile from what the model client reports', async () => {
+    const seen: unknown[] = [];
+    const onUsage = (usage: Record<string, unknown>): void => { seen.push(usage.contextProfile); };
+    const hosted = measure(await runSession({ sessionId: 'auto-hosted', hints: { hosted: true, contextWindow: 200_000 }, extraTools: syntheticMcpTools(), onUsage }));
+    expect(new Set(seen)).toEqual(new Set(['full']));
+    seen.length = 0;
+    const cpu = measure(await runSession({ sessionId: 'auto-cpu', hints: { contextWindow: 32_768, promptPerSecond: 70 }, extraTools: syntheticMcpTools(), onUsage }));
+    expect(new Set(seen)).toEqual(new Set(['lean']));
+    expect(hosted.firstStep.tools - cpu.firstStep.tools).toBeGreaterThan(7_000);
+  });
+
+  it(`lets ${CONTEXT_PROFILE_ENV} force a profile over the session's own`, async () => {
+    const previous = process.env[CONTEXT_PROFILE_ENV];
+    process.env[CONTEXT_PROFILE_ENV] = 'minimal';
+    try {
+      const seen: unknown[] = [];
+      const requests = await runSession({ sessionId: 'forced', profile: 'full', hints: { hosted: true }, onUsage: (usage) => { seen.push(usage.contextProfile); } });
+      expect(new Set(seen)).toEqual(new Set(['minimal']));
+      expect(JSON.stringify(requests[0].tools)).not.toContain('additionalProperties');
+      expect(requests[0].system).not.toContain('# Editing files');
+    } finally {
+      if (previous === undefined) delete process.env[CONTEXT_PROFILE_ENV];
+      else process.env[CONTEXT_PROFILE_ENV] = previous;
+    }
   });
 });

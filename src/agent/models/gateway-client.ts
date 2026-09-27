@@ -2,6 +2,7 @@
  * `POST {baseUrl}/api/clikcode/v1/turn`, answered as Server-Sent Events. */
 import type { ConversationItem, HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
+import type { ContextHints } from '../context-profile.js';
 
 interface GatewayModelClientOptions {
   baseUrl: string;
@@ -14,6 +15,9 @@ interface GatewayModelClientOptions {
   task?: string;
   /** A model the user chose from the Gateway's list; absent, the Gateway picks. */
   model?: string;
+  /** The model's window as the Gateway's model list gives it, known before
+   * the first step reports one; it picks the context profile. */
+  contextWindow?: number;
 }
 
 export class ModelClientError extends Error {
@@ -134,7 +138,13 @@ function withoutImages(items: readonly ConversationItem[]): ConversationItem[] {
 }
 
 export class GatewayModelClient implements ModelClient {
-  constructor(private readonly options: GatewayModelClientOptions) {}
+  /** Hosted: providers read prompts fast and bill cached input at a
+   * fraction, so the loop may spend tokens to save steps. */
+  readonly contextHints: ContextHints;
+
+  constructor(private readonly options: GatewayModelClientOptions) {
+    this.contextHints = { hosted: true, ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}) };
+  }
 
   async step(request: ModelStepRequest): Promise<ModelStepResult> {
     const { options } = this;

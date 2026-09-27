@@ -145,6 +145,12 @@ describe('the model-client seam', () => {
     expect(seen).toEqual(['http://127.0.0.1:4321/v1/chat/completions', 'qwen3.5-4b']);
   });
 
+  it('hands the engine\'s window and measured prompt speed to the loop, which picks the context profile from them', async () => {
+    engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 65536, promptPerSecond: 1200 });
+    const client = await modelClientForSession(local(), config);
+    expect(client.contextHints).toEqual({ contextWindow: 65536, promptPerSecond: 1200 });
+  });
+
   it('asks the engine for the session\'s own model, passes progress through, and reports its notice', async () => {
     engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:1/v1', model: 'gpt-oss-20b', contextWindow: 8192, notice: 'slow here' });
     const progress = vi.fn();

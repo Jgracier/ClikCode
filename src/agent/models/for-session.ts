@@ -35,6 +35,31 @@ export function gatewayConnection(config: Conf): { baseUrl: string; apiKey: stri
   return { baseUrl, apiKey };
 }
 
+/** How long a turn waits on the Gateway's model list for a window. The list
+ * is cached for a minute and usually already fetched by the model picker;
+ * a slow answer must not hold up the turn, and without it the Gateway
+ * client still says it is hosted (context-profile.ts). */
+const MODEL_LIST_WAIT_MS = 2_000;
+
+/** The context window the Gateway lists for the model this session will run
+ * (its pick, or the Gateway's automatic one), when it lists one. */
+async function gatewayModelWindow(session: HarnessSession, config: Conf): Promise<number | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    // Imported here: gateway/models.ts imports this module for gatewayConnection.
+    const { gatewayModels } = await import('../../gateway/models.js');
+    const list = await Promise.race([
+      gatewayModels({ config }),
+      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), MODEL_LIST_WAIT_MS); timer.unref(); }),
+    ]);
+    const id = session.model ?? list?.automatic;
+    return list?.models.find((model) => model.id === id)?.contextWindow;
+  } catch {
+    // fail-open-ok: the window only tunes the context profile; the turn runs without it
+    return undefined;
+  } finally { clearTimeout(timer); }
+}
+
 /** The model client for a session that runs ClikCode's own agent. Async
  * because a local engine may have to load or start a model before its first
  * step. Throws, before any turn state is written, when the route cannot
@@ -42,8 +67,10 @@ export function gatewayConnection(config: Conf): { baseUrl: string; apiKey: stri
 export async function modelClientForSession(session: HarnessSession, config: Conf, local: LocalModelHooks = {}): Promise<ModelClient> {
   if (session.route === 'gateway') {
     const { baseUrl, apiKey } = gatewayConnection(config);
+    const contextWindow = await gatewayModelWindow(session, config);
     return new GatewayModelClient({
       baseUrl, apiKey, version: CLIKCODE_VERSION, sessionId: session.id,
+      ...(contextWindow ? { contextWindow } : {}),
       // The model the user chose from the Gateway's list, served from its
       // cheapest provider; none, and the Gateway picks.
       ...(session.model ? { model: session.model } : {}),
@@ -69,6 +96,7 @@ export async function modelClientForSession(session: HarnessSession, config: Con
       // The engine's URL ends in /v1 and the client appends /v1 itself.
       baseUrl: endpoint.baseUrl.replace(/\/v1\/?$/, ''), model: endpoint.model,
       contextWindow: endpoint.contextWindow, label: CLIKCODE_LOCAL_LABEL,
+      ...(endpoint.promptPerSecond ? { promptPerSecond: endpoint.promptPerSecond } : {}),
     });
   }
   throw new Error(`a ${session.route} session runs a vendor harness, not ClikCode's own agent`);

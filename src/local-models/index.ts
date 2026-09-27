@@ -27,7 +27,7 @@ import {
   memoryStopFile, processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
   sweepOrphan, withStartLock, writeLease, type MemoryEvent, type ServerRecord, type ShrinkStep,
 } from './lifecycle.js';
-import { footprintKey, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
+import { footprintKey, latestMeasurement, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
 import { ensureModelFile, missingBytes } from './models.js';
 import { footprintsFile, preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
@@ -65,6 +65,10 @@ export interface LocalModelEndpoint {
   /** The model name to send in requests. */
   model: string;
   contextWindow: number;
+  /** Measured prompt reading speed, tokens/s: the agent's context profile
+   * depends on it. Both the start and the join path read the same stored
+   * measurement, so every turn of a session sees the same number. */
+  promptPerSecond?: number;
   notice?: string;
 }
 
@@ -226,7 +230,11 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     if (!await sessionHeldElsewhere(joinable.modelId, options.sessionId)) await writeLease(joinable.modelId, options.sessionId);
     await removeLeases(options.sessionId, joinable.modelId);
     const notice = shrinkNotice(joinable.memoryEvent);
-    return { baseUrl: `http://127.0.0.1:${joinable.port}/v1`, model: joinable.alias, contextWindow: joinable.context, ...(notice ? { notice } : {}) };
+    const speed = (await latestMeasurement(joinable.modelId))?.promptPerSecond;
+    return {
+      baseUrl: `http://127.0.0.1:${joinable.port}/v1`, model: joinable.alias, contextWindow: joinable.context,
+      ...(speed ? { promptPerSecond: speed } : {}), ...(notice ? { notice } : {}),
+    };
   }
 
   progress({ stage: 'probe', message: 'checking this machine…' });
@@ -320,9 +328,10 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
   }
   const notice = [stopNotice(stops, model, startedFit ?? { context: record.context }), choice.notice, describe(model, measured)]
     .filter(Boolean).join(' ') || undefined;
+  const speed = (await latestMeasurement(model.id))?.promptPerSecond;
   return {
     baseUrl: `http://127.0.0.1:${record.port}/v1`, model: record.alias, contextWindow: record.context,
-    ...(notice ? { notice } : {}),
+    ...(speed ? { promptPerSecond: speed } : {}), ...(notice ? { notice } : {}),
   };
 }
 

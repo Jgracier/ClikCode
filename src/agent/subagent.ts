@@ -112,6 +112,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         ...(parent.addDirs ? { addDirs: parent.addDirs } : {}),
         ...(parent.homeDir ? { homeDir: parent.homeDir } : {}),
         ...(parent.contextWindow ? { contextWindow: parent.contextWindow } : {}),
+        ...(parent.contextProfile ? { contextProfile: parent.contextProfile } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
         ...(options.approve ? { onApproval: options.approve } : {}),
         // Hooks can veto; a sub-agent must not be a way around them.

@@ -5,6 +5,7 @@
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { ToolDefinition, ToolRunResult } from './tool-contract.js';
+import type { ContextHints, ContextProfileName } from './context-profile.js';
 
 export interface TokenUsage {
   input?: number;
@@ -73,13 +74,17 @@ export interface ModelClient {
   /** True when the model can see images sent as `ImageInput`s. Without it
    * the loop does not read attached images into the transcript at all. */
   readonly acceptsImages?: boolean;
+  /** What is known up front about the inference behind this client (its
+   * window, how fast it reads prompts, whether it is hosted). The loop picks
+   * the session's context profile from it (context-profile.ts). */
+  readonly contextHints?: ContextHints;
 }
 
 export type HarnessErrorKind = 'quota' | 'auth' | 'other';
 
 export type PlanEntry = { content: string; status: 'pending' | 'in_progress' | 'completed' };
 
-type UsageReport = TokenUsage & { contextTokens?: number; contextWindow?: number; servedModel?: string };
+type UsageReport = TokenUsage & { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile?: ContextProfileName };
 
 /** Optional pre/post tool interception. A pre hook may only veto (it can
  * never widen permissions); a post hook may only rewrite what the model sees. */
@@ -108,6 +113,10 @@ export interface GatewayHarnessTurnInput {
   maxSteps?: number;
   /** Default context window when the model client reports none. */
   contextWindow?: number;
+  /** The session's own context profile setting. CLIKCODE_CONTEXT_PROFILE
+   * still overrides it; absent, the profile is chosen from the model
+   * client's hints (context-profile.ts). */
+  contextProfile?: ContextProfileName;
   onResponseDelta?: (text: string, mode?: 'append' | 'replace') => void;
   onActivity?: (event: HarnessActivityEvent) => void;
   onPhase?: (phase: string) => void;
@@ -145,6 +154,8 @@ export interface GatewayHarnessTurnResult {
   steps: number;
   /** Why the loop ended. */
   stopReason: 'completed' | 'max-steps' | 'no-progress' | 'model-error';
+  /** The context profile the turn ran under, so usage can be attributed to it. */
+  contextProfile?: ContextProfileName;
 }
 
 export interface ResolvedAddress { address: string; family: 4 | 6 }
