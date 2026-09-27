@@ -9,7 +9,7 @@ import { deleteSessionTranscript, readSessionTranscript, transcriptOf, transcrip
 import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from '../claims.js';
 import { HarnessStateVersionError, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
-import { BaselinedState, STATE_BASELINE, StateBaselineData, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
+import { BaselinedState, STATE_BASELINE, StateBaselineData, baselineOf, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
 import { ensureLayoutLocked } from './migrate.js';
 import { HARNESS_STATE_VERSION, exists, harnessStatePath } from './paths.js';
 import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from './secrets.js';
@@ -51,7 +51,7 @@ async function applyClaimIntent(state: HarnessState, baseline: StateBaselineData
  * file write regardless of how much history exists. */
 export async function writeState(state: HarnessState): Promise<void> {
   const baseline = (state as BaselinedState)[STATE_BASELINE];
-  const dirty = new Set<string>();
+  let written: StateBaselineData | undefined;
   await withStateLock(async () => {
     // A legacy file that appeared (or was never migrated) is folded in first so
     // this write merges against everything that exists.
@@ -59,23 +59,31 @@ export async function writeState(state: HarnessState): Promise<void> {
     const disk = await loadIndex();
     if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
 
+    // What this write stores is taken here, in one synchronous step, and is
+    // exactly what it then remembers as stored. The caller may keep changing
+    // `state` while the files below are written -- a turn checkpoint does: a
+    // message queued mid-write. Remembering the object as it was at the END
+    // recorded that change as already on disk, so the write made for it
+    // found nothing to store, and the queued message was lost.
+    const taken = baselineOf(state, baseline);
+    const sessions = [...(state.sessions ?? [])];
     const next = baseline && disk ? mergedIndex(baseline, state, disk) : indexFromWorking(state, disk);
     next.version = HARNESS_STATE_VERSION;
     capInvocations(next);
 
     // 1. Transcripts first: a session must never be listed before it is readable.
     const diskSessionIds = new Set((disk?.sessions ?? []).map((session) => session.id));
-    for (const session of state.sessions ?? []) {
-      const transcript = transcriptOf(session);
+    for (const session of sessions) {
+      const transcript = taken.sessions.get(session.id)!.transcript;
       const before = baseline?.sessions.get(session.id);
       let changed: boolean;
-      if (before && diskSessionIds.has(session.id)) changed = !sameData(before.transcript, transcript);
+      // baselineOf shares an unchanged transcript with the baseline.
+      if (before && diskSessionIds.has(session.id)) changed = before.transcript !== transcript;
       // New here, or removed elsewhere and re-added by this change: compare
       // with what is actually stored so nothing is written needlessly or lost.
       else changed = !sameData(await readSessionTranscript(session.id), transcript);
       if (!changed) continue;
       await writeSessionTranscript(session.id, transcript, { parentSessionId: transcriptParentOf(session) });
-      dirty.add(session.id);
     }
 
     // 2. The index, only when its content really differs.
@@ -88,19 +96,20 @@ export async function writeState(state: HarnessState): Promise<void> {
     }
 
     // 4. Secrets, only when this caller changed them.
-    const tokenChanged = baseline ? !sameSecret(state.localApiToken, baseline.localApiToken) : !!state.localApiToken;
-    const keyChanged = baseline ? !sameSecret(state.devicePrivateKeyPem, baseline.devicePrivateKeyPem) : !!state.devicePrivateKeyPem;
+    const tokenChanged = baseline ? !sameSecret(taken.localApiToken, baseline.localApiToken) : !!taken.localApiToken;
+    const keyChanged = baseline ? !sameSecret(taken.devicePrivateKeyPem, baseline.devicePrivateKeyPem) : !!taken.devicePrivateKeyPem;
     if (tokenChanged || keyChanged) {
       const secrets = await readSecretsFile();
       const updated: HarnessSecrets = {
-        localApiToken: tokenChanged ? state.localApiToken || undefined : secrets.localApiToken,
-        devicePrivateKeyPem: keyChanged ? state.devicePrivateKeyPem || undefined : secrets.devicePrivateKeyPem,
+        localApiToken: tokenChanged ? taken.localApiToken || undefined : secrets.localApiToken,
+        devicePrivateKeyPem: keyChanged ? taken.devicePrivateKeyPem || undefined : secrets.devicePrivateKeyPem,
       };
       if (!sameData(secrets, updated)) await writeSecretsFile(updated);
     }
+    written = taken;
   });
   await applyClaimIntent(state, baseline);
-  // Later writes from this same object must diff from what it looks like now,
-  // not from the original read.
-  rememberBaseline(state, baseline ? { from: baseline, dirty } : undefined);
+  // Later writes from this same object diff from what this one stored, not
+  // from the original read -- nor from the object as it looks now.
+  rememberBaseline(state, written);
 }

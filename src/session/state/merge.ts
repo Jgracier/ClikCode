@@ -100,20 +100,22 @@ export const STATE_BASELINE = Symbol('clikcode.stateBaseline');
 
 export type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineData };
 
-/** `reuse` carries over entries for sessions known to be unchanged, so the
- * per-checkpoint cost follows what changed rather than total history. */
-export function rememberBaseline(state: HarnessState, reuse?: { from: StateBaselineData; dirty: ReadonlySet<string> }): HarnessState {
+/** `state` exactly as it is at this instant. A transcript equal to the one
+ * `previous` holds is shared with it rather than copied, so a checkpoint's
+ * cost follows what changed rather than total history -- and an unchanged
+ * transcript is recognisable by identity (see writeState). */
+export function baselineOf(state: HarnessState, previous?: StateBaselineData): StateBaselineData {
   const sessions = new Map<string, BaselineSession>();
   for (const session of state.sessions ?? []) {
-    const kept = reuse && !reuse.dirty.has(session.id) ? reuse.from.sessions.get(session.id) : undefined;
+    const kept = previous?.sessions.get(session.id);
     const { meta, transcript, claim } = splitSession(session);
     sessions.set(session.id, {
       meta: cloneData(meta),
-      transcript: kept ? kept.transcript : cloneData(transcript),
+      transcript: kept && sameData(kept.transcript, transcript) ? kept.transcript : cloneData(transcript),
       ...(claim ? { claim: cloneData(claim) } : {}),
     });
   }
-  const baseline: StateBaselineData = {
+  return {
     installationId: state.installationId,
     devicePublicKey: cloneData(state.devicePublicKey),
     localApiToken: state.localApiToken,
@@ -124,6 +126,9 @@ export function rememberBaseline(state: HarnessState, reuse?: { from: StateBasel
     providerSettings: cloneData(state.providerSettings),
     sessions,
   };
+}
+
+export function rememberBaseline(state: HarnessState, baseline: StateBaselineData = baselineOf(state)): HarnessState {
   return hidden(state, STATE_BASELINE, baseline);
 }
 
