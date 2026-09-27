@@ -63,6 +63,9 @@ export interface HarnessTurnObserver {
   onApproval?: (title: string, detail?: string) => Promise<boolean>;
   /** Coarse progress ("generating response", "retrying"), for the waiting line. */
   onPhase?: (phase: string) => void;
+  /** A model step of a multi-step agent turn is starting: the next response
+   * delta begins a new segment of the same reply. */
+  onStepStart?: () => void;
   /** Quota and limit numbers the harness volunteers mid-turn. */
   onRateLimits?: (rateLimits: unknown) => void;
   /** Published with a handler while a turn can be steered, and with nothing

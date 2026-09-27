@@ -67,6 +67,29 @@ describe('a gateway that cannot serve a harness turn', () => {
     expect(title.title).toBe('Fix math add');
   });
 
+  it('keeps the title out of every step of a multi-step reply', async () => {
+    // Production 2026-09-27: step one called a tool; step two opened with the
+    // title again, because the conversation every step re-sends carries the
+    // title request -- and it reached the screen and the transcript.
+    const { StreamingTitle, stripRepeatedTitles, extractSessionTitle } = await import('../session/title');
+    const title = new StreamingTitle();
+    let shown = '';
+    const client = new ScriptedModelClient([
+      { deltas: ['<clikcode-title>Fix math add</clikcode-title>\n'], toolCalls: [{ name: 'read_file', args: { path: 'src/a.ts' } }] },
+      { deltas: ['<clikcode-title>Fix math', ' add</clikcode-title>\n', 'Fixed it.'] },
+    ]);
+    const result = await runGatewayHarnessSessionTurn({
+      session: session(workspace()), prompt: 'fix it', modelClient: client as never,
+      responseFilter: (text, mode) => title.push(text, mode),
+      onStepStart: () => { const held = title.flush(); if (held) shown += held; title.nextStep(); },
+      onResponseDelta: (text) => { shown += text; },
+    });
+    expect(shown).not.toContain('clikcode-title');
+    expect(shown.trim()).toBe('Fixed it.');
+    expect(title.title).toBe('Fix math add');
+    expect(stripRepeatedTitles(extractSessionTitle(result.text).text)).toBe('Fixed it.');
+  });
+
   it('is recognised from the administrator kill switch and a missing endpoint', () => {
     expect(gatewayHarnessUnavailable(new ModelClientError('off', { kind: 'server', statusCode: 503, code: 'CLIKCODE_DISABLED' }))).toBe(true);
     expect(gatewayHarnessUnavailable(new ModelClientError('gone', { kind: 'server', statusCode: 404 }))).toBe(true);
