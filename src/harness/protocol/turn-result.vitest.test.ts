@@ -76,4 +76,61 @@ describe('native harness turn results', () => {
     const failed = JSON.stringify({ ok: false, error: { type: 'cli_error', message: 'No API key found for provider "anthropic".' } });
     expect(nativeTurnResult(openclaw, failed)).toMatchObject({ isError: true, errorKind: 'cli_error', text: 'No API key found for provider "anthropic".' });
   });
+
+  describe('only the assistant authors an answer', () => {
+    // Recorded from cursor-agent 2026-09-26 on a free plan: the stream holds
+    // the init record and the prompt echoed back, then the process exits 1
+    // with the real reason on stderr. The echo used to be returned as the
+    // reply, with the turn marked successful.
+    const cursor = localHarnessForCommand('cursor')!;
+    const echoed = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 'f9b9da2b', model: 'Codex 5.3 Low' }),
+      JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'Reply with exactly PONG' }] }, session_id: 'f9b9da2b' }),
+    ].join('\n');
+
+    it('never returns the prompt echoed back as the reply', () => {
+      expect(() => nativeTurnResult(cursor, echoed)).toThrow(/no assistant text/);
+    });
+
+    it('fails with the reason the process gave on stderr', () => {
+      const stderr = 'ActionRequiredError: Named models unavailable Free plans can only use Auto. Switch to Auto or upgrade plans to continue.\n';
+      let failure: (Error & { stderrTail?: string; exitCode?: number }) | undefined;
+      try { nativeTurnResult(cursor, echoed, { exitCode: 1, stderr }); } catch (error) { failure = error as typeof failure; }
+      expect(failure?.message).toBe('Cursor Agent: ActionRequiredError: Named models unavailable Free plans can only use Auto. Switch to Auto or upgrade plans to continue.');
+      expect(failure?.stderrTail).toContain('Named models unavailable');
+      expect(failure?.exitCode).toBe(1);
+    });
+
+    it('still reads the assistant reply that follows an echoed prompt', () => {
+      const stdout = `${echoed}\n${JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'PONG' }] } })}`;
+      expect(nativeTurnResult(cursor, stdout, { exitCode: 0 }).text).toBe('PONG');
+    });
+
+    it('ignores text in system and tool records wherever it sits', () => {
+      const stdout = [
+        JSON.stringify({ type: 'message', message: { role: 'system', content: 'You are a helpful agent.' } }),
+        JSON.stringify({ type: 'message', message: { role: 'tool', content: 'file contents' } }),
+        JSON.stringify({ type: 'message', message: { role: 'assistant', content: 'Done.' } }),
+      ].join('\n');
+      expect(nativeTurnResult(localHarnessForCommand('vibe')!, stdout).text).toBe('Done.');
+    });
+  });
+
+  describe('plain-text output', () => {
+    const continueCli = localHarnessForCommand('cn')!;
+
+    it('treats a non-zero exit as the failure, explained by what the process printed', () => {
+      let failure: (Error & { stderrTail?: string }) | undefined;
+      try {
+        nativeTurnResult(continueCli, 'Error: You have exceeded your monthly quota\n', { exitCode: 1, stderr: '' });
+      } catch (error) { failure = error as typeof failure; }
+      expect(failure?.message).toBe('Continue: Error: You have exceeded your monthly quota');
+      // Not an answer, so it is safe to classify: failover reads it as quota.
+      expect(failure?.stderrTail).toContain('exceeded your monthly quota');
+    });
+
+    it('returns the output as the answer on a clean exit', () => {
+      expect(nativeTurnResult(continueCli, 'PONG\n', { exitCode: 0 }).text).toBe('PONG');
+    });
+  });
 });

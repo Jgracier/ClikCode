@@ -411,7 +411,7 @@ export async function aiSessionSend(
           },
         });
         if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-        let cliResult = nativeTurnResult(cliHarness, turnOutput.stdout);
+        let cliResult = nativeTurnResult(cliHarness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });
         // Aider's stdout is its banner, the answer and a cost footer; its own
         // chat history file holds the answer alone (see events/aider.ts).
         if (cliHarness.parser === 'aider') {
