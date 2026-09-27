@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { ConversationStore } from './conversation.js';
 import { runGatewayHarnessTurn } from './run-turn.js';
-import { disposeSessionState } from './session-state.js';
+import { disposeSessionState, formatShellNotifications, sessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
 import { type GatewayHarnessTurnInput } from './model-client.js';
 import { defineTool, type ToolDefinition } from './tool-contract.js';
@@ -184,6 +184,82 @@ describe('runGatewayHarnessTurn', () => {
     expect(alive).toBe(false);
     expect(steerStates).toEqual([true, false]);
   }, 15_000);
+
+  describe('background shells', () => {
+    /** Resolves on the session's next shell notification: the same hook the worker uses. */
+    const nextNotification = (sessionId: string): Promise<void> => new Promise((resolve) => {
+      sessionState(stateDir, sessionId).onNotification = () => resolve();
+    });
+
+    it('queue a notification with the exit code and unread tail when they finish, and call the listener', async () => {
+      const gate = path.join(cwd, 'gate');
+      const h = harness([
+        { toolCalls: [{ name: 'bash', args: { command: `while [ ! -e ${JSON.stringify(gate)} ]; do sleep 0.02; done; echo started; echo secret-free-tail; exit 3`, run_in_background: true } }] },
+        { text: 'started it' },
+      ]);
+      const exited = nextNotification(h.input.sessionId);
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result.text).toBe('started it');
+      const told = h.client.requests[1].items.at(-1);
+      expect(told?.type === 'tool_result' && told.output).toMatch(/You will be told when it exits/);
+      await fs.writeFile(gate, '');
+      await exited;
+      const state = sessionState(stateDir, h.input.sessionId);
+      expect(state.notifications).toHaveLength(1);
+      expect(state.notifications[0]).toMatchObject({ shellId: 'bash_1', exitCode: 3 });
+      expect(formatShellNotifications(state.notifications)).toMatch(/^\[background shell bash_1 exited \(code 3\)\] while .*; exit 3\nstarted\nsecret-free-tail$/);
+      disposeSessionState(stateDir, h.input.sessionId);
+    });
+
+    it('are handed to the model at the top of the next step, once', async () => {
+      let exited!: Promise<void>;
+      const h = harness([
+        { toolCalls: [{ name: 'bash', args: { command: 'echo built', run_in_background: true } }] },
+        { toolCalls: [{ name: 'list_dir', args: {} }], before: () => exited },
+        { text: 'saw it' },
+      ]);
+      exited = nextNotification(h.input.sessionId);
+      const events: string[] = [];
+      await runGatewayHarnessTurn({ ...h.input, onActivity: (event) => events.push(`${event.kind}:${event.label}`) });
+      const third = h.client.requests[2].items;
+      const notices = third.filter((item) => item.type === 'text' && item.text.startsWith('[background shell bash_1 exited (code 0)]'));
+      expect(notices).toHaveLength(1);
+      expect(events).toContain('tool-done:bash_1 exited: echo built');
+      expect(sessionState(stateDir, h.input.sessionId).notifications).toHaveLength(0);
+      disposeSessionState(stateDir, h.input.sessionId);
+    });
+
+    it('keep the turn going when one finishes during what would have been the last step', async () => {
+      let exited!: Promise<void>;
+      const h = harness([
+        { toolCalls: [{ name: 'bash', args: { command: `while [ ! -e gate ]; do sleep 0.02; done; echo done`, run_in_background: true } }] },
+        { text: 'waiting for it', before: async () => { await fs.writeFile(path.join(cwd, 'gate'), ''); await exited; } },
+        { text: 'it finished' },
+      ]);
+      exited = nextNotification(h.input.sessionId);
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result).toMatchObject({ steps: 3, text: 'waiting for it\n\nit finished' });
+      const last = h.client.requests[2].items.at(-1);
+      expect(last?.type === 'text' && last.text).toMatch(/^\[background shell bash_1 exited \(code 0\)\] while .*; echo done\ndone$/);
+      disposeSessionState(stateDir, h.input.sessionId);
+    });
+
+    it('stopped by kill_bash are not reported back; disposing reports the ones it kills', async () => {
+      const h = harness([
+        { toolCalls: [{ name: 'bash', args: { command: 'sleep 30', run_in_background: true } }] },
+        { toolCalls: [{ name: 'kill_bash', args: { id: 'bash_1' } }] },
+        { toolCalls: [{ name: 'bash', args: { command: 'sleep 31', run_in_background: true } }] },
+        { text: 'ok' },
+      ]);
+      await runGatewayHarnessTurn(h.input);
+      const state = sessionState(stateDir, h.input.sessionId);
+      const killed = state.shells.get('bash_1')!;
+      if (killed.exitCode === undefined) await new Promise((resolve) => killed.child.once('close', resolve));
+      expect(state.notifications).toHaveLength(0);
+      const undelivered = disposeSessionState(stateDir, h.input.sessionId, 'the worker stopped');
+      expect(undelivered).toEqual([expect.objectContaining({ shellId: 'bash_2', command: 'sleep 31', reason: 'the worker stopped' })]);
+    });
+  });
 
   it('rejects immediately when the signal is already aborted', async () => {
     const controller = new AbortController();

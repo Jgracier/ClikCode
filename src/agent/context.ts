@@ -39,7 +39,7 @@ const EDITING_FILES = `# Editing files
 - Never write secrets into files, and never edit .git internals.`;
 const SHELL = `# Shell
 - bash is for running programs (builds, tests, git, package managers), not for reading or editing files.
-- Commands are non-interactive and time-limited. Start servers and watchers with run_in_background and poll them with bash_output.
+- Commands are non-interactive and time-limited. Start servers, watchers and long jobs with run_in_background: you are told when one exits, so do not poll or sleep waiting for it; end your turn if nothing else is left.
 - Some actions need the user's approval. If a call is denied, do not retry it or work around it; adapt or explain what you need.`;
 const SAFETY = `# Safety
 - Stay inside the working directory unless the user points you elsewhere.

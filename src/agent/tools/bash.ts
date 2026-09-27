@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { killProcessTreePortable, spawnPortable } from '../../harness/transport/spawn.js';
 import { classifyCommand, OUTPUT_CAPS, redactSecrets, scrubEnvironment, toolOutputDir } from '../security.js';
-import type { BackgroundShell } from '../session-state.js';
+import { queueShellNotification, type BackgroundShell } from '../session-state.js';
 import { turnCancelledError } from '../cancellation.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { scopeOf } from './fs-helpers.js';
@@ -16,6 +16,8 @@ const BASH_DEFAULT_TIMEOUT_MS = 120_000;
 const BASH_MAX_TIMEOUT_MS = 600_000;
 const KILL_GRACE_MS = 1500;
 const BACKGROUND_BUFFER_CHARS = 1024 * 1024;
+/** How much unread output an exit notification carries; the rest stays for bash_output. */
+const NOTIFICATION_TAIL_CHARS = 2000;
 
 function shellInvocation(command: string): { file: string; args: string[] } {
   if (process.platform === 'win32') return { file: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command] };
@@ -104,15 +106,28 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
   child.stdout!.setEncoding('utf8').on('data', onData);
   child.stderr!.setEncoding('utf8').on('data', onData);
   child.once('error', (error) => { onData(`\n[failed to start: ${error.message}]`); if (shell.status === 'running') shell.status = 'exited'; });
-  child.once('close', (code, signal) => { if (shell.status === 'running') shell.status = 'exited'; shell.exitCode = code; shell.signal = signal; });
+  child.once('close', (code, signal) => {
+    // The model stopped it with kill_bash and already knows. Anything else --
+    // it finished, it crashed, the worker's ceiling stopped it -- is news.
+    const tell = shell.status === 'running' || shell.killReason !== undefined;
+    if (shell.status === 'running') shell.status = 'exited';
+    shell.exitCode = code;
+    shell.signal = signal;
+    if (!tell) return;
+    const unread = shell.unread.length > NOTIFICATION_TAIL_CHARS ? `… ${shell.unread.slice(-NOTIFICATION_TAIL_CHARS)}` : shell.unread;
+    queueShellNotification(ctx.session, {
+      shellId: id, command: args.command, exitCode: code, signal, tail: redactSecrets(unread),
+      ...(shell.killReason ? { reason: shell.killReason } : {}), at: Date.now(),
+    });
+  });
   ctx.session.shells.set(id, shell);
-  return { output: `Started background shell ${id}. Check it with bash_output (id "${id}") and stop it with kill_bash.` };
+  return { output: `Started background shell ${id}. You will be told when it exits, with the end of its output: do not poll it or sleep waiting for it. Carry on with other work, or end your turn if there is nothing else to do. bash_output (id "${id}") reads its output so far; kill_bash stops it.` };
 }
 
 export const bashTool = defineTool<BashArgs>({
   name: 'bash',
   class: 'exec',
-  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers and watchers, then poll with bash_output. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Commands are non-interactive: never start editors or prompts.',
+  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs: you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message. bash_output reads the output of a background shell so far. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Commands are non-interactive: never start editors or prompts.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['command'],
     properties: {
