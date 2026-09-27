@@ -47,7 +47,7 @@ interface ServerState {
   connecting?: Promise<void>;
   /** Set by `notifications/tools/list_changed`; the next turn re-lists. */
   stale?: boolean;
-  failure?: { message: string; at: number };
+  failure?: { message: string; at: number; reported?: boolean };
 }
 
 function firstLine(error: unknown): string {
@@ -84,7 +84,13 @@ export class McpManager {
     const taken = new Set<string>();
     for (const state of this.servers.values()) {
       if (!state.client || !state.tools) {
-        if (state.failure) notes.push(`MCP server "${state.spec.name}" is unavailable, so its tools are not offered: ${state.failure.message}`);
+        // Said once per failure, not on every turn: a server that stays down
+        // (one needing a login the agent cannot do) would otherwise add the
+        // same line to every conversation. A different reason is said again.
+        if (state.failure && !state.failure.reported) {
+          notes.push(`MCP server "${state.spec.name}" is unavailable, so its tools are not offered: ${state.failure.message}`);
+          state.failure.reported = true;
+        }
         continue;
       }
       for (const info of state.tools) {
@@ -156,7 +162,8 @@ export class McpManager {
       state.tools = await state.client.listTools(this.timeouts.connectMs);
       state.failure = undefined;
     } catch (error) {
-      state.failure = { message: firstLine(error), at: this.now() };
+      const message = firstLine(error);
+      state.failure = { message, at: this.now(), reported: state.failure?.message === message && state.failure.reported };
       await this.stop(state);
     }
   }

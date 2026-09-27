@@ -205,10 +205,16 @@ describe('a stdio server', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]).toMatch(/"broken" is unavailable/);
     expect(notes[0]).toMatch(/could not open the database/);
-    // Not retried on every turn: the note stands until the backoff passes.
+    // Not retried on every turn, and said once: a server that stays down
+    // does not add the same line to every turn.
     const started = Date.now();
-    expect((await mcp.toolset()).notes[0]).toMatch(/"broken"/);
+    expect((await mcp.toolset()).notes).toEqual([]);
     expect(Date.now() - started).toBeLessThan(500);
+    // Retried after the backoff; failing again for the same reason is not news.
+    clock += 61_000;
+    const retried = await mcp.toolset();
+    expect(retried.notes).toEqual([]);
+    expect(retried.tools.every((tool) => tool.name.startsWith('mcp__good__'))).toBe(true);
   });
 
   it('a command that does not exist is a note, not a failed turn', async () => {
