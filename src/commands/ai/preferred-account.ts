@@ -9,13 +9,14 @@
 
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessState } from '../../session/model.js';
+import { accountCanTakeTurn, accountQuotaSpent } from '../../harness/accounts/usage-reading.js';
 
 export function preferredAccountId(
   state: HarnessState, provider: string, current?: string | null,
   where: (account: AiHarnessAccount) => boolean = () => true,
 ): string | null {
   const ready = state.accounts.filter((account) => account.provider === provider
-    && account.status === 'ready' && account.quotaState !== 'exhausted' && !account.verification && where(account));
+    && accountCanTakeTurn(account) && where(account));
   if (!ready.length) return null;
   if (current && ready.some((account) => account.id === current)) return current;
   const lastUsed = [...state.sessions]
@@ -37,13 +38,13 @@ export function signedInAccountId(
 ): string | null {
   const signedIn = state.accounts.filter((account) => account.provider === provider && account.status === 'ready' && where(account));
   if (!signedIn.length) return null;
-  const usable = signedIn.filter((account) => account.quotaState !== 'exhausted' && !account.verification);
+  const usable = signedIn.filter((account) => accountCanTakeTurn(account));
   const pool = usable.length ? usable : signedIn;
   if (current && pool.some((account) => account.id === current)) return current;
   const lastUsed = [...state.sessions]
     .filter((session) => session.accountId && pool.some((account) => account.id === session.accountId))
     .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.accountId;
   if (lastUsed) return lastUsed;
-  const rank = (account: AiHarnessAccount): number => (account.quotaState === 'exhausted' ? 2 : 0) + (account.verification ? 1 : 0);
+  const rank = (account: AiHarnessAccount): number => (accountQuotaSpent(account) ? 2 : 0) + (account.verification ? 1 : 0);
   return [...pool].sort((left, right) => rank(left) - rank(right))[0]!.id;
 }

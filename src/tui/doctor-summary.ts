@@ -7,6 +7,7 @@ import { compactPath } from '../harness/protocol/labels.js';
 import { harnessStatePath } from '../session/state/paths.js';
 import { allLocalHarnesses, harnessCanRunTurns } from '../runtime/lazy-bridge.js';
 import { integrationLabel } from '../session/options.js';
+import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
 
 /** Human-readable health summary for the TUI (the headless /doctor is JSON). */
 export async function doctorSummary(state: HarnessState): Promise<string> {
@@ -18,7 +19,7 @@ export async function doctorSummary(state: HarnessState): Promise<string> {
     ...installed.map(({ harness, inspection }) => `  ${harness.displayName}${inspection.version ? ` ${inspection.version}` : ''} · ${integrationLabel(harness)}`),
     '',
     `Accounts (${state.accounts.length})`,
-    ...(state.accounts.length ? state.accounts.map((account) => `  ${account.label} · ${account.provider} · ${account.status === 'needs_login' ? 'needs reauthentication' : account.status}${account.quotaState === 'exhausted' ? ' · quota exhausted' : ''}${account.verification ? ' · needs verification' : ''}`) : ['  none yet — /provider adds one']),
+    ...(state.accounts.length ? state.accounts.map((account) => `  ${account.label} · ${account.provider} · ${account.status === 'needs_login' ? 'needs reauthentication' : account.status}${accountQuotaSpent(account) ? ' · quota exhausted' : ''}${account.verification ? ' · needs verification' : ''}`) : ['  none yet — /provider adds one']),
     '',
     `State: ${compactPath(harnessStatePath())}`,
   ].join('\n');
