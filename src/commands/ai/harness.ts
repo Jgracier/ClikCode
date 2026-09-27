@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { ensureNativeHarness, inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { HarnessSession } from '../../session/model.js';
 import { hermesTurboFitInstalled, installHermesTurboFit, registerHermesTurboFitProvider, restoreHermesPluginScan } from '../../harness/accounts/hermes-discovery.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
@@ -215,7 +216,11 @@ export async function resolveChat(ref: string): Promise<string> {
 }
 
 /** `clikcode send`: the chat to send in, ready for a turn. */
-export async function startOrResumeChat(options: { harness?: string; chat?: string; model?: string }): Promise<string> {
+export async function startOrResumeChat(options: { harness?: string; chat?: string; model?: string; permissions?: string }): Promise<string> {
+  // `--harness clikcode-local` (or `gateway`) names a route that runs
+  // ClikCode's own agent rather than a vendor harness; a script reaching for
+  // "the local model" should not have to learn sessions create/set/send.
+  if (options.harness === 'clikcode-local' || options.harness === 'gateway') return startOrResumeAgentChat({ ...options, route: options.harness });
   let id: string;
   if (options.chat) id = await resolveChat(options.chat);
   else {
@@ -240,6 +245,7 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
     }
   }
   await ensureChatReady(id);
+  if (options.permissions) await setChatPermissions(id, options.permissions);
   if (options.model) {
     const state = await readState();
     const session = state.sessions.find((item) => item.id === id);
@@ -251,4 +257,53 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
     }
   }
   return id;
+}
+
+/** `send --permissions`: the approval mode for this chat, checked against
+ * what its agent can actually honour -- a mode the provider cannot carry to
+ * a real flag is refused rather than stored and silently ignored. */
+async function setChatPermissions(id: string, mode: string): Promise<void> {
+  const { sessionPermissionModes, setSessionHarnessOption } = await import('../../session/options.js');
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const harness = !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  const supported = sessionPermissionModes(session, harness);
+  if (!supported.includes(mode as AiHarnessPermissionMode)) {
+    throw new Error(`${sessionProviderLabel(session)} supports ${supported.join(', ') || 'no'} permission modes, not ${mode}`);
+  }
+  // The same write /permissions makes: a vendor harness carries the mode
+  // as its own option, ClikCode's agent reads it off the session.
+  if (harness) setSessionHarnessOption(session, harness, 'permissions', mode);
+  else session.permissionMode = mode as AiHarnessPermissionMode;
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
+}
+
+/** A new chat on ClikCode Local or the Gateway, or an existing one already
+ * there, with the model and approval mode asked for. */
+async function startOrResumeAgentChat(options: { route: 'clikcode-local' | 'gateway'; chat?: string; model?: string; permissions?: string }): Promise<string> {
+  const { applyClikCodeAgentSessionPolicy, launchSession } = await import('./sessions.js');
+  const state = await readState();
+  let session: HarnessSession | undefined;
+  if (options.chat) {
+    const id = await resolveChat(options.chat);
+    session = state.sessions.find((item) => item.id === id);
+    if (session && session.route !== options.route) {
+      throw new Error(`that chat runs on ${sessionProviderLabel(session)}; move it with /provider, or leave out --chat to start a new one`);
+    }
+  } else {
+    session = launchSession(state, process.cwd());
+    applyClikCodeAgentSessionPolicy(session, options.route);
+    state.sessions.push(session);
+  }
+  if (!session) throw new Error(`AI session "${options.chat}" was not found`);
+  if (options.model) {
+    if (options.route === 'gateway') throw new Error('ClikDeploy Gateway selects the model by platform policy.');
+    const { resolveLocalModelId } = await import('../../local-models/catalog.js');
+    session.model = resolveLocalModelId(options.model);
+  }
+  await writeState(state);
+  if (options.permissions) await setChatPermissions(session.id, options.permissions);
+  return session.id;
 }

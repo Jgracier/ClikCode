@@ -52,6 +52,21 @@ export async function writeLease(modelId: string, sessionId: string): Promise<vo
     JSON.stringify({ pid: process.pid, session: sessionId, at: new Date().toISOString() }));
 }
 
+/** Whether a live process other than this one holds this session's lease on
+ * a model. The interactive terminal takes the lease before handing a turn to
+ * its worker; the worker, which outlives the terminal, then joins without
+ * one, so the model stops when the terminal does and not when the worker
+ * eventually exits. */
+export async function sessionHeldElsewhere(modelId: string, sessionId: string): Promise<boolean> {
+  const suffix = `-${safeName(sessionId)}.json`;
+  for (const name of await readdir(leasesDir(modelId)).catch(() => [] as string[])) {
+    if (!name.endsWith(suffix)) continue;
+    const pid = Number(name.slice(0, name.indexOf('-')));
+    if (pid !== process.pid && processAlive(pid)) return true;
+  }
+  return false;
+}
+
 /** Drop this process's leases for a session, on every model, except the
  * one named in `keep` (a session that moved to another model keeps only
  * its new one). */

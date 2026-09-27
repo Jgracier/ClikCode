@@ -9,6 +9,7 @@
  */
 import { isClikCodeAgent } from '../../session/route.js';
 import { ensureTurboFitForTurn } from './turbofit.js';
+import { ensureLocalModelForTurn, reconcileLocalModelLeases } from './local-model.js';
 import { chatNamed, latestChat } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { discardIfBlank } from '../../session/blank.js';
@@ -290,6 +291,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const latestState = await readState();
         const latest = latestState.sessions.find((item) => item.id === id);
         if (!latest) break;
+        // Whatever the last command or turn did to the conversation this
+        // terminal shows, it holds a local model for that one alone.
+        await reconcileLocalModelLeases(latest);
         activeWorkspace = latest.workspace ?? process.cwd();
         if (synchronizedSessionId !== id) {
           if (await synchronizeNativeTranscript(latestState, latest)) await writeState(latestState);
@@ -341,6 +345,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         if (active && activeHarness) {
           await ensureTurboFitForTurn(activeHarness, activeState.accounts.find((item) => item.id === active.accountId), targetId, active.model);
         }
+        // Likewise a ClikCode Local model: loaded here, with its progress on
+        // the waiting line, and held by this terminal rather than the worker.
+        await ensureLocalModelForTurn(active);
         const run = {
           persistentTransports: true,
           ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}),
@@ -744,6 +751,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     if (claimInterval) clearInterval(claimInterval);
     await closeAllWorkerClients().catch(() => undefined);
     await closePersistentTransport().catch(() => undefined);
+    // The terminal is leaving: nothing it showed keeps a local model up,
+    // even if this process lives on (the exit hook covers a hard exit).
+    await reconcileLocalModelLeases(undefined).catch(() => undefined);
     // Hand the conversation back so the next terminal can resume it. Best
     // effort: a failure here only means the claim expires on its own TTL.
     await releaseSessionClaim(id).catch(() => undefined);

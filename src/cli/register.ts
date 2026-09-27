@@ -68,10 +68,11 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // continue one), bound to an account, and the message sent. It took four
   // before -- sessions create, accounts add, sessions set, sessions send.
   program.command('send <prompt...>').description('Send a message: in a new chat, or --chat <id|name|last> to continue one')
-    .option('--harness <harness>', 'Harness to run it on, e.g. claude or codex (default: the one you are signed in to)')
+    .option('--harness <harness>', 'Harness to run it on, e.g. claude, codex, or clikcode-local (default: the one you are signed in to)')
     .option('--chat <chat>', 'Continue this chat: its id or the start of it, its name, or last')
     .option('--model <model>', 'Model to use')
-    .action(async (prompt: string[], options: { harness?: string; chat?: string; model?: string }) => {
+    .option('--permissions <mode>', 'ask, auto, or bypass for this chat (default: your global setting)')
+    .action(async (prompt: string[], options: { harness?: string; chat?: string; model?: string; permissions?: string }) => {
       const id = await startOrResumeChat(options);
       await untilStopped((signal) => aiGatewaySessionSend(config, id, prompt.join(' '), signal));
     });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,11 +11,21 @@ import { resolveSlashCommand } from '../tui/slash/registry';
 import { compactConversation } from '../tui/slash/compact';
 import { capabilitiesText } from '../tui/slash/capabilities-text';
 import { contextUsageText } from '../tui/slash/cost';
-import { CLIKCODE_LOCAL_NOT_INSTALLED, modelClientForSession } from '../agent/models/for-session';
+import { modelClientForSession } from '../agent/models/for-session';
+import { OpenAIModelClient } from '../agent/models/openai-client';
 import { aiGatewaySessionSend } from '../turn/drive';
 import { readState } from './state/read';
 import { writeState } from './state/write';
 import type { HarnessSession, HarnessState } from './model';
+
+// The engine is mocked: these tests are about what the seam does with it,
+// and the real one would probe this machine and start a llama-server.
+const engine = vi.hoisted(() => ({ ensureLocalModel: vi.fn() }));
+vi.mock('../local-models/index', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../local-models/index')>(),
+  ensureLocalModel: engine.ensureLocalModel,
+  releaseLocalModelsOnExit: () => undefined,
+}));
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'local', accountId: 'acct', provider: 'vendor', model: 'm', effort: 'high',
@@ -56,7 +66,7 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
   });
 
   it('has no vendor-harness slash commands, and says why in its own name', () => {
-    for (const name of ['native', 'login', 'model', 'effort', 'options']) {
+    for (const name of ['native', 'login', 'effort', 'options']) {
       const availability = resolveSlashCommand(name)!.availability(local(), undefined);
       expect(availability.available, `/${name} offered on ClikCode Local`).toBe(false);
       expect(availability.reason).toContain('ClikCode Local');
@@ -64,7 +74,8 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
     // The Gateway's reasons are unchanged; its model is the user's to choose.
     expect(resolveSlashCommand('effort')!.availability(gateway(), undefined).reason).toContain('ClikDeploy Gateway');
     expect(resolveSlashCommand('model')!.availability(gateway(), undefined).available).toBe(true);
-    for (const name of ['permissions', 'add-dir', 'init', 'review']) {
+    // /model picks from ClikCode Local's own catalog.
+    for (const name of ['permissions', 'add-dir', 'init', 'review', 'model']) {
       expect(resolveSlashCommand(name)!.availability(local(), undefined).available, `/${name} refused on ClikCode Local`).toBe(true);
     }
   });
@@ -111,8 +122,42 @@ describe('the provider picker', () => {
 describe('the model-client seam', () => {
   const config = { get: () => undefined } as never;
 
-  it('says plainly that ClikCode Local cannot serve a turn in this build', async () => {
-    await expect(modelClientForSession(local(), config)).rejects.toThrow(CLIKCODE_LOCAL_NOT_INSTALLED);
+  beforeEach(() => {
+    engine.ensureLocalModel.mockReset();
+    engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:4321/v1', model: 'qwen3.5-4b', contextWindow: 32768 });
+  });
+
+  it('runs ClikCode Local on the engine\'s endpoint, with its /v1 not doubled', async () => {
+    const routed = local();
+    const client = await modelClientForSession(routed, config);
+    expect(client).toBeInstanceOf(OpenAIModelClient);
+    expect(engine.ensureLocalModel).toHaveBeenCalledWith({ sessionId: 's1' });
+    // The session now names what the engine chose, so its later turns stay on it.
+    expect(routed.model).toBe('qwen3.5-4b');
+    const seen: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      seen.push(String(url), JSON.parse(String(init?.body)).model);
+      throw new Error('refused');
+    });
+    try {
+      await expect(client.step({ system: 's', items: [], tools: [] } as never)).rejects.toThrow(/ClikCode Local at http:\/\/127\.0\.0\.1:4321/);
+    } finally { fetchSpy.mockRestore(); }
+    expect(seen).toEqual(['http://127.0.0.1:4321/v1/chat/completions', 'qwen3.5-4b']);
+  });
+
+  it('asks the engine for the session\'s own model, passes progress through, and reports its notice', async () => {
+    engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:1/v1', model: 'gpt-oss-20b', contextWindow: 8192, notice: 'slow here' });
+    const progress = vi.fn();
+    const notice = vi.fn();
+    const routed = { ...local(), model: 'gpt-oss-20b' };
+    await modelClientForSession(routed, config, { progress, notice });
+    expect(engine.ensureLocalModel).toHaveBeenCalledWith({ modelId: 'gpt-oss-20b', sessionId: 's1', progress });
+    expect(notice).toHaveBeenCalledWith('slow here');
+  });
+
+  it('fails as the engine fails, before any client exists', async () => {
+    engine.ensureLocalModel.mockRejectedValue(new Error('Ornith would exceed the memory this machine can spare'));
+    await expect(modelClientForSession(local(), config)).rejects.toThrow(/exceed the memory/);
   });
 
   it('refuses a vendor-harness session, which never runs this agent', async () => {
@@ -128,12 +173,13 @@ describe('the model-client seam', () => {
     });
 
     it('takes the agent path, fails at the seam, and records no turn', async () => {
+      engine.ensureLocalModel.mockRejectedValue(new Error('the local model did not start'));
       const state = await readState();
       state.sessions.push({ ...local(), workspace: process.env.CLIKCODE_HOME! });
       await writeState(state);
       // Not "no account selected": that would mean it went down the vendor
       // harness path. Not a Gateway sign-in error either.
-      await expect(aiGatewaySessionSend(config, 's1', 'hello')).rejects.toThrow(CLIKCODE_LOCAL_NOT_INSTALLED);
+      await expect(aiGatewaySessionSend(config, 's1', 'hello')).rejects.toThrow('the local model did not start');
       const after = (await readState()).sessions.find((item) => item.id === 's1')!;
       expect(after.messages ?? []).toEqual([]);
       expect(after.pendingTurn).toBeUndefined();
