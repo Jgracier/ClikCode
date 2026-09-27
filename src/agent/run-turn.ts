@@ -8,7 +8,7 @@ import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, suggestPermissionRule, visibleTools, type PermissionRules } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
-import { sessionState } from './session-state.js';
+import { formatShellNotifications, sessionState, takeShellNotifications } from './session-state.js';
 import { discoverSkills, SKILL_TOOL, skillsPromptSection } from './skills.js';
 import { defaultTools, mergeTools, toolSpecs } from './tools/registry.js';
 import { exposeTools } from './mcp/deferred.js';
@@ -313,6 +313,13 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     for (;;) {
       throwIfAborted();
       if (steerQueue.length) await append(...steerQueue.splice(0).map((text): ConversationItem => ({ type: 'text', role: 'user', text })));
+      // Background shells that finished since the last step. The model was
+      // told it would hear about them rather than poll, so it hears here.
+      const finished = input.subagent ? [] : takeShellNotifications(session);
+      if (finished.length) {
+        for (const note of finished) input.onActivity?.({ kind: 'tool-done', label: `${note.shellId} ${note.reason ? 'stopped' : 'exited'}: ${note.command}`, id: `shell-exit-${note.shellId}`, category: 'run' });
+        await append({ type: 'text', role: 'user', text: formatShellNotifications(finished) });
+      }
 
       const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
       const system = session.plan.active ? `${baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : baseSystem;
@@ -410,7 +417,9 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
 
       if (finalOnly) return result({ stopReason: 'no-progress', isError: true, errorKind: 'other' });
       if (!calls.length) {
-        if (steerQueue.length) continue;
+        // Steering, or a background shell that finished while this step ran:
+        // one more step answers it now rather than in a follow-up turn.
+        if (steerQueue.length || (!input.subagent && session.notifications.length)) continue;
         return result({ stopReason: 'completed' });
       }
 
