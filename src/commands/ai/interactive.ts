@@ -33,7 +33,7 @@ import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { commandDuringTurn, enqueueCommandLine } from '../../tui/slash/queue.js';
 import { impliedHarnessCommand } from '../../tui/slash/infer-provider.js';
 import { aiHarnessSelect } from './harness.js';
-import { nativeUsageReading } from '../../harness/accounts/account-usage.js';
+import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, discardInterruptedTurn, nativeAvailableCommands, persistentTransports, preserveInterruptedTurn, synchronizeNativeTranscript, turnEnvironment } from '../../turn/runtime.js';
@@ -59,7 +59,7 @@ import { exportTranscript } from '../../tui/slash/export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory.js';
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
-import { interactiveResumeInPicker } from '../../tui/pickers/resume-in.js';
+import { interactiveResumeInPicker, sameProviderCanTakeTurn } from '../../tui/pickers/resume-in.js';
 import { chooseOption } from '../../tui/pickers/choose.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
@@ -261,6 +261,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     void readState().then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
       if (latest) refreshUsage(latest, latestState);
+      // The other accounts too, but only one whose quota may have come back:
+      // otherwise an account that ran out showed its last "0% left" until
+      // someone happened to open the picker, and read as spent for hours.
+      return recheckRecoveredAccounts(latestState);
     }).catch(() => { /* Usage is optional provider metadata. */ });
     // Half the usage window, so every other tick finds the reading expired and
     // refreshes it. A tick longer than the window would land inside it and
@@ -270,6 +274,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   /** A message to send next, without asking: the one that ran out of usage,
    * after "Resume in" moved the chat to a harness that has some. */
   let resend: string | undefined;
+  /** The message last re-sent because its own provider had an account back;
+   * never twice, so a record that keeps flipping cannot loop. */
+  let autoResent: string | undefined;
   let synchronizedSessionId = id;
   let transportSessionId = id;
   try {
@@ -735,11 +742,24 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // Out of usage on every account here: offer the harnesses that
           // still have some, and carry on there with the same message.
           if (!cancelled && !queuedTurnId && isUsageExhaustedMessage(message) && rl instanceof TerminalHarnessPrompter) {
-            const moved = await interactiveResumeInPicker(rl, id, line).catch(() => undefined);
-            if (moved) {
-              id = moved;
+            // An account of this provider got its quota back after failover
+            // looked (a re-read landed meanwhile): send it again here, once,
+            // rather than offering to leave the provider.
+            const again = line !== autoResent && await sameProviderCanTakeTurn(id).catch(() => false);
+            if (again) {
+              // As Resume in does: the message is sent again, so it must not
+              // also stay behind as the interrupted turn.
+              await discardInterruptedTurn(id, line).catch(() => undefined);
+              autoResent = line;
               resend = line;
               notice = undefined;
+            } else {
+              const moved = await interactiveResumeInPicker(rl, id, line).catch(() => undefined);
+              if (moved) {
+                id = moved;
+                resend = line;
+                notice = undefined;
+              }
             }
           }
         }

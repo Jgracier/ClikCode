@@ -8,7 +8,7 @@ import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES, NATIVE_USAGE_READING_PROBES } from './usage-probes.js';
 import { learnedUsageReading } from './usage-learning.js';
-import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, usageCacheKey, usageReadingIsCurrent } from './usage-reading.js';
+import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, quotaMarkExpiresAt, quotaMarkedAt, settleQuotaMark, usageCacheKey, usageReadingIsCurrent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 
 /** The structured reading behind nativeUsageLabel: same caching, same sharing. */
@@ -90,6 +90,9 @@ export async function nativeUsageReading(
   nativeUsageCache.set(cacheKey, next);
   if (account) {
     account.usage = accountUsageFrom(next);
+    // The moment a reading shows room, the refusal it overtakes is cleared on
+    // the record too -- not left for the next failover to notice.
+    if (reading?.label !== undefined) settleQuotaMark(account);
     // writeState merges per field, so publishing this reading cannot disturb
     // anything another terminal changed meanwhile.
     await writeState(state).catch(() => undefined);
@@ -157,4 +160,58 @@ export function cachedAccountUsageLabel(account: AiHarnessAccount, state: Harnes
   const reported = nativeUsageCache.get(usageCacheKey(harness.command, account.id));
   if (!reported || reported.failed || !(reported.windows?.length ?? 0)) return undefined;
   return usageReadingIsCurrent(reported) ? reported.label : undefined;
+}
+
+/** Accounts that were out of quota and may not be any more, on a harness
+ * that can be asked.
+ *
+ * Only the chat's own account was ever re-read, so an account that ran out
+ * kept its last reading -- "5h 0% left" -- until someone opened the picker,
+ * and nothing said its quota had come back. Due when that reading has gone
+ * past a reset it describes, or when the refusal it is marked with has
+ * expired and no reading since has said otherwise. */
+function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
+  let command: string | undefined;
+  try { command = localHarnessForProvider(account.provider)?.command; } catch { command = undefined; }
+  return Boolean(command && NATIVE_USAGE_PROBES[command]);
+}
+
+export function accountsDueForUsageRecheck(
+  state: HarnessState, now: number = Date.now(), canBeAsked: (account: AiHarnessAccount) => boolean = accountUsageCanBeAsked,
+): AiHarnessAccount[] {
+  return state.accounts.filter((account) => {
+    if (account.authKind !== 'vendor-cli' || account.status !== 'ready' || !canBeAsked(account)) return false;
+    const reading = account.usage as AccountUsageReading | undefined;
+    const windows = reading?.windows ?? [];
+    const wasSpent = account.quotaState === 'exhausted' || windows.some((window) => window.usedPct >= 100);
+    if (!wasSpent) return false;
+    if (windows.length && !usageReadingIsCurrent({ windows }, now)) return true;
+    if (account.quotaState !== 'exhausted' || (quotaMarkExpiresAt(account) ?? Number.POSITIVE_INFINITY) > now) return false;
+    // A current reading taken after the refusal already answers it.
+    const readAt = Date.parse(reading?.at ?? '');
+    const marked = quotaMarkedAt(account);
+    return !(windows.length && !reading?.failed && Number.isFinite(readAt) && marked !== undefined && readAt > marked);
+  });
+}
+
+/** When each account was last re-checked by this process: a probe that keeps
+ * failing is asked at most this often, whatever the poll rate. Fifteen
+ * minutes, not one: for some vendors (Claude) reading usage IS a model turn,
+ * and a re-check that keeps failing once a minute would spend the very quota
+ * it is waiting for. A reset that has passed is still noticed within a
+ * quarter hour, and a turn on the account clears the mark at once anyway. */
+const recheckedAt = new Map<string, number>();
+const RECHECK_MIN_INTERVAL_MS = 15 * 60_000;
+
+/** Re-read every account that is due (see above). Each probe publishes its
+ * reading to the shared record and clears a refusal it overtakes, so every
+ * terminal's /accounts, status line and failover see the quota the moment it
+ * is back. */
+export async function recheckRecoveredAccounts(state: HarnessState, now: number = Date.now()): Promise<void> {
+  const due = accountsDueForUsageRecheck(state, now)
+    .filter((account) => now - (recheckedAt.get(account.id) ?? 0) >= RECHECK_MIN_INTERVAL_MS);
+  for (const account of due) {
+    recheckedAt.set(account.id, now);
+    await accountUsageReading(account, state, { network: true }).catch(() => undefined);
+  }
 }

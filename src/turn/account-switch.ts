@@ -17,23 +17,13 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import { learnedUsageReading } from '../harness/accounts/usage-learning.js';
 import { NATIVE_USAGE_PROBES } from '../harness/accounts/usage-probes.js';
 import { NATIVE_STREAM_USAGE_READINGS } from '../harness/accounts/stream-usage.js';
-import { usageReadingIsCurrent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
+import { accountQuotaSpent, markQuotaExhausted, settleQuotaMark, usageReadingIsCurrent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
 import { localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import type { HarnessState } from '../session/model.js';
 import { usageLabelRemainingPercent } from './failover.js';
 
 function storedWindows(account: AiHarnessAccount): UsageWindow[] {
   return (account.usage as AccountUsageReading | undefined)?.windows ?? [];
-}
-
-/** The refusal is obsolete only when every window that was actually spent
- * has reached the reset time the vendor reported. No such window means
- * there is no evidence the quota came back, so the refusal stands. */
-function refusalHasReset(account: AiHarnessAccount, now: number): boolean {
-  if (account.quotaState !== 'exhausted') return false;
-  const spent = storedWindows(account).filter((window) => window.usedPct >= 100);
-  if (!spent.length) return false;
-  return spent.every((window) => window.resetsAt !== undefined && Date.parse(window.resetsAt) <= now);
 }
 
 /** A saved percent left is already behind a turn that happened after it. */
@@ -58,21 +48,24 @@ function publishesLiveUsage(account: AiHarnessAccount): boolean {
  *
  * `0` means do not start a turn on it. `undefined` means nothing is
  * displayed, so it may be tried. A positive number is headroom to prefer.
- * Mutates `quotaState` when a stored reading or a reset decides it. */
+ * Clears `quotaState` when the account's quota has come back. */
 export function noteStoredQuota(account: AiHarnessAccount, state: HarnessState, now = Date.now()): number | undefined {
-  if (refusalHasReset(account, now)) {
-    account.quotaState = 'available';
-    account.quotaRetryAt = undefined;
+  // The same rule every screen uses: a mark the vendor's reset, a later
+  // reading or its own expiry has overtaken is cleared here, and a spent
+  // window or a live mark means do not start a turn.
+  settleQuotaMark(account, now);
+  if (accountQuotaSpent(account, now)) {
+    // A spent window is recorded as a mark too, expiring at that window's
+    // reset, so the stored record says what the reading does.
+    if (account.quotaState !== 'exhausted') {
+      const resets = storedWindows(account).filter((window) => window.usedPct >= 100).map((window) => window.resetsAt);
+      markQuotaExhausted(account, now, resets.includes(undefined) ? undefined : (resets as string[]).sort().at(-1));
+    }
+    return 0;
   }
-  if (account.quotaState === 'exhausted') return 0;
 
   const windows = storedWindows(account);
   const current = windows.length > 0 && usageReadingIsCurrent({ windows }, now) ? windows : undefined;
-  if (current?.some((window) => window.usedPct >= 100)) {
-    account.quotaState = 'exhausted';
-    account.quotaRetryAt = undefined;
-    return 0;
-  }
   if (current?.length && !positiveReadingIsStale(account, state)) {
     return Math.min(...current.map((window) => Math.max(0, 100 - window.usedPct)));
   }
@@ -82,12 +75,13 @@ export function noteStoredQuota(account: AiHarnessAccount, state: HarnessState, 
   // on the real limit — never something to prefer an account on. Zero is a
   // refusal the history already explains.
   if (!publishesLiveUsage(account)) {
-    const learned = usageLabelRemainingPercent(
-      learnedUsageReading(account.usageLearning, state.invocations, account.id, now)?.label,
-    );
-    if (learned === 0) {
-      account.quotaState = 'exhausted';
-      account.quotaRetryAt = undefined;
+    const reading = learnedUsageReading(account.usageLearning, state.invocations, account.id, now);
+    if (usageLabelRemainingPercent(reading?.label) === 0) {
+      // Recorded as a mark, expiring when the learned window rolls, so every
+      // screen -- which cannot recompute the learned figure -- agrees.
+      const resets = (reading?.windows ?? []).filter((window) => window.usedPct >= 100 && window.resetsAt)
+        .map((window) => window.resetsAt!).sort();
+      markQuotaExhausted(account, now, resets.at(-1));
       return 0;
     }
   }

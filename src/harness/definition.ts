@@ -112,6 +112,13 @@ export interface AiHarnessAccount {
   models: string[];
   status: 'ready' | 'needs_login' | 'offline';
   quotaState?: 'available' | 'exhausted';
+  /** When the vendor refused a turn for quota -- the moment `quotaState` was
+   * set to 'exhausted'. A usage reading taken after this that shows room
+   * overrides the mark; one taken before it says nothing about it. */
+  quotaExhaustedAt?: string;
+  /** When the refusal stops holding on its own: the vendor's own "resets in"
+   * hint when the refusal carried one, else a default window. See
+   * quotaMarkExpiresAt in usage-reading.ts. */
   quotaRetryAt?: string;
   /** The vendor signed this account in but will not serve it until the user
    * verifies it (e.g. Google's "Verify your account"). A fact about the

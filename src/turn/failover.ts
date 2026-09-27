@@ -153,6 +153,30 @@ export function accountVerification(error: unknown): { url?: string } | undefine
   return url ? { url } : {};
 }
 
+const DURATION_UNIT_MS: Record<string, number> = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1_000 };
+
+/** When a quota refusal says it ends, as an ISO time -- or undefined when it
+ * does not say. Read from the vendor's own diagnostics, never a turn's stdout.
+ *
+ * The forms seen in real refusals: Antigravity's 'Resets in 76h57m39s.',
+ * Codex's 'try again in 2 days 3 hours 5 minutes', and the common
+ * 'retry after 3600 seconds'. A refusal that names a wall-clock time without a
+ * date or zone ("resets 8pm") is left alone: guessing its day is how an
+ * account gets parked for a day it did not need. */
+export function quotaRetryHint(error: unknown, now: number = Date.now()): string | undefined {
+  const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
+  const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
+  const phrase = /(?:resets?|try again|retry(?: again)?)\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i.exec(text)?.[1];
+  if (phrase) {
+    let total = 0;
+    for (const part of phrase.matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi)) total += Number(part[1]) * DURATION_UNIT_MS[part[2]!.toLowerCase()]!;
+    if (total > 0) return new Date(now + total).toISOString();
+  }
+  const stamp = /(?:resets?|try again|retry(?: again)?)\s+(?:at|after)\s+(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))/i.exec(text)?.[1];
+  const at = stamp ? Date.parse(stamp) : Number.NaN;
+  return Number.isFinite(at) && at > now ? new Date(at).toISOString() : undefined;
+}
+
 export function verificationNotice(verification: { url?: string }): string {
   if (!verification.url) return 'Account needs verification with its provider';
   return /^https:\/\/accounts\.google\.com\//.test(verification.url)

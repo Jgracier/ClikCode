@@ -18,10 +18,23 @@ import { preferredAccountId } from '../../commands/ai/preferred-account.js';
 import { discardInterruptedTurn } from '../../turn/runtime.js';
 import { nextQuotaReset, quotaResetPhrase } from '../../turn/usage-exhausted.js';
 import { chooseOption } from './choose.js';
+import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 
-/** An account that can take a turn now. */
+/** An account that can take a turn now -- the one rule failover uses too. */
 export function accountHasUsage(account: AiHarnessAccount): boolean {
-  return account.status === 'ready' && account.quotaState !== 'exhausted' && !account.verification;
+  return accountCanTakeTurn(account);
+}
+
+/** Whether an account of the chat's own provider can take the turn. While
+ * one can, the same-provider switch is the one to make, not another provider. */
+export function sessionProviderHasUsage(accounts: readonly AiHarnessAccount[], provider: string | null | undefined): boolean {
+  return accounts.some((account) => account.provider === provider && account.authKind === 'vendor-cli' && accountHasUsage(account));
+}
+
+export async function sameProviderCanTakeTurn(id: string): Promise<boolean> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  return session ? sessionProviderHasUsage(state.accounts, session.provider) : false;
 }
 
 /** Harnesses other than `current` with an account that has usage, best
@@ -43,6 +56,8 @@ export async function interactiveResumeInPicker(rl: HarnessPrompter, id: string,
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return undefined;
+  // Another provider is the answer only when this one has nothing left.
+  if (sessionProviderHasUsage(state.accounts, session.provider)) return undefined;
   const candidates = resumeInCandidates(allLocalHarnesses().filter(harnessCanRunTurns), state.accounts, session.nativeHarness, harnessTierRank);
   if (!candidates.length) return undefined;
   const spent = state.accounts.filter((account) => account.provider === session.provider);

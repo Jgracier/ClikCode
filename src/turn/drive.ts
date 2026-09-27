@@ -10,7 +10,7 @@
 import { createStreamState } from '../harness/events/adapters.js';
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice } from './failover.js';
+import { accountSwitchNotice, accountSwitchPhase, accountVerification, quotaRetryHint, verificationNotice } from './failover.js';
 import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir, open } from 'node:fs/promises';
@@ -29,6 +29,7 @@ import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { noteStoredQuota } from './account-switch.js';
+import { clearQuotaMark, markQuotaExhausted } from '../harness/accounts/usage-reading.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, type AccountFailureKind } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, titleStreamForAttempt, withTitleRequest } from '../session/title.js';
@@ -50,7 +51,7 @@ import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { localModelTurnHooks, releaseHeldLocalModel } from '../commands/ai/local-model.js';
 import { hermesTurboFitModelId } from '../harness/accounts/hermes-discovery.js';
-import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
+import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, providerHasAccountForTurn, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
@@ -195,6 +196,9 @@ export async function aiSessionSend(
     /** Whether any account actually ran out, as opposed to failing some other
      * way. Decides whether "Usage Exhausted" is the truth at the end. */
     let exhaustedAnyAccount = false;
+    /** The last failure that was not running out, for when running out is
+     * not the whole story. */
+    let lastOtherFailure: unknown;
     const attemptedAccounts = new Set<string>();
     try {
     if (session.accountFailover === 'on-quota-exhausted' && noteStoredQuota(account, state) === 0) {
@@ -658,14 +662,14 @@ export async function aiSessionSend(
         // Only a quota refusal marks the account spent, though: a crash says
         // nothing about how much allowance is left.
         if (failureKind === 'quota-exhausted') {
-          account.quotaState = 'exhausted';
-          account.quotaRetryAt = undefined;
+          markQuotaExhausted(account, Date.now(), quotaRetryHint(failure));
           exhaustedAnyAccount = true;
           // The one observation that makes a learned limit possible: this much
           // was refused. Only recorded for a real quota refusal -- a crash
           // says nothing about where the ceiling is.
           account.usageLearning = recordRefused(account.usageLearning, state.invocations, account.id, Date.now());
         }
+        else lastOtherFailure = failure;
         attemptedAccounts.add(account.id);
         await checkpoint.persistNow();
         // Same-provider failover for the native-CLI path: switching accounts means
@@ -689,6 +693,10 @@ export async function aiSessionSend(
           // actually what happened -- if the last account died of something
           // else, saying it ran out would be inventing a reason.
           if (!exhaustedAnyAccount) throw failure;
+          // An account that failed some other way -- a crash, a throttle --
+          // still has its quota. Saying every account ran out would send the
+          // user to another provider while this one can still serve them.
+          if (providerHasAccountForTurn(state, account.provider, (item) => item.authKind === 'vendor-cli')) throw lastOtherFailure ?? failure;
           throw new Error(usageExhaustedMessage(
             state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
           ));
@@ -785,10 +793,7 @@ export async function aiSessionSend(
       // live, with two accounts answering normally while still flagged,
       // which deprioritised them in failover and slowly starved it of
       // candidates.
-      if (account.quotaState === 'exhausted') {
-        account.quotaState = 'available';
-        account.quotaRetryAt = undefined;
-      }
+      clearQuotaMark(account);
       account.verification = undefined;
       // The harness ended the turn with a tool it never settled -- it
       // backgrounded a command and stopped. Re-drive it so it goes and reads
@@ -892,6 +897,7 @@ export async function aiSessionSend(
   /** Whether any account here actually ran out, as opposed to failing some
    * other way -- decides whether "Usage Exhausted" is the truth at the end. */
   let exhaustedAnyApiAccount = false;
+  let lastOtherApiFailure: unknown;
   for (;;) {
     // Same rule as the native loop above. This path re-sends the whole prompt
     // on a switch, title request included, so the stream restarts rather than
@@ -915,11 +921,10 @@ export async function aiSessionSend(
       if (session.accountFailover !== 'on-quota-exhausted') throw error;
       const exhaustedAccount = account;
       if (failureKind === 'quota-exhausted') {
-        exhaustedAccount.quotaState = 'exhausted';
-        exhaustedAccount.quotaRetryAt = undefined;
+        markQuotaExhausted(exhaustedAccount, Date.now(), quotaRetryHint(error));
         exhaustedAnyApiAccount = true;
         exhaustedAccount.usageLearning = recordRefused(exhaustedAccount.usageLearning, state.invocations, exhaustedAccount.id, Date.now());
-      }
+      } else lastOtherApiFailure = error;
       attemptedAccounts.add(exhaustedAccount.id);
       // Preserve every failed candidate before looking for the next one. A
       // chain of stale account records therefore terminates instead of merely
@@ -933,6 +938,9 @@ export async function aiSessionSend(
       if (!fallback) {
         await writeState(state);
         if (!exhaustedAnyApiAccount) throw error;
+        // Same rule as the vendor-CLI path: not "exhausted" while an account
+        // that failed some other way still has quota.
+        if (providerHasAccountForTurn(state, exhaustedAccount.provider, (item) => item.authKind === 'api-key' && item.models.includes(model))) throw lastOtherApiFailure ?? error;
         throw new Error(usageExhaustedMessage(
           state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
         ));
@@ -963,10 +971,7 @@ export async function aiSessionSend(
   // Same as the vendor-CLI path: an allowed turn raises the learned ceiling.
   account.usageLearning = recordAllowed(account.usageLearning, state.invocations, account.id, Date.parse(invocation.at));
   // Same proof-by-success rule as the vendor-CLI path above.
-  if (account.quotaState === 'exhausted') {
-    account.quotaState = 'available';
-    account.quotaRetryAt = undefined;
-  }
+  clearQuotaMark(account);
   account.verification = undefined;
   session.attachments = [];
   session.shellNotes = [];

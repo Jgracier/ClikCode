@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { stdin as input } from 'node:process';
 import { noteStoredQuota } from './account-switch.js';
+import { accountCanTakeTurn } from '../harness/accounts/usage-reading.js';
 import { normalizeSessionTitle } from '../session/title.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
@@ -150,14 +151,25 @@ export async function nameSession(
 
 
 
+/** Whether any account of this provider, on this transport, can still take
+ * the turn by the one rule. "All accounts exhausted" -- and the offer to
+ * resume on another provider that follows it -- is only true when not. */
+export function providerHasAccountForTurn(
+  state: HarnessState, provider: string, matchesTransport: (candidate: AiHarnessAccount) => boolean, now: number = Date.now(),
+): boolean {
+  return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now));
+}
+
 export function nextUsableFailoverAccount(
   state: HarnessState,
   current: AiHarnessAccount,
   matchesTransport: (candidate: AiHarnessAccount) => boolean,
   attempted: ReadonlySet<string>,
 ): AiHarnessAccount | undefined {
+  // An account the vendor is holding for verification refuses every turn
+  // until the user confirms it, so trying it only fails the switch.
   const candidates = state.accounts.filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
-    && candidate.provider === current.provider && candidate.status === 'ready'
+    && candidate.provider === current.provider && candidate.status === 'ready' && !candidate.verification
     && matchesTransport(candidate));
   const usable: Array<{ account: AiHarnessAccount; remaining?: number }> = [];
   for (const candidate of candidates) {
