@@ -1,6 +1,6 @@
 /** ModelClient for the Gateway turn route:
  * `POST {baseUrl}/api/clikcode/v1/turn`, answered as Server-Sent Events. */
-import type { HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../model-client.js';
+import type { ConversationItem, HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
 
 interface GatewayModelClientOptions {
@@ -50,7 +50,7 @@ function errorKindForCode(code: unknown): HarnessErrorKind {
 }
 
 /** `Retry-After` is either delta-seconds or an HTTP date. */
-function parseRetryAfter(value: unknown, now: number = Date.now()): number | undefined {
+export function parseRetryAfter(value: unknown, now: number = Date.now()): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : undefined;
   if (typeof value !== 'string' || !value.trim()) return undefined;
   if (/^\d+(?:\.\d+)?$/.test(value.trim())) return Number(value.trim());
@@ -58,12 +58,12 @@ function parseRetryAfter(value: unknown, now: number = Date.now()): number | und
   return Number.isNaN(date) ? undefined : Math.max(0, Math.ceil((date - now) / 1000));
 }
 
-interface SseEvent { event?: string; data: string }
+export interface SseEvent { event?: string; data: string }
 
 /** Incremental SSE parser. Bytes go in at arbitrary boundaries (mid-line,
  * mid-UTF-8 sequence, between the CR and LF of a CRLF); complete events come
  * out. Follows the WHATWG event-stream rules for the fields used here. */
-class SseParser {
+export class SseParser {
   private readonly decoder = new TextDecoder('utf-8');
   private buffer = '';
   private data: string[] = [];
@@ -121,6 +121,16 @@ function numberField(record: Record<string, unknown>, key: string): number | und
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/** The Gateway validates items strictly and has no image field, so pixels are
+ * dropped here; the item's text already names the attached files. */
+function withoutImages(items: readonly ConversationItem[]): ConversationItem[] {
+  return items.map((item) => {
+    if (item.type !== 'text' || !item.images) return item;
+    const { images: _images, ...rest } = item;
+    return rest;
+  });
+}
+
 export class GatewayModelClient implements ModelClient {
   constructor(private readonly options: GatewayModelClientOptions) {}
 
@@ -136,7 +146,7 @@ export class GatewayModelClient implements ModelClient {
         body: JSON.stringify({
           ...(options.sessionId ? { sessionId: options.sessionId } : {}),
           system: request.system,
-          items: request.items,
+          items: withoutImages(request.items),
           tools: request.tools,
           hints: { task: options.task ?? 'code', effort: options.effort ?? 'auto', ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}) },
           client: { name: 'clikcode', version: options.version },
