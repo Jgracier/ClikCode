@@ -45,6 +45,17 @@ describe('worker registry', () => {
     expect(socketPathFor('session-one')).not.toBe(socketPathFor('session-two'));
   });
 
+  it('uses a named pipe on Windows, scoped to the state directory', async () => {
+    const home = await isolatedHome();
+    const pipe = socketPathFor('abc', 'win32');
+    expect(pipe).toMatch(/^\\\\\.\\pipe\\clikcode-[0-9a-f]{12}-[0-9a-f]{20}$/);
+    expect(socketPathFor('abc', 'win32')).toBe(pipe);
+    expect(socketPathFor('abd', 'win32')).not.toBe(pipe);
+    process.env.CLIKCODE_HOME = join(home, 'elsewhere');
+    expect(socketPathFor('abc', 'win32')).not.toBe(pipe);
+    expect(socketPathFor('abc', 'linux').startsWith('\\\\')).toBe(false);
+  });
+
   describe('workerIsReachable', () => {
     it('is true for a socket that is actually listening', async () => {
       await isolatedHome();

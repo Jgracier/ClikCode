@@ -91,7 +91,16 @@ export async function ensureWorkersDirectory(): Promise<void> {
   await mkdir(workersDirectory(), { recursive: true, mode: 0o700 });
 }
 
-export function socketPathFor(sessionId: string): string {
+/** Windows has no Unix domain sockets on a path a client can find by name the
+ * way every other platform does: a worker listens on a named pipe instead,
+ * which `net` treats identically. Pipe names share one machine-wide namespace,
+ * so the state directory is part of the name -- two users, or a portable
+ * CLIKCODE_HOME beside the default one, never meet on the same pipe. */
+export function socketPathFor(sessionId: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') {
+    const scope = createHash('sha256').update(stateDirectory()).digest('hex').slice(0, 12);
+    return `\\\\.\\pipe\\clikcode-${scope}-${socketFileName(sessionId).replace(/\.sock$/, '')}`;
+  }
   const standard = join(workersDirectory(), socketFileName(sessionId));
   if (standard.length < 100) return standard;
   return join(tmpdir(), `cc-${socketFileName(sessionId)}`);

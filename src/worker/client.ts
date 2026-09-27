@@ -39,7 +39,9 @@ function workerSpawnArgv(sessionId: string): string[] {
  * would race the worker's own listen() call. */
 async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecord> {
   const child = spawn(process.execPath, workerSpawnArgv(sessionId), {
-    stdio: 'ignore', detached: true,
+    // windowsHide: a detached child on Windows otherwise opens a console
+    // window of its own for as long as the worker lives.
+    stdio: 'ignore', detached: true, windowsHide: true,
   });
   child.on('error', () => {});
   child.unref();
