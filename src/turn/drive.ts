@@ -10,7 +10,7 @@
 import { createStreamState } from '../harness/events/adapters.js';
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice } from './failover.js';
+import { accountSwitchNotice, accountSwitchPhase, accountVerification, quotaRetryHint, verificationNotice } from './failover.js';
 import { recordAllowed, recordRefused } from '../harness/accounts/usage-learning.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir, open } from 'node:fs/promises';
@@ -29,6 +29,7 @@ import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { noteStoredQuota } from './account-switch.js';
+import { clearQuotaMark, markQuotaExhausted } from '../harness/accounts/usage-reading.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, type AccountFailureKind } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, titleStreamForAttempt, withTitleRequest } from '../session/title.js';
@@ -658,8 +659,7 @@ export async function aiSessionSend(
         // Only a quota refusal marks the account spent, though: a crash says
         // nothing about how much allowance is left.
         if (failureKind === 'quota-exhausted') {
-          account.quotaState = 'exhausted';
-          account.quotaRetryAt = undefined;
+          markQuotaExhausted(account, Date.now(), quotaRetryHint(failure));
           exhaustedAnyAccount = true;
           // The one observation that makes a learned limit possible: this much
           // was refused. Only recorded for a real quota refusal -- a crash
@@ -785,10 +785,7 @@ export async function aiSessionSend(
       // live, with two accounts answering normally while still flagged,
       // which deprioritised them in failover and slowly starved it of
       // candidates.
-      if (account.quotaState === 'exhausted') {
-        account.quotaState = 'available';
-        account.quotaRetryAt = undefined;
-      }
+      clearQuotaMark(account);
       account.verification = undefined;
       // The harness ended the turn with a tool it never settled -- it
       // backgrounded a command and stopped. Re-drive it so it goes and reads
@@ -915,8 +912,7 @@ export async function aiSessionSend(
       if (session.accountFailover !== 'on-quota-exhausted') throw error;
       const exhaustedAccount = account;
       if (failureKind === 'quota-exhausted') {
-        exhaustedAccount.quotaState = 'exhausted';
-        exhaustedAccount.quotaRetryAt = undefined;
+        markQuotaExhausted(exhaustedAccount, Date.now(), quotaRetryHint(error));
         exhaustedAnyApiAccount = true;
         exhaustedAccount.usageLearning = recordRefused(exhaustedAccount.usageLearning, state.invocations, exhaustedAccount.id, Date.now());
       }
@@ -963,10 +959,7 @@ export async function aiSessionSend(
   // Same as the vendor-CLI path: an allowed turn raises the learned ceiling.
   account.usageLearning = recordAllowed(account.usageLearning, state.invocations, account.id, Date.parse(invocation.at));
   // Same proof-by-success rule as the vendor-CLI path above.
-  if (account.quotaState === 'exhausted') {
-    account.quotaState = 'available';
-    account.quotaRetryAt = undefined;
-  }
+  clearQuotaMark(account);
   account.verification = undefined;
   session.attachments = [];
   session.shellNotes = [];
