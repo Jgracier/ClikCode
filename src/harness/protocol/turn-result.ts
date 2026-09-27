@@ -96,11 +96,14 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   }
   const values = harness.turn.output === 'json' ? parseJsonDocument(stdout) : parseJsonLines(stdout).values;
   if (values.length === 0) {
-    const sample = stdout.trim().split(/\r?\n/).find((line) => line.trim())?.trim().slice(0, 300);
-    throw Object.assign(
-      new Error(`${harness.displayName} returned invalid ${harness.turn.output} output: no JSON record found${sample ? ` (${sample})` : ''}`),
-      { stdoutTail: stdout.trim().slice(-4000) },
-    );
+    // No record at all is the vendor talking instead of answering -- "Headless
+    // mode requires existing settings" (OpenHands), a login prompt, a crash.
+    // With no structure there is no answer to protect, so what it printed is
+    // the reason and is classified as one.
+    const said = firstUsefulLine([process.stderr ?? '', stdout].join('\n'));
+    throw processFailure(said
+      ? `${harness.displayName}: ${said}`
+      : `${harness.displayName} returned invalid ${harness.turn.output} output: no JSON record found`, process, stdout, true);
   }
   const fields = new Set(harness.turn.responseFields ?? ['result', 'response', 'text', 'content']);
   const messages: string[] = [];

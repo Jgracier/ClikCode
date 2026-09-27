@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { JsonRpcPeer } from './jsonrpc-peer.js';
+import { JsonRpcPeer, jsonRpcErrorDetail } from './jsonrpc-peer.js';
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -273,5 +273,19 @@ describe('JSON-RPC peer', () => {
     expect(child.killed).toEqual(['SIGTERM']);
     expect(process.listenerCount('SIGTERM')).toBe(before.length);
     expect(process.listenerCount('SIGINT')).toBe(interruptsBefore);
+  });
+});
+
+describe('an error response that explains itself in data', () => {
+  it('carries the vendor reason and status (Factory Droid 0.223)', () => {
+    const detail = jsonRpcErrorDetail('402 {"detail":"No active subscription found.\\nSubscribe to start using Droid.","status":402,"title":"Payment Required","displayToUser":true}');
+    expect(detail).toEqual({ reason: 'No active subscription found. Subscribe to start using Droid.', statusCode: 402 });
+  });
+
+  it('reads a plain string or an object message, and nothing else', () => {
+    expect(jsonRpcErrorDetail('model not found')).toEqual({ reason: 'model not found' });
+    expect(jsonRpcErrorDetail({ message: 'rate limited', retryAfter: 3 })).toEqual({ reason: 'rate limited' });
+    expect(jsonRpcErrorDetail(undefined)).toEqual({});
+    expect(jsonRpcErrorDetail({ stack: 'x' })).toEqual({});
   });
 });
