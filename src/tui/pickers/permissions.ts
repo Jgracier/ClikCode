@@ -1,6 +1,7 @@
 /** Choosing how tool calls are approved, from `clikcode permissions` and from
  * in-chat `/permissions`. */
 
+import { isClikCodeAgent } from '../../session/route.js';
 import type { AiHarnessPermissionMode } from '../../harness/definition.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
@@ -55,14 +56,14 @@ export async function interactivePermissionPicker(rl: HarnessPrompter, id: strin
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  const harness = session.route !== 'gateway' && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  const harness = !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const current = session.permissionMode ?? 'ask';
   const descriptions: Record<AiHarnessPermissionMode, string> = {
     ask: 'require approval; unanswered headless prompts are denied',
     bypass: 'run without approval prompts',
     auto: 'provider reviews approval requests automatically',
   };
-  const supported = harness || session.route === 'gateway' ? sessionPermissionModes(session, harness) : VALID_PERMISSION_MODES;
+  const supported = harness || isClikCodeAgent(session) ? sessionPermissionModes(session, harness) : VALID_PERMISSION_MODES;
   if (!supported.length) throw new Error(`${harness?.displayName ?? 'This provider'} does not map ClikCode's permission modes to a real flag.`);
   const selected = await chooseOption(rl, 'Choose permissions', supported.map((value) => ({
     label: value[0].toUpperCase() + value.slice(1), detail: `· ${descriptions[value]}${value === current ? ' · current' : ''}`, value,

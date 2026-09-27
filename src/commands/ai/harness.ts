@@ -1,5 +1,6 @@
 /** `clikcode harness`: choosing which harness a session runs on. */
 
+import { isClikCodeAgent } from '../../session/route.js';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { ensureNativeHarness, inspectNativeHarness } from '../../harness/transport/native/inspect.js';
@@ -193,7 +194,8 @@ async function ensureHermesTurboFit(harness: AiLocalHarnessDefinition, environme
 export async function ensureChatReady(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
-  if (!session || session.route === 'gateway' || session.accountId) return;
+  // ClikCode's own agent has no vendor harness or account to bind.
+  if (!session || isClikCodeAgent(session) || session.accountId) return;
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
     : session.provider ? localHarnessForProvider(session.provider) : undefined;
   if (harness) return aiHarnessSelect(harness.command, id, { emit: false });

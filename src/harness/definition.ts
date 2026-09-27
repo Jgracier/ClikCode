@@ -4,7 +4,7 @@
 
 import type { HarnessSession } from '../session/model.js';
 
-export type AiHarnessRoute = 'local' | 'gateway';
+export type AiHarnessRoute = 'local' | 'gateway' | 'clikcode-local';
 
 export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
 
