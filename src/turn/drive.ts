@@ -971,8 +971,11 @@ export async function aiSessionSend(
   session.attachments = [];
   session.shellNotes = [];
   const answer = extractSessionTitle(turn.text);
-  await checkpoint.complete(answer.text);
+  // Named BEFORE the turn is completed: completing is the write that saves the
+  // session, and the flush after it writes only what changed since -- a name
+  // set afterwards was never saved by a one-shot send.
   await nameSession(session, { title: titleStream?.title ?? answer.title });
+  await checkpoint.complete(answer.text);
   if (!prompter) emitHarnessOutput({ session, text: answer.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: switchReason } : {}) });
   } finally {
     await checkpoint.flush();
@@ -1049,11 +1052,16 @@ export async function aiGatewaySessionSend(
     const harnessTurn = await runGatewayHarnessSessionTurn({
       session, prompt: turnText, modelClient,
       ...(prompter ? { prompter } : {}),
+      ...(titleStream ? { responseFilter: (delta: string, mode: 'append' | 'replace') => titleStream?.push(delta, mode) } : {}),
       ...(signal ? { signal } : {}),
       ...(prepared.images.length ? { images: prepared.images } : {}),
       onActivity: (event) => checkpoint.activity(event),
     });
     if (harnessTurn.isError) throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
+    // A reply shorter than the title filter's decision window is still held
+    // back when the stream ends; it is owed to the screen.
+    const held = titleStream?.flush();
+    if (held) prompter?.response(held, 'append');
     const harnessInvocation = {
       id: randomUUID(), sessionId: session.id, accountId: attributedTo,
       provider: session.provider ?? attributedTo, ...(session.model ? { model: session.model } : {}),
@@ -1063,8 +1071,9 @@ export async function aiGatewaySessionSend(
     session.attachments = [];
     session.shellNotes = [];
     const named = extractSessionTitle(harnessTurn.text);
-    await checkpoint.complete(named.text);
+    // Before completing: see the vendor path above.
     await nameSession(session, { title: titleStream?.title ?? named.title });
+    await checkpoint.complete(named.text);
     if (!prompter) {
       emitHarnessOutput({
         session, text: named.text, usage: { attributedBy: attributedTo }, invocation: harnessInvocation,
@@ -1162,8 +1171,9 @@ export async function aiGatewaySessionSend(
   session.attachments = [];
   session.shellNotes = [];
   const answered = extractSessionTitle(reply);
-  await checkpoint.complete(answered.text);
+  // Before completing: see the vendor path above.
   await nameSession(session, { title: titleStream?.title ?? answered.title });
+  await checkpoint.complete(answered.text);
   if (wroteDelta) output.write('\n\n');
   else if (!prompter) emitHarnessOutput({ session, text: answered.text, usage: { attributedBy: 'gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
   } finally {

@@ -37,6 +37,9 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   session: HarnessSession;
   prompt: string;
   prompter?: TurnObserver;
+  /** Applied to each streamed delta before anyone sees it (drive passes the
+   * title filter); undefined or '' holds it back. */
+  responseFilter?: (text: string, mode: 'append' | 'replace') => string | undefined;
   signal?: AbortSignal;
   images?: readonly string[];
   /** Whatever supplies the model step: the Gateway or ClikCode Local, as
@@ -72,8 +75,13 @@ export async function runGatewayHarnessSessionTurn(
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.images?.length ? { images: input.images } : {}),
     onResponseDelta: (text, mode) => {
-      input.onResponseDelta?.(text, mode);
-      prompter?.response(text, mode);
+      // The same title filter the vendor path streams through: the tag a
+      // first turn asks the model to open with never reaches the screen, and
+      // so never outranks the stripped answer when the turn is saved.
+      const visible = input.responseFilter ? input.responseFilter(text, mode ?? 'append') : text;
+      if (!visible) return;
+      input.onResponseDelta?.(visible, mode);
+      prompter?.response(visible, mode);
     },
     onActivity: (event) => {
       // The loop reports its own tool names; classify them here so a gateway
