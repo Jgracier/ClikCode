@@ -28,7 +28,7 @@ import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { noteStoredQuota } from './account-switch.js';
-import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt } from './failover.js';
+import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, type AccountFailureKind } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, titleStreamForAttempt, withTitleRequest } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
@@ -188,6 +188,8 @@ export async function aiSessionSend(
     run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
     let switchedFrom: string | undefined;
+    /** Why the turn left that account: the failure it met there. */
+    let switchReason: AccountFailureKind = 'quota-exhausted';
     /** Whether any account actually ran out, as opposed to failing some other
      * way. Decides whether "Usage Exhausted" is the truth at the end. */
     let exhaustedAnyAccount = false;
@@ -702,6 +704,7 @@ export async function aiSessionSend(
           to: turnEnvironment(harness, fallback),
         });
         switchedFrom = account.label;
+        switchReason = failureKind;
         // Announced before the retry, not after it returns: switching accounts
         // happens inside one continuous await chain, so without this the whole
         // thing looks instantaneous and the reply just silently comes from a
@@ -820,7 +823,7 @@ export async function aiSessionSend(
       // final response are reflected in ClikCode before the turn is saved.
       await synchronizeNativeTranscript(state, session);
       await writeState(state);
-      if (!prompter) emitHarnessOutput({ session, text: answer.text, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+      if (!prompter) emitHarnessOutput({ session, text: answer.text, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: switchReason } : {}) });
       return;
     }
     } finally {
@@ -842,6 +845,8 @@ export async function aiSessionSend(
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
     run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   let switchedFrom: string | undefined;
+  /** Why the turn left that account: the failure it met there. */
+  let switchReason: AccountFailureKind = 'quota-exhausted';
   const attemptedAccounts = new Set<string>();
   try {
   if (session.accountFailover === 'on-quota-exhausted' && noteStoredQuota(account, state) === 0) {
@@ -931,6 +936,7 @@ export async function aiSessionSend(
         ));
       }
       switchedFrom = exhaustedAccount.label;
+      switchReason = failureKind;
       prompter?.activity(chalk.yellow(accountSwitchNotice(failureKind, fallback.label)));
       prompter?.phase(accountSwitchPhase(fallback.label));
       account = fallback;
@@ -965,7 +971,7 @@ export async function aiSessionSend(
   const answer = extractSessionTitle(turn.text);
   await checkpoint.complete(answer.text);
   await nameSession(session, { title: titleStream?.title ?? answer.title });
-  if (!prompter) emitHarnessOutput({ session, text: answer.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: 'quota-exhausted' } : {}) });
+  if (!prompter) emitHarnessOutput({ session, text: answer.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: switchReason } : {}) });
   } finally {
     await checkpoint.flush();
   }
