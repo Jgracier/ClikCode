@@ -301,8 +301,9 @@ describe('runGatewayHarnessTurn', () => {
     const second = harness([{ text: 'second answer' }], { sessionId: first.input.sessionId, prompt: 'follow up' });
     await runGatewayHarnessTurn(second.input);
     expect(second.client.requests[0].items).toEqual([
-      { type: 'text', role: 'user', text: 'do the thing' },
+      { type: 'text', role: 'user', text: expect.stringMatching(/^<environment>\nDate: [\d-]+\n[\s\S]*<\/environment>\n\ndo the thing$/) },
       { type: 'text', role: 'assistant', text: 'first answer' },
+      // Same day, so no second note: the first one still holds.
       { type: 'text', role: 'user', text: 'follow up' },
     ]);
   });

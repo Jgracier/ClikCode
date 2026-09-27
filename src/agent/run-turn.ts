@@ -3,7 +3,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { ConversationStore, memoryConversationStore } from './conversation.js';
-import { buildSystemPrompt, compactConversation, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, COMPACTION_THRESHOLD } from './context.js';
+import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, COMPACTION_THRESHOLD } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, suggestPermissionRule, visibleTools, type PermissionRules } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
@@ -140,7 +140,11 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // The note stays even when the pixels go too: it tells the model the file
   // names, and a later client that cannot see images still has it.
   const images = input.images?.length && input.modelClient.acceptsImages ? await abortable(readImageInputs(input.images), signal) : [];
-  await append({ type: 'text', role: 'user', text: `${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
+  // Date and git state ride on the user message, not the system prompt, so
+  // the prompt prefix stays cacheable across turns (context.ts). A sub-agent
+  // lives for one task and its short prompt already carries the date.
+  const environment = !input.subagent && needsEnvironmentNote(items) ? `${await abortable(environmentNote({ cwd }), signal)}\n\n` : '';
+  await append({ type: 'text', role: 'user', text: `${environment}${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
 
   // Steering: text typed mid-turn is queued and lands before the next model step.
   const steerQueue: string[] = [];
