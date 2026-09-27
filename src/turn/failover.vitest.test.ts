@@ -234,3 +234,12 @@ describe('accountVerificationHint', () => {
     expect(accountVerificationHint(error)).toBe('Google needs verification: https://accounts.google.com/signin/continue?sarp=1&x=2');
   });
 });
+
+describe('credit refusals, verbatim', () => {
+  it('reads a spent credit balance as quota, whatever the vendor calls it', () => {
+    // Kilo Code CLI, stderr with its colour codes.
+    expect(classifyAccountFailure(Object.assign(new Error('kilo exited 1'), { stderrTail: '\u001b[91m\u001b[1mError: \u001b[0mAdd credits to continue, or switch to a free model' }))).toBe('quota-exhausted');
+    // Command Code 1.65.2.
+    expect(classifyAccountFailure(Object.assign(new Error('cmdc exited 10'), { stderrTail: 'Error: Insufficient credits for Command Code.' }))).toBe('quota-exhausted');
+  });
+});
