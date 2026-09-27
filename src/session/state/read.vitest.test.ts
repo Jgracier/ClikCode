@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 describe('harness state normalization', () => {
-  it('does not reintroduce a local permission override on Gateway sessions', async () => {
+  it('keeps a Gateway session\'s approval setting, which its local agent honours', async () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
     process.env.CLIKCODE_HOME = root;
     const now = new Date().toISOString();
@@ -24,7 +24,7 @@ describe('harness state normalization', () => {
       devicePublicKey: { kty: 'OKP' },
       accounts: [],
       sessions: [
-        { id: 'gateway', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
+        { id: 'gateway', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
         { id: 'local', route: 'local', accountId: null, provider: null, model: null, effort: 'medium', permissionMode: 'workspace-write', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
       ],
       invocations: [],
@@ -33,7 +33,7 @@ describe('harness state normalization', () => {
     }, null, 2)}\n`);
     try {
       const state = await readState();
-      expect(state.sessions.find((session) => session.id === 'gateway')?.permissionMode).toBeUndefined();
+      expect(state.sessions.find((session) => session.id === 'gateway')?.permissionMode).toBe('bypass');
       expect(state.sessions.find((session) => session.id === 'local')?.permissionMode).toBe('ask');
       expect(state.sessions.find((session) => session.id === 'gateway')?.conversationId).toBe('gateway');
       expect(state.sessions.find((session) => session.id === 'local')?.conversationId).toBe('local');
