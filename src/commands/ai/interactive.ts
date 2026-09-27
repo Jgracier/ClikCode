@@ -70,7 +70,7 @@ import { interactiveSessionPicker } from '../../tui/pickers/session.js';
 import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
-import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker } from '../../worker/turn-bridge.js';
+import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark } from '../../worker/turn-bridge.js';
 
 // The CLIKCODE_USE_WORKER escape hatch is gone: an ANSI terminal always runs
 // its turns through a session worker now. What remains below is not a
@@ -297,6 +297,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         transportSessionId = id;
       }
       try {
+        const queueMark = workerQueueMark(id);
         const latestState = await readState();
         const latest = latestState.sessions.find((item) => item.id === id);
         if (!latest) break;
@@ -347,7 +348,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // The worker may start a turn while this sits here (another
           // window's, or a follow-up for a finished background shell), or
           // queue something: either ends the prompt, keeping the draft.
-          const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, ...(signal ? { signal } : {}) }));
+          const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, ...(signal ? { signal } : {}) }), queueMark);
           if ('woke' in answer) {
             if (answer.woke === 'turn') {
               // Shown as this window shows its own turns: the prompt as the
