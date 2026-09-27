@@ -1,0 +1,162 @@
+{
+  "name": "clikcode",
+  "displayName": "ClikCode",
+  "description": "Chat with Claude Code, Codex, Gemini, Copilot, OpenCode and 20 more coding agents from one panel: resumable conversations, account switching when a usage limit hits, diff-reviewed approvals.",
+  "version": "0.1.0",
+  "//publisher": "PLACEHOLDER: replace `clikcode` with the Marketplace publisher id you create (see PUBLISHING.md). It must match on Open VSX too.",
+  "publisher": "clikcode",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#16181d",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jgracier/ClikCode.git",
+    "directory": "packages/vscode"
+  },
+  "homepage": "https://github.com/Jgracier/ClikCode/tree/main/packages/vscode#readme",
+  "bugs": {
+    "url": "https://github.com/Jgracier/ClikCode/issues"
+  },
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "claude code",
+    "codex",
+    "gemini",
+    "copilot",
+    "opencode",
+    "coding assistant"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "ClikCode runs coding agents that read and change files and run commands in the workspace."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "clikcode",
+          "title": "ClikCode",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "clikcode": [
+        {
+          "type": "webview",
+          "id": "clikcode.chat",
+          "name": "Chat",
+          "icon": "media/activity.svg",
+          "contextualTitle": "ClikCode"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "clikcode.focus", "title": "Open Chat", "category": "ClikCode" },
+      { "command": "clikcode.newChat", "title": "New Chat", "category": "ClikCode", "icon": "$(add)" },
+      { "command": "clikcode.resumeChat", "title": "Resume Chat…", "category": "ClikCode", "icon": "$(history)" },
+      { "command": "clikcode.chooseProvider", "title": "Choose Provider…", "category": "ClikCode" },
+      { "command": "clikcode.chooseModel", "title": "Choose Model…", "category": "ClikCode" },
+      { "command": "clikcode.chooseAccount", "title": "Choose Account…", "category": "ClikCode" },
+      { "command": "clikcode.chooseEffort", "title": "Choose Reasoning Effort…", "category": "ClikCode" },
+      { "command": "clikcode.choosePermissions", "title": "Choose Permissions…", "category": "ClikCode" },
+      { "command": "clikcode.openSettings", "title": "Chat Settings…", "category": "ClikCode", "icon": "$(settings-gear)" },
+      { "command": "clikcode.runSlashCommand", "title": "Run Slash Command…", "category": "ClikCode" },
+      { "command": "clikcode.askAboutSelection", "title": "Ask About Selection", "category": "ClikCode" },
+      { "command": "clikcode.attachFile", "title": "Attach File to Next Message", "category": "ClikCode" },
+      { "command": "clikcode.cancel", "title": "Stop the Running Turn", "category": "ClikCode", "icon": "$(debug-stop)" },
+      { "command": "clikcode.restart", "title": "Restart Connection", "category": "ClikCode" },
+      { "command": "clikcode.showLog", "title": "Show Log", "category": "ClikCode" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "clikcode.newChat", "when": "view == clikcode.chat", "group": "navigation@1" },
+        { "command": "clikcode.resumeChat", "when": "view == clikcode.chat", "group": "navigation@2" },
+        { "command": "clikcode.openSettings", "when": "view == clikcode.chat", "group": "navigation@3" }
+      ],
+      "editor/context": [
+        { "command": "clikcode.askAboutSelection", "when": "editorHasSelection", "group": "clikcode@1" },
+        { "command": "clikcode.attachFile", "when": "resourceScheme == file", "group": "clikcode@2" }
+      ],
+      "explorer/context": [
+        { "command": "clikcode.attachFile", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "clikcode@1" }
+      ]
+    },
+    "keybindings": [
+      { "command": "clikcode.focus", "key": "ctrl+alt+c", "mac": "ctrl+cmd+c" },
+      { "command": "clikcode.askAboutSelection", "key": "ctrl+alt+q", "mac": "ctrl+cmd+q", "when": "editorTextFocus && editorHasSelection" },
+      { "command": "clikcode.cancel", "key": "escape", "when": "focusedView == clikcode.chat && clikcode.turnRunning" }
+    ],
+    "configuration": {
+      "title": "ClikCode",
+      "properties": {
+        "clikcode.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Path to the `clikcode` executable or its `dist/index.js`. Empty: found on `PATH`. Install ClikCode with `npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`."
+        },
+        "clikcode.nodePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Node.js 22.12 or newer to run ClikCode with. Empty: `node` on `PATH`, then the Node.js built into VS Code when it is new enough."
+        },
+        "clikcode.openDiffOnApproval": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open the proposed change in a diff editor when an approval request carries one."
+        },
+        "clikcode.startWith": {
+          "type": "string",
+          "enum": ["continue", "new"],
+          "enumDescriptions": ["Continue this workspace's most recent chat.", "Start a new chat."],
+          "default": "continue",
+          "description": "What the chat shows when it opens."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:production": "node scripts/build.mjs --production",
+    "type-check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config vitest.config.mts",
+    "test:integration": "node scripts/build.mjs --tests && node out/test/integration/run.js",
+    "package": "node scripts/build.mjs --production && vsce package --no-dependencies --out clikcode-0.1.0.vsix",
+    "vscode:prepublish": "node scripts/build.mjs --production"
+  },
+  "devDependencies": {
+    "@types/mocha": "10.0.10",
+    "@types/node": "26.1.2",
+    "@types/vscode": "1.99.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.1",
+    "marked": "15.0.12",
+    "mocha": "12.0.2",
+    "ovsx": "1.2.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

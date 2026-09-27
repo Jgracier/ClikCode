@@ -7,3 +7,9 @@ onlyBuiltDependencies:
   - esbuild
 allowBuilds:
   esbuild: true
+# The VS Code extension's packaging tools: vsce-sign fetches a signing binary
+# and keytar builds a keychain addon, and neither is used to build a .vsix
+# (publishing reads its token from the environment).
+ignoredBuiltDependencies:
+  - '@vscode/vsce-sign'
+  - keytar

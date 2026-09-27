@@ -1,0 +1,4 @@
+dist/
+out/
+*.vsix
+.vscode-test/
