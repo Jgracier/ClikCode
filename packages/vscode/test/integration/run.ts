@@ -12,9 +12,11 @@ import { join, resolve } from 'node:path';
 import { runTests } from '@vscode/test-electron';
 
 async function main(): Promise<void> {
-  const extensionDevelopmentPath = resolve(__dirname, '../../..');
+  const packageRoot = resolve(__dirname, '../../..');
+  // CLIKCODE_IT_EXTENSION_PATH: an unpacked .vsix, to test what is shipped.
+  const extensionDevelopmentPath = process.env.CLIKCODE_IT_EXTENSION_PATH ?? packageRoot;
   const extensionTestsPath = resolve(__dirname, 'suite/index.js');
-  const entry = process.env.CLIKCODE_TEST_ENTRY ?? resolve(extensionDevelopmentPath, '../../dist/index.js');
+  const entry = process.env.CLIKCODE_TEST_ENTRY ?? resolve(packageRoot, '../../dist/index.js');
   if (!existsSync(entry)) throw new Error(`no ClikCode build at ${entry}: run \`node scripts/build.mjs\` at the repository root first`);
   const root = mkdtempSync(join(tmpdir(), 'clikcode-vscode-it-'));
   const workspace = join(root, 'workspace');
