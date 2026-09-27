@@ -2,7 +2,7 @@
  * repeat, emitting the same normalized events as the vendor transports. */
 import os from 'node:os';
 import path from 'node:path';
-import { ConversationStore } from './conversation.js';
+import { ConversationStore, memoryConversationStore } from './conversation.js';
 import { buildSystemPrompt, compactConversation, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, COMPACTION_THRESHOLD } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, suggestPermissionRule, visibleTools, type PermissionRules } from './permissions.js';
@@ -15,6 +15,8 @@ import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnes
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
 import type { ToolCategory } from '../harness/prompter.js';
 import { emptyLedger, recordUsage } from './usage.js';
+import { createSubagentRunner } from './subagent.js';
+import { TASK_TOOL_NAME } from './tools/task.js';
 
 const DEFAULT_MAX_STEPS = 60;
 /** Retries of one model step that failed before saying anything. */
@@ -26,7 +28,9 @@ const STREAM_EVENT_INTERVAL_MS = 150;
 /** The gateway loop's label is the command or the path, not the tool name,
  * so the verb table cannot see that a bash call is a command. The class is
  * the fact that can. */
-function categoryForTool(tool: ToolDefinition | undefined): { category?: ToolCategory } {
+function categoryForTool(tool: ToolDefinition | undefined): { category?: ToolCategory; agent?: boolean } {
+  // The turn is waiting on a sub-agent, which the UI shows as an agent row.
+  if (tool?.name === TASK_TOOL_NAME) return { agent: true };
   if (tool?.class === 'exec') return { category: 'run' };
   if (tool?.class === 'read') return { category: 'read' };
   if (tool?.class === 'write') return { category: 'edit' };
@@ -114,14 +118,14 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   const session = sessionState(input.stateDir, input.sessionId);
   if (input.planMode !== undefined) session.plan = { active: input.planMode };
   const checkpoints = new FileCheckpointStore(input.stateDir);
-  const store = new ConversationStore(input.stateDir, input.sessionId);
+  const store = input.subagent ? memoryConversationStore(input.subagent.transcript) : new ConversationStore(input.stateDir, input.sessionId);
   const tools = mergeTools(input.tools ?? defaultTools(), input.extraTools);
   const maxSteps = Math.max(1, Math.floor(input.maxSteps ?? DEFAULT_MAX_STEPS));
 
   const [loaded, rules, baseSystem] = await abortable(Promise.all([
     store.load(),
     loadPermissionRules(cwd),
-    buildSystemPrompt({ cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir }),
+    input.subagent ? input.subagent.system : buildSystemPrompt({ cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir }),
   ]), signal);
   let items: ConversationItem[] = loaded;
   const append = async (...added: ConversationItem[]): Promise<void> => { items.push(...added); await store.append(...added); };
@@ -150,10 +154,30 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   let stalledCall: ModelToolCall | undefined;
   let stepRetries = 0;
   let compactedForSize = false;
+  let lastContext: { contextTokens?: number; contextWindow?: number; servedModel?: string } = {};
+
+  // One prompt at a time: parallel reads, and parallel sub-agents, must not stack dialogs.
+  const queueApproval = <T>(ask: () => Promise<T>): Promise<T> => {
+    const next = approvalChain.then(ask);
+    approvalChain = next.catch(() => undefined);
+    return next;
+  };
+  const onApproval = input.onApproval;
+  const runSubagent = input.subagent ? undefined : createSubagentRunner({
+    parent: input, tools, runTurn: runGatewayHarnessTurn,
+    ...(onApproval ? { approve: (title: string, detail?: string, rule?: string) => queueApproval(() => onApproval(title, detail, rule)) } : {}),
+    // A sub-agent's spend is this turn's spend: it lands in the same ledger
+    // and is reported as it happens, not when the task returns.
+    onUsage: (delta) => {
+      ledger = recordUsage(ledger, { step: steps, usage: delta });
+      input.onUsage?.({ ...ledger.total, ...lastContext });
+    },
+  });
 
   const toolContext = (callId: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs, sessionId: input.sessionId, turnId, stateDir: input.stateDir, homeDir, signal, checkpoints, session, callId, emitOutput,
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
+    ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
 
   const executeCall = async (call: ModelToolCall, rulesNow: PermissionRules): Promise<ToolRunResult> => {
@@ -195,19 +219,17 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     const verdict = decidePermission({ tool, args: call.args, mode: input.permissionMode, rules: rulesNow, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });
     if (verdict.decision === 'deny') return finish({ output: `Permission denied: ${verdict.reason}. Do not retry this call; choose another approach or tell the user what you need.`, isError: true });
     if (verdict.decision === 'ask') {
-      // One prompt at a time: parallel reads must not stack dialogs.
       // The rule this call could be answered with once and for all, e.g.
       // `Bash(npm test:*)`. Absent where no honest rule can be formed -- a
       // compound shell line, or a tool with no path or host to key on -- and
       // the approver then simply does not offer "always".
       const rule = suggestPermissionRule(tool, call.args, scope);
-      const ask = approvalChain.then(async () => {
+      const ask = queueApproval(async () => {
         throwIfAborted();
         const prompt = await buildApprovalPrompt(tool, call.args, ctx, verdict.reason);
         input.onPhase?.('waiting for approval');
         return input.onApproval!(prompt.title, prompt.detail, rule);
       });
-      approvalChain = ask.catch(() => undefined);
       const approved = await abortable(ask, signal);
       if (!approved) return finish({ output: 'The user declined this action. Do not retry it; ask what they would prefer or take a different approach.', isError: true });
       // Persisted BEFORE the tool runs, so a rule the user just agreed to is
@@ -348,12 +370,12 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       itemsAtLastUsage = items.length;
       contextWindow = step.contextWindow ?? contextWindow;
       servedModel = step.servedModel ?? servedModel;
-      input.onUsage?.({
-        ...ledger.total,
+      lastContext = {
         contextTokens: estimateContextTokens(system, items, step.usage),
         contextWindow: contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW,
         ...(servedModel ? { servedModel } : {}),
-      });
+      };
+      input.onUsage?.({ ...ledger.total, ...lastContext });
 
       if (finalOnly) return result({ stopReason: 'no-progress', isError: true, errorKind: 'other' });
       if (!calls.length) {
