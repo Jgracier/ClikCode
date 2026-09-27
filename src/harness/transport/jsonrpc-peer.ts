@@ -49,10 +49,37 @@ interface JsonRpcShutdownOptions {
   killMs?: number;
 }
 
+/** What an error response's `data` says, when it says more than its message.
+ *
+ * Agents put the vendor's real refusal there and a generic line in `message`:
+ * Factory Droid answers `{code:-32603, message:"Internal error: Agent error",
+ * data:"402 {\"detail\":\"No active subscription found. ...\",\"status\":402}"}`.
+ * Read as `message` alone, a spent plan was an unexplained crash. */
+export function jsonRpcErrorDetail(data: unknown): { reason?: string; statusCode?: number } {
+  const text = typeof data === 'string' ? data.trim()
+    : data && typeof data === 'object' && typeof (data as { message?: unknown }).message === 'string' ? String((data as { message: string }).message).trim()
+    : undefined;
+  if (!text) return {};
+  const leading = /^(\d{3})\b\s*/.exec(text);
+  const body = leading ? text.slice(leading[0].length) : text;
+  let reason = body;
+  let status = leading ? Number(leading[1]) : undefined;
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown; message?: unknown; error?: unknown; status?: unknown };
+    const said = [parsed.detail, parsed.message, parsed.error].find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    if (said) reason = said.replace(/\s+/g, ' ').trim();
+    if (status === undefined && typeof parsed.status === 'number') status = parsed.status;
+  } catch { /* not JSON: the text is the reason */ }
+  return { reason, ...(status !== undefined && status >= 400 && status < 600 ? { statusCode: status } : {}) };
+}
+
 class JsonRpcError extends Error {
+  readonly statusCode?: number;
   constructor(message: string, readonly rpcCode?: number, readonly data?: unknown) {
-    super(message);
+    const detail = jsonRpcErrorDetail(data);
+    super(detail.reason && !message.includes(detail.reason) ? `${message}: ${detail.reason}` : message);
     this.name = 'JsonRpcError';
+    if (detail.statusCode !== undefined) this.statusCode = detail.statusCode;
   }
 }
 
