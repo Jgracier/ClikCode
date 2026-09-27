@@ -74,6 +74,16 @@ function insideGitRepository(folder: string): boolean {
   }
 }
 
+/** A vendor refusing the reasoning level itself, in the words the CLIs use. */
+const EFFORT_REJECTED = /\b(?:unknown|invalid|unsupported|not supported)\b[^\n]{0,40}\b(?:reasoning[ _-]?)?effort\b|\beffort\b[^\n]{0,40}\b(?:is not supported|not supported|unsupported|invalid)\b/i;
+
+/** Whether a failed turn is the vendor refusing the reasoning level: read
+ * from its message and the stderr it carries, never from a model's reply. */
+export function isEffortRefusal(failure: Error): boolean {
+  const stderr = (failure as { stderrTail?: unknown }).stderrTail;
+  return EFFORT_REJECTED.test([failure.message, typeof stderr === 'string' ? stderr : ''].join('\n'));
+}
+
 export async function aiSessionSend(
   id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
 ): Promise<void> {
@@ -223,6 +233,9 @@ export async function aiSessionSend(
     // turn itself failing. Retrying more than once would risk a loop if
     // login genuinely doesn't fix it (wrong account, network issue, etc.).
     let authRetried = false;
+    let effortRetried = false;
+    const effortKey = (): string => `${harness.command} ${model ?? ''} ${session.effort}`;
+    const turnEffort = (): string | undefined => session.effort && session.effortRefused !== effortKey() ? session.effort : undefined;
     const declaredOptions = localHarnessCapabilityManifest(harness).options;
     /** Shared by every transport: usage seen on the wire for this attempt. */
     let turnUsage: NormalizedTurnUsage | undefined;
@@ -347,7 +360,7 @@ export async function aiSessionSend(
         }
         const argv = nativeHarnessTurnArgv(cliHarness, {
           prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
-          launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: session.effort,
+          launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: turnEffort(),
           permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
         });
         if (turn.outsideRepoArgv && !insideGitRepository(session.workspace ?? process.cwd())) argv.unshift(...turn.outsideRepoArgv);
@@ -453,7 +466,7 @@ export async function aiSessionSend(
               if (overrides.unmapped.length) prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${overrides.unmapped.join(', ')}`));
               const codexInput: CodexAppServerTurnInput = {
                 binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
-                cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
+                cwd: session.workspace!, model, effort: turnEffort(), permissionMode: session.permissionMode ?? 'ask',
                 images, environment, signal, onSessionId,
                 ...(overrides.configOverrides ? { configOverrides: overrides.configOverrides } : {}),
                 ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
@@ -477,14 +490,14 @@ export async function aiSessionSend(
               };
               result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
             } else {
-              const launch = harnessAcpLaunch(harness, { model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask' });
+              const launch = harnessAcpLaunch(harness, { model, effort: turnEffort(), permissionMode: session.permissionMode ?? 'ask' });
               if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
               const acpInput: AcpTurnInput = {
                 binary: launch.binary, command: harness.command, prompt: turnText,
                 argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
                 extraArgv: [...launch.optionArgv, ...declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId))],
                 ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
-                cwd: session.workspace!, model, effort: session.effort, permissionMode: session.permissionMode ?? 'ask',
+                cwd: session.workspace!, model, effort: turnEffort(), permissionMode: session.permissionMode ?? 'ask',
                 environment, signal, images, onSessionId,
                 ...sharedObserver,
               };
@@ -542,6 +555,18 @@ export async function aiSessionSend(
           // wording; a thrown transport error carries its own stderr/streams.
           ...(caughtTurnFailure ? {} : { isResultError: true }),
         });
+        // A reasoning level the model does not take. Which levels a model
+        // takes is often only stated by the refusal itself ("Unknown effort
+        // \"medium\". Supported: high, max." -- Command Code, where it varies
+        // per model and is published nowhere else). The conversation drops to
+        // the vendor's own default and says so, then runs the turn once more.
+        if (!cliOutputStarted && turnEffort() && !effortRetried && isEffortRefusal(failure)) {
+          effortRetried = true;
+          prompter?.activity(chalk.yellow(`${harness.displayName} does not take effort ${session.effort} on this model; using its default`));
+          session.effortRefused = effortKey();
+          await checkpoint.persistNow();
+          continue;
+        }
         // An `experimental` structured contract an older vendor build rejects
         // outright: retry once on the proven fallback contract, and remember it.
         if (failureKind === 'other' && !cliOutputStarted && harness.experimental && harness.fallbackTurn

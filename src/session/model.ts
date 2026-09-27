@@ -23,6 +23,10 @@ export interface HarnessSession {
   provider: string | null;
   model: string | null;
   effort: string;
+  /** `effort` as refused by the vendor for one harness and model
+   * (`<harness> <model> <effort>`): turns there run at the vendor's own
+   * default until the effort, model or harness changes. */
+  effortRefused?: string;
   permissionMode?: AiHarnessPermissionMode;
   name?: string;
   /** Who named it. `user` is a /rename and is never overwritten; `provider` is
