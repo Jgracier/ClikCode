@@ -16,6 +16,7 @@ import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnes
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
 import type { ToolCategory } from '../harness/prompter.js';
 import { emptyLedger, recordUsage } from './usage.js';
+import { readImageInputs } from './images.js';
 
 const DEFAULT_MAX_STEPS = 60;
 /** Retries of one model step that failed before saying anything. */
@@ -130,7 +131,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   const append = async (...added: ConversationItem[]): Promise<void> => { items.push(...added); await store.append(...added); };
 
   const imageNote = input.images?.length ? `\n\n[Attached image files: ${input.images.join(', ')}]` : '';
-  await append({ type: 'text', role: 'user', text: `${input.prompt}${imageNote}` });
+  // The note stays even when the pixels go too: it tells the model the file
+  // names, and a later client that cannot see images still has it.
+  const images = input.images?.length && input.modelClient.acceptsImages ? await abortable(readImageInputs(input.images), signal) : [];
+  await append({ type: 'text', role: 'user', text: `${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
 
   // Steering: text typed mid-turn is queued and lands before the next model step.
   const steerQueue: string[] = [];
@@ -175,6 +179,9 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     };
     if (!tool) {
       return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(tools, session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
+    }
+    if (call.argumentsError) {
+      return finish({ output: `The arguments for ${tool.name} were not a valid JSON object (${call.argumentsError}). Call the tool again with a single JSON object.`, isError: true });
     }
     const problems = validateAgainstSchema(call.args, tool.parameters);
     if (problems.length) {

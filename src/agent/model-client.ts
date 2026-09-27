@@ -15,8 +15,21 @@ export interface TokenUsage {
   costMicroUsd?: number;
 }
 
+/** An image the user attached, carried inline so a resumed conversation can
+ * resend it after the original file has moved or gone. `data` is base64
+ * without a `data:` prefix. */
+export interface ImageInput {
+  mimeType: string;
+  data: string;
+  /** The file it came from, for display and for clients that only name it. */
+  name?: string;
+}
+
 export type ConversationItem =
-  | { type: 'text'; role: 'user' | 'assistant'; text: string }
+  /** `images` only ever rides on a user item, and only when the model client
+   * said it accepts them; `text` still names the files, so a client that
+   * cannot send pixels loses nothing by ignoring the field. */
+  | { type: 'text'; role: 'user' | 'assistant'; text: string; images?: readonly ImageInput[] }
   | { type: 'tool_call'; id: string; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; id: string; name: string; output: string; isError?: boolean }
   | { type: 'summary'; text: string };
@@ -40,6 +53,10 @@ export interface ModelToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
+  /** Set when the model's arguments were not a JSON object. The loop answers
+   * the call with this instead of running it, so the model hears that its
+   * JSON was broken rather than that some required field is missing. */
+  argumentsError?: string;
 }
 
 export interface ModelStepResult {
@@ -53,6 +70,9 @@ export interface ModelStepResult {
 
 export interface ModelClient {
   step(request: ModelStepRequest): Promise<ModelStepResult>;
+  /** True when the model can see images sent as `ImageInput`s. Without it
+   * the loop does not read attached images into the transcript at all. */
+  readonly acceptsImages?: boolean;
 }
 
 export type HarnessErrorKind = 'quota' | 'auth' | 'other';
