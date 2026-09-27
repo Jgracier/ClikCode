@@ -101,6 +101,16 @@ const HERMES_OAUTH_PROVIDERS = new Set(['anthropic', 'nous', 'openai-codex', 'xa
 // authenticated even though the provider exposes its local model routes.
 const HERMES_LOCAL_PROVIDERS = new Set(['custom:turbofit', 'turbofit']);
 
+/** A TurboFit model the way Hermes can route it. Hermes' inventory names the
+ * provider `turbofit` (config `providers:`), but its model parser only
+ * recognises a user-defined provider as `custom:<name>`: `turbofit:auto` is
+ * read as a model called "turbofit:auto" on whatever provider is current --
+ * which sent it to Codex, and Codex refused it. `custom:turbofit:auto` routes
+ * to TurboFit's gateway. */
+export function hermesTurboFitModelId(model: string): string {
+  return model.replace(/^turbofit:/, 'custom:turbofit:');
+}
+
 export interface HermesConnect { id: string; label: string; detail: string; argv: string[] }
 export interface HermesLocalRecommendation { id: string; label: string; detail: string }
 export interface HermesInventory {
@@ -422,7 +432,7 @@ export function hermesInventory(output: string): HermesInventory | undefined {
         continue;
       }
       for (const model of rowModels) {
-        const id = `${row.provider}:${model.trim()}`;
+        const id = hermesTurboFitModelId(`${row.provider}:${model.trim()}`);
         models.push(id);
         if (localProvider) {
           const label = model.trim() === 'auto' ? 'TurboFit Auto mode'
@@ -434,7 +444,7 @@ export function hermesInventory(output: string): HermesInventory | undefined {
     }
     connect.sort((left, right) => CONNECT_ORDER(left) - CONNECT_ORDER(right) || left.label.localeCompare(right.label));
     const configured = typeof parsed.model === 'string' && parsed.model && typeof parsed.provider === 'string' && parsed.provider
-      ? `${parsed.provider}:${parsed.model}` : undefined;
+      ? hermesTurboFitModelId(`${parsed.provider}:${parsed.model}`) : undefined;
     return models.length || connect.length ? { models, ...(configured ? { configured } : {}), labels, connect } : undefined;
   } catch {
     return undefined;

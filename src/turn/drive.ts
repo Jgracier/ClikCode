@@ -142,7 +142,8 @@ export async function aiSessionSend(
     }
     // A TurboFit local model is running before its turn (a headless send, a
     // worker picking up a session whose terminal took the lease).
-    await ensureTurboFitForTurn(harness, account, session.id, model);
+    model = await ensureTurboFitForTurn(harness, account, session.id, model);
+    if (model) session.model = model;
     // An unnamed chat gets a title from the harness that writes one, and asks
     // the model for one where the harness does not. The request rides on this
     // turn's text only -- never on what is stored as the user's message -- and

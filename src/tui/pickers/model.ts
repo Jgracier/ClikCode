@@ -87,7 +87,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     const profile = decodeURIComponent(selected.slice('__turbofit_profile__:'.length));
     // Hermes names the provider `turbofit` (config providers:) or
     // `custom:turbofit` (legacy custom_providers:); use the one it listed.
-    const main = catalog.models.find((model) => /^(?:custom:)?turbofit:active:main$/.test(model)) ?? 'turbofit:active:main';
+    const main = catalog.models.find((model) => /^(?:custom:)?turbofit:active:main$/.test(model)) ?? 'custom:turbofit:active:main';
     // Selected, downloaded, built and answering before the session moves to
     // it; a failure leaves the session on the model it had.
     await turboFitModelChanged(harness, account, id, session.model, main, profile);
