@@ -284,11 +284,15 @@ async function syncAccountModels(accountId: string, models: readonly string[]): 
     const { writeState } = await import('../../session/state/write.js');
     const state = await readState();
     const account = state.accounts.find((item) => item.id === accountId);
-    if (!account) return;
-    const existing = new Set(account.models);
-    const added = models.filter((m) => !existing.has(m));
-    if (added.length === 0) return;
-    account.models = [...account.models, ...added];
+    // An empty answer is a discovery that failed, not a vendor with no
+    // models: it must not wipe what the account had.
+    if (!account || models.length === 0) return;
+    // The vendor's current list replaces the stored one. Appending kept every
+    // model any past discovery ever produced -- retired models, and lines an
+    // older parser misread as models ('Repo-map', a docs URL) -- forever.
+    const next = [...new Set(models)];
+    if (next.length === account.models.length && next.every((model, index) => model === account.models[index])) return;
+    account.models = next;
     await writeState(state);
   } catch {
     // Non-critical background sync
