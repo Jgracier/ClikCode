@@ -20,6 +20,9 @@ interface JsonRpcRequestOptions {
   /** Treat the timeout as an idle window: any inbound message restarts it.
    * Used for history-replaying setup calls that stream while they work. */
   idleReset?: boolean;
+  /** Told the id the request went out under, for a protocol-level cancel
+   * (MCP's `notifications/cancelled` names the request it abandons). */
+  onId?: (id: number) => void;
 }
 
 interface JsonRpcPeerOptions {
@@ -163,6 +166,7 @@ export class JsonRpcPeer {
         }, options.timeoutMs);
       }
       this.pending.set(id, entry);
+      options.onId?.(id);
       if (!this.send({ id, method, params })) {
         this.pending.delete(id);
         if (entry.timer) clearTimeout(entry.timer);
