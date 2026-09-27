@@ -20,6 +20,8 @@ describe('vendor credential files', () => {
     expect(expandAuthPath('${GEMINI_CLI_HOME:-~}/.gemini/oauth_creds.json', { GEMINI_CLI_HOME: '/profiles/g1' }, '/home/u'))
       .toBe('/profiles/g1/.gemini/oauth_creds.json');
     expect(expandAuthPath('${QWEN_HOME:-~/.qwen}/settings.json', { QWEN_HOME: '  ' }, '/home/u')).toBe('/home/u/.qwen/settings.json');
+    expect(expandAuthPath('~/.cline/data/settings/providers.json', { HOME: '/profiles/cline' }, '/home/u'))
+      .toBe('/profiles/cline/.cline/data/settings/providers.json');
   });
 
   it('is signed in by a non-empty file, a file containing the key, a non-empty directory, or an API-key variable', async () => {

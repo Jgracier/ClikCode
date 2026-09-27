@@ -22,7 +22,7 @@ import { binaryOnPath } from '../transport/native/binary.js';
 import {
   discoverHermesTurboFitRecommendations, hermesInstallDirectory, selectHermesTurboFitRecommendation, turboFitPluginRoot,
 } from './hermes-discovery.js';
-import { TURBOFIT_PLAN_SCRIPT, TURBOFIT_SUPERVISOR_SCRIPT } from './turbofit-scripts.js';
+import { TURBOFIT_CPU_LANES_SCRIPT, TURBOFIT_CPU_LANE_SELECT_SCRIPT, TURBOFIT_PLAN_SCRIPT, TURBOFIT_SUPERVISOR_SCRIPT } from './turbofit-scripts.js';
 
 /** Hermes model ids that run on TurboFit's local gateway. */
 export function isTurboFitModel(model: string | null | undefined): boolean {
@@ -159,6 +159,24 @@ const TURBOFIT_PATCHES: readonly { file: string; from: string; to: string }[] = 
     ].join('\n'),
   },
 ];
+
+/** A manual profile TurboFit wrote on a machine with no GPU carries an
+ * empty GPU index that its own loader refuses -- and one such file stops
+ * every TurboFit command from reading its state. Repaired in place, whoever
+ * wrote it (see TURBOFIT_CPU_LANE_SELECT_SCRIPT). */
+async function repairManualResolutions(environment: Environment): Promise<void> {
+  const file = join(turboFitHome(environment), '.config', 'turbofit', 'manual-runtime-resolutions.json');
+  let text: string;
+  try { text = await readFile(file, 'utf8'); } catch { return; }
+  const parsed = JSON.parse(text) as { profiles?: Record<string, Record<string, Record<string, { gpu?: unknown }>>> };
+  let changed = false;
+  for (const rungs of Object.values(parsed.profiles ?? {})) {
+    for (const roles of Object.values(rungs)) {
+      for (const role of Object.values(roles)) if (role && role.gpu === '') { role.gpu = '0'; changed = true; }
+    }
+  }
+  if (changed) await writeFile(file, `${JSON.stringify(parsed, null, 2)}\n`);
+}
 
 async function patchTurboFit(root: string): Promise<void> {
   for (const patch of TURBOFIT_PATCHES) {
@@ -397,56 +415,189 @@ async function waitUntilServing(model: string, environment: Environment, owned: 
  * Every turn processes at least that much before the first word. */
 const HERMES_PROMPT_TOKENS = 25_000;
 
-interface ModelCheck { toolCalls: boolean; promptPerSecond?: number }
+/** What "usable with Hermes" means for a local model. At 50 tokens a second
+ * Hermes' opening prompt takes about eight minutes, once: llama.cpp keeps the
+ * shared prefix cached, so later turns read only what is new. 8 tokens a
+ * second writes a paragraph in a few seconds. The Qwen 27B TurboFit picks for
+ * a 48 GB machine reads 5 a second on a laptop CPU -- over an hour. */
+const MIN_PROMPT_PER_SECOND = 50;
+const MIN_GENERATE_PER_SECOND = 8;
 
-/** What an agent needs from a model beyond fitting in memory: it calls
- * tools, and it reads a prompt fast enough to answer. Tool calling is what
- * lets Hermes act at all; prompt speed decides whether a turn takes seconds
- * or an hour (a 27B model on a laptop CPU reads ~5 tokens a second: over an
- * hour before Hermes' first reply). Both are measured once per selected
- * profile, from one request -- llama.cpp reports its own prompt speed -- and
- * reported, not refused: TurboFit chose the model for this machine. */
-async function checkModel(route: string, environment: Environment, profile: string): Promise<string | undefined> {
-  const cache = join(stateDir(environment), 'clikcode-model-check.json');
-  const known = JSON.parse(await readFile(cache, 'utf8').catch(() => '{}')) as Record<string, ModelCheck>;
-  let check = known[profile];
-  if (!check) {
-    const reply = await gatewayRequest('POST', '/v1/chat/completions', completionFor(route, {
-      max_tokens: 256,
-      messages: [{ role: 'user', content: 'What time is it? Use the get_time tool.' }],
-      tools: [{ type: 'function', function: { name: 'get_time', description: 'Returns the current time', parameters: { type: 'object', properties: {} } } }],
-      tool_choice: 'auto',
-    }), 600_000);
-    check = { toolCalls: false };
-    try {
-      const parsed = JSON.parse(reply.text) as {
-        choices?: { message?: { tool_calls?: unknown[] } }[];
-        timings?: { prompt_per_second?: number };
-      };
-      check.toolCalls = Boolean(parsed.choices?.[0]?.message?.tool_calls?.length);
-      const speed = parsed.timings?.prompt_per_second;
-      if (typeof speed === 'number' && Number.isFinite(speed) && speed > 0) check.promptPerSecond = speed;
-    } catch { /* No parseable reply is not a tool call. */ }
-    await writeFile(cache, JSON.stringify({ ...known, [profile]: check }));
-  }
+export interface ModelCheck { toolCalls: boolean; promptPerSecond?: number; generatePerSecond?: number }
+
+export function meetsBar(check: ModelCheck | undefined): boolean {
+  return Boolean(check?.toolCalls
+    && (check.promptPerSecond ?? 0) >= MIN_PROMPT_PER_SECOND && (check.generatePerSecond ?? 0) >= MIN_GENERATE_PER_SECOND);
+}
+
+async function readChecks(environment: Environment): Promise<Record<string, ModelCheck>> {
+  return JSON.parse(await readFile(join(stateDir(environment), 'clikcode-model-check.json'), 'utf8').catch(() => '{}')) as Record<string, ModelCheck>;
+}
+
+async function writeCheck(environment: Environment, profile: string, check: ModelCheck): Promise<void> {
+  await mkdir(stateDir(environment), { recursive: true });
+  await writeFile(join(stateDir(environment), 'clikcode-model-check.json'), JSON.stringify({ ...await readChecks(environment), [profile]: check }));
+}
+
+/** Measured, not estimated, on the model now serving: a few-hundred-token
+ * prompt for reading speed and a short reply for writing speed (llama.cpp
+ * reports both), then one request that asks for a tool. A model that cannot
+ * make a tool call fits in memory and still cannot do Hermes' work. */
+async function measureModel(route: string): Promise<ModelCheck> {
+  const numbers = Array.from({ length: 240 }, (_, index) => `${index * 7 + 3}`).join(', ');
+  const speed = await gatewayRequest('POST', '/v1/chat/completions', completionFor(route, {
+    max_tokens: 48, temperature: 0,
+    messages: [{ role: 'user', content: `Here is a list of numbers: ${numbers}.\nIn one sentence, what do they have in common?` }],
+  }), 900_000);
+  const check: ModelCheck = { toolCalls: false };
+  try {
+    const timings = (JSON.parse(speed.text) as { timings?: { prompt_per_second?: number; predicted_per_second?: number } }).timings;
+    const finite = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+    check.promptPerSecond = finite(timings?.prompt_per_second);
+    check.generatePerSecond = finite(timings?.predicted_per_second);
+  } catch { /* No timings: the speed stays unknown, which fails the bar. */ }
+  const tool = await gatewayRequest('POST', '/v1/chat/completions', completionFor(route, {
+    max_tokens: 256,
+    messages: [{ role: 'user', content: 'What time is it? Use the get_time tool.' }],
+    tools: [{ type: 'function', function: { name: 'get_time', description: 'Returns the current time', parameters: { type: 'object', properties: {} } } }],
+    tool_choice: 'auto',
+  }), 900_000);
+  try { check.toolCalls = Boolean((JSON.parse(tool.text) as { choices?: { message?: { tool_calls?: unknown[] } }[] }).choices?.[0]?.message?.tool_calls?.length); }
+  catch { /* No parseable reply is not a tool call. */ }
+  return check;
+}
+
+function describeCheck(profile: string, check: ModelCheck): string | undefined {
   const notes: string[] = [];
   if (!check.toolCalls) notes.push(`TurboFit's ${profile} did not make a tool call when asked, so Hermes tools may not work with it.`);
   const minutes = check.promptPerSecond ? HERMES_PROMPT_TOKENS / check.promptPerSecond / 60 : 0;
   if (minutes >= 2) {
-    notes.push(`On this machine it reads about ${Math.round(check.promptPerSecond!)} tokens a second, so each Hermes reply starts `
-      + `after roughly ${Math.round(minutes)} minutes. A GPU TurboFit can use, or a smaller model, is much faster.`);
+    notes.push(`On this machine it reads about ${Math.round(check.promptPerSecond!)} tokens a second, so a conversation's first Hermes reply `
+      + `starts after roughly ${Math.round(minutes)} minutes (later replies reuse what was read).`);
   }
   return notes.length ? notes.join(' ') : undefined;
 }
 
+// ---- CPU lanes -------------------------------------------------------------
+
+export interface LaneFile { destination: string; family: string | null; repo: string; path: string; size: number; present: boolean }
+export interface CpuLane {
+  variant: string; name: string; quant: string; totalB: number; activeB: number;
+  mainBytes: number; totalBytes: number; binaries: string[]; files: LaneFile[];
+}
+export interface CpuLanes { pool: string; usableMb: number; cores: number; lanes: CpuLane[] }
+
+async function readCpuLanes(python: string, root: string, environment: Environment): Promise<CpuLanes> {
+  const result = await run(python, ['-c', TURBOFIT_CPU_LANES_SCRIPT, root], { cwd: root, env: toolsEnv(python, root, environment), timeoutMs: 120_000 });
+  const marker = result.output.lastIndexOf('\x00TURBOFIT_LANES');
+  if (marker < 0) throw new Error(`TurboFit could not list the models for this machine.\n${tail(result.output)}`);
+  return JSON.parse(result.output.slice(marker + '\x00TURBOFIT_LANES'.length).split('\n')[0]!) as CpuLanes;
+}
+
+/** Prompt tokens a second per billion active parameters, by compression
+ * format, measured with llama-bench on an 8-core Zen 4 (Ryzen 7 8745HS):
+ * Q4_K 88 t/s at 3B active, Q3_K 5.0 at 27B, IQ3_XXS 2.9 at 27B. Kernels,
+ * not size, set these -- IQ3_XXS is the smaller file and the slower read --
+ * which is why a GPU figure cannot be scaled to a CPU one. Scaled by core
+ * count; formats not measured take a middling value. Only an ordering: what
+ * is chosen is measured before it is kept. */
+const PROMPT_RATE: readonly [RegExp, number][] = [
+  [/IQ[1-3]/i, 79], [/Q3_K/i, 136], [/Q[45]_K|Q4_0|Q4\b/i, 264], [/Q[68]/i, 200], [/[BF]F?16/i, 60],
+];
+/** Memory bandwidth llama.cpp reaches reading weights on that machine,
+ * measured the same way: writing speed times the bytes each token reads
+ * (13.2 GB x 3.3 t/s for the dense Qwen, 1.9 GB x 20.4 for Ornith's active
+ * share) -- about 40 GB/s, the 46-55 GB/s a STREAM test shows less overhead. */
+const WEIGHT_BANDWIDTH = 40e9;
+
+export function estimateLane(lane: CpuLane, cores: number): { promptPerSecond: number; generatePerSecond: number } {
+  const rate = PROMPT_RATE.find(([pattern]) => pattern.test(lane.quant))?.[1] ?? 150;
+  const activeShare = lane.totalB > 0 ? lane.activeB / lane.totalB : 1;
+  return {
+    promptPerSecond: (rate * cores / 8) / Math.max(0.1, lane.activeB),
+    generatePerSecond: WEIGHT_BANDWIDTH / Math.max(1, lane.mainBytes * activeShare),
+  };
+}
+
+function laneProfile(variant: string): string { return `manual-cpu-${variant}-64k`; }
+
+/** The order CPU lanes are tried in: those expected to meet the bar first,
+ * largest model first among them (TurboFit publishes no quality score for
+ * most of these; parameters are the plain proxy); then the rest, fastest
+ * first. A lane measured before is ranked by its measurement. */
+export function rankLanes(lanes: CpuLanes, checks: Record<string, ModelCheck>): { lane: CpuLane; passes: boolean; measured?: ModelCheck }[] {
+  return lanes.lanes.map((lane) => {
+    const measured = checks[laneProfile(lane.variant)];
+    const estimate = estimateLane(lane, lanes.cores);
+    const passes = measured ? meetsBar(measured)
+      : estimate.promptPerSecond >= MIN_PROMPT_PER_SECOND && estimate.generatePerSecond >= MIN_GENERATE_PER_SECOND;
+    return { lane, passes, measured, speed: measured?.promptPerSecond ?? estimate.promptPerSecond };
+  }).sort((left, right) => Number(right.passes) - Number(left.passes)
+    || (left.passes ? right.lane.totalB - left.lane.totalB : right.speed - left.speed))
+    .map(({ lane, passes, measured }) => ({ lane, passes, ...(measured ? { measured } : {}) }));
+}
+
+/** CPU lanes as /model rows, for a machine TurboFit sees no GPU in. */
+export async function turboFitCpuLaneRows(
+  harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined,
+): Promise<{ id: string; label: string; detail: string }[]> {
+  const environment = nativeProfileEnvironment(account?.nativeProfile);
+  const root = await turboFitPluginRoot(environment);
+  const python = venvPython(toolsDir(environment));
+  if (!root || !existsSync(python)) return [];
+  const lanes = await readCpuLanes(python, root, environment).catch(() => undefined);
+  if (!lanes || lanes.pool !== 'cpu') return [];
+  const checks = await readChecks(environment);
+  return rankLanes(lanes, checks).map(({ lane, measured }) => {
+    const speed = measured
+      ? `measured ${Math.round(measured.promptPerSecond ?? 0)} tok/s reading, ${Math.round(measured.generatePerSecond ?? 0)} writing${measured.toolCalls ? '' : ', no tool calls'}`
+      : `about ${Math.round(estimateLane(lane, lanes.cores).promptPerSecond)} tok/s reading (estimate)`;
+    const download = lane.files.filter((file) => !file.present).reduce((sum, file) => sum + file.size, 0);
+    return {
+      id: `cpu-lane:${lane.variant}`,
+      label: lane.name,
+      detail: `CPU · ${speed}${download ? ` · ${formatBytes(download)} download` : ''}`,
+    };
+  });
+}
+
+async function selectCpuLane(python: string, root: string, environment: Environment, lane: CpuLane): Promise<string> {
+  // What it will hold: weights, a 64K context, llama.cpp's buffers. Only an
+  // input to TurboFit's fit check; llama-server's --fit sizes the real thing.
+  const residentMb = Math.round(lane.totalBytes / 1048576 * 1.25 + 1024);
+  const result = await run(python, ['-c', TURBOFIT_CPU_LANE_SELECT_SCRIPT, root, lane.variant, String(residentMb)], {
+    cwd: root, env: toolsEnv(python, root, environment), timeoutMs: 240_000,
+  });
+  const marker = result.output.lastIndexOf('\x00TURBOFIT_SELECTION');
+  const payload = marker < 0 ? undefined : JSON.parse(result.output.slice(marker + '\x00TURBOFIT_SELECTION'.length).split('\n')[0]!) as { error?: string; profile_id?: string };
+  if (!payload || payload.error) throw new Error(`TurboFit could not select ${lane.name}: ${payload?.error ?? tail(result.output)}`);
+  return payload.profile_id ?? laneProfile(lane.variant);
+}
+
+/** The user's own pick in /model is kept, however it measures. */
+async function readUserChoice(environment: Environment): Promise<string | undefined> {
+  try { return (JSON.parse(await readFile(join(stateDir(environment), 'clikcode-user-choice.json'), 'utf8')) as { profile?: string }).profile; }
+  catch { return undefined; }
+}
+
+async function writeUserChoice(environment: Environment, profile: string | undefined): Promise<void> {
+  const file = join(stateDir(environment), 'clikcode-user-choice.json');
+  if (!profile) { await rm(file, { force: true }); return; }
+  await mkdir(stateDir(environment), { recursive: true });
+  await writeFile(file, JSON.stringify({ profile, at: new Date().toISOString() }));
+}
+
 export interface TurboFitReady { notice?: string }
 
-/** Get a TurboFit model running for this session: select it, fetch what it
- * needs, start the runtime (or join one already running), and wait until it
- * answers. `profile` is a recommendation the user picked; a mode picked with
- * nothing selected yet uses TurboFit's top recommendation for this machine
- * (TurboFit's own Auto profile lacks runtime entries on some tiers at the
- * reviewed commit, so it is not relied on). */
+interface Prepared { python: string; root: string; environment: Environment }
+
+/** Get a TurboFit model running for this session. `profile` is a /model
+ * pick -- a TurboFit recommendation, or `cpu-lane:<variant>` -- and is kept
+ * as picked. Otherwise, on a machine TurboFit sees no GPU in, ClikCode
+ * chooses: TurboFit's own recommendations are GPU-measured (its one pick for
+ * a 48 GB machine reads 5 tokens a second on a laptop CPU), so the CPU lanes
+ * are tried in rankLanes order and the first that measures usable is kept.
+ * With a GPU, TurboFit's recommendation stands. */
 export async function prepareTurboFitModel(
   harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, sessionId: string,
   model: string, progress: Progress, profile?: string,
@@ -455,29 +606,89 @@ export async function prepareTurboFitModel(
   const root = await turboFitPluginRoot(environment);
   if (!root) throw new Error('TurboFit is not installed in this Hermes home; choose Hermes again to install it.');
   await patchTurboFit(root);
+  await repairManualResolutions(environment);
   const python = await ensureTools(harness, environment, progress);
+  const prepared: Prepared = { python, root, environment };
 
-  let plan = await readPlan(python, root, environment);
-  const before = plan.selected;
+  const before = (await readPlan(python, root, environment)).selected;
   if (profile) {
     progress('selecting the TurboFit model…');
-    await selectHermesTurboFitRecommendation(harness, account, profile);
-  } else if (!plan.selected) {
+    const lanes = profile.startsWith('cpu-lane:') ? await readCpuLanes(python, root, environment) : undefined;
+    const lane = lanes?.lanes.find((item) => `cpu-lane:${item.variant}` === profile);
+    if (lanes && !lane) throw new Error(`${profile.slice('cpu-lane:'.length)} is not a model this machine can run.`);
+    const selected = lane ? await selectCpuLane(python, root, environment, lane) : (await selectHermesTurboFitRecommendation(harness, account, profile), undefined);
+    await writeUserChoice(environment, selected ?? (await readPlan(python, root, environment)).selected ?? profile);
+    return runSelected(prepared, sessionId, model, before, progress);
+  }
+
+  const checks = await readChecks(environment);
+  const userChoice = await readUserChoice(environment);
+  if (!(before && before === userChoice)) {
+    const lanes = await readCpuLanes(python, root, environment);
+    if (lanes.pool === 'cpu' && !(before && meetsBar(checks[before]))) {
+      return chooseCpuLane(prepared, lanes, checks, sessionId, model, before, progress);
+    }
+  }
+  if (!before) {
     progress('choosing a model for this machine…');
     const [top] = await discoverHermesTurboFitRecommendations(await hermesInstall(harness, environment), environment);
     if (!top) throw new Error('TurboFit found no local model that fits this machine.');
     await selectHermesTurboFitRecommendation(harness, account, top.id);
   }
-  plan = await readPlan(python, root, environment);
+  return runSelected(prepared, sessionId, model, before, progress);
+}
+
+/** Try CPU lanes until one measures usable; at most three are fetched, so a
+ * machine too slow for all of them does not download the whole catalog.
+ * None usable: the fastest one measured is kept, and the notice says so. */
+async function chooseCpuLane(
+  prepared: Prepared, lanes: CpuLanes, checks: Record<string, ModelCheck>,
+  sessionId: string, model: string, before: string | null, progress: Progress,
+): Promise<TurboFitReady> {
+  const ranked = rankLanes(lanes, checks);
+  if (!ranked.length) throw new Error('TurboFit has no model that fits this machine\'s memory.');
+  let current = before;
+  let best: { lane: CpuLane; check: ModelCheck } | undefined;
+  let tried = 0;
+  for (const { lane, measured } of ranked) {
+    if (measured && !meetsBar(measured)) {
+      if (!best || (measured.promptPerSecond ?? 0) > (best.check.promptPerSecond ?? 0)) best = { lane, check: measured };
+      continue;
+    }
+    if (tried++ >= 3) break;
+    progress(`trying ${lane.name} on this CPU…`);
+    const profile = await selectCpuLane(prepared.python, prepared.root, prepared.environment, lane);
+    const ready = await runSelected(prepared, sessionId, model, current, progress);
+    current = profile;
+    const check = (await readChecks(prepared.environment))[profile];
+    if (meetsBar(check)) return ready;
+    if (check && (!best || (check.promptPerSecond ?? 0) > (best.check.promptPerSecond ?? 0))) best = { lane, check };
+  }
+  if (!best) throw new Error('No TurboFit model could be measured on this machine.');
+  const profile = laneProfile(best.lane.variant);
+  if (profile !== current) {
+    await selectCpuLane(prepared.python, prepared.root, prepared.environment, best.lane);
+    await runSelected(prepared, sessionId, model, current, progress);
+  }
+  const why = describeCheck(best.lane.name, best.check);
+  return { notice: `No TurboFit model reached ${MIN_PROMPT_PER_SECOND} tokens a second reading on this CPU; ${best.lane.name} was the fastest.${why ? ` ${why}` : ''}` };
+}
+
+/** Everything after a selection: the runtime it needs, its files, the
+ * lease, the processes, the wait until it answers, and its measurement. */
+async function runSelected(
+  { python, root, environment }: Prepared, sessionId: string, model: string, before: string | null | undefined, progress: Progress,
+): Promise<TurboFitReady> {
+  let plan = await readPlan(python, root, environment);
   const selected = plan.selected;
   if (!selected) throw new Error('TurboFit has no model selected.');
   const backend = await buildableBackend(plan.backend ?? 'cpu');
   if (backend !== plan.backend) plan = await readPlan(python, root, environment, backend);
-  if (plan.unknown?.length) throw new Error(`TurboFit's ${plan.selected} names files it publishes no download for: ${plan.unknown.join(', ')}`);
+  if (plan.unknown?.length) throw new Error(`TurboFit's ${selected} names files it publishes no download for: ${plan.unknown.join(', ')}`);
 
   for (const runtime of plan.runtimes ?? []) {
     if (runtime.present) continue;
-    if (!runtime.runtime) throw new Error(`TurboFit's ${plan.selected} needs ${runtime.binary}, which no pinned runtime builds.`);
+    if (!runtime.runtime) throw new Error(`TurboFit's ${selected} needs ${runtime.binary}, which no pinned runtime builds.`);
     await buildRuntime(python, root, environment, runtime.runtime, backend, progress);
   }
   const missing = (plan.files ?? []).filter((file) => !file.present);
@@ -503,9 +714,12 @@ async function startAndCheck(
   if (owned && changed) {
     // TurboFit's controller reads its profile catalog once, at start; a newly
     // selected model is a profile it has not loaded. The supervisor restarts
-    // it (and stops the model it was serving) when asked through this file.
+    // it (and stops the model it was serving) when asked through this file --
+    // and until it has, the old model would answer the readiness check.
     progress('switching TurboFit to the new model…');
-    await writeFile(join(stateDir(environment), 'clikcode-restart'), new Date().toISOString());
+    const request = join(stateDir(environment), 'clikcode-restart');
+    await writeFile(request, new Date().toISOString());
+    for (let waited = 0; existsSync(request) && waited < 60_000; waited += 500) await new Promise((done) => setTimeout(done, 500));
   }
   if (!owned) {
     // Something already on TurboFit's port: joined only if it is TurboFit
@@ -516,14 +730,31 @@ async function startAndCheck(
       throw new Error(`Another program is using port ${GATEWAY.port}, which TurboFit's gateway needs. Stop it, then choose the model again.`);
     }
     if (!external) {
+      // A different model since TurboFit last ran: the controller's saved
+      // state names a profile TurboFit no longer has (it keeps one manual
+      // profile) and it would refuse to start. Nothing is running to lose.
+      // Decided by the state's own profile, not only by this call's change:
+      // an earlier attempt may have selected the new model and failed.
+      // Unchanged, the state stays -- it is what makes a restart take seconds.
+      const saved = await readFile(join(stateDir(environment), 'controller.json'), 'utf8')
+        .then((text) => (JSON.parse(text) as { profile_id?: string }).profile_id, () => undefined);
+      if (changed || (saved && saved !== selected)) {
+        for (const name of ['controller.json', 'runtime-state.json']) await rm(join(stateDir(environment), name), { force: true });
+      }
       progress('starting TurboFit…');
       await startSupervisor(python, root, environment, backend);
       owned = true;
     }
   }
   await waitUntilServing(model, environment, owned, progress);
-  progress('checking the local model can call tools…');
-  const notice = await checkModel(model.replace(/^(?:custom:)?turbofit:/, ''), environment, selected);
+  const route = model.replace(/^(?:custom:)?turbofit:/, '');
+  let check = (await readChecks(environment))[selected];
+  if (!check) {
+    progress('measuring the local model…');
+    check = await measureModel(route);
+    await writeCheck(environment, selected, check);
+  }
+  const notice = describeCheck(selected, check);
   return notice ? { notice } : {};
 }
 

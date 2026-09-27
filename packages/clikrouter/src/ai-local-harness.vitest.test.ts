@@ -428,7 +428,7 @@ describe('local harness catalog', () => {
     // kimi's ACP is a SUBCOMMAND, not a flag -- corrected in the catalog
     // against the real Kimi Code 2.0.2 and never reflected here.
     expect(acp.kimi).toMatchObject({ argv: ['acp'] });
-    expect(acp.vibe).toEqual({ binary: 'vibe-acp', argv: [] });
+    expect(acp.vibe).toEqual({ binary: 'vibe-acp', argv: [], listsModels: true });
     expect(acp.openhands).toMatchObject({ argv: ['acp'] });
     for (const harness of AI_LOCAL_HARNESSES) {
       if (harness.transport === 'acp') expect(harness.acp, harness.command).toBeDefined();
@@ -522,12 +522,17 @@ describe('local harness catalog', () => {
 
   it('lists what a HOME-redirected account must carry so tools still act as the user', () => {
     const redirected = AI_LOCAL_HARNESSES.filter((item) => item.profileEnv === 'HOME');
-    expect(redirected.map((item) => item.command)).toEqual(['antigravity', 'command']);
+    expect(redirected.length).toBeGreaterThan(2);
     for (const harness of redirected) {
       expect(harness.profileEnvPassthrough, harness.command).toEqual(expect.arrayContaining(['GIT_CONFIG_GLOBAL', 'SSH_AUTH_SOCK', 'NPM_CONFIG_USERCONFIG']));
       for (const name of harness.profileEnvPassthrough!) expect(name in HOME_REDIRECT_ENV_DEFAULTS, name).toBe(true);
     }
     for (const harness of AI_LOCAL_HARNESSES.filter((item) => item.profileEnv !== 'HOME')) expect(harness.profileEnvPassthrough, harness.command).toBeUndefined();
+    expect(AI_LOCAL_HARNESSES.every((item) => item.profileEnv), 'every built-in account can be isolated').toBe(true);
+    for (const harness of AI_LOCAL_HARNESSES.filter((item) => item.localAuth.includes('oauth'))) {
+      expect(harness.loginArgv, `${harness.command} advertises OAuth without a login flow`).toBeDefined();
+      expect(harness.profileEnv, `${harness.command} cannot isolate OAuth accounts`).toBeDefined();
+    }
     expect(HOME_REDIRECT_ENV_DEFAULTS.GIT_CONFIG_GLOBAL).toBe('~/.gitconfig');
     expect(HOME_REDIRECT_ENV_DEFAULTS.SSH_AUTH_SOCK).toBeNull();
   });

@@ -28,10 +28,7 @@ describe('what has already been written to scrollback', () => {
   });
 
   it('resumes correctly when the next frame hands back only a WINDOW', () => {
-    // The failure: the turn is handed messages.slice(-40), so mid-conversation
-    // the list is a window. A count alone starts past its end and writes
-    // nothing -- the message just submitted included, which vanished as the
-    // answer to it streamed in underneath.
+    // The seam helper still locates an emitted message when given a window.
     const record = new EmittedTranscript();
     writeAll(record, Array.from({ length: 57 }, (_, i) => user(`m${i}`)));
     const window = [user('m55'), user('m56'), user('just submitted')];
@@ -65,6 +62,17 @@ describe('what has already been written to scrollback', () => {
     expect(record.resume([assistant('old'), user('q'), assistant('answer')]).liveAssistant).toBe(2);
   });
 
+  it('keeps the live answer index absolute after a long transcript', () => {
+    const record = new EmittedTranscript();
+    const history = Array.from({ length: 80 }, (_, index) => index % 2 === 0 ? user(`q${index}`) : assistant(`a${index}`));
+    writeAll(record, history);
+    record.wrote(user('current prompt'));
+    record.settle(81);
+    record.liveAssistantIndex = record.writtenCount();
+
+    expect(record.resume([...history, user('current prompt'), assistant('the streamed answer')]).liveAssistant).toBe(81);
+  });
+
   it('claims each activity row once, by identity and not by text', () => {
     const record = new EmittedTranscript();
     expect(record.claimActivity(7)).toBe(true);
@@ -96,8 +104,7 @@ describe('what has already been written to scrollback', () => {
   });
 
   it('starts from nothing after a reseed, so the WHOLE conversation is rewritten', () => {
-    // Writing only the last forty is why a chat opened from disk could not be
-    // scrolled back through: the rows were never there to find.
+    // A newly opened session writes full history into terminal scrollback.
     const record = new EmittedTranscript();
     const conversation = [user('q'), assistant('a')];
     writeAll(record, conversation);

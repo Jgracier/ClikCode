@@ -21,7 +21,8 @@ export function expandAuthPath(path: string, environment: Environment, home = ho
     const value = environment[name]?.trim();
     return value || (fallback ?? '');
   });
-  return expanded.startsWith('~') ? `${home}${expanded.slice(1)}` : expanded;
+  const profileHome = environment.HOME?.trim() || home;
+  return expanded.startsWith('~') ? `${profileHome}${expanded.slice(1)}` : expanded;
 }
 
 async function present(entry: AuthFile, environment: Environment): Promise<boolean> {

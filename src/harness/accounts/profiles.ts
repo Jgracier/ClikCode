@@ -15,9 +15,8 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.j
  * profile root, plus -- when that root IS `HOME` -- the user's real git, npm,
  * gh, docker and gpg configuration (catalog HOME_REDIRECT_ENV_DEFAULTS), so a
  * turn can still commit, push and install as the user. SSH_AUTH_SOCK and
- * GIT_SSH_COMMAND are inherited from the caller's environment unchanged. XDG_*
- * is deliberately left alone: pointing XDG_CONFIG_HOME at the real home would
- * hand a HOME-isolated CLI the shared config its isolation exists to avoid. */
+ * GIT_SSH_COMMAND are inherited unchanged. XDG paths remain within the
+ * account profile to avoid exposing shared CLI configuration. */
 export function profileEnvironment(
   harness: AiLocalHarnessDefinition, account: Pick<AiHarnessAccount, 'nativeProfile'> | undefined,
 ): Record<string, string> {

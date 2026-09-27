@@ -18,7 +18,6 @@ import { preferredAccountId } from '../../commands/ai/preferred-account.js';
 import { discardInterruptedTurn } from '../../turn/runtime.js';
 import { nextQuotaReset, quotaResetPhrase } from '../../turn/usage-exhausted.js';
 import { chooseOption } from './choose.js';
-import { modelRow } from './model.js';
 
 /** An account that can take a turn now. */
 export function accountHasUsage(account: AiHarnessAccount): boolean {
@@ -61,13 +60,10 @@ export async function interactiveResumeInPicker(rl: HarnessPrompter, id: string,
       (candidate) => chosen.accounts.some((account) => account.id === candidate.id));
     const account = chosen.accounts.find((candidate) => candidate.id === accountId)!;
     const catalog = await nativeModelCatalogForPicker(chosen.harness, account);
-    const current = catalog.configured;
-    const models = [...catalog.models].sort((left, right) => left === current ? -1 : right === current ? 1 : left.localeCompare(right));
-    // No models published: the harness runs its own default, nothing to ask.
-    const model = models.length
-      ? await chooseOption(rl, `${chosen.harness.displayName} — choose a model`, models.map((item) => modelRow(chosen.harness, catalog, item, current)))
-      : null;
-    if (model === undefined) continue; // back to the harness list
+    const lastUsedModel = [...state.sessions]
+      .filter((item) => item.nativeHarness === chosen.harness.command && item.model)
+      .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
+    const model = lastUsedModel ?? state.providerSettings[chosen.harness.provider]?.model ?? catalog.configured ?? null;
     return continueIn(id, chosen.harness, account.id, model, prompt);
   }
 }

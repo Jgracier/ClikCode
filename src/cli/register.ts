@@ -49,7 +49,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   accounts.command('add').description('Register a local provider login reference; credentials remain on this device')
     .requiredOption('--provider <provider>', 'Harness (claude, codex) or provider id (anthropic, openai)')
     .requiredOption('--label <label>', 'Local account alias')
-    .requiredOption('--auth <kind>', 'oauth, api-key, or vendor-cli')
+    .requiredOption('--auth <kind>', 'api-key or vendor-cli; use the vendor login flow for OAuth')
     .option('--credential-ref <ref>', 'OS-keychain or vendor-CLI profile reference; never a token (vendor-cli: defaults to the CLI\'s own sign-in)')
     .option('--model <model...>', 'Model ids available through this account')
     .action((options) => {

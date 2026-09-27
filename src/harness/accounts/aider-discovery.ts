@@ -90,7 +90,8 @@ async function openRouterList(): Promise<string> {
 
 /** The providers Aider has a key for, in this environment. */
 export async function aiderKeyedProviders(environment: Readonly<Record<string, string>>): Promise<typeof AIDER_PROVIDERS[number][]> {
-  const keys = { ...parseEnvFile(await readFile(join(homedir(), '.aider', 'oauth-keys.env'), 'utf8').catch(() => '')), ...process.env, ...environment };
+  const home = environment.HOME || homedir();
+  const keys = { ...parseEnvFile(await readFile(join(home, '.aider', 'oauth-keys.env'), 'utf8').catch(() => '')), ...environment };
   return AIDER_PROVIDERS.filter((provider) => keys[provider.env]?.trim());
 }
 

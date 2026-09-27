@@ -20,10 +20,7 @@ describe('where the transcript resumes', () => {
   });
 
   it('finds the seam inside a WINDOW, which a count alone cannot', () => {
-    // The real bug: the turn is handed messages.slice(-40), so mid-conversation
-    // the array is a window. Counting absolutely (emitted=57) starts past the
-    // end and writes NOTHING -- the message just submitted included, which
-    // vanished as the answer to it streamed in underneath.
+    // The pure seam helper still supports callers that provide a window.
     const window = [user('older'), assistant('answer'), user('just submitted')];
     expect(firstUnwritten(window, 57, messageKey(assistant('answer')))).toBe(2);
   });
@@ -60,6 +57,7 @@ describe('whether the pending turn is already in the transcript', () => {
   it('is false when no more was retired than the list holds', () => {
     expect(materializedPendingTurn(3, 3, 3)).toBe(false);
   });
+
 });
 
 describe('where the streamed answer landed', () => {

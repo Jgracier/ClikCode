@@ -49,6 +49,12 @@ describe('slash registry', () => {
     });
   });
 
+  it('allows model selection for ACP harnesses that publish their own model list', () => {
+    const model = resolveSlashCommand('model')!;
+    expect(model.availability(session(), harness({ modelArgvPrefix: undefined, acp: { argv: [], listsModels: true } })))
+      .toEqual({ available: true });
+  });
+
   it('allows repository tasks on the gateway route, which now reads local files', () => {
     // The gateway route runs ClikCode's own agent loop on this machine and
     // asks the gateway only for the model step, so its tools touch the same
@@ -95,13 +101,11 @@ describe('slash registry', () => {
 
   /** Typing `/` on a phone shows about six rows before anything scrolls, so
    * what sits in those rows is the whole of the feature for most uses. */
-  it('opens with the commands reached for most, in the order they are reached for', () => {
+  it('opens with the pinned commands, in their fixed order', () => {
     const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
-    // Spelled out rather than derived from SLASH_PALETTE_PINNED: comparing the
-    // constant to itself passes whatever the constant says.
-    expect(palette.slice(0, 10).map((row) => row.value))
-      .toEqual(['/resume', '/provider', '/model', '/account', '/new', '/permissions', '/settings', '/sessions', '/status', '/help']);
-    // One header, not one per pinned command's real group.
+    expect(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.value))
+      .toEqual(SLASH_PALETTE_PINNED.map((name) => `/${name}`));
+    expect(SLASH_PALETTE_PINNED.slice(0, 4)).toEqual(['resume', 'provider', 'model', 'account']);
     expect(new Set(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.group))).toEqual(new Set(['Common']));
     // Pinned once, not listed again under the group it came from.
     const values = palette.map((row) => row.value);

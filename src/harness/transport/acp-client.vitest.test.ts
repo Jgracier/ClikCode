@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv } from './acp-client.js';
+import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange } from './acp-client.js';
 
 describe('shared ACP adapter contract', () => {
   it('normalizes agent prose and tool lifecycle events', () => {
@@ -10,6 +10,15 @@ describe('shared ACP adapter contract', () => {
       .toEqual({ kind: 'tool-done', id: 'call-1', label: 'Read config', category: 'read' });
     expect(acpActivityEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', title: 'Read config', status: 'failed' }))
       .toEqual({ kind: 'tool-error', id: 'call-1', label: 'Read config', category: 'read' });
+  });
+
+  it('replaces rewritten Mistral Vibe message snapshots instead of duplicating them', () => {
+    expect(acpVibeResponseChange('The answer is 42.', 'The answer is 43.'))
+      .toEqual({ text: 'The answer is 43.', mode: 'replace', current: 'The answer is 43.' });
+    expect(acpVibeResponseChange('The answer is', ' 42.'))
+      .toEqual({ text: ' 42.', mode: 'append', current: 'The answer is 42.' });
+    expect(acpVibeResponseChange('The answer is', 'The answer is 42.'))
+      .toEqual({ text: ' 42.', mode: 'append', current: 'The answer is 42.' });
   });
 
   it('preserves ACP diff content in the provider-neutral activity event', () => {
@@ -84,5 +93,14 @@ describe('shared ACP adapter contract', () => {
     expect(acpModelChoice(models, 'anthropic:claude-sonnet-5'), 'a provider:model id the list leaves out').toBe('anthropic:claude-sonnet-5');
     expect(acpModelChoice({ availableModels: [{ modelId: 'sonnet' }] }, 'x:y'), 'an agent that does not name providers').toBeUndefined();
     expect(acpModelChoice(undefined, 'anything'), 'an agent with no model list').toBeUndefined();
+  });
+
+  it('resolves model aliases published as ACP config options', () => {
+    expect(acpModelChoice({ configOptions: [{
+      id: 'model', currentValue: 'devstral-latest', options: [
+        { value: 'devstral-latest', name: 'Devstral Latest' },
+        { value: 'mistral-medium', name: 'Mistral Medium' },
+      ],
+    }] }, 'mistral-medium')).toBe('mistral-medium');
   });
 });
