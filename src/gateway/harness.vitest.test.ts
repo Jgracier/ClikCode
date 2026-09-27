@@ -48,6 +48,25 @@ describe('a gateway turn runs the agent loop on this machine', () => {
 });
 
 describe('a gateway that cannot serve a harness turn', () => {
+  it('streams a titled first reply without its title tag', async () => {
+    // Production 2026-09-27: the tag the first turn asks for streamed to the
+    // screen, and the streamed copy then won over the stripped answer when the
+    // turn was saved -- so the chat kept the tag and never got its name.
+    const { StreamingTitle } = await import('../session/title');
+    const title = new StreamingTitle();
+    let shown = '';
+    const client = new ScriptedModelClient([
+      { deltas: ['<clikcode-ti', 'tle>Fix math add</clikcode-title>\n', 'Fixed math.js.'] },
+    ]);
+    await runGatewayHarnessSessionTurn({
+      session: session(workspace()), prompt: 'fix it', modelClient: client as never,
+      responseFilter: (text, mode) => title.push(text, mode),
+      onResponseDelta: (text) => { shown += text; },
+    });
+    expect(shown).toBe('Fixed math.js.');
+    expect(title.title).toBe('Fix math add');
+  });
+
   it('is recognised from the administrator kill switch and a missing endpoint', () => {
     expect(gatewayHarnessUnavailable(new ModelClientError('off', { kind: 'server', statusCode: 503, code: 'CLIKCODE_DISABLED' }))).toBe(true);
     expect(gatewayHarnessUnavailable(new ModelClientError('gone', { kind: 'server', statusCode: 404 }))).toBe(true);
