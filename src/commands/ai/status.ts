@@ -111,6 +111,9 @@ export async function aiGatewayModels(config: Conf): Promise<void> {
   const { automatic, models } = await gatewayModels({ config, fresh: true });
   emitResult({
     automatic,
-    models: models.map((model) => ({ id: model.id, access: model.access, via: gatewayModelDetail(model), providers: model.providers.map((item) => item.provider) })),
+    models: models.map((model) => ({
+      id: model.id, access: model.access, via: gatewayModelDetail(model), providers: model.providers.map((item) => item.provider),
+      ...(model.price ? { price: model.price } : {}),
+    })),
   });
 }

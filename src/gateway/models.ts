@@ -19,6 +19,16 @@ export interface GatewayModel {
   providers: { provider: string; access: GatewayModelAccess }[];
   contextWindow?: number;
   vision?: boolean;
+  /** What a call costs this account, $ per 1M tokens: the full price, the
+   * discount in force, and the price charged. Absent when the account is not
+   * charged (unlimited) or the Gateway predates prices. */
+  price?: GatewayModelPrice;
+}
+
+export interface GatewayModelPrice {
+  full: { inMTok: number; outMTok: number };
+  discountPercent: number;
+  charged: { inMTok: number; outMTok: number };
 }
 
 export interface GatewayModelList {
@@ -32,11 +42,22 @@ export function gatewayAccessLabel(access: GatewayModelAccess): string {
   return access === 'subscription' ? 'subscription' : access === 'free-tier' ? 'free' : 'paid';
 }
 
-/** One row's detail: the access it will run on first, and through whom. */
+/** One row's detail: the access it will run on first, through whom, and its price. */
 export function gatewayModelDetail(model: GatewayModel): string {
   const first = model.providers.find((item) => item.access === model.access)?.provider ?? model.providers[0]?.provider;
   const also = model.providers.length > 1 ? ` (+${model.providers.length - 1} more)` : '';
-  return `${gatewayAccessLabel(model.access)}${first ? ` · ${first}${also}` : ''}`;
+  const price = model.price ? ` · ${gatewayPriceLabel(model.price)}` : '';
+  return `${gatewayAccessLabel(model.access)}${first ? ` · ${first}${also}` : ''}${price}`;
+}
+
+/** `$4/$20 per 1M`, or with a discount `$4/$20 → $3/$15 per 1M (25% off)`: input/output. */
+export function gatewayPriceLabel(price: GatewayModelPrice): string {
+  const money = (n: number) => `$${Number(n.toFixed(n < 1 ? 3 : 2))}`;
+  const pair = (rate: { inMTok: number; outMTok: number }) => `${money(rate.inMTok)}/${money(rate.outMTok)}`;
+  const full = pair(price.full);
+  const charged = pair(price.charged);
+  if (price.discountPercent <= 0 || charged === full) return `${full} per 1M`;
+  return `${full} → ${charged} per 1M (${price.discountPercent}% off)`;
 }
 
 const TTL_MS = 60_000;
