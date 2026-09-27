@@ -26,4 +26,14 @@ describe('a Gateway step', () => {
     expect(error).toMatchObject({ code: 'incomplete_stream', kind: 'other' });
     expect(cancelled).toBe(true);
   });
+
+  it('tells a user out of credit how to add more', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ success: false, error: "You're out of AI credit.", code: 'AI_CREDIT_EXHAUSTED', balanceMicroUsd: '0' }), { status: 402 }));
+    const client = new GatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', version: '1', sessionId: 's', fetchImpl: fetchImpl as never });
+    await expect(client.step(step)).rejects.toMatchObject({
+      kind: 'quota',
+      code: 'AI_CREDIT_EXHAUSTED',
+      message: "You're out of AI credit. Run `clikcode gateway credit` to add credit.",
+    });
+  });
 });

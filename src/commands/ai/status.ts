@@ -72,6 +72,38 @@ export async function aiGatewayUsage(config: Conf, options: { days?: string } = 
   emitResult({ apiUrl, ...(body.data as Record<string, unknown>) });
 }
 
+/** Buy AI credit for the signed-in account: the Gateway returns a Stripe
+ * Checkout page, opened here when there is a display to open it on. Paying it
+ * adds the credit and saves the card for later top-ups. */
+export async function aiGatewayCredit(
+  config: Conf,
+  options: { amount?: string } = {},
+  deps: { fetchImpl?: typeof fetch; open?: (url: string) => void; environment?: NodeJS.ProcessEnv } = {},
+): Promise<void> {
+  const apiUrl = getApiUrl(config);
+  const apiKey = getApiKeyForUrl(config, apiUrl);
+  if (!apiKey) throw new Error(`Not signed in to ClikDeploy Gateway. Run \`${harnessCommand()} gateway login\`.`);
+  const amountUsd = options.amount === undefined ? undefined : Number(options.amount);
+  if (amountUsd !== undefined && (!Number.isInteger(amountUsd) || amountUsd < 5 || amountUsd > 500)) {
+    throw new Error('--amount must be a whole number of dollars from 5 to 500');
+  }
+  const response = await (deps.fetchImpl ?? fetch)(new URL('/api/clikcode/v1/credit/checkout', apiUrl), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
+    body: JSON.stringify(amountUsd === undefined ? {} : { amountUsd }),
+  });
+  const body = await response.json().catch(() => undefined) as { data?: { url?: unknown; amountCents?: unknown }; error?: unknown } | undefined;
+  const url = typeof body?.data?.url === 'string' ? body.data.url : undefined;
+  if (!response.ok || !url) {
+    const reason = typeof body?.error === 'string' ? body.error : response.status === 404 ? 'this Gateway does not sell credit yet' : `HTTP ${response.status}`;
+    throw Object.assign(new Error(`ClikDeploy Gateway credit: ${reason}`), { statusCode: response.status });
+  }
+  const { hasLocalDisplay, openLoginUrl } = await import('../../gateway/login/url.js');
+  const opened = hasLocalDisplay(deps.environment ?? process.env);
+  if (opened) (deps.open ?? openLoginUrl)(url);
+  emitResult({ apiUrl, checkoutUrl: url, amountCents: body?.data?.amountCents ?? null, opened });
+}
+
 /** The models ClikDeploy Gateway offers the signed-in account, cheapest access
  * first -- what `/model` and `sessions set --model` choose from. */
 export async function aiGatewayModels(config: Conf): Promise<void> {

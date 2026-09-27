@@ -3,6 +3,7 @@
 import type { ConversationItem, HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
 import type { ContextHints } from '../context-profile.js';
+import { harnessCommand } from '../../session/state/paths.js';
 
 interface GatewayModelClientOptions {
   baseUrl: string;
@@ -214,6 +215,8 @@ export class GatewayModelClient implements ModelClient {
         if (typeof rawCode === 'string') code = rawCode;
         retryAfter ??= parseRetryAfter(nested?.retryAfter ?? body.retryAfter);
       } catch { /* non-JSON error body: the status line is the message */ }
+      // Out of credit is the one refusal the user fixes from here.
+      if (code?.toLowerCase() === 'ai_credit_exhausted') message = `${message} Run \`${harnessCommand()} gateway credit\` to add credit.`;
       throw new ModelClientError(message, { kind: errorKindForStatus(response.status), statusCode: response.status, ...(code ? { code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
     }
     if (!response.body) throw new ModelClientError('ClikDeploy Gateway returned an empty response', { kind: 'other', statusCode: response.status });
