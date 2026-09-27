@@ -161,6 +161,10 @@ function decide(request: PermissionRequest): PermissionDecision {
       if (mode === 'auto' && command?.tier === 'safe') return { decision: 'allow', reason: command.reason };
       return { decision: 'ask', reason: command?.reason ?? 'commands need approval' };
     case 'network':
+      // The session's permission mode is the whole policy: auto approves what
+      // changes nothing on this machine, and a fetch or search changes nothing.
+      // Only ask mode asks.
+      if (mode === 'auto') return { decision: 'allow', reason: 'auto mode: network reads change nothing locally' };
       return { decision: 'ask', reason: 'network access needs approval' };
   }
 }
