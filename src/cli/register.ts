@@ -3,6 +3,7 @@
  *
  * The `gateway` group is the only part that talks to a remote platform.
  */
+import { untilStopped } from './stop-signal.js';
 import type { Command } from 'commander';
 import { mcpAdd, mcpTargets } from '../commands/mcp.js';
 import type Conf from 'conf';
@@ -72,7 +73,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--model <model>', 'Model to use')
     .action(async (prompt: string[], options: { harness?: string; chat?: string; model?: string }) => {
       const id = await startOrResumeChat(options);
-      await aiGatewaySessionSend(config, id, prompt.join(' '));
+      await untilStopped((signal) => aiGatewaySessionSend(config, id, prompt.join(' '), signal));
     });
   // One MCP server, added once, written into every harness that takes one.
   const mcp = program.command('mcp').description('Share an MCP server with every harness that supports one');
@@ -97,7 +98,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action(async (chat: string, prompt: string[]) => {
       const id = await resolveChat(chat);
       await ensureChatReady(id);
-      await aiGatewaySessionSend(config, id, prompt.join(' '));
+      await untilStopped((signal) => aiGatewaySessionSend(config, id, prompt.join(' '), signal));
     });
   sessions.command('command <id> <slash...>').alias('slash').description('Run /claude, /accounts, or another session slash command')
     .action(async (id, slash: string[]) => { await aiSessionCommand(id, slash.join(' ')); });
