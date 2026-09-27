@@ -1,6 +1,16 @@
 /** The models ClikCode Local offers: open-licensed GGUF builds that make
  * tool calls reliably and run on mainline llama.cpp, one or more per size
- * tier (about 3, 6, 12-15 and 20-22 GB of weights).
+ * tier (about 3, 6, 12-15 and 20-22 GB of weights), then higher-precision
+ * builds of the two strongest (29-38 GB) for machines with room to spare.
+ *
+ * Why the large tier is more bits, not more parameters: as of September
+ * 2026 no open-licensed model under ~100 GB beats Ornith 1.5 35B-A3B or
+ * Qwen3.8 27B at agentic coding. The bigger MoEs that fit 40-100 GB score
+ * lower on their own cards -- gpt-oss-120b (SWE-bench Verified 62.0,
+ * Terminal-Bench 2 18.7) and Qwen3.5-122B-A10B (72.0, 49.4), per the
+ * Qwen3.5-122B card, against Qwen3.6-35B-A3B's 73.4 / 51.5 -- so on any
+ * machine that holds them, a Q6_K/Q8_0 of the 35B-A3B or the 27B is the
+ * better use of the memory.
  *
  * Every file is pinned: the Hugging Face commit it is fetched from, its
  * size, and its SHA-256 as Hugging Face's LFS metadata records it
@@ -57,7 +67,12 @@ export interface CatalogModel {
   /** Rough rank for agentic coding, 0-100, used only to order models that
    * all meet the speed bar. From published SWE-bench Verified /
    * Terminal-Bench results where the model card gives them, otherwise by
-   * generation and size within a family. */
+   * generation and size within a family. A higher-precision build of the
+   * same model scores +2 (Q6_K) or +3 (Q8_0) over its Q4_K_M: cards
+   * publish no per-quant agentic results, but Q4_K_M is the one of the
+   * three that measurably drifts from the full-precision model, and a long
+   * agent run compounds small drifts. The bump is kept below the gap to
+   * the next model, so a quant never outranks a stronger model. */
   quality: number;
   qualityNote: string;
 }
@@ -200,6 +215,73 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
     defaultContext: 65_536, maxContext: 262_144, license: 'apache-2.0',
     kv: { layers: 16, kvHeads: 4, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(48, 48) },
     quality: 92, qualityNote: 'Terminal-Bench 2.1 73.0 (its card)',
+  },
+  // ---- higher-precision builds, for machines with memory to spare ----
+  // Same models as above, so architecture, parameters, contexts and KV shape
+  // are theirs; only the file and the bits per weight differ.
+  {
+    // Ornith at Q6_K: on a CPU a mixture of experts reads only its routed
+    // experts per token, so 7.5 GB more file costs about a quarter of the
+    // writing speed (still above the bar on dual-channel DDR5) and fits
+    // where 48-64 GB of RAM leaves ~33 GB for models. Pinned to the same
+    // revision as the Q4_K_M above: one conversion, measured together.
+    id: 'ornith-1.5-35b-a3b-q6',
+    label: 'Ornith 1.5 35B-A3B Q6_K',
+    weights: {
+      repo: 'ornith-ai/Ornith-1.5-35B-A3B-GGUF', revision: '63d07eca3c975d65e050192cf7429658bafb0ac9',
+      file: 'Ornith-1.5-35B-Q6_K.gguf', sizeBytes: 29_208_731_200,
+      sha256: '1c4e5bb98a74c89a5d93a2488b5748b7b331daf77f6dbb64bd9b2ff864b64eb3',
+    },
+    projector: {
+      repo: 'ornith-ai/Ornith-1.5-35B-A3B-GGUF', revision: '63d07eca3c975d65e050192cf7429658bafb0ac9',
+      file: 'mmproj-Ornith-1.5-35B-BF16.gguf', sizeBytes: 902_822_016,
+      sha256: 'd9ce31026d1cb1f3f8d5152e2e2a014d9d2b302b6c93a7dc07bb0a0487f52837',
+    },
+    architecture: 'qwen35moe', totalParamsB: 35.5, activeParamsB: 3, quantization: 'Q6_K',
+    defaultContext: 65_536, maxContext: 262_144, license: 'mit',
+    kv: { layers: 10, kvHeads: 2, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(31, 32) },
+    quality: 90, qualityNote: 'Ornith 1.5 35B-A3B at Q6_K; near-lossless against Q4_K_M',
+  },
+  {
+    // Ornith at Q8_0: the most faithful build that is still fast on a
+    // CPU; for 64 GB+ RAM, 48 GB cards and 64 GB+ Apple unified memory.
+    id: 'ornith-1.5-35b-a3b-q8',
+    label: 'Ornith 1.5 35B-A3B Q8_0',
+    weights: {
+      repo: 'ornith-ai/Ornith-1.5-35B-A3B-GGUF', revision: '63d07eca3c975d65e050192cf7429658bafb0ac9',
+      file: 'Ornith-1.5-35B-Q8_0.gguf', sizeBytes: 37_802_149_120,
+      sha256: '854cf83f80cd37a061ed86df1fa7201162e4e1fb820b91068cc12a11d2746c9e',
+    },
+    projector: {
+      repo: 'ornith-ai/Ornith-1.5-35B-A3B-GGUF', revision: '63d07eca3c975d65e050192cf7429658bafb0ac9',
+      file: 'mmproj-Ornith-1.5-35B-BF16.gguf', sizeBytes: 902_822_016,
+      sha256: 'd9ce31026d1cb1f3f8d5152e2e2a014d9d2b302b6c93a7dc07bb0a0487f52837',
+    },
+    architecture: 'qwen35moe', totalParamsB: 35.5, activeParamsB: 3, quantization: 'Q8_0',
+    defaultContext: 65_536, maxContext: 262_144, license: 'mit',
+    kv: { layers: 10, kvHeads: 2, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(31, 32) },
+    quality: 91, qualityNote: 'Ornith 1.5 35B-A3B at Q8_0',
+  },
+  {
+    // Qwen3.8 27B at Q8_0: the strongest model here, at the precision a
+    // 40-48 GB card or a 64 GB+ Mac can hold. Dense, so like its Q4_K_M it
+    // is for GPUs; on a CPU it is further under the speed bar still.
+    id: 'qwen3.8-27b-q8',
+    label: 'Qwen3.8 27B Q8_0',
+    weights: {
+      repo: 'ggml-org/Qwen3.8-27B-GGUF', revision: '71bc7b627595dc8a91039addd9c791ae548d6747',
+      file: 'Qwen3.8-27B-Q8_0.gguf', sizeBytes: 28_595_763_648,
+      sha256: 'aab65c67ef0dad127960efef9247f1832bca105faa1c7a052cc039b223cf86a1',
+    },
+    projector: {
+      repo: 'ggml-org/Qwen3.8-27B-GGUF', revision: '71bc7b627595dc8a91039addd9c791ae548d6747',
+      file: 'mmproj-Qwen3.8-27B-Q8_0.gguf', sizeBytes: 629_247_008,
+      sha256: '2e968a6af97ce35d8971890b257b9b7edabf20ad91450501fa53162a19ee33eb',
+    },
+    architecture: 'qwen35', totalParamsB: 26.9, activeParamsB: 26.9, quantization: 'Q8_0',
+    defaultContext: 65_536, maxContext: 262_144, license: 'apache-2.0',
+    kv: { layers: 16, kvHeads: 4, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(48, 48) },
+    quality: 95, qualityNote: 'Qwen3.8 27B at Q8_0',
   },
 ];
 
