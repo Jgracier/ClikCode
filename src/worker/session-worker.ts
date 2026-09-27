@@ -17,8 +17,9 @@ import { writeState } from '../session/state/write.js';
 import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
 import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
-import { closePersistentTransport, discardInterruptedTurn, preserveInterruptedTurn } from '../turn/runtime.js';
+import { closePersistentTransport, discardInterruptedTurn, preserveInterruptedTurn, setVendorBackgroundTurnHandler } from '../turn/runtime.js';
 import { BroadcastObserver } from './broadcast-observer.js';
+import { createVendorBackgroundRunner } from './vendor-background.js';
 import { decodeFrames, encodeFrame, type ClientCommand } from './protocol.js';
 import { disposeSessionState, formatShellNotifications, runningShellCount, sessionState, takeShellNotifications, type ShellNotification } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
@@ -83,13 +84,24 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   let activeLiveInput: LiveTurnInputBroker | undefined;
   let activeRestoreDraft = false;
 
+  // --- Vendor background turns (persistent transports) -------------------
+  // Work a Codex app-server or ACP agent does between turns: broadcast,
+  // persisted, and keeping this worker alive while it runs. See
+  // worker/vendor-background.ts. Kept to this block, userTurnEnded() in
+  // runTurn's finally, and `vendorBackground.busy` in scheduleIdleExit.
+  const vendorBackground = createVendorBackgroundRunner({
+    sessionId, observer, userTurnRunning: () => turnRunning, changed: () => scheduleIdleExit(),
+  });
+  setVendorBackgroundTurnHandler(sessionId, vendorBackground.handle);
+  // -------------------------------------------------------------------------
+
   /** Idle means no client, no turn, no background shell whose exit the
    * model is still owed, and no notification on its way to it. A running
    * shell instead arms the abandoned-shell ceiling (ABANDONED_SHELL_MS). */
   const scheduleIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
-    if (turnRunning || observer.attachedCount > 0 || agentSession.notifications.length) return;
+    if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
     if (runningShellCount(agentSession) > 0) {
       const oldest = Math.min(...[...agentSession.shells.values()].filter((shell) => shell.status === 'running').map((shell) => shell.startedAt));
       idleTimer = setTimeout(stopAbandonedShells, Math.max(0, oldest + ABANDONED_SHELL_MS - Date.now()));
@@ -302,6 +314,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       observer.stopWaiting();
       turnRunning = false;
       activeQueuedTurnId = undefined;
+      // Vendor work that arrived while this turn was finishing.
+      vendorBackground.userTurnEnded();
       // Everyone left while it ran: now nothing is using what it started.
       if (observer.attachedCount === 0) void releaseMcp();
       // Shells that finished after the turn's last step, then whatever is

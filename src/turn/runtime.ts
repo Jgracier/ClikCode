@@ -39,6 +39,7 @@ import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessio
 import type { HarnessTurnTransport } from '../harness/transport/select.js';
 import type { CodexSession } from '../harness/transport/codex-app-server.js';
 import type { AcpSession } from '../harness/transport/acp-client.js';
+import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harness/transport/background-turn.js';
 import type { LiveTurnSubmission } from './live-input.js';
 
 export interface TurnRunOptions {
@@ -89,6 +90,15 @@ export const persistentTransports = new Map<string, PersistentTransport>();
 /** Test seam: the transport session factories. */
 const TRANSPORT_SESSIONS = { codex: createCodexSession, acp: createAcpSession };
 
+/** Who receives the work a persistent vendor does between ClikCode turns
+ * (harness/transport/background-turn.ts), per ClikCode session. The session
+ * worker registers here; without a registration that work is not surfaced. */
+const vendorBackgroundTurnHandlers = new Map<string, VendorBackgroundTurnHandler>();
+export function setVendorBackgroundTurnHandler(sessionId: string, handler: VendorBackgroundTurnHandler | undefined): void {
+  if (handler) vendorBackgroundTurnHandlers.set(sessionId, handler);
+  else vendorBackgroundTurnHandlers.delete(sessionId);
+}
+
 /** One live child per open ClikCode session, keyed by everything that makes a
  * child reusable (harness, account, profile env, cwd). A different key closes
  * the old child first, which is what covers account/harness/cwd changes. */
@@ -96,8 +106,9 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
   const existing = persistentTransports.get(sessionId);
   if (existing && existing.key === key && existing.transport === transport) return existing;
   if (existing) void closePersistentTransport(sessionId);
+  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn) };
   const created: PersistentTransport = {
-    key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex() : TRANSPORT_SESSIONS.acp(),
+    key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
   };
   persistentTransports.set(sessionId, created);
   return created;
