@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition';
-import { accountHasUsage, resumeInCandidates } from './resume-in';
+import { accountHasUsage, resumeInCandidates, sessionProviderHasUsage } from './resume-in';
 
 const harness = (command: string, provider: string, tier: number): AiLocalHarnessDefinition & { tier: number } => ({
   command, provider, displayName: command, surface: 'terminal', localAuth: ['vendor-cli'], binary: command, tier,
@@ -30,5 +30,20 @@ describe('resume in', () => {
     expect(accountHasUsage(account('x', 'p', { quotaState: 'exhausted' }))).toBe(false);
     expect(accountHasUsage(account('x', 'p', { status: 'needs_login' }))).toBe(false);
     expect(accountHasUsage(account('x', 'p', { verification: { reason: 'verify' } as never }))).toBe(false);
+  });
+
+  it('counts an account whose spent window has since reset as having usage', () => {
+    const past = new Date(Date.now() - 3_600_000).toISOString();
+    expect(accountHasUsage(account('x', 'p', {
+      quotaState: 'exhausted', quotaExhaustedAt: new Date(Date.now() - 7_200_000).toISOString(),
+      usage: { at: past, label: '5h 0% left', windows: [{ name: '5h', usedPct: 100, resetsAt: past }] } as never,
+    }))).toBe(true);
+  });
+
+  it('is not offered while an account of the chat\'s own provider can take the turn', () => {
+    const spent = account('a1', 'anthropic', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    const pending = account('a2', 'anthropic', { verification: { at: new Date().toISOString() } });
+    expect(sessionProviderHasUsage([spent, pending, account('o1', 'openai')], 'anthropic')).toBe(false);
+    expect(sessionProviderHasUsage([spent, pending, account('a3', 'anthropic')], 'anthropic')).toBe(true);
   });
 });
