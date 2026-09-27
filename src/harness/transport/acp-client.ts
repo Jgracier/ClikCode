@@ -21,6 +21,11 @@ const DIFF_LINE_CAP = 200;
 const OUTPUT_LINE_CAP = 20;
 const DETAIL_LINE_CAP = 12;
 const CANCEL_SETTLE_MS = 2000;
+/** How long an agent that said it is retrying a rate-limited call gets to
+ * make progress before the turn is given up as throttled. Vibe backs off for
+ * minutes after one `_session/retrying`, with nothing on the wire meanwhile;
+ * handing the turn to the next account beats waiting that out. */
+export const ACP_RATE_LIMIT_GRACE_MS = 30_000;
 
 type AcpSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
@@ -54,6 +59,8 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   extraArgv?: readonly string[];
   /** Setup request timeout (initialize, session/new|resume|load). */
   setupTimeoutMs?: number;
+  /** Override ACP_RATE_LIMIT_GRACE_MS. */
+  rateLimitGraceMs?: number;
   signal?: AbortSignal;
 }
 
@@ -301,6 +308,8 @@ interface ActiveTurn {
   sessionId?: string;
   prompt?: Promise<unknown>;
   fail: (error: Error) => void;
+  /** Running while the agent retries a rate-limited call; progress stops it. */
+  throttled?: NodeJS.Timeout;
 }
 
 class AcpSessionImpl implements AcpSession {
@@ -343,6 +352,7 @@ class AcpSessionImpl implements AcpSession {
       throw failureError;
     } finally {
       turn.done = true;
+      if (turn.throttled) clearTimeout(turn.throttled);
       input.signal?.removeEventListener('abort', onAbort);
       if (this.turn === turn) this.turn = undefined;
       this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
@@ -408,7 +418,10 @@ class AcpSessionImpl implements AcpSession {
         label: `${input.command} ACP`,
         detached,
         onRequest: (method, params) => method === 'session/request_permission' ? this.permission(params) : undefined,
-        onNotification: (method, params) => { if (method === 'session/update') this.update(params); },
+        onNotification: (method, params) => {
+          if (method === 'session/update') this.update(params);
+          else if (method === '_session/retrying') this.retrying(params);
+        },
         onClose: (error) => {
           if (this.live === live) this.live = undefined;
           if (this.turn && !this.turn.done) this.turn.fail(error);
@@ -510,6 +523,10 @@ class AcpSessionImpl implements AcpSession {
     // session/load replays the old conversation as ordinary updates. Nothing
     // before our own prompt belongs to this turn.
     if (!turn.promptStarted) return;
+    if (turn.throttled && update.sessionUpdate !== 'usage_update' && update.sessionUpdate !== 'user_message_chunk') {
+      clearTimeout(turn.throttled);
+      turn.throttled = undefined;
+    }
     const delta = acpResponseDelta(update);
     if (delta) {
       if (input.command === 'vibe' && typeof update.messageId === 'string') {
@@ -533,6 +550,31 @@ class AcpSessionImpl implements AcpSession {
     if (update.sessionUpdate === 'usage_update' || (update.usage && typeof update.usage === 'object')) {
       input.onUsage?.((update.usage && typeof update.usage === 'object' ? update.usage : update) as Record<string, unknown>);
     }
+  }
+
+  /** The agent's own notice that it is retrying a failed model call
+   * (`_session/retrying`, Vibe: `{category:"rate_limited", detail:"HTTP 429"}`).
+   * A rate limit is shown, and if nothing else arrives within the grace the
+   * turn fails as a 429 -- which failover reads as throttled and moves on. */
+  private retrying(params: Json): void {
+    const turn = this.turn;
+    if (!turn || turn.done || !turn.promptStarted) return;
+    if (typeof params.sessionId === 'string' && turn.sessionId && params.sessionId !== turn.sessionId) return;
+    const category = typeof params.category === 'string' ? params.category : '';
+    const detail = typeof params.detail === 'string' ? params.detail : '';
+    turn.input.onPhase?.(`${turn.input.command} is retrying${detail ? ` (${detail})` : ''}`);
+    if (!/rate|limit|quota|throttl/i.test(category) || turn.throttled) return;
+    const status = Number(/\b(4\d\d|5\d\d)\b/.exec(detail)?.[1] ?? 429);
+    const grace = turn.input.rateLimitGraceMs ?? ACP_RATE_LIMIT_GRACE_MS;
+    turn.throttled = setTimeout(() => {
+      turn.throttled = undefined;
+      if (turn.done) return;
+      turn.fail(Object.assign(
+        new Error(`${turn.input.command}: rate limited${detail ? ` (${detail})` : ''}, still retrying after ${Math.round(grace / 1000)}s`),
+        { statusCode: status },
+      ));
+    }, grace);
+    turn.throttled.unref?.();
   }
 
   private async permission(params: Json): Promise<Json> {

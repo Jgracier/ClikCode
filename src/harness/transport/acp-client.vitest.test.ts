@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange } from './acp-client.js';
+import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, runAcpTurn } from './acp-client.js';
 
 describe('shared ACP adapter contract', () => {
   it('normalizes agent prose and tool lifecycle events', () => {
@@ -102,5 +102,44 @@ describe('shared ACP adapter contract', () => {
         { value: 'mistral-medium', name: 'Mistral Medium' },
       ],
     }] }, 'mistral-medium')).toBe('mistral-medium');
+  });
+});
+
+describe('an agent that is retrying a rate-limited call', () => {
+  /** A real child speaking ACP the way Mistral Vibe does after a 429: it
+   * echoes the prompt as a user chunk, says `_session/retrying` once, and
+   * then (with PROGRESS set) either answers or stays silent. */
+  const agent = (progress: 'answer' | 'silent') => `
+    const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+    let buf = '';
+    process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+      if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+      else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1' } });
+      else if (m.method === 'session/prompt') {
+        send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'PONG?' } } } });
+        send({ method: '_session/retrying', params: { sessionId: 's1', category: 'rate_limited', detail: 'HTTP 429' } });
+        if (${JSON.stringify(progress)} === 'answer') setTimeout(() => {
+          send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'PONG' } } } });
+          send({ id: m.id, result: { stopReason: 'end_turn' } });
+        }, 150);
+      } } });
+  `;
+  const input = (progress: 'answer' | 'silent', phases: string[]) => ({
+    binary: process.execPath, command: 'vibe', argv: ['-e', agent(progress)], cwd: process.cwd(), prompt: 'PONG?',
+    environment: {}, permissionMode: 'ask' as const, rateLimitGraceMs: 400, onPhase: (phase: string) => phases.push(phase),
+  });
+
+  it('gives the turn up as a 429 when the agent makes no progress', async () => {
+    const phases: string[] = [];
+    const failure = await runAcpTurn(input('silent', phases)).catch((error: Error & { statusCode?: number }) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('vibe: rate limited (HTTP 429), still retrying after 0s');
+    expect((failure as { statusCode?: number }).statusCode).toBe(429);
+    expect(phases).toEqual(['vibe is retrying (HTTP 429)']);
+  });
+
+  it('keeps the turn when the retry succeeds, and never takes the echoed prompt as the answer', async () => {
+    const result = await runAcpTurn(input('answer', []));
+    expect(result.text).toBe('PONG');
   });
 });
