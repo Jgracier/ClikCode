@@ -99,8 +99,8 @@ describe('slash registry', () => {
     const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
     // Spelled out rather than derived from SLASH_PALETTE_PINNED: comparing the
     // constant to itself passes whatever the constant says.
-    expect(palette.slice(0, 6).map((row) => row.value))
-      .toEqual(['/provider', '/account', '/resume', '/model', '/new', '/permissions']);
+    expect(palette.slice(0, 10).map((row) => row.value))
+      .toEqual(['/resume', '/provider', '/model', '/account', '/new', '/permissions', '/settings', '/sessions', '/status', '/help']);
     // One header, not one per pinned command's real group.
     expect(new Set(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.group))).toEqual(new Set(['Common']));
     // Pinned once, not listed again under the group it came from.

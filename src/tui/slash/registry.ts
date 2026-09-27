@@ -14,10 +14,12 @@ const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
   'Common', 'Conversation', 'Workspace', 'Provider', 'Settings', 'Sessions', 'Info', 'Tools', 'Custom', 'Switch harness',
 ];
 
-/** The handful of commands worth reaching without scrolling, in the order
- * they are reached for: pick a provider, pick an account on it, resume a
- * conversation, change the model. Then the two that get used mid-conversation
- * more than anything else -- starting over, and changing what needs approval.
+/** The commands worth reaching without scrolling, always in this order:
+ * resume a conversation, pick a provider, its model, an account on it. Then
+ * the ones used mid-conversation most -- starting over, changing what needs
+ * approval -- and the settings, sessions, status and help screens. Fixed, not
+ * ranked by use: a list that reorders itself moves the row the user's hand
+ * already knows.
  *
  * Palette only. `/help` keeps its own grouping, because a reference reads
  * better by topic than by frequency. The palette draws a header whenever the
@@ -25,7 +27,7 @@ const SLASH_GROUP_ORDER: readonly SlashGroup[] = [
  * otherwise the top of the list flips between four headers and prints
  * "Settings" twice. */
 export const SLASH_PALETTE_PINNED: readonly string[] = [
-  'provider', 'account', 'resume', 'model', 'new', 'permissions',
+  'resume', 'provider', 'model', 'account', 'new', 'permissions', 'settings', 'sessions', 'status', 'help',
 ];
 
 /** Every handler a dispatcher must implement. `as const` so both handler
