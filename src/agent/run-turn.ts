@@ -3,7 +3,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { ConversationStore, memoryConversationStore } from './conversation.js';
-import { buildSystemPrompt, compactConversation, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, COMPACTION_THRESHOLD } from './context.js';
+import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, toolOutputCap } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, suggestPermissionRule, visibleTools, type PermissionRules } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
@@ -11,6 +11,7 @@ import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
 import { sessionState } from './session-state.js';
 import { discoverSkills, SKILL_TOOL, skillsPromptSection } from './skills.js';
 import { defaultTools, mergeTools, toolSpecs } from './tools/registry.js';
+import { exposeTools } from './mcp/deferred.js';
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
 import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind, type ModelStepResult, type ModelToolCall, type TokenUsage } from './model-client.js';
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
@@ -121,7 +122,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   if (input.planMode !== undefined) session.plan = { active: input.planMode };
   const checkpoints = new FileCheckpointStore(input.stateDir);
   const store = input.subagent ? memoryConversationStore(input.subagent.transcript) : new ConversationStore(input.stateDir, input.sessionId);
-  const tools = mergeTools(input.tools ?? defaultTools(), input.extraTools);
+  const exposure = exposeTools(mergeTools(input.tools ?? defaultTools(), input.extraTools));
+  const tools = exposure.all;
   const maxSteps = Math.max(1, Math.floor(input.maxSteps ?? DEFAULT_MAX_STEPS));
 
   const [loaded, rules, baseSystem] = await abortable(Promise.all([
@@ -140,7 +142,11 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // The note stays even when the pixels go too: it tells the model the file
   // names, and a later client that cannot see images still has it.
   const images = input.images?.length && input.modelClient.acceptsImages ? await abortable(readImageInputs(input.images), signal) : [];
-  await append({ type: 'text', role: 'user', text: `${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
+  // Date and git state ride on the user message, not the system prompt, so
+  // the prompt prefix stays cacheable across turns (context.ts). A sub-agent
+  // lives for one task and its short prompt already carries the date.
+  const environment = !input.subagent && needsEnvironmentNote(items) ? `${await abortable(environmentNote({ cwd }), signal)}\n\n` : '';
+  await append({ type: 'text', role: 'user', text: `${environment}${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
 
   // Steering: text typed mid-turn is queued and lands before the next model step.
   const steerQueue: string[] = [];
@@ -185,6 +191,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
 
   const toolContext = (callId: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs, sessionId: input.sessionId, turnId, stateDir: input.stateDir, homeDir, signal, checkpoints, session, callId, emitOutput,
+    outputCap: toolOutputCap(contextWindow),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
     ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
@@ -201,10 +208,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
         ...(output ? { output } : {}), ...(result.diff ? { diff: result.diff } : {}),
       });
-      return { ...result, output: capHeadTail(result.output).text };
+      return { ...result, output: capHeadTail(result.output, toolOutputCap(contextWindow), 'narrow the request to see the middle').text };
     };
     if (!tool) {
-      return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(tools, session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
+      return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(exposure.advertised(items), session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
     }
     if (call.argumentsError) {
       return finish({ output: `The arguments for ${tool.name} were not a valid JSON object (${call.argumentsError}). Call the tool again with a single JSON object.`, isError: true });
@@ -300,7 +307,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       const system = session.plan.active ? `${baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : baseSystem;
       if (shouldCompact(estimateContextTokens(system, items, lastStepUsage, items.slice(itemsAtLastUsage)), window)) {
         input.onPhase?.('compacting context');
-        const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, targetTokens: window * COMPACTION_THRESHOLD * 0.75 }), signal);
+        const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, targetTokens: compactionThreshold(window) * 0.75 }), signal);
         if (compacted.stage !== 'none') {
           items = compacted.items;
           lastStepUsage = undefined;
@@ -317,7 +324,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       try {
         step = await abortable(input.modelClient.step({
           system, items, signal,
-          tools: finalOnly ? [] : toolSpecs(visibleTools(tools, session.plan.active)),
+          tools: finalOnly ? [] : toolSpecs(visibleTools(exposure.advertised(items), session.plan.active)),
           onTextDelta: (text) => {
             if (!text || signal?.aborted) return;
             if (!streamedThisStep && needsSeparator) input.onResponseDelta?.('\n\n', 'append');

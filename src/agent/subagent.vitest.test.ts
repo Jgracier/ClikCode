@@ -39,7 +39,8 @@ class RoutedModelClient implements ModelClient {
 
   step(request: ModelStepRequest): Promise<ModelStepResult> {
     const first = request.items.find((item) => item.type === 'text' && item.role === 'user');
-    const prompt = first?.type === 'text' ? first.text : '';
+    // The parent's first message also carries the <environment> note.
+    const prompt = first?.type === 'text' ? first.text.replace(/^<environment>[\s\S]*?<\/environment>\n\n/, '') : '';
     const client = this.clients.get(prompt);
     if (!client) throw new Error(`No script for prompt: ${prompt}`);
     return client.step(request);

@@ -19,6 +19,10 @@ export interface ToolContext {
   /** Identity of the tool call being executed (spill files, shell ids). */
   callId?: string;
   emitOutput?(chunk: string): void;
+  /** Bytes of output the model will be given (context.ts toolOutputCap).
+   * A tool that can say where it stopped should stop here itself rather than
+   * have its middle cut out by the loop. */
+  outputCap?: number;
   onPlan?(entries: PlanEntry[]): void;
   net?: NetworkSeams;
   /** Runs a `task` sub-agent under this call. Absent inside a sub-agent. */
@@ -38,6 +42,9 @@ export interface ToolDefinition<A = Record<string, unknown>> {
   description: string;
   parameters: Record<string, unknown>;
   class: ToolClass;
+  /** Set on tools an MCP server provides: which server, and its own name for
+   * the tool. Lets their schemas be deferred until loaded (mcp/deferred.ts). */
+  mcp?: { server: string; tool: string };
   label(args: A): string;
   /** Filesystem paths this call touches; drives confinement and deny checks. */
   paths?(args: A): string[];

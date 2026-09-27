@@ -93,6 +93,7 @@ export function mcpToolDefinition(server: string, info: McpToolInfo, name: strin
     description: description.length > MAX_DESCRIPTION ? `${description.slice(0, MAX_DESCRIPTION - 1)}…` : description,
     parameters: mcpToolParameters(info.inputSchema),
     class: info.annotations?.readOnlyHint === true ? 'read' : 'exec',
+    mcp: { server, tool: info.name },
     label: () => `${server} › ${title}`,
     preview: async (args) => {
       const json = JSON.stringify(args, null, 2);
