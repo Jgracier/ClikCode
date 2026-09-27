@@ -62,6 +62,8 @@ interface AiHarnessTurnDefinition {
   createIdSuffix?: readonly string[];
   promptArgvPrefix?: readonly string[];
   promptInput?: 'argv' | 'stdin';
+  /** See the catalog: a stream-json prompt on a stdin held open. */
+  stdinFormat?: 'stream-json';
   stdinArgv?: readonly string[];
   promptGuard?: 'double-dash' | 'space';
   output: 'text' | 'json' | 'json-lines';
@@ -218,6 +220,7 @@ export interface AiLocalHarnessDefinition {
     createIdSuffix?: readonly string[];
     promptArgvPrefix?: readonly string[];
     promptInput?: 'argv' | 'stdin';
+    stdinFormat?: 'stream-json';
     stdinArgv?: readonly string[];
     promptGuard?: 'double-dash' | 'space';
     output: 'text' | 'json' | 'json-lines';

@@ -27,7 +27,8 @@ import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarn
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { captureNativeHarnessTurn, createTurnIdleController, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
+import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
+import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { noteStoredQuota } from './account-switch.js';
 import { clearQuotaMark, markQuotaExhausted } from '../harness/accounts/usage-reading.js';
@@ -386,12 +387,44 @@ export async function aiSessionSend(
         // a vendor's per-record session ids must not decide which records
         // belong together (see adapters.ts StreamState).
         const stream = createStreamState();
+        // A stream-json stdin stays open while the vendor has background work
+        // running, so the turn it starts when that work finishes reaches this
+        // conversation instead of being killed at exit (background-wait.ts).
+        // Its follow-up text streams into the same reply, and a message typed
+        // meanwhile goes straight to the vendor rather than waiting behind it.
+        const heldInput = turn.promptInput === 'stdin' && turn.stdinFormat === 'stream-json' ? createTurnInput() : undefined;
+        const background = heldInput ? createBackgroundWait({
+          onSettled: () => {
+            run.liveInput?.setSteerHandler(undefined);
+            heldInput.end();
+          },
+          onTaskStarted: (id, description) => {
+            idle.toolStarted(`background:${id}`);
+            prompter?.activity(chalk.dim(`background: ${description}`));
+          },
+          onTaskFinished: (id, status) => {
+            idle.toolFinished(`background:${id}`);
+            prompter?.activity(chalk.dim(`background task ${status}`));
+          },
+        }) : undefined;
+        if (heldInput && background) {
+          run.liveInput?.setSteerHandler(async (steerText, submission) => {
+            if (background.settled || !heldInput.write(streamJsonUserMessage(steerText))) throw new Error('turn is finishing');
+            background.noteInput();
+            await checkpoint.steer(submission);
+          });
+        }
+        try {
         turnOutput = await captureNativeHarnessTurn(cliHarness, argv, environment, {
           cwd: session.workspace,
           signal,
           idleController: idle,
-          stdinText: turn.promptInput === 'stdin' ? turnText : undefined,
+          stdinText: turn.promptInput === 'stdin' ? (heldInput ? streamJsonUserMessage(turnText) : turnText) : undefined,
+          ...(heldInput ? { input: heldInput } : {}),
           onStdoutLine: (lineText) => {
+            if (background && lineText.trimStart().startsWith('{')) {
+              try { background.note(JSON.parse(lineText) as Record<string, unknown>); } catch { /* fail-open-ok: not a record; the parser below says the same */ }
+            }
             // The same observer every other transport is handed. What is left
             // here is the turn loop's own bookkeeping, which no line parser
             // should be doing: confirming an optimistically minted session id,
@@ -433,6 +466,13 @@ export async function aiSessionSend(
             }
           },
         });
+        } finally {
+          // Whatever ended the process, input to it has nowhere to go now.
+          if (background) {
+            background.dispose();
+            run.liveInput?.setSteerHandler(undefined);
+          }
+        }
         if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
         let cliResult = nativeTurnResult(cliHarness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });
         // Aider's stdout is its banner, the answer and a cost footer; its own
