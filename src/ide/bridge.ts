@@ -1,0 +1,778 @@
+/** `clikcode ide-bridge`: an editor's ClikCode client.
+ *
+ * The interactive terminal (commands/ai/interactive.ts) is two things at
+ * once: a screen, and the client that runs a conversation -- attaching to its
+ * worker, loading what a turn needs before submitting it, sending queued
+ * messages when a turn ends, handing a sign-in a terminal. This is the second
+ * half, for a client whose screen is an editor: the same decisions, in the
+ * same order, with the editor's widgets answering the pickers (see
+ * prompter.ts) and the protocol in protocol.ts in place of painting.
+ *
+ * One conversation at a time, like a terminal: `open` switches, and a slash
+ * command that moves the conversation (/new, a handoff, /resume) switches too.
+ */
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import type Conf from 'conf';
+import { CLIKCODE_VERSION } from '../version.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
+import type { HarnessSession } from '../session/model.js';
+import { isClikCodeAgent } from '../session/route.js';
+import { latestChat, chatNamed } from '../session/options.js';
+import { claimSession, releaseSession, SESSION_CLAIM_TTL_MS } from '../session/claim.js';
+import { discardIfBlank } from '../session/blank.js';
+import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
+import { compactPath } from '../harness/protocol/labels.js';
+import { consumeSessionTurn } from '../turn/checkpoint.js';
+import { discardInterruptedTurn, synchronizeNativeTranscript, turnEnvironment } from '../turn/runtime.js';
+import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
+import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
+import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
+import { nativeUsageReading } from '../harness/accounts/account-usage.js';
+import { usageResetLabel } from '../harness/accounts/usage-reading.js';
+import { setVendorSignInRunner, type VendorSignInRequest } from '../harness/transport/native/login.js';
+import { launchSession, aiSessionLeave } from '../commands/ai/sessions.js';
+import { newConversation, newProviderConversation, releaseQueuedTurn } from '../commands/ai/conversations.js';
+import { aiHarnessSelect } from '../commands/ai/harness.js';
+import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
+import { ensureLocalModelForTurn, reconcileLocalModelLeases } from '../commands/ai/local-model.js';
+import { isShellCommandLine } from '../commands/ai/shell-run.js';
+import { aiSessionCommand } from '../tui/slash/handlers.js';
+import { routeSlashInput, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../tui/slash/registry.js';
+import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
+import { commandDuringTurn, enqueueCommandLine, slashLineIsCommand } from '../tui/slash/queue.js';
+import { impliedHarnessCommand } from '../tui/slash/infer-provider.js';
+import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
+import { customCommandPrompt } from '../session/custom-commands.js';
+import { capabilitiesText } from '../tui/slash/capabilities-text.js';
+import { compactConversation } from '../tui/slash/compact.js';
+import { exportTranscript } from '../tui/slash/export-transcript.js';
+import { initPrompt, readMemoryFile, reviewPrompt } from '../tui/slash/memory.js';
+import { nativeManagerListing } from '../tui/slash/native-manager.js';
+import { doctorSummary } from '../tui/doctor-summary.js';
+import { chooseOption } from '../tui/pickers/choose.js';
+import { autoSelectSessionHarness, interactiveEnginePicker } from '../tui/pickers/engine.js';
+import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../tui/pickers/account.js';
+import { interactiveModelPicker } from '../tui/pickers/model.js';
+import { interactiveEffortPicker } from '../tui/pickers/effort.js';
+import { interactivePermissionPicker } from '../tui/pickers/permissions.js';
+import { interactiveHarnessOptionPicker } from '../tui/pickers/options.js';
+import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
+import { interactiveSessionPicker } from '../tui/pickers/session.js';
+import { interactiveResumeInPicker, sameProviderCanTakeTurn } from '../tui/pickers/resume-in.js';
+import { WorkerClient } from '../worker/client.js';
+import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
+import type { WorkerEvent } from '../worker/protocol.js';
+import { IdePrompter, type IdeChannel } from './prompter.js';
+import { encodeTerminalSpec, type IdeEvent, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
+
+/** A turn's own failure. The worker has already reported it (its turn-error
+ * reaches the editor as a worker event), so the bridge does not say it twice. */
+class TurnFailed extends Error {}
+
+const USAGE_REFRESH_MS = 30_000;
+
+export class IdeBridge {
+  readonly prompter: IdePrompter;
+  private sessionId: string | undefined;
+  private worker: { sessionId: string; client: WorkerClient } | undefined;
+  /** Seen waiting-start without its waiting-stop: a turn is running on this
+   * conversation's worker, whichever client started it. */
+  private workerTurnRunning = false;
+  private turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error } | undefined;
+  private preparedRoute: string | undefined;
+  private autoResent: string | undefined;
+  private work: Promise<void> = Promise.resolve();
+  private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  private readonly timers: NodeJS.Timeout[] = [];
+  private closed = false;
+
+  constructor(private readonly config: Conf, private readonly channel: IdeChannel) {
+    this.prompter = new IdePrompter(channel);
+  }
+
+  start(): void {
+    setVendorSignInRunner((request) => this.runInTerminal({ command: request.command, mode: 'login', argv: request.argv }, request));
+    const claim = setInterval(() => { void this.refreshClaim().catch(() => undefined); }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
+    const usage = setInterval(() => { void this.refreshUsage().catch(() => undefined); }, USAGE_REFRESH_MS);
+    claim.unref();
+    usage.unref();
+    this.timers.push(claim, usage);
+    this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
+  }
+
+  handle(request: IdeRequest): void {
+    switch (request.type) {
+      case 'open':
+        this.enqueue(async () => {
+          try {
+            await this.open(request.workspace, request.mode, request.sessionId);
+            this.channel.send({ type: 'result', requestId: request.requestId, ok: true, data: { sessionId: this.sessionId } });
+          } catch (error) {
+            this.channel.send({ type: 'result', requestId: request.requestId, ok: false, error: messageOf(error) });
+            return;
+          }
+          await this.drainQueue();
+        });
+        return;
+      case 'send':
+        void this.send(request.text, request.id);
+        return;
+      case 'cancel':
+        this.worker?.client.send({ type: 'cancel', restoreDraft: request.restoreDraft });
+        return;
+      case 'approval-response':
+        this.worker?.client.send({ type: 'approval-response', id: request.id, approved: request.approved });
+        return;
+      case 'ui-response':
+        this.prompter.answer(request.id, request.result);
+        return;
+      case 'sign-in-result': {
+        const pending = this.signIns.get(request.id);
+        if (!pending) return;
+        this.signIns.delete(request.id);
+        if (request.error) pending.reject(new Error(request.error));
+        else pending.resolve();
+        return;
+      }
+      case 'query':
+        void this.query(request.requestId);
+        return;
+      case 'refresh':
+        this.worker?.client.send({ type: 'refresh' });
+        void this.emitSession().catch(() => undefined);
+        return;
+      case 'close':
+        void this.shutdown();
+        return;
+      default:
+        // An editor newer than this ClikCode: a request it does not know.
+        return;
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    for (const timer of this.timers) clearInterval(timer);
+    this.prompter.cancelAll();
+    for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));
+    this.signIns.clear();
+    setVendorSignInRunner(undefined);
+    this.detachWorker();
+    await reconcileLocalModelLeases(undefined).catch(() => undefined);
+    if (this.sessionId) await this.leave(this.sessionId).catch(() => undefined);
+  }
+
+  private enqueue(job: () => Promise<void>): void {
+    this.work = this.work.then(job).catch((error: unknown) => this.report(error));
+  }
+
+  private report(error: unknown): void {
+    if (error instanceof TurnFailed) return;
+    this.channel.send({ type: 'notice', message: messageOf(error), level: 'error' });
+  }
+
+  private requireSession(): string {
+    if (!this.sessionId) throw new Error('No conversation is open.');
+    return this.sessionId;
+  }
+
+  private async current(id = this.requireSession()): Promise<{ session: HarnessSession; account?: string }> {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    if (!session) throw new Error(`AI session "${id}" was not found`);
+    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
+    return { session, ...(account ? { account } : {}) };
+  }
+
+  private async emitSession(): Promise<void> {
+    if (!this.sessionId) return;
+    const { session, account } = await this.current();
+    this.channel.send({ type: 'session', session, ...(account ? { account } : {}) });
+  }
+
+  // ---- conversations -------------------------------------------------------
+
+  private async open(workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string): Promise<void> {
+    const state = await readState();
+    let session: HarnessSession | undefined;
+    if (mode === 'resume') {
+      if (!ref) throw new Error('resume needs a conversation id');
+      const id = state.sessions.some((item) => item.id === ref) ? ref : chatNamed(state.sessions, ref, '');
+      session = id ? state.sessions.find((item) => item.id === id) : undefined;
+      if (!session) throw new Error(`no chat matches "${ref}"`);
+    } else if (mode === 'continue') {
+      session = latestChat(state.sessions.filter((item) => item.status !== 'archived'), workspace);
+      if (session && session.workspace !== workspace) session = undefined;
+    }
+    if (!session) {
+      session = launchSession(state, workspace);
+      state.sessions.push(session);
+    }
+    if (session.status !== 'active') {
+      session.status = 'active';
+      session.closedAt = undefined;
+      session.updatedAt = new Date().toISOString();
+    }
+    await writeState(state);
+    const id = session.id;
+    // As a terminal does on open: a conversation with no provider gets the one
+    // the user is signed in to, without asking; with none, the first message
+    // or /provider asks.
+    if (!session.nativeHarness && !isClikCodeAgent(session)) await autoSelectSessionHarness(id).catch(() => false);
+    await this.resolveModel(id);
+    const synced = await readState();
+    const syncing = synced.sessions.find((item) => item.id === id);
+    if (syncing && await synchronizeNativeTranscript(synced, syncing)) await writeState(synced);
+    await this.switchTo(id);
+  }
+
+  private async resolveModel(id: string): Promise<void> {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    if (!session || session.model) return;
+    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
+      : session.provider ? localHarnessForProvider(session.provider) : undefined;
+    if (!harness) return;
+    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+    const resolved = await resolveNativeModel(harness, account).catch(() => undefined);
+    if (!resolved) return;
+    session.model = resolved;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+  }
+
+  private async switchTo(id: string): Promise<void> {
+    const previous = this.sessionId;
+    if (previous && previous !== id) {
+      if (this.worker?.sessionId === previous) this.worker.client.send({ type: 'release' });
+      this.detachWorker();
+      await this.leave(previous);
+    }
+    this.sessionId = id;
+    this.preparedRoute = undefined;
+    await this.refreshClaim();
+    await this.emitSession();
+    // Follow a turn another client has running here, and have a worker that
+    // is already up paint what it has streamed; nothing is started for a
+    // conversation that has none yet.
+    const record = await readWorkerRecord(id).catch(() => undefined);
+    if (record && await workerIsReachable(record.socketPath)) await this.workerFor(id).catch(() => undefined);
+    await this.prepareRoute();
+    void this.refreshUsage().catch(() => undefined);
+  }
+
+  /** This client stops showing a conversation: its claim goes, and one that
+   * was never started is not kept. */
+  private async leave(id: string): Promise<void> {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    if (session?.claim?.pid === process.pid) {
+      releaseSession(session);
+      await writeState(state);
+    }
+    await discardIfBlank(id).catch(() => undefined);
+  }
+
+  private async refreshClaim(): Promise<void> {
+    if (!this.sessionId) return;
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === this.sessionId);
+    if (!session) return;
+    claimSession(session);
+    await writeState(state);
+  }
+
+  private async refreshUsage(): Promise<void> {
+    if (!this.sessionId) return;
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === this.sessionId);
+    if (!session) return;
+    const reading = await nativeUsageReading(session, state);
+    this.channel.send({ type: 'usage', ...(reading?.label ? { label: reading.label } : {}), ...(usageResetLabel(reading?.windows) ? { reset: usageResetLabel(reading?.windows) } : {}) });
+  }
+
+  /** The conversation's route is ready before the first message: MCP servers
+   * and the Gateway connection for an agent route, and nothing left running
+   * for one that moved off it. Mirrors the interactive loop's preparedRoute. */
+  private async prepareRoute(): Promise<void> {
+    const { session } = await this.current();
+    await reconcileLocalModelLeases(session).catch(() => undefined);
+    const key = `${session.id} ${session.route}`;
+    if (key === this.preparedRoute) return;
+    this.preparedRoute = key;
+    if (!isClikCodeAgent(session) && this.worker?.sessionId !== session.id) return;
+    const client = await this.workerFor(session.id).catch(() => undefined);
+    client?.send({ type: 'prepare' });
+  }
+
+  // ---- the worker ----------------------------------------------------------
+
+  private async workerFor(sessionId: string): Promise<WorkerClient> {
+    if (this.worker?.sessionId === sessionId) return this.worker.client;
+    this.detachWorker();
+    const client = await WorkerClient.attach(sessionId);
+    const initial = await client.initialSnapshot;
+    this.worker = { sessionId, client };
+    this.workerTurnRunning = initial.type === 'snapshot' && Boolean(initial.live);
+    this.channel.send({ type: 'worker', sessionId, event: initial });
+    client.on('event', (event: WorkerEvent) => this.onWorkerEvent(sessionId, client, event));
+    client.on('close', () => {
+      if (this.worker?.client !== client) return;
+      this.worker = undefined;
+      this.workerTurnRunning = false;
+      this.failTurn(new Error('session worker connection closed unexpectedly'));
+    });
+    return client;
+  }
+
+  private detachWorker(): void {
+    const worker = this.worker;
+    if (!worker) return;
+    this.worker = undefined;
+    this.workerTurnRunning = false;
+    try { worker.client.send({ type: 'detach' }); worker.client.close(); } catch { /* already gone */ }
+  }
+
+  private onWorkerEvent(sessionId: string, client: WorkerClient, event: WorkerEvent): void {
+    this.channel.send({ type: 'worker', sessionId, event });
+    switch (event.type) {
+      case 'waiting-start':
+        this.workerTurnRunning = true;
+        return;
+      case 'sign-in-request':
+        // The worker has no terminal; the editor has one. The worker retries
+        // the turn once this answers.
+        void this.runInTerminal({ command: event.command, mode: 'login', argv: event.argv }, { environment: event.environment, name: event.name })
+          .then(() => client.send({ type: 'sign-in-response', id: event.id }),
+            (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: messageOf(error) }));
+        return;
+      case 'turn-error':
+        if (this.turnWaiter) this.turnWaiter.error = new TurnFailed(event.message);
+        return;
+      case 'waiting-stop': {
+        this.workerTurnRunning = false;
+        const waiter = this.turnWaiter;
+        this.turnWaiter = undefined;
+        if (waiter) (waiter.error ? waiter.reject(waiter.error) : waiter.resolve());
+        return;
+      }
+      case 'shutdown':
+        this.failTurn(new Error(`session worker exited mid-turn: ${event.reason}`));
+        return;
+      default:
+        return;
+    }
+  }
+
+  private failTurn(error: Error): void {
+    const waiter = this.turnWaiter;
+    this.turnWaiter = undefined;
+    waiter?.reject(error);
+  }
+
+  private runInTerminal(spec: IdeTerminalSpec, request: Pick<VendorSignInRequest, 'environment' | 'name'>): Promise<void> {
+    if (this.closed) return Promise.reject(new Error('the editor closed'));
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      this.signIns.set(id, { resolve, reject });
+      this.channel.send({ type: 'sign-in', id, name: request.name, spec: encodeTerminalSpec(spec), environment: { ...request.environment } });
+    });
+  }
+
+  // ---- lines -----------------------------------------------------------------
+
+  private async send(text: string, id?: string): Promise<void> {
+    const line = text.trim();
+    if (!line) return;
+    try {
+      if (this.workerTurnRunning && this.worker) {
+        const sessionId = this.worker.sessionId;
+        const { session } = await this.current(sessionId);
+        const context = slashRouteContextFor(session, sessionHarness(session), (path) => existsSync(expandHomePath(path)));
+        if (isShellCommandLine(line) || slashLineIsCommand(line, context)) {
+          // ClikCode's own command: applied now if it is a pure setting,
+          // otherwise run when the turn ends -- never sent to the model.
+          const result = await commandDuringTurn(sessionId, line);
+          if (id) this.channel.send({ type: 'worker', sessionId, event: { type: 'submission', id, disposition: result.disposition === 'queued' ? 'queued' : 'steered' } });
+          await this.emitSession();
+          return;
+        }
+        this.worker.client.send({ type: 'steer', text: line, ...(id ? { id } : {}) });
+        return;
+      }
+    } catch (error) {
+      this.report(error);
+      return;
+    }
+    this.enqueue(async () => {
+      await this.execute(line, {});
+      await this.drainQueue();
+    });
+  }
+
+  /** Messages typed during a turn that the harness could not take mid-turn,
+   * and commands that waited for the turn to end: sent in order, as the
+   * interactive loop does at the top of every pass. */
+  private async drainQueue(): Promise<void> {
+    for (let guard = 0; guard < 100 && !this.closed && this.sessionId; guard += 1) {
+      const state = await readState();
+      const session = state.sessions.find((item) => item.id === this.sessionId);
+      const queued = session?.queuedTurns?.[0];
+      if (!session || !queued) return;
+      if (queued.kind === 'command') {
+        if (consumeSessionTurn(session, queued.id)) await writeState(state);
+        await this.execute(queued.text, { fromQueuedCommand: true });
+      } else {
+        await this.execute(queued.text, { queuedTurnId: queued.id });
+      }
+    }
+  }
+
+  private async execute(line: string, options: { queuedTurnId?: string; fromQueuedCommand?: boolean; resent?: boolean }): Promise<void> {
+    const id = this.requireSession();
+    try {
+      if (options.queuedTurnId) {
+        await this.runTurn(id, line, { echo: true, queuedTurnId: options.queuedTurnId });
+        return;
+      }
+      const outcome = await this.dispatch(line, Boolean(options.fromQueuedCommand));
+      if (outcome.notice) this.channel.send({ type: 'notice', message: outcome.notice, level: 'info' });
+      if (outcome.exit) {
+        this.channel.send({ type: 'closed', sessionId: id });
+        this.detachWorker();
+        this.sessionId = undefined;
+        return;
+      }
+      if (outcome.id && outcome.id !== this.sessionId) await this.switchTo(outcome.id);
+      else await this.emitSession();
+      if (outcome.prompt) await this.runTurn(this.requireSession(), outcome.prompt, { echo: outcome.echo !== false });
+    } catch (error) {
+      const message = messageOf(error);
+      const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
+      // A queued turn that cannot start would otherwise stay at the head of
+      // the queue and fail identically forever; it goes back to the composer.
+      if (options.queuedTurnId && !cancelled) {
+        await releaseQueuedTurn(id, options.queuedTurnId).catch(() => undefined);
+        this.channel.send({ type: 'restore-draft', text: line });
+      }
+      if (!cancelled && !options.queuedTurnId && !options.resent && isUsageExhaustedMessage(message)) {
+        // Out of usage on every account here: once more on this provider if
+        // an account came back, otherwise the harnesses that still have some.
+        const again = line !== this.autoResent && await sameProviderCanTakeTurn(id).catch(() => false);
+        if (again) {
+          await discardInterruptedTurn(id, line).catch(() => undefined);
+          this.autoResent = line;
+          await this.execute(line, { resent: true });
+          return;
+        }
+        const moved = await interactiveResumeInPicker(this.prompter, id, line).catch(() => undefined);
+        if (moved) {
+          await this.switchTo(moved);
+          await this.execute(line, { resent: true });
+          return;
+        }
+      }
+      this.report(error);
+    } finally {
+      await this.emitSession().catch(() => undefined);
+    }
+  }
+
+  /** One turn through the conversation's worker, with what the terminal does
+   * around it: a TurboFit or ClikCode Local model is up first, held by this
+   * client rather than the worker. */
+  private async runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
+    const state = await readState();
+    const active = state.sessions.find((item) => item.id === targetId);
+    const harness = active?.nativeHarness ? localHarnessForCommand(active.nativeHarness) : undefined;
+    if (active && harness) {
+      this.channel.send({ type: 'busy', label: 'preparing…' });
+      try {
+        await ensureTurboFitForTurn(harness, state.accounts.find((item) => item.id === active.accountId), targetId, active.model);
+      } finally { this.channel.send({ type: 'busy' }); }
+    }
+    if (active?.route === 'clikcode-local') {
+      this.channel.send({ type: 'busy', label: 'loading the local model…' });
+      try { await ensureLocalModelForTurn(active); } finally { this.channel.send({ type: 'busy' }); }
+    }
+    await this.prepareRoute();
+    const client = await this.workerFor(targetId);
+    this.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
+    let failure: string | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.turnWaiter = { resolve, reject };
+        client.send({ type: 'submit', text: prompt, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
+      });
+    } catch (error) {
+      failure = messageOf(error);
+      throw error instanceof TurnFailed ? error : new TurnFailed(failure);
+    } finally {
+      this.channel.send({ type: 'turn-end', sessionId: targetId, ...(failure ? { error: failure } : {}) });
+    }
+  }
+
+  /** A line typed between turns: the interactive loop's routing, with the
+   * editor's pickers where the terminal draws its own. */
+  private async dispatch(line: string, fromQueuedCommand: boolean): Promise<InteractiveSlashOutcome> {
+    const id = this.requireSession();
+    const rl = this.prompter;
+    const viaHeadless = async (text: string): Promise<InteractiveSlashOutcome> => {
+      const resulting = await aiSessionCommand(id, text);
+      return resulting !== id ? { id: resulting } : {};
+    };
+    const { session } = await this.current(id);
+    const workspace = session.workspace ?? process.cwd();
+    // `!<command>`: run here, its output a transcript message for next turn.
+    if (isShellCommandLine(line)) {
+      this.channel.send({ type: 'busy', label: line });
+      try { return await viaHeadless(line); } finally { this.channel.send({ type: 'busy' }); }
+    }
+    const attachment = await resolveStandaloneAttachment(line, workspace);
+    if (attachment) {
+      const state = await readState();
+      const target = state.sessions.find((item) => item.id === id);
+      if (!target) throw new Error(`AI session "${id}" was not found`);
+      await queueAttachment(target, attachment);
+      target.updatedAt = new Date().toISOString();
+      await writeState(state);
+      return { notice: `Attached ${compactPath(attachment)} for the next request` };
+    }
+    const commandState = await readState();
+    const commandSession = commandState.sessions.find((item) => item.id === id);
+    if (!commandSession) throw new Error(`AI session "${id}" was not found`);
+    const harness = sessionHarness(commandSession);
+    const route = routeSlashInput(line, slashRouteContextFor(commandSession, harness, (path) => existsSync(expandHomePath(path))));
+    if (route.kind === 'prompt') {
+      const images = await embeddedImagePaths(route.prompt, workspace);
+      if (images.length) {
+        for (const image of images) await queueAttachment(commandSession, image).catch(() => undefined);
+        await writeState(commandState);
+      }
+      if (!commandSession.nativeHarness && !isClikCodeAgent(commandSession)) {
+        // Nothing chosen yet: choosing is the first step of sending.
+        const chosen = await interactiveEnginePicker(this.config, rl, id) ?? id;
+        return { id: chosen, ...(await this.hasHarness(chosen) ? { prompt: route.prompt, echo: true } : { notice: 'Choose a provider to send this.' }) };
+      }
+      return { prompt: route.prompt, echo: true };
+    }
+    if (route.kind === 'native') {
+      if (isClikCodeAgent(commandSession)) throw new Error('Native harness commands apply only to local harnesses.');
+      return { prompt: route.prompt, echo: true };
+    }
+    if (route.kind === 'unknown') throw new Error(unknownSlashMessage(route));
+    if (route.kind === 'custom') {
+      const custom = customCommandsFor(commandSession, harness).find((item) => item.name === route.name);
+      if (!custom) throw new Error(`custom command /${route.name} is no longer available`);
+      return { prompt: customCommandPrompt(custom, route.args, harness), echo: false };
+    }
+    if (route.kind === 'harness') {
+      const selected = await newProviderConversation(id, route.command);
+      return { id: selected, ...(route.args ? { prompt: route.args, echo: true } : {}) };
+    }
+    if (route.kind === 'manager') {
+      const manager = harness ? (localHarnessCapabilityManifest(harness).managers as Record<string, { label: string; listArgv?: readonly string[]; manageArgv?: readonly string[] } | undefined> | undefined)?.[route.name] : undefined;
+      if (!harness || !manager) throw new Error('Choose a provider first.');
+      if (manager.listArgv) {
+        this.channel.send({ type: 'busy', label: `loading ${manager.label}…` });
+        try {
+          const listing = await nativeManagerListing(commandState, commandSession, route.name);
+          rl.panel(listing.label, listing.text);
+        } finally { this.channel.send({ type: 'busy' }); }
+      } else if (manager.manageArgv) {
+        const account = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
+        await this.runInTerminal({ command: harness.command, mode: 'run', argv: manager.manageArgv }, { environment: turnEnvironment(harness, account), name: `${harness.displayName} ${manager.label}` });
+      }
+      return {};
+    }
+    const availability = route.entry.availability(commandSession, harness);
+    if (!availability.available && availability.needs === 'provider' && !fromQueuedCommand) {
+      const commandLine = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
+      const implied = impliedHarnessCommand(route, commandState.accounts, localHarnessForProvider);
+      if (implied) {
+        await aiHarnessSelect(implied, id);
+        await enqueueCommandLine(id, commandLine);
+        return {};
+      }
+      const chosen = await interactiveEnginePicker(this.config, rl, id) ?? id;
+      if (await this.hasHarness(chosen)) await enqueueCommandLine(chosen, commandLine);
+      return { id: chosen };
+    }
+    if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
+    const text = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
+    const { args } = route;
+    const openConversationPicker = async (): Promise<InteractiveSlashOutcome> => {
+      const picked = await interactiveSessionPicker(rl, id);
+      if (picked && 'new' in picked) return { id: await newConversation(id) };
+      return { id: picked?.id ?? id };
+    };
+    const interactive: Record<InteractiveSlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>> = {
+      exit: async () => { await aiSessionLeave(id); return { exit: true }; },
+      new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
+      redraw: async () => { await this.emitSession(); },
+      provider: async () => ({ id: await interactiveEnginePicker(this.config, rl, id) ?? id }),
+      accounts: async () => {
+        const [action, name] = args.split(/\s+/);
+        const target = (action === 'login' || action === 'add') && name ? localHarnessForCommand(name.toLowerCase()) : undefined;
+        if (target?.surface === 'terminal') {
+          const added = await addAccountForHarness(rl, target);
+          if (added && target.provider === commandSession.provider) await useAddedAccount(id, target, added);
+          return {};
+        }
+        return args ? viaHeadless(text) : { id: await interactiveAccountPicker(rl, id) ?? id };
+      },
+      model: async () => args ? viaHeadless(text) : interactiveModelPicker(rl, id),
+      effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),
+      permissions: async () => args ? viaHeadless(text) : interactivePermissionPicker(rl, id),
+      options: async () => interactiveHarnessOptionPicker(rl, id),
+      capabilities: async () => {
+        const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');
+        rl.panel(title, rest.join('\n'));
+      },
+      settings: async () => args ? viaHeadless(text) : { id: await interactiveSettingsPicker(this.config, rl, id) ?? id },
+      sessions: async () => (args ? viaHeadless(text) : openConversationPicker()),
+      resume: async () => {
+        const named = args ? chatNamed(commandState.sessions, args, id) : undefined;
+        return named ? { id: named } : openConversationPicker();
+      },
+      rename: async () => {
+        const name = args || (await rl.question('Conversation name')).trim();
+        if (name) await aiSessionCommand(id, `/rename ${name}`);
+      },
+      archive: async () => { await aiSessionCommand(id, '/archive'); return { exit: true }; },
+      delete: async () => {
+        const confirmed = await chooseOption(rl, 'Delete this conversation?', [
+          { label: 'Cancel', value: false }, { label: 'Delete this conversation', value: true },
+        ]);
+        if (!confirmed) return {};
+        await aiSessionCommand(id, '/delete confirm');
+        return { exit: true };
+      },
+      mention: async () => {
+        const path = args || (await rl.question('File to attach')).trim();
+        return path ? viaHeadless(`/mention ${path}`) : {};
+      },
+      review: async () => ({ prompt: reviewPrompt(args), echo: false }),
+      init: async () => ({ prompt: initPrompt(commandSession), echo: false }),
+      native: async () => {
+        if (!args) throw new Error('usage: /native <text>  (or //text)');
+        return { prompt: args, echo: true };
+      },
+      compact: async () => {
+        const compacted = await compactConversation(id, commandSession, args, (targetId, promptText) => this.runTurn(targetId, promptText, { echo: false }));
+        return typeof compacted === 'string' ? { id: compacted } : {};
+      },
+      export: async () => {
+        const path = await exportTranscript(commandSession, args, async (existing) =>
+          ['y', 'yes'].includes((await rl.question(`${compactPath(existing)} exists. Overwrite? [y/N]`)).trim().toLowerCase()));
+        this.channel.send({ type: 'open-file', path });
+        return { notice: `Transcript written to ${compactPath(path)}` };
+      },
+      memory: async () => {
+        if (route.words[0]?.toLowerCase() !== 'edit') return viaHeadless(text);
+        const memory = await readMemoryFile(commandSession);
+        if (!existsSync(memory.path)) {
+          await mkdir(dirname(memory.path), { recursive: true });
+          await writeFile(memory.path, '', { flag: 'a' });
+        }
+        this.channel.send({ type: 'open-file', path: memory.path });
+        return {};
+      },
+      doctor: async () => {
+        this.channel.send({ type: 'busy', label: 'checking harnesses…' });
+        try { rl.panel('ClikCode doctor', await doctorSummary(commandState)); } finally { this.channel.send({ type: 'busy' }); }
+      },
+      login: async () => {
+        if (!harness) throw new Error('Choose a provider before signing in.');
+        const account = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
+        if (account?.authKind === 'vendor-cli' && (account.status !== 'ready' || account.verification)) {
+          await manageAccountAction(rl, account.id, 'reauthenticate');
+          return {};
+        }
+        const added = await addAccountForHarness(rl, harness);
+        if (added) await useAddedAccount(id, harness, added);
+        return {};
+      },
+      logout: async () => {
+        if (!commandSession.accountId) throw new Error('This conversation has no account to sign out.');
+        await manageAccountAction(rl, commandSession.accountId, 'disconnect');
+        return {};
+      },
+    };
+    const handler = (interactive as Partial<Record<SlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>>>)[route.entry.handlerKey];
+    return (handler ? await handler() : await viaHeadless(text)) ?? {};
+  }
+
+  private async hasHarness(id: string): Promise<boolean> {
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === id);
+    return Boolean(session && (session.nativeHarness || isClikCodeAgent(session)));
+  }
+
+  private async query(requestId: string): Promise<void> {
+    try {
+      const { session } = await this.current();
+      const harness = sessionHarness(session);
+      const rows = slashPalette(session, harness, slashExtrasFor(session, harness));
+      this.channel.send({
+        type: 'result', requestId, ok: true,
+        data: rows.map((row) => ({ command: row.value, description: row.detail, ...(row.argHint ? { argHint: row.argHint } : {}), group: row.group })),
+      });
+    } catch (error) {
+      this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
+    }
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Everything this process prints to stdout is either a command's JSON result
+ * -- which the editor shows -- or noise from something that did not expect to
+ * run without a terminal, which goes to the log. */
+export function captureStdout(channel: IdeChannel, stream: NodeJS.WriteStream = process.stdout, log: (line: string) => void = (line) => process.stderr.write(`${line}\n`)): void {
+  let buffer = '';
+  stream.write = ((chunk: string | Uint8Array, encoding?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void): boolean => {
+    buffer += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      let payload: unknown;
+      try { payload = JSON.parse(line); } catch { payload = undefined; }
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) channel.send({ type: 'output', payload: payload as Record<string, unknown> });
+      else if (line.trim()) log(line);
+    }
+    const done = typeof encoding === 'function' ? encoding : callback;
+    done?.();
+    return true;
+  }) as NodeJS.WriteStream['write'];
+}
+
+export async function runIdeBridge(config: Conf): Promise<void> {
+  const send = process.send?.bind(process);
+  if (!send) throw new Error('ide-bridge is started by an editor extension, over an IPC channel');
+  // Command results as records, which the editor renders -- never as text
+  // drawn for a terminal that is not there.
+  process.env.CLIKCODE_OUTPUT_MODE = 'json';
+  const channel: IdeChannel = {
+    send: (event: IdeEvent) => {
+      if (process.connected) send(event, undefined, {}, () => undefined);
+    },
+  };
+  captureStdout(channel);
+  const bridge = new IdeBridge(config, channel);
+  process.on('message', (message) => {
+    if (message && typeof message === 'object' && typeof (message as { type?: unknown }).type === 'string') bridge.handle(message as IdeRequest);
+  });
+  // The editor closed or crashed: the channel is gone with it.
+  process.on('disconnect', () => { void bridge.shutdown().finally(() => process.exit(0)); });
+  process.on('SIGTERM', () => { void bridge.shutdown().finally(() => process.exit(0)); });
+  bridge.start();
+  await new Promise<void>(() => { /* lives as long as the channel */ });
+}

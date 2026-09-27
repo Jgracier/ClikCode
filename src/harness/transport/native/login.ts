@@ -6,8 +6,30 @@ import { NativeHarnessSpec } from './binary.js';
 import { captureNativeHarnessOutput, run } from './command.js';
 import { ensureNativeHarness } from './inspect.js';
 
+/** A vendor sign-in that has to own a terminal, handed to whoever has one.
+ * Set only by a process that has none of its own to give -- the IDE bridge,
+ * whose stdio is a pipe to the editor, runs it in the editor's terminal. */
+export interface VendorSignInRequest {
+  command: string;
+  argv: readonly string[];
+  environment: Readonly<Record<string, string>>;
+  name: string;
+}
+
+let vendorSignInRunner: ((request: VendorSignInRequest) => Promise<void>) | undefined;
+
+export function setVendorSignInRunner(runner: ((request: VendorSignInRequest) => Promise<void>) | undefined): void {
+  vendorSignInRunner = runner;
+}
+
 /** Login is always performed by the vendor CLI in the user's terminal. */
 export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
+  // Before the install check: the terminal it runs in repeats this call, with
+  // a screen for an installer or a sign-in to show progress on.
+  if (vendorSignInRunner && !spec.loginCapturable) {
+    await vendorSignInRunner({ command: spec.command, argv: spec.loginArgv ?? [], environment: envOverrides, name: spec.displayName });
+    return;
+  }
   await ensureNativeHarness(spec);
   if (spec.loginCapturable) {
     // Confirmed live for Antigravity CLI: its login turn authenticates via
