@@ -147,6 +147,17 @@ export class ConversationStore {
   }
 }
 
+/** A sub-agent's conversation: the store's surface over an array the caller
+ * owns. Compaction is not recorded, just as the disk file keeps its full
+ * history, so the array is everything that was said. */
+export function memoryConversationStore(history: ConversationItem[]): Pick<ConversationStore, 'load' | 'append' | 'appendCompaction'> {
+  return {
+    load: async () => [...history],
+    append: async (...items) => { history.push(...items); },
+    appendCompaction: async () => undefined,
+  };
+}
+
 /** A crash or cancel can leave a tool_call with no result. Structured
  * provider APIs reject that, so resume closes each one explicitly. */
 function repairDanglingCalls(items: readonly ConversationItem[]): ConversationItem[] {

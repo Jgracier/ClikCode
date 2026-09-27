@@ -128,6 +128,10 @@ export interface GatewayHarnessTurnInput {
   tools?: readonly ToolDefinition[];
   /** Network seams for web_fetch; tests inject fakes. */
   net?: NetworkSeams;
+  /** Set when this turn is a `task` sub-agent's: `system` replaces the built-in
+   * prompt, the conversation goes to `transcript` instead of disk, and the
+   * turn cannot start sub-agents of its own. */
+  subagent?: { system: string; transcript: ConversationItem[] };
 }
 
 export interface GatewayHarnessTurnResult {

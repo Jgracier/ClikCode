@@ -21,6 +21,8 @@ export interface ToolContext {
   emitOutput?(chunk: string): void;
   onPlan?(entries: PlanEntry[]): void;
   net?: NetworkSeams;
+  /** Runs a `task` sub-agent under this call. Absent inside a sub-agent. */
+  runSubagent?(request: { prompt: string; description?: string }): Promise<ToolRunResult>;
 }
 
 export interface ToolRunResult {
