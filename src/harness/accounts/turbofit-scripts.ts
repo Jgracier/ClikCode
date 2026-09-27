@@ -322,3 +322,56 @@ except Exception as exc:
     sys.exit(2)
 print("\x00TURBOFIT_SELECTION" + json.dumps({**payload, "profile_id": profile_id}))
 `;
+
+/** CPU launch settings for one CPU lane, written into TurboFit's own recipe
+ * data as the typed launch overrides it already supports, for the 64K
+ * context CPU lanes run at only -- TurboFit's GPU-measured profiles run at
+ * other contexts and are untouched. Measured with llama-bench on an 8-core
+ * Zen 4 with Ornith 35B-A3B:
+ *  - The quantized KV cache TurboFit's recipe sets (q4_0) halves prompt
+ *    reading on a CPU once context builds up: 36.8 tokens/s at 8K deep,
+ *    69.5 with f16, generation unchanged (15.1 vs 16.2). It saves memory a
+ *    GPU is short of; a CPU with RAM to spare pays in speed. f16 cost 4.7 GB
+ *    more at 64K there, so it is used only with 16 GB of headroom.
+ *  - Reading is fastest a little past the physical cores (12 threads: 103
+ *    tokens/s against 97 at 8), writing at exactly them (8: 20.8 against 18);
+ *    llama.cpp takes the two separately. Past that, hyperthreads contend
+ *    (16 threads: 66).
+ * Prints whether anything changed, so a changed launch is re-measured.
+ * argv: plugin root, variant. */
+export const TURBOFIT_CPU_TUNE_SCRIPT = String.raw`
+import copy, json, os, sys
+from pathlib import Path
+root, variant = Path(sys.argv[1]), sys.argv[2]
+sys.path.insert(0, str(root / "src"))
+from turbofit_runtime.hardware import probe_hardware
+path = root / "references" / "model-recipes.json"
+recipes = json.loads(path.read_text(encoding="utf-8"))
+spec = recipes["variants"][variant]
+family = recipes["models"][spec["family"]]
+manifest = {a["destination"]: a for a in json.loads((root / "references" / "artifact-manifest.json").read_text(encoding="utf-8")).get("artifacts", [])}
+files = [spec.get(k) or family.get(k) for k in ("model", "projector", "draft")]
+total_mb = sum(int(manifest.get(str(f).replace("$" "{TURBOFIT_MODEL_ROOT}/", ""), {}).get("size_bytes", 0)) for f in files if f) / 1048576
+hardware = probe_hardware()
+logical = os.cpu_count() or 8
+try:
+    cores = len({line.split(":")[1].strip() for line in open("/proc/cpuinfo") if line.startswith("core id")}) or max(1, logical // 2)
+except OSError:
+    cores = max(1, logical // 2)
+tuning = {"threads": cores, "threads_batch": min(logical, cores + cores // 2)}
+if hardware.host_usable_memory_mb - total_mb >= 16384:
+    tuning.update({"cache_type_k": "f16", "cache_type_v": "f16"})
+# A variant's keys replace its family's, so the family's context overrides
+# are carried into the variant before the 64K entry is tuned.
+contexts = copy.deepcopy(spec.get("context_overrides") or family.get("context_overrides") or {})
+entry = contexts.setdefault("65536", {})
+before = entry.get("launch_overrides")
+entry["launch_overrides"] = {**(before or {}), **tuning}
+changed = entry["launch_overrides"] != before
+if changed:
+    spec["context_overrides"] = contexts
+    temporary = path.with_suffix(".json.clikcode")
+    temporary.write_text(json.dumps(recipes, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+print("\x00TURBOFIT_TUNED" + json.dumps({"changed": changed, "tuning": tuning}))
+`;
