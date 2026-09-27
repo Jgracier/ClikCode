@@ -22,7 +22,7 @@ import { LOCAL_MODEL_CATALOG, catalogModel, type CatalogModel } from './catalog.
 import { chooseModel, fitModel, kvCacheBytes, meetsBar, rankModels, MIN_CONTEXT, type Fit, type Footprint, type Measurement, type RankedModel } from './choose.js';
 import { formatBytes } from './download.js';
 import { probeHardware, type HardwareProfile } from './hardware.js';
-import { buildServerArgs, freePort, httpJson, threadPlan, waitForHealth } from './launch.js';
+import { buildServerArgs, freePort, httpJson, threadPlan, usesMmap, waitForHealth } from './launch.js';
 import {
   memoryStopFile, processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
   sweepOrphan, withStartLock, writeLease, type MemoryEvent, type ServerRecord, type ShrinkStep,
@@ -288,7 +288,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
         ...(watched ? {
           memory: {
             bufferBytes: view.budget.bufferBytes, sampleMs: 2000, footprintsFile: footprintsFile(model.id), machine: view.machine,
-            cacheType: fit.cacheType, parallel: fit.parallel, vision,
+            cacheType: fit.cacheType, parallel: fit.parallel, vision, mmap: usesMmap(fit.placement),
             current: {
               context: fit.context, cacheRamMib, kvBytes: kvCacheBytes(model.kv, fit.context, fit.cacheType, fit.parallel),
               footprintKey: footprintKey({ context: fit.context, cacheType: fit.cacheType, parallel: fit.parallel, vision }),

@@ -130,9 +130,27 @@ describe('memory readers', () => {
   });
 
   it('keeps the larger peak of two runs', () => {
-    const first = { context: 1, cacheType: 'f16', parallel: 2, vision: false, anonBytes: 5, fileBytes: 9, at: 'a' };
+    const first = { context: 1, cacheType: 'f16', parallel: 2, vision: false, anonBytes: 5, fileBytes: 9, mmap: true, at: 'a' };
     expect(mergeFootprint(first, { ...first, anonBytes: 7, fileBytes: 3, at: 'b' })).toMatchObject({ anonBytes: 7, fileBytes: 9, at: 'b' });
     expect(mergeFootprint(undefined, first)).toBe(first);
+  });
+
+  it('replaces, not merges, a record made with the other loading mode', () => {
+    // A mapped run's 15.2 GB anonymous peak must not survive into a read-in record.
+    const mapped = { context: 1, cacheType: 'f16', parallel: 2, vision: false, anonBytes: 15.2e9, fileBytes: 20.5e9, mmap: true, at: 'a' };
+    const read = { ...mapped, anonBytes: 12e9, fileBytes: 0, mmap: false, at: 'b' };
+    expect(mergeFootprint(mapped, read)).toEqual(read);
+    // Records from before the field existed are mapped runs.
+    const { mmap: _dropped, ...legacy } = mapped;
+    expect(mergeFootprint(legacy as typeof mapped, read)).toEqual(read);
+  });
+
+  it('counts a read-in server\'s whole footprint as its own, and spare as all of MemAvailable', () => {
+    // With the weights read in, the supervisor passes ourFileBytes 0.
+    const decision = memoryStep({ sample: { ...sample(0, 7 * GB), ourAnonBytes: 24 * GB, ourFileBytes: 0 }, state: {}, bufferBytes: BUFFER, busy: false, shrinks: [] });
+    expect(decision.spareBytes).toBe(7 * GB);
+    expect(decision.level).toBe('ok');
+    expect(decision.othersBytes).toBe(29 * GB);
   });
 });
 

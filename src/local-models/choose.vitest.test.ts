@@ -6,7 +6,7 @@ import {
   PROMPT_CACHE_ALLOWANCE, type Footprint,
 } from './choose';
 import type { HardwareProfile } from './hardware';
-import { buildServerArgs, threadPlan } from './launch';
+import { buildServerArgs, threadPlan, usesMmap } from './launch';
 import { selectRuntimeBuild } from './runtime';
 
 const GIB = 1024 ** 3;
@@ -176,58 +176,72 @@ describe('fit', () => {
 });
 
 describe('fit from a measured footprint', () => {
-  // Ornith 35B-A3B at 64K, f16, measured on the Zen 4: 15.2 GB RssAnon
-  // (repacked weights, KV, buffers) plus 20.5 GB of mmapped weights resident.
-  const ornithRun: Footprint = {
+  // Ornith 35B-A3B at 64K, f16, measured on the Zen 4 while it still mapped
+  // its weights: 15.2 GB RssAnon plus 20.5 GB RssFile for a 21.7 GB file --
+  // repacked tensors counted twice.
+  const mappedRun: Footprint = {
     context: 65_536, cacheType: 'f16', parallel: 2, vision: false, anonBytes: 15.2e9, fileBytes: 20.5e9, at: '2026-09-27T00:00:00Z',
   };
+  // The same model reading its weights into memory: one copy of each tensor.
+  const readRun: Footprint = { ...mappedRun, anonBytes: 23.5e9, fileBytes: 0, mmap: false };
 
   it('is the estimate until the model has run', () => {
     expect(measuredNeed(model('ornith-1.5-35b-a3b'), [], 65_536, 'f16', 2, false)).toBeUndefined();
   });
 
+  it('ignores runs that mapped their weights, which double-count them', () => {
+    expect(measuredNeed(model('ornith-1.5-35b-a3b'), [mappedRun], 65_536, 'f16', 2, false)).toBeUndefined();
+    expect(measuredNeed(model('ornith-1.5-35b-a3b'), [{ ...mappedRun, mmap: true }], 65_536, 'f16', 2, false)).toBeUndefined();
+  });
+
   it('is the measured peak at the measured configuration', () => {
-    expect(measuredNeed(model('ornith-1.5-35b-a3b'), [ornithRun], 65_536, 'f16', 2, false)).toBeCloseTo(35.7e9);
+    expect(measuredNeed(model('ornith-1.5-35b-a3b'), [mappedRun, readRun], 65_536, 'f16', 2, false)).toBeCloseTo(23.5e9);
   });
 
   it('adjusts by the KV cache difference for another context or cache type', () => {
     const ornith = model('ornith-1.5-35b-a3b');
-    const at32k = measuredNeed(ornith, [ornithRun], 32_768, 'q8_0', 2, false)!;
-    expect(at32k).toBeCloseTo(35.7e9 + kvCacheBytes(ornith.kv, 32_768, 'q8_0', 2) - kvCacheBytes(ornith.kv, 65_536, 'f16', 2));
-    expect(at32k).toBeLessThan(35.7e9);
+    const at32k = measuredNeed(ornith, [readRun], 32_768, 'q8_0', 2, false)!;
+    expect(at32k).toBeCloseTo(23.5e9 + kvCacheBytes(ornith.kv, 32_768, 'q8_0', 2) - kvCacheBytes(ornith.kv, 65_536, 'f16', 2));
+    expect(at32k).toBeLessThan(23.5e9);
     // A different slot count changes buffers the adjustment does not model.
-    expect(measuredNeed(ornith, [ornithRun], 65_536, 'f16', 4, false)).toBeUndefined();
+    expect(measuredNeed(ornith, [readRun], 65_536, 'f16', 4, false)).toBeUndefined();
     // Vision adds the projector.
-    expect(measuredNeed(ornith, [ornithRun], 65_536, 'f16', 2, true)).toBeCloseTo(35.7e9 + ornith.projector!.sizeBytes);
+    expect(measuredNeed(ornith, [readRun], 65_536, 'f16', 2, true)).toBeCloseTo(23.5e9 + ornith.projector!.sizeBytes);
   });
 
   it('prefers the nearest run: same cache type, then nearest context', () => {
     const ornith = model('ornith-1.5-35b-a3b');
-    const other: Footprint = { ...ornithRun, cacheType: 'q8_0', context: 16_384, anonBytes: 10e9 };
-    const need = measuredNeed(ornith, [other, ornithRun], 131_072, 'f16', 2, false)!;
-    expect(need).toBeCloseTo(35.7e9 + kvCacheBytes(ornith.kv, 131_072, 'f16', 2) - kvCacheBytes(ornith.kv, 65_536, 'f16', 2));
+    const other: Footprint = { ...readRun, cacheType: 'q8_0', context: 16_384, anonBytes: 10e9 };
+    const need = measuredNeed(ornith, [other, readRun], 131_072, 'f16', 2, false)!;
+    expect(need).toBeCloseTo(23.5e9 + kvCacheBytes(ornith.kv, 131_072, 'f16', 2) - kvCacheBytes(ornith.kv, 65_536, 'f16', 2));
+  });
+
+  it('fits Ornith at 39 GB available: weights, cache and buffers counted once', () => {
+    const machine = { ...ZEN4, availableRamBytes: 39e9 };
+    const estimated = fitModel(model('ornith-1.5-35b-a3b'), memoryBudget(machine), { footprints: [mappedRun] });
+    expect(estimated).toMatchObject({ fits: true, placement: 'cpu' });
+    expect(estimated.measured).toBeUndefined();
+    expect(estimated.context).toBeGreaterThanOrEqual(65_536);
+    expect(estimated.needBytes).toBeLessThan(21.7e9 + 5e9);
   });
 
   it('decides the fit by what the model really held, not the estimate', () => {
     const ornith = model('ornith-1.5-35b-a3b');
-    // 39 GB available, as measured before the run: the estimate says it
-    // fits at 64K; the measured 35.7 GB says it does not fit at any context
-    // once the buffer and margin are kept.
     const machine = { ...ZEN4, availableRamBytes: 39e9 };
-    const estimated = fitModel(ornith, memoryBudget(machine));
-    expect(estimated.fits).toBe(true);
-    const measured = fitModel(ornith, memoryBudget(machine), { footprints: [ornithRun] });
-    expect(measured).toMatchObject({ fits: false, measured: true });
-    // With enough free, the measured need decides the context instead.
-    const roomy = fitModel(ornith, memoryBudget({ ...ZEN4, availableRamBytes: 50 * GIB }), { footprints: [ornithRun] });
-    expect(roomy).toMatchObject({ fits: true, measured: true });
-    expect(roomy.needBytes + (roomy.context > 65_536 ? PROMPT_CACHE_ALLOWANCE : 0)).toBeLessThanOrEqual(memoryBudget({ ...ZEN4, availableRamBytes: 50 * GIB }).ramBytes);
+    // A run that held far more than estimated keeps it out.
+    const heavy: Footprint = { ...readRun, anonBytes: 33e9 };
+    expect(fitModel(ornith, memoryBudget(machine), { footprints: [heavy] })).toMatchObject({ fits: false, measured: true });
+    const fit = fitModel(ornith, memoryBudget(machine), { footprints: [readRun] });
+    expect(fit).toMatchObject({ fits: true, measured: true });
+    expect(fit.needBytes + (fit.context > 65_536 ? PROMPT_CACHE_ALLOWANCE : 0)).toBeLessThanOrEqual(memoryBudget(machine).ramBytes);
   });
 
   it('ranks with the measured footprint', () => {
     const machine = { ...ZEN4, availableRamBytes: 39e9 };
-    const ranked = rankModels(LOCAL_MODEL_CATALOG, machine, memoryBudget(machine), {}, { 'ornith-1.5-35b-a3b': [ornithRun] });
-    expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b')!.fit.fits).toBe(false);
+    const ornithFits = (footprints: Footprint[]) => rankModels(LOCAL_MODEL_CATALOG, machine, memoryBudget(machine), {}, { 'ornith-1.5-35b-a3b': footprints })
+      .find((row) => row.model.id === 'ornith-1.5-35b-a3b')!.fit.fits;
+    expect(ornithFits([mappedRun])).toBe(true);
+    expect(ornithFits([{ ...readRun, anonBytes: 33e9 }])).toBe(false);
   });
 });
 
@@ -312,7 +326,17 @@ describe('launch settings', () => {
       threads: { threads: 8, threadsBatch: 12 },
     });
     expect(args.join(' ')).toBe('--host 127.0.0.1 --port 43210 -m /m.gguf -a qwen3.5-4b -c 65536 -np 2 --kv-unified --jinja -fa on -t 8 -tb 12 '
-      + '-ctk f16 -ctv f16 --cache-ram 2048 --no-webui -ngl 0');
+      + '-ctk f16 -ctv f16 --cache-ram 2048 --no-webui --load-mode none -ngl 0');
+  });
+
+  it('reads the weights into memory on the CPU and maps them on a GPU', () => {
+    expect(usesMmap('cpu')).toBe(false);
+    expect(usesMmap('gpu')).toBe(true);
+    expect(usesMmap('gpu-partial')).toBe(true);
+    const base = { modelPath: '/m.gguf', port: 1, alias: 'a', cacheRamMib: 0, threads: { threads: 8, threadsBatch: 12 } };
+    for (const placement of ['gpu', 'gpu-partial'] as const) {
+      expect(buildServerArgs({ ...base, fit: { placement, context: 8192, cacheType: 'f16', parallel: 4 } })).not.toContain('--load-mode');
+    }
   });
 
   it('offloads all layers, or lets llama.cpp fit them with a margin', () => {
