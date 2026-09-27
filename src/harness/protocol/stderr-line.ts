@@ -8,7 +8,9 @@ export function firstUsefulLine(stderr: string, limit = 200): string {
   // Stack frames, brackets, bare paths, carets, and the runtime's own
   // `throw err;` line -- none of them is the complaint.
   const noise = /^\s*(?:at\s|[{}[\]]|"|\/|[A-Za-z]:\\|\.{3}|Require stack|throw\s|\^+\s*$|node:internal)/;
-  const lines = stderr.split(/\r?\n/).filter((line) => line.trim() && !noise.test(line));
+  // Colour and cursor escapes are how a terminal shows the line, not the line.
+  const plain = stderr.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
+  const lines = plain.split(/\r?\n/).filter((line) => line.trim() && !noise.test(line));
   const cut = (text: string): string =>
     text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}\u2026` : text;
   // The line that names the error wins over whatever merely came first: a
@@ -16,6 +18,6 @@ export function firstUsefulLine(stderr: string, limit = 200): string {
   const named = lines.find((line) => /\berror\b/i.test(line));
   if (named) return cut(named.trim());
   if (lines.length) return cut(lines[0]!.trim());
-  const fallback = stderr.trim().split(/\r?\n/)[0]?.trim() ?? '';
+  const fallback = plain.trim().split(/\r?\n/)[0]?.trim() ?? '';
   return cut(fallback);
 }
