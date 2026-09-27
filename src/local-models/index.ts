@@ -243,6 +243,18 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     };
   }
 
+  // A server of this model that is shutting down (its last run just ended
+  // and it did not answer) still holds its memory: fitting now would count
+  // it against the new start. Wait for it to go.
+  if (joinable && !healthy) {
+    const leaving = joinable;
+    const label = catalogModel(leaving.modelId)?.label ?? leaving.modelId;
+    const deadline = Date.now() + 60_000;
+    while (processAlive(leaving.supervisorPid) && Date.now() < deadline) {
+      progress({ stage: 'start', message: `waiting for the previous ${label} to finish stopping…` });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
   progress({ stage: 'probe', message: 'checking this machine…' });
   const view = await viewMachine();
   const stops = await takeMemoryStops();

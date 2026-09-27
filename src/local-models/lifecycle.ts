@@ -201,6 +201,10 @@ export interface SupervisorConfig {
   /** Stop after this long with no request; 0 keeps it while leased. */
   idleMs: number;
   pollMs: number;
+  /** How long the server outlives its last lease (default 10 s): a ClikCode
+   * run that starts right after another one joins it, instead of loading
+   * the model again beside a copy that is still shutting down. */
+  leaseGraceMs?: number;
   /** Watch the machine's memory while the model runs. */
   memory?: MemoryWatchConfig;
 }
@@ -428,10 +432,13 @@ function memoryTick() {
   }
 }
 
-let lastActive = Date.now(), lastSignature = '';
+let lastActive = Date.now(), lastSignature = '', leaselessSince;
 async function tick() {
   if (stopping) return;
-  if (liveLeases() === 0) return stop('no live ClikCode process holds a lease');
+  if (liveLeases() === 0) {
+    leaselessSince ??= Date.now();
+    if (Date.now() - leaselessSince >= (config.leaseGraceMs ?? 10000)) return stop('no live ClikCode process holds a lease');
+  } else leaselessSince = undefined;
   if (restartArgs) { lastActive = Date.now(); return; }
   const list = await slots();
   if (Array.isArray(list)) {
