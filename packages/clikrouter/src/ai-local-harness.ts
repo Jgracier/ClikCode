@@ -1441,12 +1441,18 @@ export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHar
   const acp = harness.acp;
   if (!acp) return undefined;
   const options: string[] = [];
-  if (input.model) options.push(...modelSelectorArgv(harness, input.model));
-  const effortPrefix = acp.effortArgvPrefix ?? harness.effortArgvPrefix;
+  // The CLI's own flags describe the CLI. A separate ACP program (Vibe's
+  // `vibe-acp`) takes only what `acp` declares for it: handed `--auto-approve`
+  // it refused to start, and every Vibe turn fell back to the CLI. It needs no
+  // more -- the model is chosen over the protocol, and approvals are answered
+  // by ClikCode on the permission requests the agent sends.
+  const sameProgram = !acp.binary || acp.binary === harness.binary;
+  if (input.model && sameProgram) options.push(...modelSelectorArgv(harness, input.model));
+  const effortPrefix = acp.effortArgvPrefix ?? (sameProgram ? harness.effortArgvPrefix : undefined);
   if (input.effort && effortPrefix) options.push(...effortPrefix, harness.effortConfigKey && !acp.effortArgvPrefix ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
   if (input.permissionMode === 'bypass' || input.permissionMode === 'auto') {
     options.push(...(acp.permissionArgv?.[input.permissionMode]
-      ?? (harness.permissionModes?.includes(input.permissionMode) ? harness.permissionArgv?.[input.permissionMode]?.argv : undefined) ?? []));
+      ?? (sameProgram && harness.permissionModes?.includes(input.permissionMode) ? harness.permissionArgv?.[input.permissionMode]?.argv : undefined) ?? []));
   }
   const optionPlacement = acp.optionPlacement ?? 'before';
   return {
