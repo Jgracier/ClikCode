@@ -221,6 +221,7 @@ when you would rather type than pick.
 | `clikcode sessions list` / `show` / `create` / `open` / `resume` / `send` / `set` / `close` | Your conversations, including ones a tool started on its own |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
 | `clikcode gateway login [--github]` / `gateway status` | ClikDeploy Gateway sign-in (Google by default) |
+| `clikcode gateway usage [--days N]` | Your AI use and credit as ClikDeploy Gateway records it: every call, by surface and model |
 
 Output is JSON when it is not going to a terminal, so ClikCode scripts
 cleanly -- one record per line, so a command that reports twice is still

@@ -15,7 +15,7 @@ import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAc
 import { localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { ensureChatReady, resolveChat, startOrResumeChat } from '../commands/ai/harness.js';
 import { aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList } from '../commands/ai/sessions.js';
-import { aiGatewayStatus, aiModelsList, aiUsage } from '../commands/ai/status.js';
+import { aiGatewayStatus, aiGatewayUsage, aiModelsList, aiUsage } from '../commands/ai/status.js';
 import { aiStart, aiStatus, aiStop } from '../daemon/server.js';
 import { gatewayLogin } from '../commands/gateway.js';
 import { runSessionWorker } from '../worker/session-worker.js';
@@ -88,6 +88,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action(mcpTargets);
   const gateway = program.command('gateway').description('Connect ClikDeploy Gateway for remote models');
   gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));
+  gateway.command('usage').description('Show your AI use and credit as ClikDeploy Gateway records it')
+    .option('--days <days>', 'Window in days, 1-90 (default 30)')
+    .action((options: { days?: string }) => aiGatewayUsage(config, options));
   gateway.command('login').description('Sign in to ClikDeploy Gateway')
     .option('--github', 'Use GitHub OAuth instead of Google OAuth')
     .action(async (options) => { await gatewayLogin(config, { google: !options.github, github: Boolean(options.github) }); });
