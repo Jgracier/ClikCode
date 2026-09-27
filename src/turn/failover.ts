@@ -166,7 +166,7 @@ const DURATION_UNIT_MS: Record<string, number> = { d: 86_400_000, h: 3_600_000, 
 export function quotaRetryHint(error: unknown, now: number = Date.now()): string | undefined {
   const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
   const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
-  const phrase = /(?:resets?|try again|retry(?: again)?)\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b[\s,]*(?:and\s+)?)+)/i.exec(text)?.[1];
+  const phrase = /(?:resets?|try again|retry(?: again)?)\s+(?:in|after)\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i.exec(text)?.[1];
   if (phrase) {
     let total = 0;
     for (const part of phrase.matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi)) total += Number(part[1]) * DURATION_UNIT_MS[part[2]!.toLowerCase()]!;

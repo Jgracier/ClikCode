@@ -170,12 +170,17 @@ export function cachedAccountUsageLabel(account: AiHarnessAccount, state: Harnes
  * and nothing said its quota had come back. Due when that reading has gone
  * past a reset it describes, or when the refusal it is marked with has
  * expired and no reading since has said otherwise. */
-export function accountsDueForUsageRecheck(state: HarnessState, now: number = Date.now()): AiHarnessAccount[] {
+function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
+  let command: string | undefined;
+  try { command = localHarnessForProvider(account.provider)?.command; } catch { command = undefined; }
+  return Boolean(command && NATIVE_USAGE_PROBES[command]);
+}
+
+export function accountsDueForUsageRecheck(
+  state: HarnessState, now: number = Date.now(), canBeAsked: (account: AiHarnessAccount) => boolean = accountUsageCanBeAsked,
+): AiHarnessAccount[] {
   return state.accounts.filter((account) => {
-    if (account.authKind !== 'vendor-cli' || account.status !== 'ready') return false;
-    let command: string | undefined;
-    try { command = localHarnessForProvider(account.provider)?.command; } catch { command = undefined; }
-    if (!command || !NATIVE_USAGE_PROBES[command]) return false;
+    if (account.authKind !== 'vendor-cli' || account.status !== 'ready' || !canBeAsked(account)) return false;
     const reading = account.usage as AccountUsageReading | undefined;
     const windows = reading?.windows ?? [];
     const wasSpent = account.quotaState === 'exhausted' || windows.some((window) => window.usedPct >= 100);
