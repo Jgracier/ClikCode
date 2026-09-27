@@ -5,14 +5,19 @@
  * matches, so a file at its final name is always a verified one and the
  * next run can trust it by size alone. An interrupted download resumes from
  * the partial file with an HTTP Range request; a server that ignores the
- * range (answers 200) gets the file restarted, not appended to. */
+ * range (answers 200) gets the file restarted, not appended to.
+ *
+ * node:https, not fetch: on Node 26 fetch read a Hugging Face (Xet CDN)
+ * download at about 3 MB/s where node:https and curl on the same machine
+ * and connection read 32-46 MB/s -- the difference between a 2.7 GB model
+ * arriving in one minute and in fifteen. */
 
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { mkdir, rename, rm, stat, statfs } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { Readable } from 'node:stream';
-import type { ReadableStream as WebReadableStream } from 'node:stream/web';
+import { get, type IncomingMessage } from 'node:http';
+import { get as getSecure } from 'node:https';
 
 export interface DownloadProgress { bytes: number; totalBytes: number }
 
@@ -70,6 +75,31 @@ export async function isDownloaded(destination: string, sizeBytes: number): Prom
   return (await stat(destination).catch(() => undefined))?.size === sizeBytes;
 }
 
+/** GET with a Range from `offset`, following redirects (Hugging Face
+ * answers a resolve URL with a redirect to its CDN). A connection that
+ * stalls for a minute is abandoned; the next attempt resumes. */
+function openRange(url: string, offset: number, signal: AbortSignal | undefined, hops = 0): Promise<IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const send = target.protocol === 'http:' ? get : getSecure;
+    const request = send(target, {
+      headers: { 'user-agent': 'clikcode-local-models', ...(offset > 0 ? { range: `bytes=${offset}-` } : {}) },
+      timeout: 60_000, ...(signal ? { signal } : {}),
+    }, (response) => {
+      const status = response.statusCode ?? 0;
+      if (status >= 300 && status < 400 && response.headers.location) {
+        response.resume();
+        if (hops >= 10) { reject(new Error(`Too many redirects fetching ${url}`)); return; }
+        resolve(openRange(new URL(response.headers.location, target).href, offset, signal, hops + 1));
+        return;
+      }
+      resolve(response);
+    });
+    request.on('timeout', () => request.destroy(new Error(`The download of ${url} stalled`)));
+    request.on('error', reject);
+  });
+}
+
 export async function downloadVerified(request: DownloadRequest): Promise<void> {
   const { url, destination, sizeBytes, sha256 } = request;
   if (await isDownloaded(destination, sizeBytes)) return;
@@ -80,23 +110,20 @@ export async function downloadVerified(request: DownloadRequest): Promise<void> 
   await checkDiskSpace(dirname(destination), sizeBytes - offset);
 
   if (offset < sizeBytes) {
-    const response = await fetch(url, {
-      headers: offset > 0 ? { range: `bytes=${offset}-` } : {},
-      redirect: 'follow',
-      ...(request.signal ? { signal: request.signal } : {}),
-    });
-    if (response.status === 416 && offset > 0) {
+    const response = await openRange(url, offset, request.signal);
+    if (response.statusCode === 416 && offset > 0) {
       // The range starts at the end: the partial file is already whole.
-    } else if (!response.ok || !response.body) {
-      throw new Error(`Download failed (HTTP ${response.status}) for ${url}`);
+      response.resume();
+    } else if (response.statusCode !== 200 && response.statusCode !== 206) {
+      response.resume();
+      throw new Error(`Download failed (HTTP ${response.statusCode}) for ${url}`);
     } else {
-      if (response.status !== 206) offset = 0;
+      if (response.statusCode !== 206) offset = 0;
       const out = createWriteStream(partial, { flags: offset > 0 ? 'a' : 'w' });
       let bytes = offset;
       let lastReport = 0;
-      const body = Readable.fromWeb(response.body as unknown as WebReadableStream<Uint8Array>);
       try {
-        for await (const chunk of body) {
+        for await (const chunk of response) {
           const buffer = chunk as Buffer;
           if (!out.write(buffer)) await new Promise<void>((resolve) => out.once('drain', resolve));
           bytes += buffer.length;
