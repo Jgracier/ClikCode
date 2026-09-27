@@ -111,6 +111,7 @@ export async function runGatewayHarnessSessionTurn(
     // The gateway path runs ClikCode's OWN agent, so a rule can be
     // remembered here: the third answer is passed straight through.
     onApproval: async (title, detail, rule) => (await prompter?.approval(title, detail, undefined, rule)) ?? false,
+    ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),
   });
 }
 

@@ -1050,6 +1050,11 @@ export async function aiGatewaySessionSend(
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);
+  // Bound as soon as the turn is durable, as on the vendor path: a message
+  // typed from here on steers into the running loop or is queued, instead of
+  // waiting for the turn to end and then being dropped.
+  run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+  run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   // The coding agent runs here, on this machine; the gateway supplies the
   // model step and nothing else. Only a gateway that cannot serve that -- an
   // administrator kill switch, or a deployment older than the endpoint --
@@ -1074,6 +1079,11 @@ export async function aiGatewaySessionSend(
       ...(signal ? { signal } : {}),
       ...(prepared.images.length ? { images: prepared.images } : {}),
       onActivity: (event) => checkpoint.activity(event),
+      // The loop takes steering before each model step (run-turn.ts).
+      onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
+        await handler(steerText);
+        await checkpoint.steer(submission);
+      } : undefined),
     });
     if (harnessTurn.isError) throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
     // A reply shorter than the title filter's decision window is still held
@@ -1121,8 +1131,6 @@ export async function aiGatewaySessionSend(
   // Only a Gateway session reaches here, and it is the same connection the
   // model client was built from.
   const { baseUrl, apiKey } = gatewayConnection(config);
-  run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
-    run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   try {
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
