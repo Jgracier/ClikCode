@@ -20,6 +20,7 @@
 import type { ToolDefinition } from '../tool-contract.js';
 import { McpClient, type McpCallResult, type McpToolInfo } from './client.js';
 import { loadMcpServers, type McpServerSpec } from './config.js';
+import { importNotice, importVendorMcpServers } from './import.js';
 import { mcpToolDefinition, mcpToolName } from './tools.js';
 
 export interface McpTimeouts {
@@ -185,6 +186,7 @@ export class McpManager {
 }
 
 let shared: { stateDir: string; manager: McpManager } | undefined;
+let imports: Promise<string | undefined> | undefined;
 
 /** The process-wide manager for one state directory: what a turn builder
  * (the gateway route today, the local route next) calls for its extraTools.
@@ -208,9 +210,17 @@ async function sharedToolset(stateDir: string): Promise<McpToolset> {
   if (shared?.stateDir !== stateDir) {
     await shared?.manager.shutdown();
     shared = { stateDir, manager: new McpManager(() => loadMcpServers(stateDir)) };
+    imports = undefined;
   }
+  // Before the first load, once per process and state directory: the servers
+  // the user gave their vendor harnesses before mcp.json existed. Once it has
+  // run anywhere, its marker file makes this a single read.
+  imports ??= importVendorMcpServers(stateDir).then(importNotice, (error: unknown) => `MCP import from harness configs failed: ${firstLine(error)}`);
+  const notice = await imports;
+  imports = Promise.resolve(undefined); // the notice is shown once, not every turn
   try {
-    return await shared.manager.toolset();
+    const toolset = await shared.manager.toolset();
+    return notice ? { ...toolset, notes: [notice, ...toolset.notes] } : toolset;
   } catch (error) {
     // Belt and braces: the manager catches per server, but MCP must never be
     // the reason a turn did not run.
