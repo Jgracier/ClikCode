@@ -14,13 +14,14 @@ import Conf from 'conf';
 import { aiGatewaySessionSend } from '../turn/drive.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { enqueueSessionTurn } from '../turn/checkpoint.js';
+import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
 import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
-import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/runtime.js';
+import { closePersistentTransport, discardInterruptedTurn, preserveInterruptedTurn } from '../turn/runtime.js';
 import { BroadcastObserver } from './broadcast-observer.js';
 import { decodeFrames, encodeFrame, type ClientCommand } from './protocol.js';
-import { disposeSessionState } from '../agent/session-state.js';
+import { disposeSessionState, formatShellNotifications, runningShellCount, sessionState, takeShellNotifications, type ShellNotification } from '../agent/session-state.js';
+import { stopBackgroundShell } from '../agent/tools/bash.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
@@ -34,8 +35,15 @@ import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socket
  * problem this whole design fixes more robustly) has plenty of time to
  * happen without racing a shutdown; short enough that a genuinely abandoned
  * session does not sit as dead weight for days the way the zombie processes
- * that motivated this design did. */
-const IDLE_EXIT_MS = 30 * 60 * 1000;
+ * that motivated this design did. CLIKCODE_WORKER_IDLE_EXIT_MS overrides it
+ * for tests that need to watch a worker decide to exit. */
+const IDLE_EXIT_MS = Number(process.env.CLIKCODE_WORKER_IDLE_EXIT_MS) > 0 ? Number(process.env.CLIKCODE_WORKER_IDLE_EXIT_MS) : 30 * 60 * 1000;
+
+/** A background shell keeps an otherwise idle worker alive -- its exit is
+ * owed to the model -- but not for ever: this long after it started, with
+ * nobody attached and no turn running, it is stopped, and the model is told
+ * so like any other exit. */
+const ABANDONED_SHELL_MS = 24 * 60 * 60 * 1000;
 
 interface ConnectionState {
   socket: Socket;
@@ -55,8 +63,18 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   await ensureWorkersDirectory();
   await unlink(socketPath).catch(() => undefined);
 
+  /** Set the moment a turn is decided on (startTurn), synchronously, and
+   * cleared in runTurn's `finally`: the one guard that keeps two turns from
+   * ever running at once, whoever asked for them. */
   let turnRunning = false;
+  /** The queued turn the running turn is, so a second request for it -- the
+   * client draining the same queue entry -- follows it instead of rerunning it. */
+  let activeQueuedTurnId: string | undefined;
+  let draining = false;
   let idleTimer: NodeJS.Timeout | undefined;
+  /** The agent's in-process state for this conversation: its background
+   * shells and their exit notifications (agent/session-state.ts). */
+  const agentSession = sessionState(stateDirectory(), sessionId);
   const connections = new Map<Socket, ConnectionState>();
   /** The turn currently in flight, if any -- both cleared together in
    * runTurn's `finally`. A `cancel` with nothing running is simply a no-op:
@@ -65,11 +83,31 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   let activeLiveInput: LiveTurnInputBroker | undefined;
   let activeRestoreDraft = false;
 
+  /** Idle means no client, no turn, no background shell whose exit the
+   * model is still owed, and no notification on its way to it. A running
+   * shell instead arms the abandoned-shell ceiling (ABANDONED_SHELL_MS). */
   const scheduleIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
-    if (turnRunning || observer.attachedCount > 0) return;
+    idleTimer = undefined;
+    if (turnRunning || observer.attachedCount > 0 || agentSession.notifications.length) return;
+    if (runningShellCount(agentSession) > 0) {
+      const oldest = Math.min(...[...agentSession.shells.values()].filter((shell) => shell.status === 'running').map((shell) => shell.startedAt));
+      idleTimer = setTimeout(stopAbandonedShells, Math.max(0, oldest + ABANDONED_SHELL_MS - Date.now()));
+      idleTimer.unref();
+      return;
+    }
     idleTimer = setTimeout(() => { void shutdown('idle timeout'); }, IDLE_EXIT_MS);
     idleTimer.unref();
+  };
+
+  /** Stops each shell past the ceiling. Each one's exit then arrives as a
+   * notification like any other, and is delivered the same way. */
+  const stopAbandonedShells = (): void => {
+    const cutoff = Date.now() - ABANDONED_SHELL_MS;
+    for (const shell of agentSession.shells.values()) {
+      if (shell.status === 'running' && shell.startedAt <= cutoff) stopBackgroundShell(shell, 'still running 24 hours after it started, with no ClikCode window open');
+    }
+    scheduleIdleExit();
   };
 
   const currentSessionAndAccount = async (): Promise<{ session: import('../session/model.js').HarnessSession; account?: string }> => {
@@ -95,9 +133,113 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'notice', message }));
   };
 
+  const broadcastQueueChanged = (): void => {
+    for (const connection of connections.values()) if (connection.attached) connection.socket.write(encodeFrame({ type: 'queue-changed' }));
+  };
+
+  /** Shell notifications become a queued turn: durable in the conversation's
+   * state (a worker that stops before running it leaves it for the next
+   * one), and run through the same queue as a message typed during a turn. */
+  const recordNotifications = async (notes: readonly ShellNotification[]): Promise<void> => {
+    if (!notes.length) return;
+    const latest = await readState();
+    const found = latest.sessions.find((item) => item.id === sessionId);
+    if (!found) return;
+    const submittedAt = new Date().toISOString();
+    enqueueSessionTurn(found, { id: randomUUID(), text: formatShellNotifications(notes), submittedAt, kind: 'notification' }, submittedAt);
+    await writeState(latest);
+  };
+
+  /** A background shell finished. A running turn hands it to the model
+   * before its next step (run-turn.ts) and needs nothing from here; with no
+   * turn running, it is recorded and run as a follow-up turn, whether or not
+   * any window is open -- an attached window follows that turn like its own. */
+  const deliverNotifications = async (): Promise<void> => {
+    try {
+      if (!turnRunning && agentSession.notifications.length) {
+        await recordNotifications(takeShellNotifications(agentSession));
+        broadcastQueueChanged();
+        await drainQueue();
+      }
+    } catch (error) {
+      broadcastNotice(`Could not deliver a background shell's exit: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      scheduleIdleExit();
+    }
+  };
+  agentSession.onNotification = () => { void deliverNotifications(); };
+
+  /** Starts a turn unless one is already running. Synchronous from the check
+   * to the flag, so nothing can slip a second turn in between. */
+  const startTurn = (command: Extract<ClientCommand, { type: 'submit' }>): boolean => {
+    if (turnRunning) return false;
+    turnRunning = true;
+    activeQueuedTurnId = command.queuedTurnId;
+    void runTurn(command);
+    return true;
+  };
+
+  /** Runs the queue's head when it is a notification. A message the user
+   * queued is still sent by their window, which prepares what that turn
+   * needs locally (a TurboFit or ClikCode Local model) before sending it; a
+   * slash command only ever runs there. Anything else at the head is left,
+   * and the windows are told the queue changed. */
+  const drainQueue = async (): Promise<void> => {
+    if (turnRunning || draining) return;
+    draining = true;
+    try {
+      const { session: current } = await currentSessionAndAccount();
+      const head = current.queuedTurns?.[0];
+      if (!head) return;
+      if (head.kind !== 'notification') { broadcastQueueChanged(); return; }
+      startTurn({ type: 'submit', text: head.text, echo: true, queuedTurnId: head.id });
+    } finally {
+      draining = false;
+    }
+  };
+
+  /** `submit`. A queued turn this worker is already running is followed,
+   * not run again; one no longer in the queue already ran. A submit while
+   * another turn runs is queued behind it (it used to start a second turn
+   * beside the first). */
+  const handleSubmit = async (socket: Socket, command: Extract<ClientCommand, { type: 'submit' }>): Promise<void> => {
+    // The client already shows the prompt; the snapshot brings it up to date
+    // with what has streamed, and the turn's own events carry it from there.
+    const follow = (): void => {
+      const live = observer.liveSnapshot();
+      void currentSessionAndAccount().then(({ session: current, account }) => {
+        socket.write(encodeFrame({ type: 'snapshot', session: current, ...(account ? { account } : {}), ...(live ? { live } : {}) }));
+      }, () => undefined);
+    };
+    if (command.queuedTurnId) {
+      if (turnRunning && activeQueuedTurnId === command.queuedTurnId) { follow(); return; }
+      const { session: current, account } = await currentSessionAndAccount();
+      if (turnRunning && activeQueuedTurnId === command.queuedTurnId) { follow(); return; }
+      if (!current.queuedTurns?.some((item) => item.id === command.queuedTurnId)) {
+        socket.write(encodeFrame({ type: 'snapshot', session: current, ...(account ? { account } : {}) }));
+        socket.write(encodeFrame({ type: 'waiting-stop' }));
+        return;
+      }
+    }
+    if (startTurn(command)) return;
+    let queuedTurnId = command.queuedTurnId;
+    if (!queuedTurnId) {
+      queuedTurnId = randomUUID();
+      const latest = await readState();
+      const found = latest.sessions.find((item) => item.id === sessionId);
+      if (!found) throw new Error(`AI session "${sessionId}" was not found`);
+      const submittedAt = new Date().toISOString();
+      enqueueSessionTurn(found, { id: queuedTurnId, text: command.text.trim(), submittedAt }, submittedAt);
+      await writeState(latest);
+    }
+    socket.write(encodeFrame({ type: 'submit-queued', queuedTurnId }));
+    broadcastQueueChanged();
+  };
+
   const runTurn = async (command: Extract<ClientCommand, { type: 'submit' }>): Promise<void> => {
     turnRunning = true;
     if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = undefined;
     const controller = new AbortController();
     const liveInput = new LiveTurnInputBroker();
     activeController = controller;
@@ -110,7 +252,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // stopWaiting is the one event every client needs regardless of outcome
     // to know a `submit` it sent has actually finished -- broadcast in
     // `finally`, covering success, a caught failure, and cancellation alike.
-    observer.startWaiting('thinking');
+    observer.startTurn('thinking', command.text);
     try {
       await aiGatewaySessionSend(config, sessionId, command.text, controller.signal, {
         persistentTransports: true,
@@ -137,6 +279,14 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       } else {
         const message = error instanceof Error ? error.message : String(error);
         for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'turn-error', message }));
+        // A queued turn is consumed once its checkpoint starts; one that
+        // failed before that is still at the head, and would be run again
+        // straight after this -- and fail the same way, for ever.
+        if (command.queuedTurnId) {
+          const latest = await readState().catch(() => undefined);
+          const found = latest?.sessions.find((item) => item.id === sessionId);
+          if (latest && found && consumeSessionTurn(found, command.queuedTurnId)) await writeState(latest).catch(() => undefined);
+        }
       }
     } finally {
       liveInput.close();
@@ -151,8 +301,13 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       observer.render((await currentSessionAndAccount()).session);
       observer.stopWaiting();
       turnRunning = false;
+      activeQueuedTurnId = undefined;
       // Everyone left while it ran: now nothing is using what it started.
       if (observer.attachedCount === 0) void releaseMcp();
+      // Shells that finished after the turn's last step, then whatever is
+      // queued next; either may start the next turn at once.
+      if (agentSession.notifications.length) void deliverNotifications();
+      else void drainQueue().catch(() => undefined).finally(scheduleIdleExit);
       scheduleIdleExit();
     }
   };
@@ -170,10 +325,19 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       const { session: current, account } = await currentSessionAndAccount();
       const live = observer.liveSnapshot();
       socket.write(encodeFrame({ type: 'snapshot', session: current, ...(account ? { account } : {}), ...(live ? { live } : {}) }));
+      // A turn waiting on an answer is asked again here: whoever it asked
+      // may be gone, and this window may be the only one left to answer.
+      observer.reofferPending(socket);
       return;
     }
     if (!connection.attached) return;
-    if (command.type === 'submit') { void runTurn(command); return; }
+    if (command.type === 'submit') {
+      try { await handleSubmit(socket, command); } catch (error) {
+        socket.write(encodeFrame({ type: 'turn-error', message: error instanceof Error ? error.message : String(error) }));
+        socket.write(encodeFrame({ type: 'waiting-stop' }));
+      }
+      return;
+    }
     if (command.type === 'approval-response') { observer.resolveApproval(command.id, command.approved); return; }
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
     if (command.type === 'refresh') { observer.render((await currentSessionAndAccount()).session); return; }
@@ -242,7 +406,11 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     socket.on('error', () => socket.destroy());
   });
 
-  const shutdown = async (reason: string): Promise<void> => {
+  /** Once: a second signal while the first shutdown is still recording
+   * what it stopped must not exit underneath that write. */
+  let shuttingDown: Promise<void> | undefined;
+  const shutdown = (reason: string): Promise<void> => (shuttingDown ??= shutdownOnce(reason));
+  const shutdownOnce = async (reason: string): Promise<void> => {
     // Background shells the agent tools started are spawned DETACHED on
     // everything but Windows, so they outlive this process rather than dying
     // with it. disposeSessionState is the only thing that kills them and had
@@ -250,7 +418,15 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // worker, its session and this terminal -- indefinitely. Done on every
     // shutdown reason, not just the idle one: whenever this worker is going
     // away, so is the session whose shells these are.
-    disposeSessionState(stateDirectory(), sessionId);
+    //
+    // What the model was never told -- notifications not yet delivered, and
+    // each shell this stops -- is recorded as a queued turn first, so the
+    // next worker for the conversation delivers it.
+    const undelivered = disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
+    await recordNotifications(undelivered).catch(() => undefined);
+    // Codex app-server and ACP children are spawned detached too, and were
+    // orphaned the same way.
+    await closePersistentTransport().catch(() => undefined);
     for (const connection of connections.keys()) {
       connection.write(encodeFrame({ type: 'shutdown', reason }));
       connection.end();
@@ -272,4 +448,6 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT', () => { void shutdown('SIGINT'); });
   scheduleIdleExit();
+  // A notification a previous worker recorded but never ran.
+  void drainQueue().catch(() => undefined);
 }

@@ -52,14 +52,20 @@ export type ClientCommand =
  * persisted history the way reseedTranscript used to; it is simply told. */
 export type WorkerEvent =
   | { type: 'attach-rejected'; reason: string }
-  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: { text: string; waitingLabel: string } }
+  /** `live.prompt` is what the running turn was started with, so a client
+   * that did not start it can show it as the pending message. */
+  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: { text: string; waitingLabel: string; prompt?: string } }
   | { type: 'delta'; text: string; mode: 'append' | 'replace' }
   | { type: 'activity'; event: HarnessActivityEvent }
   | { type: 'phase'; message: string }
   | { type: 'plan'; entries: readonly PlanEntry[] }
   | { type: 'usage'; usage: { inputTokens?: number; outputTokens?: number } }
   | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string }
-  | { type: 'waiting-start'; message: string }
+  /** A turn has started. `prompt` (additive) is its text: a client that did
+   * not send it -- another window's turn, or one the worker started itself
+   * for a finished background shell -- follows it from here to waiting-stop
+   * and shows the prompt as the pending message. */
+  | { type: 'waiting-start'; message: string; prompt?: string }
   | { type: 'waiting-stop' }
   | { type: 'suspend' }
   /** A turn needs the vendor signed in. The worker has no terminal to run a
@@ -84,7 +90,17 @@ export type WorkerEvent =
   /** The worker is exiting (idle timeout, explicit stop, an unrecoverable
    * error) -- told, not just disconnected, so a client can say why instead
    * of a bare "connection closed". */
-  | { type: 'shutdown'; reason: string };
+  | { type: 'shutdown'; reason: string }
+  /** The conversation's queued turns changed (a message queued behind a
+   * running turn, a background-shell notification recorded). An idle client
+   * re-reads them from state and runs the one at the head; it no longer only
+   * notices at its next prompt. Additive: a client that ignores it runs the
+   * queue at its next prompt as before. */
+  | { type: 'queue-changed' }
+  /** Answer to a `submit` that arrived while another turn was running, sent
+   * to the submitting client only: nothing runs two turns at once, so the
+   * message was queued (`queuedTurnId`) and runs after the current one. */
+  | { type: 'submit-queued'; queuedTurnId: string };
 
 const FRAME_SEPARATOR = '\n';
 

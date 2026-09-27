@@ -90,7 +90,7 @@ export interface HarnessSession {
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */
-  queuedTurns?: Array<{ id: string; text: string; submittedAt: string; kind?: 'command' }>;
+  queuedTurns?: Array<{ id: string; text: string; submittedAt: string; kind?: 'command' | 'notification' }>;
   attachments?: string[];
   /** Output the user's `!<command>` runs produced between turns. Injected into
    * the next turn the way attachments are (see shellContextBlock and

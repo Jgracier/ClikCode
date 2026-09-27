@@ -33,11 +33,26 @@ export class BroadcastObserver implements TurnObserver {
    * to decide between preserveInterruptedTurn (something real to keep) and
    * discardInterruptedTurn (nothing happened yet, safe to drop entirely). */
   private outputStarted = false;
-  private readonly pendingApprovals = new Map<string, (approved: boolean | 'always') => void>();
-  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  /** What the running turn was started with (see WorkerEvent's waiting-start). */
+  private livePrompt: string | undefined;
+  /** Each open request is kept WITH the event that asked it, so a client
+   * attaching later is asked too (reofferPending). They used to go only to
+   * whoever was attached at that moment: a turn waiting on an approval with
+   * nobody watching waited forever, and reattaching showed nothing to answer. */
+  private readonly pendingApprovals = new Map<string, { resolve: (approved: boolean | 'always') => void; event: WorkerEvent }>();
+  private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent }>();
 
   attach(socket: Socket): void {
     this.clients.add(socket);
+  }
+
+  /** Sent to a client that just attached, after its snapshot. */
+  reofferPending(socket: Socket): void {
+    for (const pending of [...this.pendingApprovals.values(), ...this.pendingSignIns.values()]) socket.write(encodeFrame(pending.event));
+  }
+
+  get pendingRequestCount(): number {
+    return this.pendingApprovals.size + this.pendingSignIns.size;
   }
 
   detach(socket: Socket): void {
@@ -50,15 +65,23 @@ export class BroadcastObserver implements TurnObserver {
 
   /** What a freshly-attached client needs painted immediately: the turn in
    * flight, if any, exactly as far along as it has actually gotten. */
-  liveSnapshot(): { text: string; waitingLabel: string } | undefined {
-    return this.waitingLabel ? { text: this.liveText, waitingLabel: this.waitingLabel } : undefined;
+  liveSnapshot(): { text: string; waitingLabel: string; prompt?: string } | undefined {
+    return this.waitingLabel ? { text: this.liveText, waitingLabel: this.waitingLabel, ...(this.livePrompt !== undefined ? { prompt: this.livePrompt } : {}) } : undefined;
   }
 
   resolveApproval(id: string, approved: boolean | 'always'): void {
-    const resolve = this.pendingApprovals.get(id);
-    if (!resolve) return;
+    const pending = this.pendingApprovals.get(id);
+    if (!pending) return;
     this.pendingApprovals.delete(id);
-    resolve(approved);
+    pending.resolve(approved);
+  }
+
+  /** A turn's end, whatever it was: nobody is left to answer what it asked. */
+  private dropPending(): void {
+    for (const pending of this.pendingApprovals.values()) pending.resolve(false);
+    this.pendingApprovals.clear();
+    for (const pending of this.pendingSignIns.values()) pending.reject(new Error('the turn ended'));
+    this.pendingSignIns.clear();
   }
 
   private broadcast(event: WorkerEvent): void {
@@ -101,9 +124,10 @@ export class BroadcastObserver implements TurnObserver {
 
   approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'> {
     const id = randomUUID();
+    const event: WorkerEvent = { type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}), ...(rule ? { rule } : {}) };
     return new Promise((resolveApproval) => {
-      this.pendingApprovals.set(id, resolveApproval);
-      this.broadcast({ type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}), ...(rule ? { rule } : {}) });
+      this.pendingApprovals.set(id, { resolve: resolveApproval, event });
+      this.broadcast(event);
     });
   }
 
@@ -116,14 +140,22 @@ export class BroadcastObserver implements TurnObserver {
    * signature, so this still satisfies the one interface both a worker and
    * a real terminal are held to. */
   startWaiting(message: string, _onCancel?: (restoreDraft: boolean) => void, _onSubmit?: (text: string) => Promise<LiveTurnInputResult>, _onCommand?: (text: string) => Promise<LiveTurnInputResult>): void {
+    this.startTurn(message);
+  }
+
+  /** startWaiting, naming the prompt the turn runs, for clients following it. */
+  startTurn(message: string, prompt?: string): void {
     this.liveText = '';
     this.waitingLabel = message;
+    this.livePrompt = prompt;
     this.outputStarted = false;
-    this.broadcast({ type: 'waiting-start', message });
+    this.broadcast({ type: 'waiting-start', message, ...(prompt !== undefined ? { prompt } : {}) });
   }
 
   stopWaiting(): void {
     this.waitingLabel = '';
+    this.livePrompt = undefined;
+    this.dropPending();
     this.broadcast({ type: 'waiting-stop' });
   }
 
@@ -151,9 +183,10 @@ export class BroadcastObserver implements TurnObserver {
   signIn(request: SignInRequest): Promise<void> {
     if (this.clients.size === 0) return Promise.reject(new Error(`sign in to ${request.name} needs an open ClikCode window`));
     const id = randomUUID();
+    const event: WorkerEvent = { type: 'sign-in-request', id, ...request };
     return new Promise((resolve, reject) => {
-      this.pendingSignIns.set(id, { resolve, reject });
-      this.broadcast({ type: 'sign-in-request', id, ...request });
+      this.pendingSignIns.set(id, { resolve, reject, event });
+      this.broadcast(event);
     });
   }
 

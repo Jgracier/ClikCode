@@ -92,6 +92,14 @@ function killTree(child: BackgroundShell['child'], detached: boolean): void {
   child.once('close', () => clearTimeout(timer));
 }
 
+/** Stop a background shell for a reason the model did not give: its close
+ * handler then tells the model why (see startBackground). */
+export function stopBackgroundShell(shell: BackgroundShell, reason: string): void {
+  if (shell.status !== 'running') return;
+  shell.killReason = reason;
+  killTree(shell.child, shell.detached);
+}
+
 function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
   const detached = process.platform !== 'win32';
   const { file, args: argv } = shellInvocation(args.command);

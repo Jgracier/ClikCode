@@ -136,6 +136,7 @@ async function findRunningWorker(sessionId: string): Promise<WorkerRuntimeRecord
  * caught this exact ordering the first time this shipped. */
 export class WorkerClient extends EventEmitter {
   private buffer = '';
+  private early: WorkerEvent[] | undefined = [];
   readonly initialSnapshot: Promise<Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }>>;
 
   private constructor(private readonly socket: Socket) {
@@ -153,8 +154,19 @@ export class WorkerClient extends EventEmitter {
           resolveInitial(event);
           continue;
         }
-        this.emit('event', event);
+        // Events that arrive in the same chunk as the snapshot -- an approval
+        // re-offered on attach, a turn's first delta -- come before attach()
+        // has even returned, so before anyone could listen. Held until the
+        // first listener, instead of emitted to nobody.
+        if (this.early) this.early.push(event);
+        else this.emit('event', event);
       }
+    });
+    this.on('newListener', (name) => {
+      if (name !== 'event' || !this.early) return;
+      const held = this.early;
+      this.early = undefined;
+      queueMicrotask(() => { for (const event of held) this.emit('event', event); });
     });
     socket.on('close', () => this.emit('close'));
   }

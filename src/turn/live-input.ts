@@ -6,8 +6,11 @@ export interface LiveTurnSubmission {
   submittedAt: string;
   /** A ClikCode slash command typed while the turn was running. It is queued
    * like a message but is NOT one: it runs as the command it is when the turn
-   * ends, with the screen to itself. See tui/waiting-slash.ts. */
-  kind?: 'command';
+   * ends, with the screen to itself. See tui/waiting-slash.ts.
+   * `notification`: not typed by anyone -- background shells the agent
+   * started have finished, and this tells the model (session-worker.ts).
+   * Sent as a message like any other; the worker runs it on its own. */
+  kind?: 'command' | 'notification';
 }
 
 export interface LiveTurnInputResult {

@@ -36,3 +36,56 @@ describe('sign-in from a worker', () => {
     await expect(new BroadcastObserver().signIn(request)).rejects.toThrow('needs an open ClikCode window');
   });
 });
+
+describe('a request nobody has answered yet', () => {
+  it('is asked again of a window that attaches later, and the answer still reaches the turn', async () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking', 'fix it');
+    // Asked with nobody attached: it used to go nowhere, for ever.
+    const approved = observer.approval('Run npm test?', 'npm test', undefined, 'Bash(npm test:*)');
+    const late = fakeClient();
+    observer.attach(late.socket);
+    observer.reofferPending(late.socket);
+    const asked = late.frames.find((frame) => frame.type === 'approval-request') as { id: string };
+    expect(asked).toMatchObject({ title: 'Run npm test?', detail: 'npm test', rule: 'Bash(npm test:*)' });
+    observer.resolveApproval(asked.id, 'always');
+    await expect(approved).resolves.toBe('always');
+    // Answered: not offered to the next window.
+    const later = fakeClient();
+    observer.reofferPending(later.socket);
+    expect(later.frames).toEqual([]);
+  });
+
+  it('re-offers a sign-in to a window attaching after the one that was asked left', async () => {
+    const observer = new BroadcastObserver();
+    const first = fakeClient();
+    observer.attach(first.socket);
+    const signedIn = observer.signIn({ command: 'hermes', argv: [], environment: {}, name: 'Hermes' });
+    observer.detach(first.socket);
+    const second = fakeClient();
+    observer.attach(second.socket);
+    observer.reofferPending(second.socket);
+    const asked = second.frames.find((frame) => frame.type === 'sign-in-request') as { id: string };
+    expect(asked).toMatchObject({ command: 'hermes' });
+    observer.resolveSignIn(asked.id);
+    await expect(signedIn).resolves.toBeUndefined();
+  });
+
+  it('is refused when its turn ends, so nothing is left waiting', async () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking');
+    const approved = observer.approval('Write a.txt?');
+    observer.stopWaiting();
+    await expect(approved).resolves.toBe(false);
+    expect(observer.pendingRequestCount).toBe(0);
+  });
+
+  it('names the running prompt in waiting-start and in the live snapshot', () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking', '[background shell bash_1 exited (code 0)] make');
+    expect(client.frames[0]).toEqual({ type: 'waiting-start', message: 'thinking', prompt: '[background shell bash_1 exited (code 0)] make' });
+    expect(observer.liveSnapshot()).toMatchObject({ prompt: '[background shell bash_1 exited (code 0)] make' });
+  });
+});
