@@ -14,7 +14,8 @@ export function preferredAccountId(
   state: HarnessState, provider: string, current?: string | null,
   where: (account: AiHarnessAccount) => boolean = () => true,
 ): string | null {
-  const ready = state.accounts.filter((account) => account.provider === provider && account.status === 'ready' && where(account));
+  const ready = state.accounts.filter((account) => account.provider === provider
+    && account.status === 'ready' && account.quotaState !== 'exhausted' && !account.verification && where(account));
   if (!ready.length) return null;
   if (current && ready.some((account) => account.id === current)) return current;
   const lastUsed = [...state.sessions]

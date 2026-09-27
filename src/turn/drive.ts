@@ -47,6 +47,7 @@ import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
+import { hermesTurboFitModelId } from '../harness/accounts/hermes-discovery.js';
 import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
@@ -85,7 +86,12 @@ export async function aiSessionSend(
   let account = state.accounts.find((item) => item.id === session.accountId);
   if (!account) throw new Error('local AI session account was removed');
   let model: string | null = session.model ?? account.models[0] ?? null;
-  if (model && account.models.length > 0 && !account.models.includes(model)) {
+  // A model this account lists, spelled as it was listed: TurboFit ids saved
+  // before they were corrected to `custom:turbofit:` still count, or a session
+  // corrected on its first turn would be refused on its second.
+  const listed = (candidate: string): boolean => account!.models.includes(candidate)
+    || account!.models.some((item) => hermesTurboFitModelId(item) === candidate);
+  if (model && account.models.length > 0 && !listed(model)) {
     throw new Error(`model "${model}" is not available through local account "${account.label}"`);
   }
   const text = prompt.trim();
@@ -685,11 +691,7 @@ export async function aiSessionSend(
           //
           // 'present' counts here as much as 'carried'. It means the thread
           // never had to move, because both accounts run this harness against
-          // the same vendor home -- true for the fifteen harnesses that
-          // declare no profileEnv at all. Those were re-seeding the whole
-          // conversation to reach a file sitting exactly where the next
-          // account would look for it, which is the difference between a
-          // failover costing a 20KB prompt and costing nothing.
+          // the same vendor home.
           turnText = INTERRUPTED_TURN_REQUEST;
           // And the answer on screen stays. The thread already contains what
           // the first account wrote, and the next one is told to carry on

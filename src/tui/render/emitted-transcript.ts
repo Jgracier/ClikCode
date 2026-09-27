@@ -61,9 +61,8 @@ export class EmittedTranscript {
   }
 
   /** Forget everything written, because it is all about to be written again.
-   *  The whole conversation is rewritten, not a window of it: writing only the
-   *  last forty messages is why a chat opened from disk could not be scrolled
-   *  back through -- the rows were never there to find. */
+   *  The whole conversation is rewritten so a newly opened session can scroll
+   *  back through it in terminal scrollback. */
   reseeded(): void {
     this.messages = 0;
     this.lastMessage = undefined;

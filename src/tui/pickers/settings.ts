@@ -19,6 +19,7 @@ import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { VALID_PERMISSION_MODES } from '../../session/options.js';
 import { readState } from '../../session/state/read.js';
+import { newConversation } from '../../commands/ai/conversations.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
 import { lastPickerExit } from '../option-picker.js';
 import { chooseOption } from './choose.js';
@@ -28,6 +29,7 @@ import { interactiveEnginePicker } from './engine.js';
 import { interactiveModelPicker } from './model.js';
 import { interactiveHarnessOptionPicker } from './options.js';
 import { interactivePermissionPicker } from './permissions.js';
+import { interactiveSessionPicker } from './session.js';
 import { applyToChat, settingLabel } from './setting-scope.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { harnessManagers, interactiveToolsPicker } from './tools.js';
@@ -68,6 +70,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     };
 
     const rows: PickerOption<string>[] = [
+      { label: 'Resume', detail: 'choose a conversation', value: 'resume' },
       {
         label: 'Provider', detail: harness?.displayName ?? (session.route === 'gateway' ? 'ClikDeploy Gateway' : 'none chosen'), value: 'provider',
         ...(harness ? { actions: [{ label: `Use global defaults for ${harness.displayName}`, value: 'clear-provider' }] } : {}),
@@ -90,11 +93,11 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
           },
         },
       ] : []),
-      ...(harness ? [{ label: 'Account', detail: account?.label ?? 'none', value: 'account' }] : []),
-      ...(harness?.modelArgvPrefix ? [{
+      ...(harness && (harness.modelArgvPrefix !== undefined || harness.acp?.listsModels) ? [{
         label: 'Model', detail: session.model ? nativeModelLabel(harness.command, session.model) ?? session.model : 'harness default', value: 'model',
         actions: defaultActions(harness, 'model'),
       }] : []),
+      ...(harness ? [{ label: 'Account', detail: account?.label ?? 'automatic', value: 'account' }] : []),
       ...(efforts.length ? [{
         label: 'Effort', detail: settingLabel(session.effort ?? ''), value: 'effort', actions: defaultActions(harness, 'effort'),
         // Default is a real choice: no level sent, the harness decides.
@@ -138,7 +141,10 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
       rl.panel?.('Default saved', `${settingLabel(key)} ${scope === 'global' ? 'for every harness' : `for ${harness?.displayName}`}: ${value}`);
     });
     if (selected === undefined) return id;
-    if (selected === 'provider') id = await interactiveEnginePicker(config, rl, id) ?? id;
+    if (selected === 'resume') {
+      const picked = await interactiveSessionPicker(rl, id);
+      if (picked) id = 'new' in picked ? await newConversation(id) : picked.id;
+    } else if (selected === 'provider') id = await interactiveEnginePicker(config, rl, id) ?? id;
     else if (selected === 'account') id = await interactiveAccountPicker(rl, id) ?? id;
     else if (selected === 'model') await interactiveModelPicker(rl, id);
     else if (selected === 'effort') await interactiveEffortPicker(rl, id);

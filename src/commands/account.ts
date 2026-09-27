@@ -26,6 +26,7 @@ import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, firstUnusedAccountLabel } from '../harness/accounts/labels.js';
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
 import { authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
+import { captureMistralVibeCredential } from '../harness/accounts/mistral-vibe-identity.js';
 
 // emitHarnessOutput is defined in ai.ts (the HTTP-server-adjacent JSON/panel
 // output helper) -- passed in rather than imported to avoid a circular
@@ -35,6 +36,16 @@ type EmitHarnessOutput = (payload: Record<string, unknown>) => void;
 let emitHarnessOutput: EmitHarnessOutput = () => {};
 
 export function setEmitHarnessOutput(fn: EmitHarnessOutput): void { emitHarnessOutput = fn; }
+
+function distinctAccountLabel(provider: string, preferred: string, state: HarnessState, exceptId?: string): string {
+  const used = (label: string): boolean => state.accounts.some((account) => account.id !== exceptId
+    && account.provider === provider && account.label.toLowerCase() === label.toLowerCase());
+  if (!used(preferred)) return preferred;
+  for (let suffix = 2; ; suffix++) {
+    const candidate = `${preferred} (${suffix})`;
+    if (!used(candidate)) return candidate;
+  }
+}
 
 export async function aiAccountsList(): Promise<void> {
   const state = await readState();
@@ -75,7 +86,7 @@ export async function aiDoctor(): Promise<void> {
         accountStatus: Boolean(harness.statusArgv) || hasAuthEvidence(harness),
         logout: harnessCanLogout(harness),
         isolatedProfiles: Boolean(harness.profileEnv),
-        modelSelection: Boolean(harness.modelArgvPrefix),
+        modelSelection: harness.modelArgvPrefix !== undefined || Boolean(harness.acp?.listsModels),
         workspaceSelection: Boolean(harness.workspaceArgvPrefix),
         effortSelection: Boolean(harness.effortArgvPrefix),
         permissionModeSelection: (harness.permissionModes?.length ?? 0) > 0,
@@ -114,26 +125,31 @@ export async function syncAccountIdentityAfterLogin(
   // always mark ready and persist, so a caller never has to separately
   // remember to do either around this call.
   account.status = 'ready';
+  if (harness.command === 'vibe' && account.nativeProfile?.path) {
+    if (!await captureMistralVibeCredential(account.nativeProfile.path)) {
+      throw new Error('Mistral Vibe login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not updated.');
+    }
+  }
   const derived = await deriveAccountLabel(harness, account.nativeProfile?.path);
   if (!derived || derived.toLowerCase() === account.label.toLowerCase()) {
     await writeState(state);
     return account;
   }
-  const existingMatch = state.accounts.find(
-    (item) => item.id !== account.id && item.provider === harness.provider && item.label.toLowerCase() === derived.toLowerCase(),
-  );
+  const existingMatch = state.accounts.find((item) => item.id !== account.id
+    && item.provider === harness.provider && item.label.toLowerCase() === derived.toLowerCase());
   if (existingMatch) {
-    // The login just completed authenticated as a DIFFERENT real account
-    // ClikCode already has a record for -- merge into that one (repoint its
-    // nativeProfile at this fresh login, since the old one may be stale)
-    // instead of leaving two records for the same real identity.
+    const replacedProfile = existingMatch.nativeProfile;
     existingMatch.status = 'ready';
     if (account.nativeProfile) existingMatch.nativeProfile = account.nativeProfile;
     state.accounts = state.accounts.filter((item) => item.id !== account.id);
+    for (const session of state.sessions) if (session.accountId === account.id) session.accountId = existingMatch.id;
     await writeState(state);
+    if (replacedProfile && replacedProfile.path !== account.nativeProfile?.path) {
+      await purgeAccountProfile({ nativeProfile: replacedProfile }, state.accounts).catch(() => undefined);
+    }
     return existingMatch;
   }
-  account.label = derived;
+  account.label = distinctAccountLabel(harness.provider, derived, state, account.id);
   await writeState(state);
   return account;
 }
@@ -211,6 +227,14 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   const nativeProfile = profilePath && harness.profileEnv
     ? { env: harness.profileEnv, path: profilePath, ...(Object.keys(extraEnv).length ? { extraEnv } : {}) }
     : undefined;
+  if (harness.command === 'vibe' && profilePath) {
+    for (const previous of state.accounts.filter((account) => account.provider === harness.provider && !account.nativeProfile)) {
+      const previousPath = join(harnessStatePath(), '..', 'profiles', harness.command, previous.id);
+      await mkdir(previousPath, { recursive: true, mode: 0o700 });
+      if (await captureMistralVibeCredential(previousPath)) previous.nativeProfile = { env: 'VIBE_HOME', path: previousPath };
+    }
+    await writeState(state);
+  }
   let loginError: unknown;
   try {
     await loginNativeHarness(harness, profileEnvironment(harness, { nativeProfile }));
@@ -227,6 +251,9 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
     if (harness.command !== 'antigravity' || !profilePath) throw error;
     loginError = error;
   }
+  if (harness.command === 'vibe' && profilePath && !await captureMistralVibeCredential(profilePath)) {
+    throw new Error('Mistral Vibe login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not added.');
+  }
   // An explicit label means derivation below never runs, so there is no
   // independent way to confirm auth actually succeeded despite the error --
   // surface it rather than silently treat a real failure as success.
@@ -235,29 +262,15 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
     const derived = await deriveAccountLabel(harness, profilePath);
     if (!derived && loginError) throw loginError;
     if (derived) {
-      // A derived identity matching an account that already exists means
-      // this is the SAME real account signing in again -- not a new one --
-      // even though the login flow just created a brand-new isolated
-      // profile directory to get here (there's no way to know who's behind
-      // a login before actually completing it). Previously this only
-      // skipped renaming to the derived label in that case and fell
-      // through to pushing a duplicate anyway under the numbered
-      // placeholder -- the exact "logged in with the same email, it
-      // created a new one and left the old one" bug. Now it reuses the
-      // existing account outright: repoints its nativeProfile at the fresh
-      // login (the old profile directory may be stale/expired) instead of
-      // creating anything new, and the just-created directory above is
-      // simply orphaned rather than referenced by two accounts.
-      const existingMatch = state.accounts.find((account) => account.provider === harness.provider && account.label.toLowerCase() === derived.toLowerCase());
+      const existingMatch = state.accounts.find((account) => account.provider === harness.provider
+        && account.label.toLowerCase() === derived.toLowerCase());
       if (existingMatch) {
-        existingMatch.status = 'ready';
         const replacedProfile = nativeProfile ? existingMatch.nativeProfile : undefined;
+        existingMatch.status = 'ready';
         if (nativeProfile) existingMatch.nativeProfile = nativeProfile;
         existingMatch.verification = undefined;
         const verifyNotice = recordVerification(existingMatch, loginError);
         await writeState(state);
-        // The profile this login replaces holds the stale credentials; nothing
-        // references it any more, so it goes rather than lingering on disk.
         if (replacedProfile && replacedProfile.path !== nativeProfile?.path) {
           await purgeAccountProfile({ nativeProfile: replacedProfile }, state.accounts).catch(() => undefined);
         }
@@ -265,24 +278,15 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
         if (verifyNotice) emitHarnessOutput({ panel: 'error', message: verifyNotice });
         return existingMatch.label;
       }
-      accountLabel = derived;
+      accountLabel = distinctAccountLabel(harness.provider, derived, state);
     }
   }
-  // Scoped to this provider, as the existingMatch check above already is.
-  // One person's email is their identity on every provider they use, so a
-  // cross-provider label check meant signing in to a second harness under an
-  // address already connected elsewhere silently created nothing: the guard
-  // matched an unrelated account, the push was skipped, and "connected" was
-  // still announced. The isolated profile directory it had just built was
-  // left orphaned, once per attempt.
   let verifyNotice: string | undefined;
-  if (!state.accounts.some((account) => account.provider === harness.provider
-    && account.label.toLowerCase() === accountLabel.toLowerCase())) {
-    const created: AiHarnessAccount = { id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) };
-    verifyNotice = recordVerification(created, loginError);
-    state.accounts.push(created);
-    await writeState(state);
-  }
+  accountLabel = distinctAccountLabel(harness.provider, accountLabel, state);
+  const created: AiHarnessAccount = { id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) };
+  verifyNotice = recordVerification(created, loginError);
+  state.accounts.push(created);
+  await writeState(state);
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
   if (verifyNotice) emitHarnessOutput({ panel: 'error', message: verifyNotice });
   return accountLabel;
@@ -451,6 +455,9 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   const credentialRef = options.credentialRef.trim();
   if (!provider || !label || !credentialRef) throw new Error('provider, label, and local credential reference are required');
   const auth = requireAuthKind(options.auth);
+  if (auth === 'oauth') {
+    throw new Error('OAuth accounts must be created through the harness’s own sign-in flow; manual OAuth credential references are not supported.');
+  }
   if (auth === 'api-key' && !/^env:[A-Z][A-Z0-9_]*$/.test(credentialRef)) {
     throw new Error('API-key accounts require an env:VARIABLE credential reference; raw provider keys are never stored');
   }

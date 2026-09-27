@@ -74,6 +74,18 @@ export function acpResponseDelta(update: Json): string | undefined {
     ? update.content.text : undefined;
 }
 
+export function acpVibeResponseChange(previous: string, incoming: string): { text: string; mode: 'append' | 'replace'; current: string } {
+  if (!previous) return { text: incoming, mode: 'append', current: incoming };
+  if (incoming.startsWith(previous)) {
+    const text = incoming.slice(previous.length);
+    return { text, mode: 'append', current: incoming };
+  }
+  let sharedPrefix = 0;
+  while (sharedPrefix < previous.length && sharedPrefix < incoming.length && previous[sharedPrefix] === incoming[sharedPrefix]) sharedPrefix++;
+  if (sharedPrefix > 0) return { text: incoming, mode: 'replace', current: incoming };
+  return { text: incoming, mode: 'append', current: previous + incoming };
+}
+
 function acpThoughtDelta(update: Json): string | undefined {
   return update.sessionUpdate === 'agent_thought_chunk' && update.content?.type === 'text' && typeof update.content.text === 'string'
     ? update.content.text : undefined;
@@ -239,6 +251,12 @@ export function acpSpawnArgv(
 export function acpModelChoice(models: Json | undefined, model: string): string | undefined {
   const available: unknown[] = Array.isArray(models?.availableModels) ? models!.availableModels : [];
   const ids = available.map((entry) => (entry as Json | null)?.modelId).filter((id): id is string => typeof id === 'string');
+  if (ids.length === 0 && Array.isArray(models?.configOptions)) {
+    const modelOption = models.configOptions.find((option: Json) => (option?.id ?? option?.configId) === 'model');
+    if (Array.isArray(modelOption?.options)) {
+      for (const option of modelOption.options) if (typeof option?.value === 'string') ids.push(option.value);
+    }
+  }
   if (ids.includes(model)) return model;
   const suffixed = ids.filter((id) => id.endsWith(`:${model}`));
   if (suffixed.length === 1) return suffixed[0];
@@ -270,11 +288,13 @@ interface LiveAgent {
   sessionId?: string;
   /** The loaded session's model state (`currentModelId`, `availableModels`). */
   models?: Json;
+  configOptions?: Json[];
 }
 
 interface ActiveTurn {
   input: AcpTurnInput;
   text: string;
+  vibeMessageText: string;
   sawActivity: boolean;
   promptStarted: boolean;
   done: boolean;
@@ -303,7 +323,7 @@ class AcpSessionImpl implements AcpSession {
     let fail!: (error: Error) => void;
     const failure = new Promise<never>((_, reject) => { fail = reject; });
     failure.catch(() => undefined);
-    const turn: ActiveTurn = { input, text: '', sawActivity: false, promptStarted: false, done: false, fail };
+    const turn: ActiveTurn = { input, text: '', vibeMessageText: '', sawActivity: false, promptStarted: false, done: false, fail };
     this.turn = turn;
     const onAbort = (): void => this.cancelTurn(turn);
     input.signal?.addEventListener('abort', onAbort, { once: true });
@@ -432,7 +452,8 @@ class AcpSessionImpl implements AcpSession {
         else throw new Error(`${input.command} ACP cannot load sessions`);
         stillRunning();
         live.sessionId = wanted;
-        live.models = loaded?.models;
+        live.models = loaded?.models ?? { configOptions: loaded?.configOptions };
+        live.configOptions = loaded?.configOptions;
       }
       turn.sessionId = wanted;
     } else {
@@ -441,7 +462,8 @@ class AcpSessionImpl implements AcpSession {
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
       live.sessionId = sessionId;
-      live.models = started.models;
+      live.models = started.models ?? { configOptions: started.configOptions };
+      live.configOptions = started.configOptions;
       turn.sessionId = sessionId;
       await input.onSessionId?.(sessionId);
       stillRunning();
@@ -451,10 +473,14 @@ class AcpSessionImpl implements AcpSession {
     // launch flag is not guaranteed to reach the session (`hermes acp` ignores
     // `--model`, and would silently run its configured default).
     const modelId = input.model ? acpModelChoice(live.models, input.model) : undefined;
-    if (modelId && modelId !== live.models?.currentModelId) {
-      await peer.request('session/set_model', { sessionId: turn.sessionId, modelId }, setup);
+    const modelConfig = live.configOptions?.find((option) => (option.id ?? option.configId) === 'model');
+    const currentModel = live.models?.currentModelId ?? modelConfig?.currentValue;
+    if (modelId && modelId !== currentModel) {
+      if (modelConfig) await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: 'model', value: modelId }, setup);
+      else await peer.request('session/set_model', { sessionId: turn.sessionId, modelId }, setup);
       stillRunning();
-      live.models = { ...live.models, currentModelId: modelId };
+      if (modelConfig) live.configOptions = live.configOptions?.map((option) => option === modelConfig ? { ...option, currentValue: modelId } : option);
+      else live.models = { ...live.models, currentModelId: modelId };
     }
     const blocks: Json[] = [{ type: 'text', text: input.prompt }, ...await Promise.all(images.map(acpImageBlock))];
     stillRunning();
@@ -485,7 +511,19 @@ class AcpSessionImpl implements AcpSession {
     // before our own prompt belongs to this turn.
     if (!turn.promptStarted) return;
     const delta = acpResponseDelta(update);
-    if (delta) { turn.text += delta; input.onResponseDelta?.(delta); return; }
+    if (delta) {
+      if (input.command === 'vibe' && typeof update.messageId === 'string') {
+        const change = acpVibeResponseChange(turn.vibeMessageText, delta);
+        turn.vibeMessageText = change.current;
+        if (change.mode === 'replace') turn.text = change.current;
+        else turn.text += change.text;
+        input.onResponseDelta?.(change.text, change.mode);
+      } else {
+        turn.text += delta;
+        input.onResponseDelta?.(delta);
+      }
+      return;
+    }
     const thought = acpThoughtDelta(update);
     if (thought) return input.onThought?.(thought);
     const activity = acpActivityEvent(update);

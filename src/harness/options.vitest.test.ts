@@ -71,9 +71,10 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // 214 -> 213: Hermes's provider row is retired; its model ids name the
     // provider, and the model picker connects new ones.
     // 213 -> 215: OpenClaw's real turn flags, --timeout and --verbose.
+    // 78 -> 79: Vibe declares a model selector, so its model row folds.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(78);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(79);
     expect(kept.length).toBe(215);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     // OpenClaw used to fold everything it published; it has real rows now.

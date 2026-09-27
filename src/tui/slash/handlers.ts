@@ -17,7 +17,7 @@ import { stdin as input } from 'node:process';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
 import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
-import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
+import { nativeModelCatalogForPicker, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
@@ -225,13 +225,17 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // conversation runs on one, and a model belonging to another is not a
     // thing this command could set. /models is the cross-provider list.
     if (!value) {
+      const account = state.accounts.find((item) => item.id === session.accountId);
+      const catalog = harness ? await nativeModelCatalogForPicker(harness, account) : undefined;
       return emitHarnessOutput({
         panel: 'models',
-        models: modelChoicesFor({ ...session, provider: harness?.provider ?? session.provider }, state.accounts),
+        models: catalog && harness
+          ? catalog.models.map((model) => ({ account: account?.label ?? 'automatic', provider: harness.provider, model }))
+          : modelChoicesFor({ ...session, provider: harness?.provider ?? session.provider }, state.accounts),
         selected: session.model,
       });
     }
-    if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
+    if (!(harness?.modelArgvPrefix !== undefined || harness?.acp?.listsModels)) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
     const account = state.accounts.find((item) => item.id === session.accountId);
     // `/model auto` and `/model default` mean "stop overriding", not "store a
     // word no vendor accepts" -- so they RESOLVE to whatever the harness
@@ -337,7 +341,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       return aiSessionCommand(id, `/accounts use ${value}`);
     } else if (setting === 'model') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-      if (!harness?.modelArgvPrefix) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
+      if (!(harness?.modelArgvPrefix !== undefined || harness?.acp?.listsModels)) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
       const modelAccount = state.accounts.find((item) => item.id === session.accountId);
       const requestedModel = normalizeModelWord(value);
       if (requestedModel) await assertRealModel(harness, modelAccount, requestedModel);
@@ -470,7 +474,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       if (!provider) throw new Error('usage: /accounts add <harness>');
       const knownHarness = shortcut ? localHarnessForCommand(shortcut) : undefined;
       if (knownHarness?.surface === 'terminal') { await aiAccountLogin(knownHarness.command, words.join(' ') || undefined); return; }
-      return emitHarnessOutput({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth oauth|api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
+      return emitHarnessOutput({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
     if (action === 'failover') {
       const setting = words.shift();

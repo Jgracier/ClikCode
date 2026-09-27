@@ -296,6 +296,8 @@ export async function hermesTurboFitCatalogFiles(environment: Readonly<Record<st
     join(root, 'references', 'model-catalog.json'),
     join(root, 'references', 'successful-runtime-profiles.json'),
     join(root, 'references', 'intelligence-scores.json'),
+    // ClikCode's own measurements, which the CPU rows in /model show.
+    join(environment.HOME || process.env.HOME || homedir(), '.local', 'state', 'turbofit', 'clikcode-model-check.json'),
   ];
 }
 

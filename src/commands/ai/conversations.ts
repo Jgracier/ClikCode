@@ -81,6 +81,9 @@ export async function newProviderConversation(
   // child branch. The source native session remains untouched after this.
   if (await synchronizeNativeTranscript(state, current)) await writeState(state);
   const defaults = resolveDefaultSettings(state, harness.provider);
+  const lastUsedModel = [...state.sessions]
+    .filter((session) => session.nativeHarness === harness.command && session.model)
+    .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
   const now = new Date().toISOString();
   const sourceDisplayName = current.nativeHarness
     ? localHarnessForCommand(current.nativeHarness)?.displayName
@@ -88,7 +91,8 @@ export async function newProviderConversation(
   const session = createHandoffBranch({
     source: current, target: harness,
     accountId: selection.accountId ?? preferredAccountId(state, harness.provider),
-    model: selection.model ?? state.providerSettings[harness.provider]?.model ?? null,
+    model: selection.model ?? (current.nativeHarness === harness.command ? current.model : undefined)
+      ?? lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null,
     defaults, now, sourceDisplayName,
   });
   state.sessions.push(session);

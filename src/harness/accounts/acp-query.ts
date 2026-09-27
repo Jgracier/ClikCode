@@ -48,5 +48,18 @@ export function acpSessionModels(result: Json | undefined): { models: string[]; 
     if (typeof name === 'string' && name && name !== modelId) labels[modelId] = name;
   }
   const current = typeof result?.models?.currentModelId === 'string' ? result.models.currentModelId as string : undefined;
-  return { models, labels, ...(current ? { current } : {}) };
+  const modelOption = Array.isArray(result?.configOptions)
+    ? result!.configOptions.find((option: Json) => (option?.id ?? option?.configId) === 'model')
+    : undefined;
+  if (models.length === 0 && Array.isArray(modelOption?.options)) {
+    for (const option of modelOption.options) {
+      if (typeof option?.value !== 'string' || !option.value) continue;
+      models.push(option.value);
+      if (typeof option.name === 'string' && option.name && option.name !== option.value) labels[option.value] = option.name;
+    }
+  }
+  const configured = typeof modelOption?.currentValue === 'string' && modelOption.currentValue
+    ? modelOption.currentValue
+    : undefined;
+  return { models, labels, ...((current ?? configured) ? { current: current ?? configured } : {}) };
 }

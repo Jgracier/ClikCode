@@ -138,7 +138,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
     availability: (session, harness) => {
       const base = needsHarness('choosing a model')(session, harness);
       if (!base.available) return base;
-      return harness!.modelArgvPrefix ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
+      return (harness!.modelArgvPrefix !== undefined || harness!.acp?.listsModels) ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
     },
   }),
   entry('effort', 'Settings', 'reasoning level', { argHint: '[level]', availability: needsHarness('setting effort'), duringTurn: 'apply' }),
@@ -246,11 +246,11 @@ export function slashPalette(
   // pasted underneath ClikCode's. They still run when typed, and /help still
   // documents them as `/<harness> [request]`.
   const rows = slashRows(session, harness, extras, false).filter((row) => row.group !== 'Switch harness');
-  // A pinned command that is unavailable on this route or harness was already
-  // dropped above; pinning never resurrects one.
+  // A pinned command this session cannot run stays in its own group, marked
+  // unavailable; pinning never puts a row at the top that errors when chosen.
   const pinned = SLASH_PALETTE_PINNED
     .map((name) => rows.find((row) => row.value === `/${name}`))
-    .filter((row): row is SlashPaletteEntry => row !== undefined)
+    .filter((row): row is SlashPaletteEntry => row !== undefined && !row.detail.startsWith('unavailable · '))
     .map((row) => ({ ...row, group: 'Common' as const }));
   const pinnedValues = new Set(pinned.map((row) => row.value));
   return [...pinned, ...rows.filter((row) => !pinnedValues.has(row.value))];

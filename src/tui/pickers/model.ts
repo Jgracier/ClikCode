@@ -63,7 +63,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     ...discoveredModels.map((model) => modelRow(harness, catalog, model, effective, !session.model && model === catalog.configured)),
     ...(harness?.command === 'hermes' ? (catalog.localRecommendations ?? []).map((item) => ({
       label: item.label,
-      detail: `· TurboFit recommendation · ${item.detail}`,
+      detail: `· TurboFit · ${item.detail}`,
       value: `__turbofit_profile__:${encodeURIComponent(item.id)}`,
     })) : []),
     // A multi-provider harness (Hermes) lists providers it can reach but is

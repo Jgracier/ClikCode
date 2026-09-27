@@ -118,23 +118,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Persisted messages already in scrollback, and the standalone activity
    * rows already written. Everything before `emittedMessages` belongs to the
    * terminal now; this UI never addresses it again. */
-  /** `role:content` of the last message written to the transcript -- the seam
-   * the next frame carries on from, which a count cannot identify once the
-   * caller hands a window of the conversation rather than all of it. */
+  /** `role:content` of the last message written, used to locate the next seam. */
   /** Sequence numbers of the standalone activity rows already retired. One
    * number per activity event, alongside activityEntries itself, which is
    * deliberately never evicted -- some of it is immutable scrollback. */
   /** User text already retired, so a steer materialized into the transcript by
    * an earlier frame is not drawn a second time as a live row. */
-  /** Where the answer currently streaming will land once it is persisted, so
-   * the persisted copy adds only what the stream had not already retired. */
+  /** Absolute message index where the streamed answer lands in the full
+   * transcript, so its persisted copy adds only what the stream has not retired. */
   private readonly turnTranscript = new TurnTranscript();
   /** What is already in the terminal's scrollback. See emitted-transcript.ts:
    *  every write there is irreversible, so the rules live in one place. */
   private readonly emitted = new EmittedTranscript();
   /** Timeline sequence this turn started at, so activity left over from an
    * earlier turn at the same anchor is never adopted into it. */
-  /** Write the windowed history once: the first frame of the process, and the
+  /** Write the full history once: the first frame of the process, and the
    * first frame of a newly opened session. */
   private lastColumns = output.columns || 0;
   private usageLabel?: string;
@@ -1194,11 +1192,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // the conversation once -- ALL of it. Everything already in scrollback
       // (the shell's own output, the previous conversation) stays where it is.
       //
-      // This wrote only the last forty messages, which is why a chat opened
-      // from disk could not be scrolled back through: the rows were never
-      // written, so there was nothing above the fold to find. On the main
-      // screen the terminal's scrollback is where a conversation lives, and a
-      // window here truncated it at the one moment it is filled.
+      // The full transcript must be written: scrollback is where this terminal
+      // keeps conversation history, and omitted rows cannot be read back later.
       this.emitted.reseeded();
       this.turnTranscript.reset();
     }
@@ -1246,7 +1241,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
     const liveConversation: string[] = [];
     if (hasTransientAssistant) {
-      this.emitted.liveAssistantIndex = persistedMessages.length;
+      this.emitted.liveAssistantIndex = this.emitted.writtenCount();
       const content = sanitizeTerminalText(this.liveResponse);
       const step = this.turnTranscript.advance({
         content,

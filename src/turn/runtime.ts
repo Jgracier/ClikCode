@@ -23,7 +23,7 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../session/model.js';
 import type { HarnessAvailableCommand } from '../harness/events/turn-observer.js';
 import type { TurnObserver } from './observer.js';
-import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
+import { nativeAccountEnvironment, nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
@@ -119,7 +119,7 @@ export function turnEnvironment(
   account: AiHarnessAccount | undefined,
   permissionMode?: AiHarnessPermissionMode,
 ): Record<string, string> {
-  const environment = homeRedirectEnvironment(harness, nativeProfileEnvironment(account?.nativeProfile), { home: homedir(), exists: existsSync });
+  const environment = homeRedirectEnvironment(harness, nativeAccountEnvironment(harness, account), { home: homedir(), exists: existsSync });
   // A vendor that carries its tool-approval policy in the environment rather
   // than in argv -- Goose, whose only other routes are `goose configure` and
   // an in-session /mode. Omitting it is not neutral: an unset GOOSE_MODE

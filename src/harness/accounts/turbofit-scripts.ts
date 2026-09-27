@@ -186,6 +186,13 @@ try:
             restart.unlink(missing_ok=True)
             stop(controller)
             stop_models()
+            # TurboFit keeps one manual profile; selecting another replaced
+            # it, and the controller's saved state still names the old one,
+            # which it then refuses to retire ("cannot safely retire unknown
+            # previous profile"). Its models are stopped just above, so the
+            # state it would retire them from is dropped with them.
+            for name in ("controller.json", "runtime-state.json"):
+                (state / name).unlink(missing_ok=True)
             controller = start("turbofit-controller", "controller.log")
             record()
             continue
@@ -205,4 +212,113 @@ finally:
     stop_models()
     marker.unlink(missing_ok=True)
     print(json.dumps({"stopped": reason}), flush=True)
+`;
+
+/** Every TurboFit model that can run on this machine's CPU: a GGUF recipe
+ * (not MLX) whose files TurboFit publishes pinned downloads for, whose
+ * native runtime resolves for this machine, and whose files fit in memory
+ * with room for its context. For each, what its speed estimate needs: total
+ * and active parameters (a mixture of experts reads only its active share
+ * per token) and the compression format, whose CPU kernels differ by 3x
+ * at the same size. TurboFit's own recommendations are GPU-measured and
+ * offer one model per memory tier; this is the list a CPU is chosen from.
+ * argv: plugin root. */
+export const TURBOFIT_CPU_LANES_SCRIPT = String.raw`
+import json, os, re, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "src"))
+from turbofit_runtime.hardware import probe_hardware
+from turbofit_runtime.recipes import RecipeBook
+hardware = probe_hardware()
+book = RecipeBook.load(root / "references" / "model-recipes.json", hardware=hardware)
+recipes = json.loads((root / "references" / "model-recipes.json").read_text(encoding="utf-8"))
+catalog = {m["id"]: m for m in json.loads((root / "references" / "model-catalog.json").read_text(encoding="utf-8")).get("models", [])}
+manifest = {a["destination"]: a for a in json.loads((root / "references" / "artifact-manifest.json").read_text(encoding="utf-8")).get("artifacts", [])}
+model_root = Path(os.environ.get("TURBOFIT_MODEL_ROOT", "~/Models/storage/gguf")).expanduser()
+usable_mb = hardware.host_usable_memory_mb
+cores = os.cpu_count() or 8
+try:
+    cores = len({line.split(":")[1].strip() for line in open("/proc/cpuinfo") if line.startswith("core id")}) or cores
+except OSError:
+    cores = max(1, cores // 2)
+lanes = []
+for variant, spec in (recipes.get("variants") or {}).items():
+    if spec.get("engine") == "mlx" or not str(spec.get("model", "")).endswith(".gguf"):
+        continue
+    paths = [spec.get(key) for key in ("model", "projector", "draft") if spec.get(key)]
+    relative = [p.replace("$" "{TURBOFIT_MODEL_ROOT}/", "") for p in paths]  # "$" "{": no JS interpolation
+    rows = [manifest.get(r) for r in relative]
+    if not rows or not all(rows):
+        continue
+    try:
+        recipe = book.resolve_catalog_configuration({"id": f"{variant}-auto-64k", "main": variant, "auxiliary": "auto", "context": 65536, "status": "candidate"})
+    except Exception:
+        continue
+    total_bytes = sum(int(r["size_bytes"]) for r in rows)
+    main_bytes = int(rows[0]["size_bytes"])
+    # Weights plus a 64K context and llama.cpp's buffers, inside what TurboFit
+    # itself counts as usable (RAM less its host reserve).
+    if total_bytes < 100_000_000 or total_bytes / 1048576 * 1.25 + 2048 > usable_mb:
+        continue
+    entry = catalog.get(variant, {})
+    name = str(entry.get("name") or variant)
+    moe = re.search(r"(\d+(?:\.\d+)?)B-A(\d+(?:\.\d+)?)B", name) or re.search(r"(\d+(?:\.\d+)?)A(\d+(?:\.\d+)?)B", str(entry.get("family", "")))
+    dense = re.search(r"(\d+(?:\.\d+)?)B", name)
+    total_b = float(moe.group(1)) if moe else float(dense.group(1)) if dense else main_bytes / 0.6e9
+    active_b = float(moe.group(2)) if moe else total_b
+    binaries = sorted({c.command[0] for c in recipe.components})
+    lanes.append({
+        "variant": variant, "name": name, "quant": str(entry.get("quantization") or ""),
+        "totalB": total_b, "activeB": active_b, "mainBytes": main_bytes, "totalBytes": total_bytes,
+        "binaries": binaries,
+        "files": [{"destination": r["destination"], "family": (r.get("families") or [None])[0], "repo": r["repo_id"], "path": r["path"],
+                   "size": int(r["size_bytes"]), "present": (model_root / r["destination"]).is_file()} for r in rows],
+    })
+print("\x00TURBOFIT_LANES" + json.dumps({"pool": hardware.memory_pool_kind, "usableMb": usable_mb, "cores": cores, "lanes": lanes}))
+`;
+
+/** Select one CPU lane: TurboFit's own manual-profile writer, given the
+ * recipe for this variant at a 64K context and the memory it will hold,
+ * then TurboFit's own selector. The same two steps TurboFit takes for a
+ * recommendation, without its gate that admits only GPU-benchmarked
+ * winners. argv: plugin root, variant, resident MB. */
+export const TURBOFIT_CPU_LANE_SELECT_SCRIPT = String.raw`
+import importlib.util, json, sys
+from pathlib import Path
+root, variant, resident_mb = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+sys.path.insert(0, str(root / "src"))
+from turbofit_runtime.hardware import probe_hardware
+from turbofit_runtime.recipes import RecipeBook
+from turbofit_runtime.manual_profiles import write_manual_profile
+hardware = probe_hardware()
+book = RecipeBook.load(root / "references" / "model-recipes.json", hardware=hardware)
+configuration = {"id": f"cpu-{variant}-64k", "main": variant, "auxiliary": "auto", "context": 65536, "status": "candidate"}
+recipe = book.resolve_catalog_configuration(configuration)
+profile_id = "manual-" + configuration["id"]
+config_dir = Path.home() / ".config" / "turbofit"
+write_manual_profile(config_dir, profile_id=profile_id,
+    profile_entry={"context": 65536, "metrics": {"gpu_peak_mb": {"0": resident_mb}}}, recipe=recipe, hardware=hardware)
+# With no GPU, TurboFit's resolver gives each role an empty GPU index and its
+# own writer records it so; its loader then refuses the file ("runtime gpu
+# must be a non-empty string"), so no manual profile has ever loaded on a CPU.
+# The index means nothing there -- the recipe runs with -ngl 0 -- and "0" is
+# what its GPU-measured profiles carry.
+resolutions_path = config_dir / "manual-runtime-resolutions.json"
+resolutions = json.loads(resolutions_path.read_text(encoding="utf-8"))
+for rungs in (resolutions.get("profiles") or {}).values():
+    for roles in rungs.values():
+        for role in roles.values():
+            if isinstance(role, dict) and role.get("gpu") == "":
+                role["gpu"] = "0"
+resolutions_path.write_text(json.dumps(resolutions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+spec = importlib.util.spec_from_file_location("clikcode_turbofit_plugin_tools", root / "plugin_tools.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+    payload = module.select_profile(profile_id)
+except Exception as exc:
+    print("\x00TURBOFIT_SELECTION" + json.dumps({"error": str(exc)}))
+    sys.exit(2)
+print("\x00TURBOFIT_SELECTION" + json.dumps({**payload, "profile_id": profile_id}))
 `;

@@ -22,13 +22,10 @@ export function messageKey(message: TranscriptMessage): string {
 
 /** The index to resume writing at.
  *
- * A count alone cannot answer this. The interactive loop hands the turn its
- * own view of the conversation as `messages.slice(-40)`, so the array arriving
- * mid-turn is a WINDOW, not the whole transcript. Counting absolutely, a long
- * conversation had already emitted more messages than the window contains, so
- * the loop started past its end and wrote nothing -- including the message the
- * user had just submitted, which vanished as the answer to it streamed in
- * underneath.
+ * A count alone cannot answer this if a caller provides a WINDOW instead of
+ * the whole transcript. Counting absolutely, a long conversation may already
+ * have emitted more messages than the window contains, so the seam would
+ * start past its end and write nothing -- including a newly submitted message.
  *
  * The last message actually written identifies the seam wherever it sits,
  * window or not. Searched from the END so that a repeated sentence does not

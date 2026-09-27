@@ -93,12 +93,10 @@ import { closeAllWorkerClients, runTurnThroughWorker } from '../../worker/turn-b
 //     state/read.ts and state/migrate.ts use it as the file lock that stops
 //     two processes corrupting index.json.
 //
-// Also staying, contrary to the earlier plan: the SIGHUP/SIGINT-ignoring
-// block a few lines down. Its SIGINT half guards client-side identity
-// derivation and vendor login, both of which the worker design keeps in the
-// client on purpose, so it protects a real reproduced failure (an account
-// never saved because a hangup killed the process before any handler ran)
-// that the worker split does not address.
+// SIGINT remains ignored around client-side identity derivation and vendor
+// login, which the worker design keeps in the client. SIGHUP is different:
+// the terminal restore handler tears down the UI and exits the client, while
+// its detached worker can finish an in-flight turn and serve a reconnect.
 
 export async function aiSessionOpenDefault(config: Conf, options: { continue?: boolean } = {}): Promise<void> {
   const state = await readState();
@@ -132,21 +130,7 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   // Fetched while the app starts, so Copilot's model list is there the first
   // time the picker opens rather than racing the picker's short wait.
   void import('../../harness/accounts/goose-discovery.js').then(({ modelsDevCache }) => modelsDevCache()).catch(() => undefined);
-  // A long-lived interactive session should survive a transient terminal
-  // hangup (a flaky/mobile SSH connection dropping and reconnecting mid-use
-  // is exactly the kind of thing this hits), not die from it. Node's
-  // default action for an unhandled SIGHUP is immediate termination --
-  // before any try/catch, before uncaughtException, before anything this
-  // process could do about it. run()'s own SIGHUP forwarding only covers
-  // the narrow window a login/turn subprocess is actually running; a
-  // hangup arriving in any of the gaps around that (mid-suspend, during
-  // identity derivation, mid-render) previously killed the whole process
-  // silently -- explaining a real, reproduced case where the account never
-  // saved because ClikCode itself was gone, with no crash log at all
-  // (SIGHUP's default handling pre-empts JS entirely; there was nothing
-  // for a crash handler to catch). Ignoring it here covers the session's
-  // entire lifetime, not just subprocess windows. SIGINT gets the identical
-  // treatment for a related but distinct reason: run()'s own Ctrl+C
+  // SIGINT is ignored for a related but distinct reason: run()'s own Ctrl+C
   // forwarding to a login/turn subprocess is removed the INSTANT that
   // subprocess exits -- but the terminal stays in cooked mode (raw mode
   // off, from suspend()) for everything that happens after, including this
@@ -162,14 +146,11 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   // nothing about that existing, working "cancel the current turn"
   // behavior; it only closes the gap where raw mode is temporarily off and
   // nothing else is watching. /exit and /quit remain the ways to leave.
-  const ignoreHangup = (): void => {};
   const ignoreInterrupt = (): void => {};
-  if (process.platform !== 'win32') process.on('SIGHUP', ignoreHangup);
   process.on('SIGINT', ignoreInterrupt);
   try {
     await aiSessionInteractiveInner(config, id);
   } finally {
-    if (process.platform !== 'win32') process.off('SIGHUP', ignoreHangup);
     process.off('SIGINT', ignoreInterrupt);
   }
 }
@@ -373,7 +354,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           rl.submitted?.(turn.echo ? promptText : undefined);
           const pending: HarnessSession = {
             ...active,
-            messages: sessionTranscriptMessages(active).slice(-40),
+            messages: sessionTranscriptMessages(active),
             pendingTurn: undefined,
             ...(turn.queuedTurnId
               ? { queuedTurns: active.queuedTurns?.filter((item) => item.id !== turn.queuedTurnId) }

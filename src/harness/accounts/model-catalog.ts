@@ -2,11 +2,12 @@
  * itself -- its CLI, its config, or its own bundled table -- and cached only
  * for as long as what it was derived from stays the same. */
 
+import { turboFitCpuLaneRows } from './turbofit-local.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
-import { nativeProfileEnvironment } from '../transport/profile-environment.js';
+import { nativeAccountEnvironment, nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect, ModelCatalogResult } from '../definition.js';
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
@@ -122,7 +123,8 @@ function catalogProfileRoot(harness: AiLocalHarnessDefinition, account?: AiHarne
     ?? (harness.command === 'codex' ? join(homedir(), '.codex')
       : harness.command === 'claude' ? join(homedir(), '.claude')
         : harness.command === 'hermes' ? join(homedir(), '.hermes')
-          : harness.command === 'openclaw' ? join(homedir(), '.openclaw') : undefined);
+          : harness.command === 'openclaw' ? join(homedir(), '.openclaw')
+            : harness.command === 'vibe' ? join(homedir(), '.vibe') : undefined);
 }
 
 /** Harnesses whose list comes from the models.dev catalog. */
@@ -143,6 +145,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     ...(harness.command === 'hermes' ? await hermesTurboFitCatalogFiles(nativeProfileEnvironment(account?.nativeProfile)) : []),
     // OpenClaw's sign-ins live in the agent's SQLite auth store.
     ...(harness.command === 'openclaw' && root ? [join(root, 'openclaw.json'), join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')] : []),
+    ...(harness.command === 'vibe' && root ? [join(root, 'config.toml')] : []),
     ...(harness.command === 'goose' ? [join(homedir(), '.config', 'goose', 'config.yaml'), join(homedir(), '.config', 'goose', 'secrets.yaml')] : []),
     // The models.dev catalog a list was read from: a newer copy is a new list.
     ...(MODELS_DEV_HARNESSES.has(harness.command) ? modelsDevFiles() : []),
@@ -186,6 +189,7 @@ async function cachedCatalog(
   }
   if (!cached) return undefined;
   if (cached.fingerprint !== await catalogFingerprint(harness, account)) return undefined;
+  if (harness.acp && cached.result.models.length === 0) return undefined;
   const isExpired = Boolean(harness.modelDiscoveryArgv && Date.now() - cached.at >= SERVER_LIST_TTL_MS);
   if (isExpired && !options?.allowStale) return undefined;
   return cached.result;
@@ -222,7 +226,7 @@ function defaultModelCatalogFallback(
 export async function nativeModelCatalogForPicker(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
-  waitMs = MODEL_CATALOG_PICKER_WAIT_MS,
+  waitMs = harness.acp?.listsModels ? 10_000 : MODEL_CATALOG_PICKER_WAIT_MS,
 ): Promise<ModelCatalogResult> {
   const cached = await cachedCatalog(harness, account, { allowStale: true });
   if (cached) {
@@ -304,7 +308,7 @@ export async function nativeModelCatalog(
   // A list read from a server (Copilot's, from models.dev) that came back
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead.
-  if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider')) return result;
+  if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider' || harness.acp)) return result;
   const key = cacheKey(harness, account);
   const entry: CatalogMemoEntry = { at: Date.now(), fingerprint, result };
   modelCatalogCache.set(key, entry);
@@ -424,7 +428,10 @@ async function nativeModelCatalogUncached(
       labels = { ...labels, ...inventory.labels };
       if (inventory.configured) configured = inventory.configured;
       connect = inventory.connect;
-      localRecommendations = inventory.localRecommendations;
+      // On a machine TurboFit sees no GPU in, its recommendations are GPU
+      // measurements; the CPU lanes, measured or estimated here, replace them.
+      const cpuLanes = await turboFitCpuLaneRows(harness, account).catch(() => []);
+      localRecommendations = cpuLanes.length ? cpuLanes : inventory.localRecommendations;
     } else if (profileRoot) {
       try {
         for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) models.add(model);
@@ -451,7 +458,7 @@ async function nativeModelCatalogUncached(
   }
   // Aider: the models of each provider it has a key for (aider-discovery.ts).
   if (harness.command === 'aider') {
-    const found = await discoverAiderModels(harness, nativeProfileEnvironment(account?.nativeProfile)).catch(() => undefined);
+    const found = await discoverAiderModels(harness, nativeAccountEnvironment(harness, account)).catch(() => undefined);
     if (found) {
       found.models.forEach((model) => models.add(model));
       labels = { ...labels, ...found.labels };
@@ -495,7 +502,7 @@ async function nativeModelCatalogUncached(
   }
   // No list command, but the ACP session says (Cline: 318 models through its
   // own gateway, none of which ClikCode could offer before).
-  if (harness.acp?.listsModels && !harness.modelDiscoveryArgv) {
+  if (harness.acp && harness.command !== 'hermes' && !harness.modelDiscoveryArgv) {
     const listed = await queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, nativeProfileEnvironment(account?.nativeProfile),
       async (request) => acpSessionModels(await request('session/new', { cwd: homedir(), mcpServers: [] })), 30_000).catch(() => undefined);
     if (listed?.models.length) {

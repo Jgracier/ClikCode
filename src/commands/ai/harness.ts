@@ -56,6 +56,8 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   session.route = 'local';
   session.workspace ??= process.cwd();
   const selected = session.accountId ? state.accounts.find((account) => account.id === session.accountId) : undefined;
+  const selectedUsable = selected?.provider === harness.provider && selected.status === 'ready'
+    && selected.quotaState !== 'exhausted' && !selected.verification;
   // Tracks whether the account below is being minted right now, not found
   // pre-existing -- needed because harnessNeedsLogin returns false
   // unconditionally for any harness with no statusArgv (Gemini, Antigravity,
@@ -69,13 +71,14 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   // never having had a real opportunity to authenticate it in the first
   // place.
   let accountJustCreated = false;
-  if (!selected || selected.provider !== harness.provider || selected.status !== 'ready') {
+  if (!selectedUsable) {
     const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli');
-    // Signed in is what decides a login, not usable right now: an account out
-    // of quota or waiting on the vendor's verification is still one the user
-    // has, so it is chosen (a usable one first) and its turn says why it
-    // cannot run. Accounts that are all signed out are not replaced by a new
-    // placeholder -- the sign-in below is for them.
+    // Signed in is what decides a login, not usable right now. An account out
+    // of quota or waiting on the vendor's verification is still an account the
+    // user has: it is chosen (the best one first), and its turn says why it
+    // cannot run. Treating "none usable" as "none at all" prompted a sign-in
+    // on every provider whose accounts were all spent -- Antigravity, Augment,
+    // xAI here -- when the user had them and wanted to pick one.
     if (accounts.some((account) => account.status === 'ready')) {
       session.accountId = signedInAccountId(state, harness.provider, session.accountId, (account) => account.authKind === 'vendor-cli');
     } else if (accounts.length) {
@@ -139,7 +142,10 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (harness.command === 'hermes') await ensureHermesTurboFit(harness, nativeProfileEnvironment(account?.nativeProfile));
   // Always a real model, never a placeholder -- see resolveNativeModel.
   if (!session.model) {
-    session.model = state.providerSettings[harness.provider]?.model
+    const lastUsedModel = [...state.sessions]
+      .filter((item) => item.id !== session.id && item.nativeHarness === harness.command && item.model)
+      .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
+    session.model = lastUsedModel ?? state.providerSettings[harness.provider]?.model
       ?? await resolveNativeModel(harness, account)
       ?? null;
   }

@@ -9,6 +9,7 @@ import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { inspectNativeHarness } from '../transport/native/inspect.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { mistralVibeAccountEmail } from './mistral-vibe-identity.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessState } from '../../session/model.js';
 
@@ -77,6 +78,7 @@ export async function refreshPlaceholderAccountLabels(state: HarnessState): Prom
 }
 
 export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
+  if (harness.command === 'vibe') return mistralVibeAccountEmail(profilePath);
   if (harness.command === 'claude') {
     try {
       // Asked of the harness, about the account it is running as.
@@ -122,14 +124,9 @@ export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, prof
   if (harness.command === 'cursor') {
     // Simplest of the three so far: no token to decode, no API call --
     // ~/.cursor/cli-config.json carries a real, plain-text authInfo.email
-    // field directly. No profileEnv exists for Cursor (confirmed against
-    // its own catalog entry), so this file is always at the one fixed path
-    // regardless of account -- meaning, same as Gemini/OpenCode/Amp, only
-    // one real Cursor identity can be tracked at a time today; this just
-    // means that one identity shows correctly instead of as "Cursor Agent
-    // default".
+    // field directly. HOME-based account profiles keep this lookup scoped.
     try {
-      const parsed = JSON.parse(await readFile(join(homedir(), '.cursor', 'cli-config.json'), 'utf8')) as { authInfo?: { email?: string } };
+      const parsed = JSON.parse(await readFile(join(profilePath ?? homedir(), '.cursor', 'cli-config.json'), 'utf8')) as { authInfo?: { email?: string } };
       const email = parsed.authInfo?.email;
       return typeof email === 'string' && email ? email : undefined;
     } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
@@ -137,8 +134,7 @@ export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, prof
   if (harness.command === 'gemini') {
     // ~/.gemini/google_accounts.json names the signed-in Google account
     // directly in `active`. Verified against this machine's own file.
-    // Gemini CLI has no profileEnv, so there is one identity at a time --
-    // this just makes that one show as itself instead of "Gemini CLI default".
+    // The profile root keeps the account lookup scoped to this login.
     try {
       const parsed = JSON.parse(await readFile(join(profilePath ?? join(homedir(), '.gemini'), 'google_accounts.json'), 'utf8')) as { active?: unknown };
       return typeof parsed.active === 'string' && parsed.active ? parsed.active : undefined;

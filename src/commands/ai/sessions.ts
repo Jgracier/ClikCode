@@ -117,7 +117,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const harness = provider ? localHarnessForProvider(provider) : undefined;
   if (provider && !harness && options.route === 'local') throw new Error(`unknown local provider "${provider}"`);
   const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
-  if (model && harness && !harness.modelArgvPrefix) throw new Error(`${harness.displayName} does not publish a model selector.`);
+  if (model && harness && !(harness.modelArgvPrefix !== undefined || harness.acp?.listsModels)) throw new Error(`${harness.displayName} does not publish a model selector.`);
   if (model) await assertRealModel(harness, account, model);
   if (options.effort && harness) {
     const effortOption = optionForHarness(harness, 'effort');
@@ -322,7 +322,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     throw new Error(`unknown local provider "${options.provider ?? account?.provider}"`);
   }
   const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
-  if (model && selectedHarness && !selectedHarness.modelArgvPrefix) {
+  if (model && selectedHarness && !(selectedHarness.modelArgvPrefix !== undefined || selectedHarness.acp?.listsModels)) {
     throw new Error(`${selectedHarness.displayName} does not publish a model selector.`);
   }
   if (model) await assertRealModel(selectedHarness, account ?? state.accounts.find((item) => item.id === current.accountId), model);

@@ -90,9 +90,8 @@ export async function carryNativeSession(input: CarryNativeSessionInput): Promis
   // threads, because when the profile is shared the answer does not depend on
   // that: the losing account and the one taking over run the harness against
   // the same home, so the thread is already exactly where it will be looked
-  // for. Fifteen of the twenty-four harnesses declare no profileEnv at all
-  // and are therefore always in this case -- they were re-seeding the entire
-  // conversation to reach a file that had never moved.
+  // for. Accounts intentionally sharing a vendor profile are always in this
+  // case; isolated profiles need a known transcript store to carry.
   if (sharesVendorProfile(harness, input.from, input.to)) return 'present';
   if (!workspace) return undefined;
   const target = nativeSessionRoot(harness, input.to);
