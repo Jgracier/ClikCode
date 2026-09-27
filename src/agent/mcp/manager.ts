@@ -99,6 +99,8 @@ export class McpManager {
   async shutdown(): Promise<void> {
     const states = [...this.servers.values()];
     this.servers.clear();
+    process.off('exit', this.killAll);
+    this.exitHookInstalled = false;
     await Promise.all(states.map((state) => this.stop(state)));
   }
 
