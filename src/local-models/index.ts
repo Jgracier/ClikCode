@@ -210,8 +210,19 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
   // is joined without a lease of this process's own: the model follows the
   // process that took it.
   const running = pick ? [await liveServer(pick)].filter((record): record is ServerRecord => Boolean(record)) : await runningModels();
-  const joinable = running.sort((left, right) => (catalogModel(right.modelId)?.quality ?? 0) - (catalogModel(left.modelId)?.quality ?? 0))[0];
-  if (joinable && (await httpJson(joinable.port, 'GET', '/health', undefined, 3000)).status === 200) {
+  let joinable: ServerRecord | undefined = running.sort((left, right) => (catalogModel(right.modelId)?.quality ?? 0) - (catalogModel(left.modelId)?.quality ?? 0))[0];
+  let healthy = Boolean(joinable) && (await httpJson(joinable!.port, 'GET', '/health', undefined, 3000)).status === 200;
+  if (joinable && !healthy && joinable.restarting) {
+    // Restarting smaller to give memory back: waited for, not fitted anew
+    // -- the fit would count the memory its own restart is about to take.
+    const restarting = joinable;
+    const label = catalogModel(restarting.modelId)?.label ?? restarting.modelId;
+    healthy = await waitForHealth(restarting.port, () => processAlive(restarting.supervisorPid),
+      (seconds) => progress({ stage: 'start', message: `${label} is restarting smaller to leave memory for other programs… ${seconds}s` }))
+      .then(() => true, () => false);
+    joinable = await liveServer(restarting.modelId);
+  }
+  if (joinable && healthy) {
     if (!await sessionHeldElsewhere(joinable.modelId, options.sessionId)) await writeLease(joinable.modelId, options.sessionId);
     await removeLeases(options.sessionId, joinable.modelId);
     const notice = shrinkNotice(joinable.memoryEvent);

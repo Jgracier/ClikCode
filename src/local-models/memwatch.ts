@@ -133,7 +133,10 @@ export function memoryStep(input: WatchInput): WatchDecision {
     return { ...base, level, action: 'wait', reason: 'a request is running' };
   }
 
-  const why = `other programs left ${gb(Math.max(0, spareBytes))} free, under the ${gb(input.bufferBytes)} kept for them`
+  // Worded by what is left, not by who took it: the model's own prompt
+  // cache filling lowers spare memory too, and the buffer is defended all
+  // the same.
+  const why = `only ${gb(Math.max(0, spareBytes))} was left for other programs, under the ${gb(input.bufferBytes)} kept for them`
     + ` (they hold ${gb(othersBytes)}${swapping ? ', and the machine is swapping' : ''})`;
   const wanted = deficit + input.bufferBytes / 4;
   state.lastActionAt = sample.at;

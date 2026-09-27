@@ -53,7 +53,7 @@ describe('memory decisions', () => {
     const first = decisions.findIndex((decision) => decision.action !== 'none');
     expect(first).toBe(8); // t = 16 s, the first sample 15 s past the first low one
     expect(decisions[first]).toMatchObject({ action: 'shrink', shrinkIndex: 2, level: 'low' });
-    expect(decisions[first]!.reason).toMatch(/other programs left 5\.0 GB free, under the 5\.8 GB kept for them.*16K context/);
+    expect(decisions[first]!.reason).toMatch(/only 5\.0 GB was left for other programs, under the 5\.8 GB kept for them.*16K context/);
   });
 
   it('stops when no shrink frees enough', () => {
