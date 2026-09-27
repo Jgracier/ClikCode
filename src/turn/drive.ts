@@ -32,7 +32,7 @@ import { noteStoredQuota } from './account-switch.js';
 import { clearQuotaMark, markQuotaExhausted } from '../harness/accounts/usage-reading.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, type AccountFailureKind } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
-import { extractSessionTitle, sessionTitleSource, shouldRequestTitle, StreamingTitle, titleStreamForAttempt, withTitleRequest } from '../session/title.js';
+import { extractSessionTitle, stripRepeatedTitles, sessionTitleSource, shouldRequestTitle, StreamingTitle, titleStreamForAttempt, withTitleRequest } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -1058,6 +1058,16 @@ export async function aiGatewaySessionSend(
       session, prompt: turnText, modelClient,
       ...(prompter ? { prompter } : {}),
       ...(titleStream ? { responseFilter: (delta: string, mode: 'append' | 'replace') => titleStream?.push(delta, mode) } : {}),
+      // Each model step may open with the title again (the request rides in
+      // the conversation every step re-sends): the filter watches every step's
+      // start, and hands on whatever the previous step still held.
+      ...(titleStream ? {
+        onStepStart: () => {
+          const pending = titleStream?.flush();
+          if (pending) prompter?.response(pending, 'append');
+          titleStream?.nextStep();
+        },
+      } : {}),
       ...(signal ? { signal } : {}),
       ...(prepared.images.length ? { images: prepared.images } : {}),
       onActivity: (event) => checkpoint.activity(event),
@@ -1078,7 +1088,8 @@ export async function aiGatewaySessionSend(
     state.invocations.push(harnessInvocation);
     session.attachments = [];
     session.shellNotes = [];
-    const named = extractSessionTitle(harnessTurn.text);
+    const extracted = extractSessionTitle(harnessTurn.text);
+    const named = { ...extracted, text: stripRepeatedTitles(extracted.text) };
     // Before completing: see the vendor path above.
     await nameSession(session, { title: titleStream?.title ?? named.title });
     await checkpoint.complete(named.text);

@@ -97,7 +97,11 @@ export async function runGatewayHarnessSessionTurn(
       input.onActivity?.(classified as never);
       prompter?.activityEvent(classified as never);
     },
-    onPhase: (phase) => prompter?.phase(phase),
+    onPhase: (phase) => {
+      // The loop announces every model step as 'thinking' before calling it.
+      if (phase === 'thinking') input.onStepStart?.();
+      prompter?.phase(phase);
+    },
     onPlan: (entries) => prompter?.setPlan(entries),
     // No prompter means a headless run; a turn that cannot ask must not
     // silently act, so an unattended approval is a refusal.

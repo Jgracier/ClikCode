@@ -134,6 +134,13 @@ export function extractSessionTitle(answer: string): { title?: string; text: str
   return { ...(title ? { title } : {}), text };
 }
 
+/** A reply with a title line removed wherever a step began with one -- the
+ * start of the reply or of any paragraph -- for a multi-step reply whose later
+ * steps repeated the title the first step gave. */
+export function stripRepeatedTitles(text: string): string {
+  return text.replace(new RegExp(`(^|\\n)[ \\t]*${OPEN}[\\s\\S]*?${CLOSE}[ \\t]*\\r?\\n?`, 'g'), '$1').replace(/^\n+/, '');
+}
+
 /** How much of a reply has to arrive before it is clear no title is coming:
  * the open tag, plus room for a model that pads it with a word or two first. */
 const DECIDE_AFTER = OPEN.length + 64;
@@ -178,6 +185,15 @@ export class StreamingTitle {
    * nobody will ever see -- and a stream left settled would hand the NEW
    * reply's title marker straight to the screen, because a settled stream
    * passes append deltas through verbatim. */
+  /** The next model step of the SAME reply. A multi-step agent re-sends the
+   * conversation -- title request included -- on every step, and a model may
+   * open each step's text with the title again. Watch the start of this step
+   * as closely as the first; the title already found is kept. */
+  nextStep(): void {
+    this.buffer = '';
+    this.settled = false;
+  }
+
   restart(): void {
     this.buffer = '';
     this.settled = false;
