@@ -59,7 +59,7 @@ import { exportTranscript } from '../../tui/slash/export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory.js';
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
-import { interactiveResumeInPicker } from '../../tui/pickers/resume-in.js';
+import { interactiveResumeInPicker, sameProviderCanTakeTurn } from '../../tui/pickers/resume-in.js';
 import { chooseOption } from '../../tui/pickers/choose.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
@@ -274,6 +274,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   /** A message to send next, without asking: the one that ran out of usage,
    * after "Resume in" moved the chat to a harness that has some. */
   let resend: string | undefined;
+  /** The message last re-sent because its own provider had an account back;
+   * never twice, so a record that keeps flipping cannot loop. */
+  let autoResent: string | undefined;
   let synchronizedSessionId = id;
   let transportSessionId = id;
   try {
@@ -739,11 +742,24 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // Out of usage on every account here: offer the harnesses that
           // still have some, and carry on there with the same message.
           if (!cancelled && !queuedTurnId && isUsageExhaustedMessage(message) && rl instanceof TerminalHarnessPrompter) {
-            const moved = await interactiveResumeInPicker(rl, id, line).catch(() => undefined);
-            if (moved) {
-              id = moved;
+            // An account of this provider got its quota back after failover
+            // looked (a re-read landed meanwhile): send it again here, once,
+            // rather than offering to leave the provider.
+            const again = line !== autoResent && await sameProviderCanTakeTurn(id).catch(() => false);
+            if (again) {
+              // As Resume in does: the message is sent again, so it must not
+              // also stay behind as the interrupted turn.
+              await discardInterruptedTurn(id, line).catch(() => undefined);
+              autoResent = line;
               resend = line;
               notice = undefined;
+            } else {
+              const moved = await interactiveResumeInPicker(rl, id, line).catch(() => undefined);
+              if (moved) {
+                id = moved;
+                resend = line;
+                notice = undefined;
+              }
             }
           }
         }

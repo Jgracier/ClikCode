@@ -25,6 +25,18 @@ export function accountHasUsage(account: AiHarnessAccount): boolean {
   return accountCanTakeTurn(account);
 }
 
+/** Whether an account of the chat's own provider can take the turn. While
+ * one can, the same-provider switch is the one to make, not another provider. */
+export function sessionProviderHasUsage(accounts: readonly AiHarnessAccount[], provider: string | null | undefined): boolean {
+  return accounts.some((account) => account.provider === provider && account.authKind === 'vendor-cli' && accountHasUsage(account));
+}
+
+export async function sameProviderCanTakeTurn(id: string): Promise<boolean> {
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  return session ? sessionProviderHasUsage(state.accounts, session.provider) : false;
+}
+
 /** Harnesses other than `current` with an account that has usage, best
  * tier first, each with those accounts. */
 export function resumeInCandidates(
@@ -44,6 +56,8 @@ export async function interactiveResumeInPicker(rl: HarnessPrompter, id: string,
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return undefined;
+  // Another provider is the answer only when this one has nothing left.
+  if (sessionProviderHasUsage(state.accounts, session.provider)) return undefined;
   const candidates = resumeInCandidates(allLocalHarnesses().filter(harnessCanRunTurns), state.accounts, session.nativeHarness, harnessTierRank);
   if (!candidates.length) return undefined;
   const spent = state.accounts.filter((account) => account.provider === session.provider);
