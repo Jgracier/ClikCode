@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { NetworkSeams, PinnedRequestOptions, PinnedResponse } from '../model-client.js';
+import { decidePermission, parsePermissionRules, suggestPermissionRule } from '../permissions.js';
 import type { ToolContext } from '../tool-contract.js';
 import { createWebSearchTool, decodeDuckDuckGoLink, parseBraveJson, parseDuckDuckGoHtml, parseTavilyJson, resolveSearchKeys } from './web-search.js';
 
@@ -124,8 +125,20 @@ describe('key resolution', () => {
 });
 
 describe('web_search tool', () => {
-  it('is a read tool, so it needs no approval', () => {
-    expect(tool().class).toBe('read');
+  it('asks like web_fetch, and "always" remembers the tool itself', () => {
+    // The query leaves the machine; there is no domain to scope a rule to.
+    expect(tool().class).toBe('network');
+    const scope = { cwd: '/w', addDirs: [], homeDir: '/h', stateDir: '/s' } as unknown as Parameters<typeof suggestPermissionRule>[2];
+    const rule = suggestPermissionRule(tool(), { query: 'node streams' }, scope);
+    expect(rule).toBe('web_search');
+    expect(decidePermission({
+      tool: tool(), args: { query: 'x' }, mode: 'ask', planMode: false, scope, hasApprover: true,
+      rules: parsePermissionRules([rule]), command: undefined,
+    } as unknown as Parameters<typeof decidePermission>[0]).decision).toBe('allow');
+    expect(decidePermission({
+      tool: tool(), args: { query: 'x' }, mode: 'ask', planMode: false, scope, hasApprover: true,
+      rules: parsePermissionRules([]), command: undefined,
+    } as unknown as Parameters<typeof decidePermission>[0]).decision).toBe('ask');
   });
 
   it('with no keys, searches DuckDuckGo and prints a compact numbered list', async () => {
