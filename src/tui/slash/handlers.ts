@@ -16,7 +16,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { stdin as input } from 'node:process';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
-import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
+import { localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { nativeModelCatalogForPicker, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
@@ -30,12 +30,12 @@ import { SELECTION_MODE, setSelectionMode } from '../modes.js';
 import { TERMINAL } from '../active-terminal.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../session/attachments.js';
-import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, setSessionHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
+import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, sessionPermissionModes, setSessionHarnessOption } from '../../session/options.js';
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey } from './registry.js';
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { impliedHarnessCommand } from './infer-provider.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
@@ -106,16 +106,19 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     return created.id;
   },
   permissions: async ({ state, session, words }) => {
-    if (session.route === 'gateway') throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy; Ask, Bypass, and Auto apply only to local harnesses.');
     const value = words.shift()?.toLowerCase();
-    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-    if (!harness) throw new Error('Choose a provider before setting permissions.');
+    const gateway = session.route === 'gateway';
+    const harness = !gateway && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+    if (!gateway && !harness) throw new Error('Choose a provider before setting permissions.');
+    const controls = sessionPermissionModes(session, harness);
     if (!value) {
-      const controls = VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode));
-      if (!controls.length) throw new Error(`${harness.displayName} does not map ClikCode's permission modes to a real flag.`);
+      if (!controls.length) throw new Error(`${harness!.displayName} does not map ClikCode's permission modes to a real flag.`);
       return emitHarnessOutput({ panel: 'permissions', session, controls });
     }
-    setSessionHarnessOption(session, harness, 'permissions', value);
+    if (gateway) {
+      if (!controls.includes(value as AiHarnessPermissionMode)) throw new Error('permissions must be ask, bypass, or auto');
+      session.permissionMode = value as AiHarnessPermissionMode;
+    } else setSessionHarnessOption(session, harness!, 'permissions', value);
     // Same as /model: the reported mode described the previous request.
     if (session.reported?.permissionMode) delete session.reported.permissionMode;
     session.updatedAt = new Date().toISOString();

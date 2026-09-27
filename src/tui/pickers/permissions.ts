@@ -3,12 +3,12 @@
 
 import type { AiHarnessPermissionMode } from '../../harness/definition.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
-import { harnessSupportsPermissionMode, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { TERMINAL } from '../active-terminal.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { terminalUiSupported } from '../capabilities.js';
-import { VALID_PERMISSION_MODES } from '../../session/options.js';
+import { sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { aiSettingsSetGlobal } from '../../commands/ai/settings.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
@@ -55,15 +55,14 @@ export async function interactivePermissionPicker(rl: HarnessPrompter, id: strin
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (session.route === 'gateway') throw new Error('ClikDeploy Gateway permissions are enforced by authenticated platform policy.');
-  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  const harness = session.route !== 'gateway' && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   const current = session.permissionMode ?? 'ask';
   const descriptions: Record<AiHarnessPermissionMode, string> = {
     ask: 'require approval; unanswered headless prompts are denied',
     bypass: 'run without approval prompts',
     auto: 'provider reviews approval requests automatically',
   };
-  const supported = harness ? VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode)) : VALID_PERMISSION_MODES;
+  const supported = harness || session.route === 'gateway' ? sessionPermissionModes(session, harness) : VALID_PERMISSION_MODES;
   if (!supported.length) throw new Error(`${harness?.displayName ?? 'This provider'} does not map ClikCode's permission modes to a real flag.`);
   const selected = await chooseOption(rl, 'Choose permissions', supported.map((value) => ({
     label: value[0].toUpperCase() + value.slice(1), detail: `· ${descriptions[value]}${value === current ? ' · current' : ''}`, value,

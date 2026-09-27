@@ -26,6 +26,18 @@ import { harnessCanLogout } from '../harness/accounts/auth-files.js';
 export const VALID_EFFORTS = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['ask', 'bypass', 'auto'];
 
+/** The approval modes a conversation can be set to. On the Gateway route the
+ * agent is ClikCode's own, running on this machine, and it implements all
+ * three -- the Gateway supplies the model, never the decision about what may
+ * touch the user's files. A local harness offers the ones it carries to a real
+ * flag. */
+export function sessionPermissionModes(
+  session: Pick<HarnessSession, 'route'>, harness: AiLocalHarnessDefinition | undefined,
+): readonly AiHarnessPermissionMode[] {
+  if (session.route === 'gateway') return VALID_PERMISSION_MODES;
+  return harness ? VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode)) : [];
+}
+
 type ProviderChoice =
   | { kind: 'gateway' }
   | { kind: 'provider'; harness: string };

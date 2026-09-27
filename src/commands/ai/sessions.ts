@@ -9,7 +9,7 @@ import { emitResult } from '../../cli/structured-output.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
-import { harnessSupportsPermissionMode, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { sessionIsLive } from '../../session/liveness.js';
 import { pruneSessionClaims } from '../../session/claims.js';
 import { readWorkerRecord } from '../../worker/registry.js';
@@ -19,7 +19,7 @@ import { writeState } from '../../session/state/write.js';
 import { setEmitHarnessOutput } from '../account.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
-import { normalizeModelWord, optionForHarness, parseHarnessOption, VALID_PERMISSION_MODES } from '../../session/options.js';
+import { normalizeModelWord, optionForHarness, parseHarnessOption, sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession } from './conversations.js';
 
@@ -137,7 +137,9 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     provider: options.route === 'gateway' ? 'gateway' : provider,
     model: options.route === 'gateway' ? null : model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
     effort: options.route === 'gateway' ? 'platform-managed' : options.effort ?? defaults.effort,
-    ...(options.route === 'local' ? { permissionMode: defaults.permissionMode } : {}),
+    // Both routes: on the Gateway route the agent is ClikCode's own, running
+    // here, and it honours the same approval setting.
+    permissionMode: defaults.permissionMode,
     accountFailover: options.route === 'gateway' ? 'never' : options.accountFailover ?? defaults.accountFailover,
     ...(options.route === 'gateway' ? { gatewayConfirmed: true as const } : {}),
     createdAt: now, updatedAt: now, status: 'active',
@@ -337,7 +339,8 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     const choices = (await effortChoicesFor(selectedHarness, effortAccount, model ?? current.model)).values;
     parseHarnessOption(choices.length ? { ...effortOption, values: choices } : effortOption, options.effort);
   }
-  if (options.permissions && (!selectedHarness || !harnessSupportsPermissionMode(selectedHarness, options.permissions))) {
+  const gatewayAfter = (options.route ?? current.route) === 'gateway';
+  if (options.permissions && !sessionPermissionModes({ route: gatewayAfter ? 'gateway' : 'local' }, selectedHarness).includes(options.permissions)) {
     if (!selectedHarness) throw new Error('Choose a provider before setting permissions.');
     throw new Error(`${selectedHarness.displayName} does not support ${options.permissions} permissions.`);
   }
