@@ -5,6 +5,7 @@ import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { emitResult } from '../../cli/structured-output.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
+import { CLIKCODE_USER_AGENT } from '../../version.js';
 
 export async function aiModelsList(): Promise<void> {
   const state = await readState();
@@ -48,4 +49,25 @@ export async function aiGatewayStatus(config: Conf): Promise<void> {
       hint: `Run \`${harnessCommand()} gateway login\` to connect ClikDeploy Gateway, or use \`${harnessCommand()} accounts add\` for a provider login that stays local.`,
     }),
   });
+}
+
+/** The signed-in account's AI use as ClikDeploy Gateway records it: every
+ * surface, not only ClikCode, with the credit that gates the next call (or
+ * `unlimited`). The Gateway owns the ledger; this only reads it. */
+export async function aiGatewayUsage(config: Conf, options: { days?: string } = {}, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const apiUrl = getApiUrl(config);
+  const apiKey = getApiKeyForUrl(config, apiUrl);
+  if (!apiKey) throw new Error(`Not signed in to ClikDeploy Gateway. Run \`${harnessCommand()} gateway login\`.`);
+  const days = options.days === undefined ? undefined : Number(options.days);
+  if (days !== undefined && (!Number.isInteger(days) || days < 1 || days > 90)) throw new Error('--days must be a whole number from 1 to 90');
+  const url = new URL('/api/clikcode/v1/usage', apiUrl);
+  if (days !== undefined) url.searchParams.set('days', String(days));
+  const response = await fetchImpl(url, { headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT } });
+  const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown; code?: unknown } | undefined;
+  if (!response.ok || !body?.data) {
+    // A Gateway that predates the endpoint answers 404.
+    const reason = typeof body?.error === 'string' ? body.error : response.status === 404 ? 'this Gateway does not report usage yet' : `HTTP ${response.status}`;
+    throw Object.assign(new Error(`ClikDeploy Gateway usage: ${reason}`), { statusCode: response.status });
+  }
+  emitResult({ apiUrl, ...(body.data as Record<string, unknown>) });
 }
