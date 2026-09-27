@@ -599,3 +599,18 @@ describe('replies that are really a failed call', () => {
   });
 });
 
+describe('an ACP launch', () => {
+  it('gives a separate ACP program only its own flags (vibe-acp refuses the CLI\'s)', () => {
+    const vibe = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'vibe')!;
+    // Verified: `vibe-acp --auto-approve` exits 2, "unrecognized arguments".
+    expect(harnessAcpLaunch(vibe, { model: 'mistral-medium-3.5', effort: 'high', permissionMode: 'bypass' }))
+      .toMatchObject({ binary: 'vibe-acp', argv: [], optionArgv: [] });
+  });
+
+  it('still carries the CLI flags when ACP is the same program', () => {
+    const droid = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'droid')!;
+    expect(harnessAcpLaunch(droid, { effort: 'high', permissionMode: 'bypass' })!.optionArgv)
+      .toEqual(['--reasoning-effort', 'high', '--skip-permissions-unsafe']);
+  });
+});
+
