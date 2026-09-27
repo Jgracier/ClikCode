@@ -56,6 +56,8 @@ interface SystemPromptInput {
   /** Directory holding the user-level AGENTS.md. */
   userConfigDir: string;
   planMode?: boolean;
+  /** Rendered "# Skills" section (skills.ts); empty or absent adds nothing. */
+  skillsSection?: string;
   now?: Date;
   /** Injected for tests; defaults to a real `git` spawn with a 2s timeout. */
   git?: (args: readonly string[], cwd: string) => Promise<string | undefined>;
@@ -135,6 +137,8 @@ export async function buildSystemPrompt(input: SystemPromptInput): Promise<strin
       ...memory.map((entry) => `<instructions file="${entry.file}">\n${entry.text.trim()}\n</instructions>`),
     ].join('\n\n'));
   }
+  // After memory, before the volatile environment: skills change rarely.
+  if (input.skillsSection) sections.push(input.skillsSection);
   const environment = [
     '# Environment',
     `Working directory: ${input.cwd}`,
