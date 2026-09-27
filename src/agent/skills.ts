@@ -86,7 +86,7 @@ export function parseFrontmatter(text: string): ParsedFrontmatter {
     return { error: 'frontmatter is not a key/value mapping' };
   } catch (error) {
     const fields = looseFields(match[1]);
-    if (typeof fields.name === 'string' || typeof fields.description === 'string') return { fields, body };
+    if (typeof fields.description === 'string') return { fields, body };
     return { error: `invalid YAML frontmatter: ${(error instanceof Error ? error.message : String(error)).split('\n')[0]}` };
   }
 }
