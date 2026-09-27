@@ -11,6 +11,7 @@
  * seam: it turns a ClikCode session into a GatewayHarnessTurnInput, and turns
  * the loop's callbacks back into the prompter's own transcript rows.
  */
+import type { McpServerSpec } from '../agent/mcp/config.js';
 import { stdout as output } from 'node:process';
 import { ModelClientError } from '../agent/models/gateway-client.js';
 import { runGatewayHarnessTurn } from '../agent/run-turn.js';
@@ -40,6 +41,8 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   /** Applied to each streamed delta before anyone sees it (drive passes the
    * title filter); undefined or '' holds it back. */
   responseFilter?: (text: string, mode: 'append' | 'replace') => string | undefined;
+  /** Servers the route brings beside the user's own (the Gateway's ClikDeploy server). */
+  mcpServers?: readonly McpServerSpec[];
   signal?: AbortSignal;
   images?: readonly string[];
   /** Whatever supplies the model step: the Gateway or ClikCode Local, as
@@ -62,7 +65,7 @@ export async function runGatewayHarnessSessionTurn(
   const stateDir = stateDirectory();
   // The user's MCP servers, the same ones `clikcode mcp add` gave every
   // harness. One that is down is named here rather than silently missing.
-  const mcp = await mcpToolsForTurn(stateDir, input.signal);
+  const mcp = await mcpToolsForTurn(stateDir, input.signal, input.mcpServers ?? []);
   for (const note of mcp.notes) prompter?.activity(note);
   return runGatewayHarnessTurn({
     sessionId: session.id,

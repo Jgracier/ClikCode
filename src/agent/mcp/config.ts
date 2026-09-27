@@ -18,9 +18,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-export type McpServerSpec =
+export type McpServerSpec = (
   | { name: string; transport: 'stdio'; command: string; args: readonly string[]; env: Readonly<Record<string, string>> }
-  | { name: string; transport: 'http' | 'sse'; url: string; headers: Readonly<Record<string, string>> };
+  | { name: string; transport: 'http' | 'sse'; url: string; headers: Readonly<Record<string, string>> }
+) & {
+  /** Tools of this server always offered with their schemas, never deferred
+   * behind the loader -- a built-in server's everyday set (the rest are found
+   * with its search). Absent: every tool follows the deferral rule. */
+  core?: readonly string[];
+};
 
 export const MCP_SERVERS_KEY = 'mcpServers';
 

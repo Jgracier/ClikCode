@@ -89,7 +89,8 @@ export interface ToolExposure {
  * only on the tool set and the session's budget, so it is the same on every
  * turn with the same servers. */
 export function exposeTools(tools: readonly ToolDefinition[], eagerSchemaTokens = DEFER_MCP_SCHEMA_TOKENS): ToolExposure {
-  const mcp = tools.filter((tool) => tool.mcp);
+  // A server's core tools are always offered; only the rest may be deferred.
+  const mcp = tools.filter((tool) => tool.mcp && !tool.mcp.core);
   if (!mcp.length || schemaTokens(mcp) <= eagerSchemaTokens || tools.some((tool) => tool.name === LOAD_MCP_TOOLS)) {
     return { all: [...tools], advertised: () => [...tools] };
   }

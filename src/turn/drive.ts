@@ -7,6 +7,7 @@
  * What differs is only where the reply comes from -- a local harness over one
  * of four transports, or the gateway.
  */
+import { routeMcpServers } from '../gateway/mcp.js';
 import { createStreamState } from '../harness/events/adapters.js';
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
@@ -1056,6 +1057,8 @@ export async function aiGatewaySessionSend(
   try {
     const harnessTurn = await runGatewayHarnessSessionTurn({
       session, prompt: turnText, modelClient,
+      // ClikDeploy's own account tools come with the Gateway.
+      mcpServers: routeMcpServers(session, config),
       ...(prompter ? { prompter } : {}),
       ...(titleStream ? { responseFilter: (delta: string, mode: 'append' | 'replace') => titleStream?.push(delta, mode) } : {}),
       // Each model step may open with the title again (the request rides in

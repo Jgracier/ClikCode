@@ -105,7 +105,7 @@ export class McpManager {
       for (const info of state.tools) {
         const name = mcpToolName(state.spec.name, info.name, taken);
         taken.add(name);
-        tools.push(mcpToolDefinition(state.spec.name, info, name, (tool, args, signal) => this.call(state, tool, args, signal)));
+        tools.push(mcpToolDefinition(state.spec.name, info, name, (tool, args, signal) => this.call(state, tool, args, signal), state.spec.core?.includes(info.name) ?? false));
       }
     }
     return { tools, notes };
@@ -215,14 +215,27 @@ export class McpManager {
 
 let shared: { stateDir: string; manager: McpManager } | undefined;
 let imports: Promise<string | undefined> | undefined;
+/** Servers the route brings with it (the Gateway's own ClikDeploy server),
+ * beside the user's mcp.json. The latest caller's list: the config is re-read
+ * every turn, so a route change adds or stops them like an edited file. */
+let builtinServers: readonly McpServerSpec[] = [];
+
+/** The user's servers and the route's built-ins; a server the user configured
+ * under the same name wins. */
+async function loadAllServers(stateDir: string): Promise<{ servers: McpServerSpec[]; problem?: string }> {
+  const loaded = await loadMcpServers(stateDir);
+  const names = new Set(loaded.servers.map((server) => server.name));
+  return { ...loaded, servers: [...loaded.servers, ...builtinServers.filter((server) => !names.has(server.name))] };
+}
 
 /** The process-wide manager for one state directory: what a turn builder
  * (the gateway route today, the local route next) calls for its extraTools.
  *
  * Under vitest with no CLIKCODE_HOME the answer is always empty, so a test
  * of the turn wiring never starts the developer's real servers. */
-export async function mcpToolsForTurn(stateDir: string, signal?: AbortSignal): Promise<McpToolset> {
+export async function mcpToolsForTurn(stateDir: string, signal?: AbortSignal, builtins: readonly McpServerSpec[] = []): Promise<McpToolset> {
   if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return { tools: [], notes: [] };
+  builtinServers = builtins;
   if (!signal) return sharedToolset(stateDir);
   // A cancel while a slow server is still starting ends the wait at once;
   // the start carries on in the background and serves the next turn.
@@ -237,7 +250,7 @@ export async function mcpToolsForTurn(stateDir: string, signal?: AbortSignal): P
 async function sharedToolset(stateDir: string): Promise<McpToolset> {
   if (shared?.stateDir !== stateDir) {
     await shared?.manager.shutdown();
-    shared = { stateDir, manager: new McpManager(() => loadMcpServers(stateDir)) };
+    shared = { stateDir, manager: new McpManager(() => loadAllServers(stateDir)) };
     imports = undefined;
   }
   // Before the first load, once per process and state directory: the servers
@@ -260,8 +273,9 @@ async function sharedToolset(stateDir: string): Promise<McpToolset> {
  * a conversation that has just chosen an agent route will want them, and
  * `npx -y` servers take seconds. Never throws; a server that will not start
  * is reported by the turn that wanted it, as before. */
-export function prepareMcp(stateDir: string): void {
+export function prepareMcp(stateDir: string, builtins: readonly McpServerSpec[] = []): void {
   if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return;
+  builtinServers = builtins;
   void sharedToolset(stateDir).catch(() => undefined);
 }
 
@@ -269,6 +283,7 @@ export function prepareMcp(stateDir: string): void {
  * route, or nobody is attached to it any more. The next turn that wants
  * tools starts them again. */
 export async function releaseMcp(): Promise<void> {
+  builtinServers = [];
   const current = shared;
   shared = undefined;
   imports = undefined;
