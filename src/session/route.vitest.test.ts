@@ -61,8 +61,9 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
       expect(availability.available, `/${name} offered on ClikCode Local`).toBe(false);
       expect(availability.reason).toContain('ClikCode Local');
     }
-    // The Gateway's reasons are unchanged.
-    expect(resolveSlashCommand('model')!.availability(gateway(), undefined).reason).toContain('ClikDeploy Gateway');
+    // The Gateway's reasons are unchanged; its model is the user's to choose.
+    expect(resolveSlashCommand('effort')!.availability(gateway(), undefined).reason).toContain('ClikDeploy Gateway');
+    expect(resolveSlashCommand('model')!.availability(gateway(), undefined).available).toBe(true);
     for (const name of ['permissions', 'add-dir', 'init', 'review']) {
       expect(resolveSlashCommand(name)!.availability(local(), undefined).available, `/${name} refused on ClikCode Local`).toBe(true);
     }

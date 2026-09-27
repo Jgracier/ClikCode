@@ -2,6 +2,8 @@
 
 import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
+import { isGatewayService } from '../../session/route.js';
+import { gatewayModelDetail, gatewayModels } from '../../gateway/models.js';
 import { localHarnessForCommand, localHarnessForProvider, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
@@ -41,6 +43,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  if (isGatewayService(session)) return gatewayModelPicker(rl, id, session.model ?? null);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
     : session.provider ? localHarnessForProvider(session.provider) : undefined;
@@ -117,3 +120,25 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   // genuinely benefit from a scope choice.
   if (value) await aiSessionCommand(id, typed !== undefined ? `/model --any ${value}` : `/model ${value}`);
 }
+
+/** A Gateway conversation's picker: the Gateway's own list for this account,
+ * cheapest access first, with "Automatic" to hand the choice back. Whichever
+ * model is chosen, the Gateway serves it from its cheapest provider --
+ * subscription, then free, then paid -- and never swaps in another. */
+async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: string | null): Promise<void> {
+  const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
+  waiting?.startWaiting('finding ClikDeploy Gateway models…');
+  let list: Awaited<ReturnType<typeof gatewayModels>>;
+  try { list = await gatewayModels(); } finally { waiting?.stopWaiting(); }
+  const options: PickerOption<string>[] = [
+    { label: 'Automatic', detail: `· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}${current ? '' : ' · current'}`, value: 'auto' },
+    ...list.models.map((model) => ({
+      label: model.id,
+      detail: `· ${gatewayModelDetail(model)}${model.id === current ? ' · current' : ''}`,
+      value: model.id,
+    })),
+  ];
+  const selected = await chooseOption(rl, 'Choose a ClikDeploy Gateway model', options);
+  if (selected) await aiSessionCommand(id, `/model ${selected}`);
+}
+

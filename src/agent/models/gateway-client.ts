@@ -12,6 +12,8 @@ interface GatewayModelClientOptions {
   maxOutputTokens?: number;
   effort?: string;
   task?: string;
+  /** A model the user chose from the Gateway's list; absent, the Gateway picks. */
+  model?: string;
 }
 
 export class ModelClientError extends Error {
@@ -148,7 +150,11 @@ export class GatewayModelClient implements ModelClient {
           system: request.system,
           items: withoutImages(request.items),
           tools: request.tools,
-          hints: { task: options.task ?? 'code', effort: options.effort ?? 'auto', ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}) },
+          hints: {
+            task: options.task ?? 'code', effort: options.effort ?? 'auto',
+            ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}),
+            ...(options.model ? { model: options.model } : {}),
+          },
           client: { name: 'clikcode', version: options.version },
         }),
         ...(request.signal ? { signal: request.signal } : {}),

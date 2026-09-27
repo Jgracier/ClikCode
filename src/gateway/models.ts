@@ -1,0 +1,71 @@
+/** The models ClikDeploy Gateway offers this account, for choosing one.
+ *
+ * The Gateway owns the list: one entry per model across the providers it has
+ * connected, each with the cheapest access it can serve it through right now
+ * (subscription, then free, then paid). Choosing one stores its id on the
+ * session and sends it with every step; the Gateway then serves that model
+ * from its cheapest provider and never swaps in a different one. No choice
+ * (`null`) leaves the pick to the Gateway. */
+
+import Conf from 'conf';
+import { gatewayConnection } from '../agent/models/for-session.js';
+import { CLIKCODE_USER_AGENT } from '../version.js';
+
+export type GatewayModelAccess = 'subscription' | 'free-tier' | 'metered';
+
+export interface GatewayModel {
+  id: string;
+  access: GatewayModelAccess;
+  providers: { provider: string; access: GatewayModelAccess }[];
+  contextWindow?: number;
+  vision?: boolean;
+}
+
+export interface GatewayModelList {
+  /** What the Gateway picks when nothing is chosen. */
+  automatic: string | null;
+  models: GatewayModel[];
+}
+
+/** How the access tier reads beside a model. */
+export function gatewayAccessLabel(access: GatewayModelAccess): string {
+  return access === 'subscription' ? 'subscription' : access === 'free-tier' ? 'free' : 'paid';
+}
+
+/** One row's detail: the access it will run on first, and through whom. */
+export function gatewayModelDetail(model: GatewayModel): string {
+  const first = model.providers.find((item) => item.access === model.access)?.provider ?? model.providers[0]?.provider;
+  const also = model.providers.length > 1 ? ` (+${model.providers.length - 1} more)` : '';
+  return `${gatewayAccessLabel(model.access)}${first ? ` · ${first}${also}` : ''}`;
+}
+
+const TTL_MS = 60_000;
+let cached: { baseUrl: string; at: number; list: GatewayModelList } | undefined;
+
+/** Words that mean "let the Gateway choose" rather than a model id. */
+export function isAutomaticModelWord(value: string): boolean {
+  return /^(auto|automatic|default|gateway)$/i.test(value.trim());
+}
+
+export async function gatewayModels(
+  options: { config?: Conf; fetchImpl?: typeof fetch; fresh?: boolean } = {},
+): Promise<GatewayModelList> {
+  const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
+  if (!options.fresh && cached && cached.baseUrl === baseUrl && Date.now() - cached.at < TTL_MS) return cached.list;
+  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/api/clikcode/v1/models`, {
+    headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
+  });
+  const body = await response.json().catch(() => undefined) as { data?: GatewayModelList; error?: unknown } | undefined;
+  if (!response.ok || !body?.data || !Array.isArray(body.data.models)) {
+    // A Gateway that predates model choice answers 404.
+    const reason = typeof body?.error === 'string' ? body.error : response.status === 404 ? 'this Gateway does not offer a model choice yet' : `HTTP ${response.status}`;
+    throw Object.assign(new Error(`ClikDeploy Gateway models: ${reason}`), { statusCode: response.status });
+  }
+  cached = { baseUrl, at: Date.now(), list: body.data };
+  return body.data;
+}
+
+/** Test seam. */
+export function resetGatewayModelCache(): void {
+  cached = undefined;
+}

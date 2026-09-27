@@ -32,7 +32,12 @@ export function gatewayConnection(config: Conf): { baseUrl: string; apiKey: stri
 export async function modelClientForSession(session: HarnessSession, config: Conf): Promise<ModelClient> {
   if (session.route === 'gateway') {
     const { baseUrl, apiKey } = gatewayConnection(config);
-    return new GatewayModelClient({ baseUrl, apiKey, version: CLIKCODE_VERSION, sessionId: session.id });
+    return new GatewayModelClient({
+      baseUrl, apiKey, version: CLIKCODE_VERSION, sessionId: session.id,
+      // The model the user chose from the Gateway's list, served from its
+      // cheapest provider; none, and the Gateway picks.
+      ...(session.model ? { model: session.model } : {}),
+    });
   }
   if (session.route === 'clikcode-local') {
     // The seam the local-model engine fills: it will resolve the session's
