@@ -106,6 +106,9 @@ export async function runTurnThroughWorker(
         switch (event.type) {
           case 'snapshot':
             rl.render(event.session, event.account);
+            // The worker was already running this turn (a queued message it
+            // started first): what has streamed so far.
+            if (event.live?.text) rl.response(event.live.text, 'replace');
             return;
           case 'delta':
             rl.response(event.text, event.mode);
@@ -174,6 +177,14 @@ export async function runTurnThroughWorker(
             return;
           case 'shutdown':
             finish(() => rejectTurn(new Error(`session worker exited mid-turn: ${event.reason}`)));
+            return;
+          case 'submit-queued':
+            // Another turn was already running; this message waits behind it
+            // and the loop sends it when its turn comes.
+            notice = 'Queued behind the turn already running';
+            finish(() => resolveTurn());
+            return;
+          case 'queue-changed':
             return;
           case 'waiting-start':
             // Already reflected: the caller calls rl.startWaiting() itself,
