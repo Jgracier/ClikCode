@@ -14,6 +14,7 @@
 import { stdout as output } from 'node:process';
 import { GatewayModelClient, ModelClientError } from '../agent/models/gateway-client.js';
 import { runGatewayHarnessTurn } from '../agent/run-turn.js';
+import { mcpToolsForTurn } from '../agent/mcp/manager.js';
 import type { GatewayHarnessTurnResult } from '../agent/model-client.js';
 import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
@@ -58,13 +59,19 @@ export async function runGatewayHarnessSessionTurn(
   // decision about the user's own filesystem. It stays local, and `ask` is
   // the setting that prompts rather than the one that assumes.
   const permissionMode: AiHarnessPermissionMode = session.permissionMode ?? 'ask';
+  const stateDir = stateDirectory();
+  // The user's MCP servers, the same ones `clikcode mcp add` gave every
+  // harness. One that is down is named here rather than silently missing.
+  const mcp = await mcpToolsForTurn(stateDir, input.signal);
+  for (const note of mcp.notes) prompter?.activity(note);
   return runGatewayHarnessTurn({
     sessionId: session.id,
     cwd: session.workspace ?? process.cwd(),
     prompt: input.prompt,
     permissionMode,
     modelClient,
-    stateDir: stateDirectory(),
+    stateDir,
+    ...(mcp.tools.length ? { extraTools: mcp.tools } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.images?.length ? { images: input.images } : {}),
     onResponseDelta: (text, mode) => {
