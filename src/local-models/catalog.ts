@@ -206,3 +206,20 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
 export function catalogModel(id: string): CatalogModel | undefined {
   return LOCAL_MODEL_CATALOG.find((model) => model.id === id);
 }
+
+/** How a session's local model is named on screen: the catalog label, or
+ * nothing when the session has not settled on one (the engine picks on the
+ * first turn) -- never a placeholder like "auto" standing in for a model. */
+export function localModelLabel(id: string | null | undefined): string | undefined {
+  return id ? catalogModel(id)?.label ?? id : undefined;
+}
+
+/** A model a user typed, as a catalog id: the id itself or its label, in
+ * any case. Anything else is refused with the ids there are, before a
+ * session stores a name the engine would reject on its next turn. */
+export function resolveLocalModelId(typed: string): string {
+  const wanted = typed.trim().toLowerCase();
+  const model = LOCAL_MODEL_CATALOG.find((item) => item.id.toLowerCase() === wanted || item.label.toLowerCase() === wanted);
+  if (!model) throw new Error(`"${typed.trim()}" is not a ClikCode Local model. Choose one of: ${LOCAL_MODEL_CATALOG.map((item) => item.id).join(', ')}`);
+  return model.id;
+}
