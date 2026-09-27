@@ -32,6 +32,12 @@ interface NativeTurnIdleController {
   toolFinished(id?: string): void;
   /** Number of tools believed to be running right now. */
   readonly runningTools: number;
+  /** The vendor wrote its end-of-turn record. A successful one means the
+   * answer is complete: silence after it is the process lingering, not a
+   * hang, and running out the idle budget then ends the turn normally. */
+  noteResult(outcome: 'success' | 'error'): void;
+  /** A successful end-of-turn record has been seen and not since superseded. */
+  readonly succeeded: boolean;
 }
 
 interface BoundIdleController extends NativeTurnIdleController {
@@ -41,9 +47,12 @@ interface BoundIdleController extends NativeTurnIdleController {
 export function createTurnIdleController(): NativeTurnIdleController {
   const running = new Set<string>();
   let anonymous = 0;
+  let succeeded = false;
   let listener: (() => void) | undefined;
   const controller: BoundIdleController = {
     noteActivity: () => listener?.(),
+    noteResult: (outcome) => { succeeded = outcome === 'success'; listener?.(); },
+    get succeeded() { return succeeded; },
     toolStarted: (id) => {
       if (id) running.add(id);
       else anonymous += 1;
@@ -306,6 +315,12 @@ export async function captureNativeHarnessTurn(
       const exit = { ...(code !== null ? { exitCode: code } : {}), ...(signal ? { signalName: signal } : {}) };
       if (exceededLimit) {
         return reject(new NativeHarnessTurnError(`${spec.displayName} turn output exceeded 16 MiB`, { ...tails(), ...exit, reason: 'output-limit' }));
+      }
+      // The answer already arrived: a vendor that holds its process open
+        // silently after a successful `result` has finished the turn, and
+        // stopping it for that is not a failure to report.
+      if (timedOut && controller?.succeeded) {
+        return resolve({ stdout, stderr, exitCode: 0, ...(truncated ? { truncated: true } : {}) });
       }
       if (timedOut) {
         return reject(new NativeHarnessTurnError(

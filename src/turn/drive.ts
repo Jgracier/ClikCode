@@ -414,6 +414,7 @@ export async function aiSessionSend(
             }, stream);
             if (outcome.live) confirmNativeSession();
             if (outcome.error) streamError = outcome.error;
+            if (outcome.result) idle.noteResult(outcome.result);
             // The harness reports its own quota on this stream. Reading it here
             // costs nothing and refreshes on every turn, which is what keeps the
             // shared OAuth usage endpoint -- a per-account budget several open

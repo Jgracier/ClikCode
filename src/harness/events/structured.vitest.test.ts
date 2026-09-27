@@ -51,4 +51,15 @@ describe('a structured CLI line', () => {
       expect(source, `the line reporter reaches for ${forbidden}`).not.toContain(forbidden);
     }
   });
+
+  it('says when the vendor closed its turn, and how', () => {
+    const { observer } = record();
+    // Captured from claude 2.1.281, Amp and Antigravity (trimmed).
+    expect(reportStructuredLine(harness, '{"type":"result","subtype":"success","is_error":false,"result":"started"}', observer).result).toBe('success');
+    expect(reportStructuredLine(harness, '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["402"]}', observer).result).toBe('error');
+    const agy = { command: 'antigravity', parser: 'antigravity' } as unknown as AiLocalHarnessDefinition;
+    expect(reportStructuredLine(agy, '{"event":"result","result":{"status":"SUCCESS","response":"started"}}', observer).result).toBe('success');
+    expect(reportStructuredLine(agy, '{"event":"result","result":{"status":"ERROR","error":"API error"}}', observer).result).toBe('error');
+    expect(reportStructuredLine(harness, '{"type":"assistant","message":{"content":[]}}', observer).result).toBeUndefined();
+  });
 });
