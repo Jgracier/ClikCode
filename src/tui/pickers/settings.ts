@@ -14,10 +14,10 @@ import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
-import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
-import { VALID_PERMISSION_MODES } from '../../session/options.js';
+import { sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { readState } from '../../session/state/read.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
@@ -57,8 +57,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
     const efforts = harness && harnessSupportsEffort(harness) ? (await effortChoicesFor(harness, account, session.model)).values : [];
-    const permissions = harness && session.route !== 'gateway'
-      ? VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode)) : [];
+    const permissions = sessionPermissionModes(session, session.route === 'gateway' ? undefined : harness);
     const failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';
     const inline = (choices: readonly { label: string; value: string }[], current: string, apply: (value: string) => Promise<void>) => (
       choices.length >= 2 && choices.length <= INLINE_MAX_CHOICES ? { inline: { choices, current, apply } } : {}
