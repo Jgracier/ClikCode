@@ -57,9 +57,12 @@ export function runtimeOverheadBytes(weightBytes: number): number {
   return 0.75 * GIB + weightBytes * 0.02;
 }
 
-/** The KV cache type: f16 when at least 16 GiB of budget stays free
- * beyond the weights (it cost 4.7 GB more than q4_0 at 64K for a 35B-A3B),
- * else q8_0, which costs about half as much and reads nearly as fast. */
+/** The KV cache type on a GPU: f16 when at least 16 GiB of budget stays
+ * free beyond the weights (it cost 4.7 GB more than q4_0 at 64K for a
+ * 35B-A3B), else q8_0, which costs about half as much. Not for the CPU:
+ * there q8_0 read prompts 4.5x slower 16K deep (Qwen3.5 4B 65.3 -> 14.5
+ * tokens/s, gpt-oss 46.9 -> 14.4, 8-core Zen 4), so the CPU fit takes f16
+ * at any context before q8_0 at all (fitModel). */
 export function chooseCacheType(budgetBytes: number, weightBytes: number): CacheType {
   return budgetBytes - weightBytes >= 16 * GIB ? 'f16' : 'q8_0';
 }
@@ -179,7 +182,10 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
   const extra = (context: number): boolean => !options.context && context > model.defaultContext;
   const allowance = (context: number): number => (extra(context) ? PROMPT_CACHE_ALLOWANCE : 0);
   let smallest: Fit | undefined;
-  for (const context of contextsToTry(model, options.context)) {
+  // On the CPU, f16 at a smaller context beats q8_0 at a larger one; q8_0
+  // only when f16 fits nowhere (chooseCacheType).
+  const cpuCacheTypes: CacheType[] = ['f16', 'q8_0'];
+  for (const cpuCacheType of cpuCacheTypes) for (const context of contextsToTry(model, options.context)) {
     const gpu = budget.gpu;
     if (gpu?.unified) {
       // Apple Silicon: the GPU works from RAM, so its budget is the only one.
@@ -206,7 +212,7 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
         return { fits: true, placement: 'gpu-partial', context, cacheType, weightBytes, needBytes, gpuBytes: gpu.bytes, parallel };
       }
     }
-    const cacheType = chooseCacheType(budget.ramBytes, weightBytes);
+    const cacheType = cpuCacheType;
     const measured = measuredNeed(model, options.footprints, context, cacheType, parallel, vision);
     const needBytes = measured ?? weightBytes + kvCacheBytes(model.kv, context, cacheType, parallel) + overhead;
     const fit: Fit = {

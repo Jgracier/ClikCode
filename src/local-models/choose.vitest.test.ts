@@ -183,7 +183,7 @@ describe('KV cache', () => {
 describe('fit', () => {
   it('fits Ornith on the Zen 4 on the CPU, by the estimate before it has run', () => {
     const fit = fitModel(model('ornith-1.5-35b-a3b'), memoryBudget(ZEN4));
-    expect(fit).toMatchObject({ fits: true, placement: 'cpu', cacheType: 'q8_0' });
+    expect(fit).toMatchObject({ fits: true, placement: 'cpu', cacheType: 'f16' });
     expect(fit.measured).toBeUndefined();
     expect(fit.context).toBeGreaterThanOrEqual(65_536);
   });
@@ -206,14 +206,22 @@ describe('fit', () => {
 
   it('uses spare memory for a longer context, leaving the prompt cache its room past the default', () => {
     const qwen = model('qwen3.5-4b');
-    // A budget this size gets a q8_0 cache (under 16 GiB beyond the weights).
-    const at256k = fitModel(qwen, { ramBytes: 10 * GIB, bufferBytes: 0, ramReserveBytes: 0 }, { context: 262_144 });
-    expect(at256k.cacheType).toBe('q8_0');
+    const at256k = fitModel(qwen, { ramBytes: 1e12, bufferBytes: 0, ramReserveBytes: 0 }, { context: 262_144 });
+    expect(at256k.cacheType).toBe('f16');
     const roomy = fitModel(qwen, { ramBytes: at256k.needBytes + PROMPT_CACHE_ALLOWANCE, bufferBytes: 0, ramReserveBytes: 0 });
-    expect(roomy.context).toBe(262_144);
+    expect(roomy).toMatchObject({ context: 262_144, cacheType: 'f16' });
     // Without the prompt cache's room the maximum is given up for the next step down.
     const short = fitModel(qwen, { ramBytes: at256k.needBytes + PROMPT_CACHE_ALLOWANCE - 1, bufferBytes: 0, ramReserveBytes: 0 });
-    expect(short.context).toBe(131_072);
+    expect(short).toMatchObject({ context: 131_072, cacheType: 'f16' });
+  });
+
+  it('takes an f16 cache at a shorter context over q8_0 at a longer one on the CPU, and q8_0 only when f16 fits nowhere', () => {
+    const qwen = model('qwen3.5-4b');
+    // 10 GiB would hold q8_0 at 256K; f16 at a shorter context is taken instead.
+    expect(fitModel(qwen, { ramBytes: 10 * GIB, bufferBytes: 0, ramReserveBytes: 0 })).toMatchObject({ fits: true, cacheType: 'f16' });
+    const f16Min = fitModel(qwen, { ramBytes: 1e12, bufferBytes: 0, ramReserveBytes: 0 }, { context: MIN_CONTEXT });
+    const tooSmallForF16 = fitModel(qwen, { ramBytes: f16Min.needBytes - 1, bufferBytes: 0, ramReserveBytes: 0 }, { context: MIN_CONTEXT });
+    expect(tooSmallForF16).toMatchObject({ fits: true, cacheType: 'q8_0', context: MIN_CONTEXT });
   });
 
   it('says why a model does not fit', () => {
