@@ -143,7 +143,7 @@
     "type-check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --config vitest.config.mts",
     "test:integration": "node scripts/build.mjs --tests && node out/test/integration/run.js",
-    "package": "node scripts/build.mjs --production && vsce package --no-dependencies --out clikcode-0.1.0.vsix",
+    "package": "node scripts/package.mjs",
     "vscode:prepublish": "node scripts/build.mjs --production"
   },
   "devDependencies": {

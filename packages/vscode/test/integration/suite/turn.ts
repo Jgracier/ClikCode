@@ -34,7 +34,7 @@ export function turnSuite(): void {
     let api: ClikCodeApi;
 
     before(async () => {
-      const extension = vscode.extensions.all.find((item) => item.packageJSON?.name === 'clikcode' && item.extensionPath.includes('vscode'));
+      const extension = vscode.extensions.all.find((item) => item.packageJSON?.name === 'clikcode');
       assert.ok(extension, 'the extension is installed in the test instance');
       api = await extension.activate() as ClikCodeApi;
       await vscode.commands.executeCommand('clikcode.focus');
