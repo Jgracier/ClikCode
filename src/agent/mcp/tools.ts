@@ -85,7 +85,7 @@ export interface McpToolCaller {
  * or deploys has no path to confine, so it must ask every time -- which
  * `exec` does in every mode but bypass -- until the user saves an exact
  * `mcp__server__tool` rule for it. Plan mode hides it either way. */
-export function mcpToolDefinition(server: string, info: McpToolInfo, name: string, call: McpToolCaller): ToolDefinition {
+export function mcpToolDefinition(server: string, info: McpToolInfo, name: string, call: McpToolCaller, core = false): ToolDefinition {
   const title = info.title ?? info.annotations?.title ?? info.name;
   const description = `${info.description?.trim() || title} (from MCP server "${server}")`;
   return defineTool<Record<string, unknown>>({
@@ -93,7 +93,7 @@ export function mcpToolDefinition(server: string, info: McpToolInfo, name: strin
     description: description.length > MAX_DESCRIPTION ? `${description.slice(0, MAX_DESCRIPTION - 1)}…` : description,
     parameters: mcpToolParameters(info.inputSchema),
     class: info.annotations?.readOnlyHint === true ? 'read' : 'exec',
-    mcp: { server, tool: info.name },
+    mcp: { server, tool: info.name, ...(core ? { core: true as const } : {}) },
     label: () => `${server} › ${title}`,
     preview: async (args) => {
       const json = JSON.stringify(args, null, 2);

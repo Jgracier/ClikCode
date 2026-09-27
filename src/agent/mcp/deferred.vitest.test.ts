@@ -54,4 +54,15 @@ describe('deferred MCP tools', () => {
     const loader = exposeTools([builtin, ...many()]).all.find((tool) => tool.name === LOAD_MCP_TOOLS)!;
     expect(await loader.run({ server: 'nope' }, {} as never)).toEqual({ output: 'Unknown MCP server "nope". Servers: brain, docs.', isError: true });
   });
+
+  it('always offers a server\'s core tools, deferring only the rest', () => {
+    const core = defineTool({
+      name: 'mcp__clikdeploy__list_apps', description: 'List apps.', parameters: { type: 'object', properties: {} },
+      class: 'read', mcp: { server: 'clikdeploy', tool: 'list_apps', core: true }, label: () => 'list_apps', run: async () => ({ output: '' }),
+    });
+    const exposure = exposeTools([builtin, core, ...many()]);
+    expect(names(exposure.advertised([]))).toEqual(['read_file', 'mcp__clikdeploy__list_apps', LOAD_MCP_TOOLS]);
+    expect(exposure.advertised([])[2].description).not.toContain('clikdeploy');
+  });
 });
+

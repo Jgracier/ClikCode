@@ -44,7 +44,7 @@ export interface ToolDefinition<A = Record<string, unknown>> {
   class: ToolClass;
   /** Set on tools an MCP server provides: which server, and its own name for
    * the tool. Lets their schemas be deferred until loaded (mcp/deferred.ts). */
-  mcp?: { server: string; tool: string };
+  mcp?: { server: string; tool: string; core?: true };
   label(args: A): string;
   /** Filesystem paths this call touches; drives confinement and deny checks. */
   paths?(args: A): string[];

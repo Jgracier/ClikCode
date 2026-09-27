@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { prepareMcp, releaseMcp } from './manager';
+import { mcpToolsForTurn, prepareMcp, releaseMcp } from './manager';
 import { IMPORT_MARKER_FILE } from './import';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-mcp-server.mjs', import.meta.url));
@@ -57,6 +57,24 @@ describe('MCP servers follow the route of the conversation', () => {
     await releaseMcp();
     await until(() => !alive(pid), 5_000);
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('add a route\'s built-in servers beside the user\'s, the user\'s winning a shared name', { timeout: 30_000 }, async () => {
+    const { dir, pidFile } = stateDir();
+    process.env.CLIKCODE_HOME = dir;
+    const builtinPid = join(dir, 'builtin.pid');
+    const builtin = (name: string) => ({ name, transport: 'stdio' as const, command: process.execPath, args: [FIXTURE], env: { FAKE_MCP_PID_FILE: builtinPid } });
+    // Same name as the user's server: the user's config is the one started.
+    const shadowed = await mcpToolsForTurn(dir, undefined, [builtin('fake')]);
+    expect(existsSync(builtinPid)).toBe(false);
+    expect(existsSync(pidFile)).toBe(true);
+    expect(shadowed.tools.some((tool) => tool.mcp?.server === 'fake')).toBe(true);
+    // A distinct name is added, and leaving the route stops it.
+    const withBuiltin = await mcpToolsForTurn(dir, undefined, [builtin('platform')]);
+    expect(withBuiltin.tools.some((tool) => tool.mcp?.server === 'platform')).toBe(true);
+    const pid = Number(readFileSync(builtinPid, 'utf8'));
+    await mcpToolsForTurn(dir, undefined, []);
+    await until(() => !alive(pid));
   });
 });
 

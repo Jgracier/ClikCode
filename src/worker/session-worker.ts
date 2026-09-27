@@ -25,6 +25,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { gatewayModels } from '../gateway/models.js';
+import { routeMcpServers } from '../gateway/mcp.js';
 import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socketPathFor, writeWorkerRecord, currentWorkerBuild } from './registry.js';
 
 /** No attached client and no turn running, for this long: the worker exits
@@ -84,7 +85,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   const prepareForRoute = async (): Promise<void> => {
     const { session: current } = await currentSessionAndAccount();
     if (!isClikCodeAgent(current)) { await releaseMcp(); return; }
-    prepareMcp(stateDirectory());
+    prepareMcp(stateDirectory(), routeMcpServers(current, config));
     // Opens the connection the first step will reuse, and has the model list
     // ready for the picker.
     if (isGatewayService(current)) void gatewayModels({ config }).catch(() => undefined);
