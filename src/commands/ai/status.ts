@@ -36,12 +36,16 @@ export async function aiUsage(): Promise<void> {
 /** Reports the separate ClikDeploy OAuth/API-key gateway identity, never a BYO provider login. */
 export async function aiGatewayStatus(config: Conf): Promise<void> {
   const apiUrl = getApiUrl(config);
+  const connected = Boolean(getApiKeyForUrl(config, apiUrl));
   emitResult({
     route: 'gateway',
-    connected: Boolean(getApiKeyForUrl(config, apiUrl)),
+    connected,
     apiUrl,
     authentication: 'oauth-or-api-key',
     credentialBoundary: 'gateway-auth-only',
-    hint: `Run \`${harnessCommand()} gateway login\` to connect ClikDeploy Gateway, or use \`${harnessCommand()} accounts add\` for a provider login that stays local.`,
+    // How to connect is only worth saying to someone who is not.
+    ...(connected ? {} : {
+      hint: `Run \`${harnessCommand()} gateway login\` to connect ClikDeploy Gateway, or use \`${harnessCommand()} accounts add\` for a provider login that stays local.`,
+    }),
   });
 }
