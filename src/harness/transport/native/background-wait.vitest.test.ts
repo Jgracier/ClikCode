@@ -171,3 +171,20 @@ describe('a held-open stdin on a real process', () => {
     expect(output.stdout.trim().split('\n')).toHaveLength(records.length);
   });
 });
+
+describe('vendor background work read off the stream', () => {
+  it('reads Cursor\'s backgrounded shell and the notification that ends it', async () => {
+    const { vendorBackgroundEvent } = await import('./background-task.js');
+    const events = fixture('cursor-background-shell').map((value) => vendorBackgroundEvent(value)).filter(Boolean);
+    expect(events).toEqual([
+      { kind: 'started', id: '484640', description: 'sleep 20; echo done-marker > marker.txt' },
+      { kind: 'finished', id: '484640', status: 'success' },
+    ]);
+  });
+
+  it('reads Claude\'s background tasks and ignores its foreground and subagent ones', async () => {
+    const { vendorBackgroundEvent } = await import('./background-task.js');
+    const started = fixture('claude-background-agent').map((value) => vendorBackgroundEvent(value)).filter((event) => event?.kind === 'started');
+    expect(started).toHaveLength(1);
+  });
+});
