@@ -27,8 +27,9 @@ import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarn
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
+import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
+import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
 import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { noteStoredQuota } from './account-switch.js';
@@ -54,7 +55,7 @@ import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { localModelTurnHooks, releaseHeldLocalModel } from '../commands/ai/local-model.js';
 import { hermesTurboFitModelId } from '../harness/accounts/hermes-discovery.js';
-import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, providerHasAccountForTurn, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
+import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, providerHasAccountForTurn, persistentTransports, synchronizeNativeTranscript, turnEnvironment, vendorBackgroundTurnHandlerFor, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
@@ -81,6 +82,10 @@ function insideGitRepository(folder: string): boolean {
 }
 
 /** A vendor refusing the reasoning level itself, in the words the CLIs use. */
+/** With no session worker to show a background turn, how long a finished
+ * answer waits on background tasks still running before letting them go. */
+const UNHELD_BACKGROUND_GRACE_MS = 60_000;
+
 const EFFORT_REJECTED = /\b(?:unknown|invalid|unsupported|not supported)\b[^\n]{0,40}\b(?:reasoning[ _-]?)?effort\b|\beffort\b[^\n]{0,40}\b(?:is not supported|not supported|unsupported|invalid)\b/i;
 
 /** Whether a failed turn is the vendor refusing the reasoning level: read
@@ -341,6 +346,13 @@ export async function aiSessionSend(
       // all five instead of the ones someone remembered.
       titleStream = titleStreamForAttempt(titleStream, turnText, session);
       const runStructuredCliTurn = async (): Promise<NativeTurnResult> => {
+        // A previous turn's vendor may still be running for its background
+        // work (held-vendor.ts). This turn takes over: stdin closes, anything
+        // it was saying finishes into its own transcript, and it exits.
+        if (hasHeldVendorProcess(session.id)) {
+          prompter?.phase('closing background work');
+          await releaseHeldVendorProcess(session.id);
+        }
         const cliHarness: AiLocalHarnessDefinition = harness.fallbackTurn && await usesFallbackTurn(harness)
           ? { ...harness, turn: harness.fallbackTurn } : harness;
         const turn = cliHarness.turn;
@@ -391,23 +403,33 @@ export async function aiSessionSend(
         // A stream-json stdin stays open while the vendor has background work
         // running, so the turn it starts when that work finishes reaches this
         // conversation instead of being killed at exit (background-wait.ts).
-        // Its follow-up text streams into the same reply, and a message typed
-        // meanwhile goes straight to the vendor rather than waiting behind it.
+        // A message typed while this turn runs goes straight to the vendor.
         const vendorBackground = new Set<string>();
         const heldInput = turn.promptInput === 'stdin' && turn.stdinFormat === 'stream-json' ? createTurnInput() : undefined;
+        // A successful answer with background tasks still running ends this
+        // turn at once; the process is kept, and what it says when a task
+        // finishes becomes a background turn (held-vendor.ts). With nobody to
+        // show that (no session worker), the turn waits a bounded while
+        // instead, then lets the tasks go.
+        const backgroundHandler = heldInput ? vendorBackgroundTurnHandlerFor(session.id) : undefined;
+        const release = backgroundHandler ? createTurnRelease() : undefined;
+        let held: HeldVendor | undefined;
+        const heldStreams = new WeakMap<object, ReturnType<typeof createStreamState>>();
         const background = heldInput ? createBackgroundWait({
           onSettled: () => {
             run.liveInput?.setSteerHandler(undefined);
             heldInput.end();
           },
+          onQuiet: () => held?.quiet(),
           onTaskStarted: (id, description) => {
             idle.toolStarted(`background:${id}`);
-            prompter?.activity(chalk.dim(`background: ${description}`));
+            if (!held) prompter?.activity(chalk.dim(`background: ${description}`));
           },
           onTaskFinished: (id, status) => {
             idle.toolFinished(`background:${id}`);
-            prompter?.activity(chalk.dim(`background task ${status}`));
+            if (!held) prompter?.activity(chalk.dim(`background task ${status}`));
           },
+          ...(backgroundHandler ? {} : { resultGraceMs: UNHELD_BACKGROUND_GRACE_MS }),
         }) : undefined;
         if (heldInput && background) {
           run.liveInput?.setSteerHandler(async (steerText, submission) => {
@@ -423,7 +445,13 @@ export async function aiSessionSend(
           idleController: idle,
           stdinText: turn.promptInput === 'stdin' ? (heldInput ? streamJsonUserMessage(turnText) : turnText) : undefined,
           ...(heldInput ? { input: heldInput } : {}),
+          ...(release ? { release } : {}),
           onStdoutLine: (lineText) => {
+            if (held) {
+              held.line(lineText);
+              void recordNativeStreamUsage(session, lineText).catch(() => undefined);
+              return;
+            }
             if (background && lineText.trimStart().startsWith('{')) {
               try { background.note(JSON.parse(lineText) as Record<string, unknown>); } catch { /* fail-open-ok: not a record; the parser below says the same */ }
             } else if (/"task_notification"|"isBackground":true/.test(lineText)) {
@@ -460,6 +488,21 @@ export async function aiSessionSend(
             if (outcome.live) confirmNativeSession();
             if (outcome.error) streamError = outcome.error;
             if (outcome.result) idle.noteResult(outcome.result);
+            // Answered, and only background tasks left: the turn is over.
+            if (outcome.result === 'success' && release && background && backgroundHandler
+              && background.pending > 0 && background.quiet && !background.settled) {
+              run.liveInput?.setSteerHandler(undefined);
+              held = holdVendorProcess({
+                sessionId: session.id, background, release, handler: backgroundHandler,
+                endInput: () => heldInput!.end(),
+                // One stream position per background turn, like per attempt.
+                report: (text, observer) => {
+                  let position = heldStreams.get(observer);
+                  if (!position) heldStreams.set(observer, position = createStreamState());
+                  reportStructuredLine(cliHarness, text, observer, position);
+                },
+              });
+            }
             // The harness reports its own quota on this stream. Reading it here
             // costs nothing and refreshes on every turn, which is what keeps the
             // shared OAuth usage endpoint -- a per-account budget several open
@@ -479,8 +522,9 @@ export async function aiSessionSend(
           },
         });
         } finally {
-          // Whatever ended the process, input to it has nowhere to go now.
-          if (background) {
+          // Whatever ended the process, input to it has nowhere to go now --
+          // unless it was handed on still running.
+          if (background && !held) {
             background.dispose();
             run.liveInput?.setSteerHandler(undefined);
           }

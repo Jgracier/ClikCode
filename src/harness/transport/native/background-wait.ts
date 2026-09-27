@@ -30,6 +30,14 @@
  * The two timers are safety ceilings for a promise the vendor did not keep (a
  * task that left the list with no notification; a notification that started
  * no turn), not the mechanism.
+ *
+ * Settled is not when the ClikCode turn ends. A dev server or a watcher
+ * started with `run_in_background` never finishes, so a turn held to
+ * "settled" stayed running -- thinking, slash commands queued -- for the whole
+ * hour-long tool budget. The caller ends its turn at the first successful
+ * `result` and keeps the process for what follows (`quiet` says when Claude
+ * is between turns); a caller that cannot keep it passes `resultGraceMs` and
+ * stops waiting on tasks that long after a result.
  */
 
 type Json = Record<string, unknown>;
@@ -43,6 +51,8 @@ export interface BackgroundWait {
   readonly pending: number;
   /** Whether stdin is to be held open right now. */
   readonly settled: boolean;
+  /** Between turns: no turn open and no follow-up owed. Tasks may still run. */
+  readonly quiet: boolean;
   dispose(): void;
 }
 
@@ -51,8 +61,14 @@ export interface BackgroundWaitOptions {
   onSettled(): void;
   onTaskStarted?(id: string, description: string): void;
   onTaskFinished?(id: string, status: string): void;
+  /** Called each time Claude goes between turns (see `quiet`). */
+  onQuiet?(): void;
   /** Ceiling on a promise the vendor did not keep. Default 30 s. */
   graceMs?: number;
+  /** After a successful result, stop waiting for tasks still running this
+   * long later: they are abandoned and stdin closes (which kills them).
+   * Unset: wait for every task however long it runs. */
+  resultGraceMs?: number;
 }
 
 const DEFAULT_GRACE_MS = 30_000;
@@ -66,6 +82,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
   let settled = false;
   let followUpTimer: NodeJS.Timeout | undefined;
   let orphanTimer: NodeJS.Timeout | undefined;
+  let resultTimer: NodeJS.Timeout | undefined;
   const clear = (timer: NodeJS.Timeout | undefined): undefined => { if (timer) clearTimeout(timer); return undefined; };
   const finish = (id: string, status: string): boolean => {
     if (!tasks.delete(id)) return false;
@@ -73,10 +90,13 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
     return true;
   };
   const check = (): void => {
-    if (settled || turnOpen || followUpOwed || tasks.size > 0) return;
+    if (settled || turnOpen || followUpOwed) return;
+    options.onQuiet?.();
+    if (settled || tasks.size > 0) return;
     settled = true;
     followUpTimer = clear(followUpTimer);
     orphanTimer = clear(orphanTimer);
+    resultTimer = clear(resultTimer);
     options.onSettled();
   };
   const arm = (callback: () => void): NodeJS.Timeout => {
@@ -98,6 +118,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
         turnOpen = true;
         followUpOwed = false;
         followUpTimer = clear(followUpTimer);
+        resultTimer = clear(resultTimer);
         return;
       }
       if (type === 'result') {
@@ -107,6 +128,15 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
         if (value.is_error === true) {
           for (const id of [...tasks.keys()]) finish(id, 'abandoned');
           followUpOwed = false;
+        } else if (options.resultGraceMs !== undefined && tasks.size > 0) {
+          resultTimer = clear(resultTimer);
+          resultTimer = setTimeout(() => {
+            resultTimer = undefined;
+            if (turnOpen || followUpOwed) return;
+            for (const task of [...tasks.keys()]) finish(task, 'abandoned');
+            check();
+          }, options.resultGraceMs);
+          resultTimer.unref();
         }
         check();
         return;
@@ -157,9 +187,11 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
     },
     get pending() { return tasks.size; },
     get settled() { return settled; },
+    get quiet() { return !turnOpen && !followUpOwed; },
     dispose() {
       followUpTimer = clear(followUpTimer);
       orphanTimer = clear(orphanTimer);
+      resultTimer = clear(resultTimer);
     },
   };
 }

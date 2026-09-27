@@ -106,6 +106,42 @@ export function createTurnInput(): NativeTurnInput {
   return input;
 }
 
+/** How a released vendor process eventually ended (see NativeTurnRelease). */
+export interface ReleasedTurnExit {
+  exitCode?: number;
+  signalName?: string;
+  /** Stopped by the idle watchdog, not by closing stdin. */
+  timedOut: boolean;
+}
+
+/** Ends a turn before its process does. A vendor that answered and is now
+ * only minding background work it started (see background-wait.ts) keeps
+ * running, but the ClikCode turn -- and the user's prompt -- is over. Created
+ * by the caller, bound by the turn. */
+interface NativeTurnRelease {
+  /** Resolve the turn now with the output so far. The process keeps running,
+   * its lines keep reaching `onStdoutLine`, and the idle watchdog keeps
+   * guarding it; the turn's abort signal no longer reaches it. `onExit` is
+   * called once, when it is gone. False when the turn already ended. */
+  release(onExit: (exit: ReleasedTurnExit) => void): boolean;
+  /** Stop a released process outright (SIGTERM, then SIGKILL). */
+  terminate(): void;
+}
+
+interface BoundTurnRelease extends NativeTurnRelease {
+  bind(target: { release(onExit: (exit: ReleasedTurnExit) => void): boolean; terminate(): void } | undefined): void;
+}
+
+export function createTurnRelease(): NativeTurnRelease {
+  let target: { release(onExit: (exit: ReleasedTurnExit) => void): boolean; terminate(): void } | undefined;
+  const handle: BoundTurnRelease = {
+    release: (onExit) => target?.release(onExit) ?? false,
+    terminate: () => target?.terminate(),
+    bind: (next) => { target = next; },
+  };
+  return handle;
+}
+
 /** Feed a parsed activity event to the watchdog: the one call a streaming
  * caller needs to keep long-running tools from being mistaken for a hang. */
 export function noteTurnActivityEvent(
@@ -136,6 +172,8 @@ interface NativeHarnessTurnOptions {
   toolIdleTimeoutMs?: number;
   /** See NativeTurnIdleController. Create with createTurnIdleController(). */
   idleController?: NativeTurnIdleController;
+  /** See createTurnRelease. */
+  release?: NativeTurnRelease;
   /** Newest bytes (UTF-16 units) of each stream retained when that stream has
    * a line callback. Defaults to TURN_OUTPUT_TAIL_LIMIT. */
   retainTailLimit?: number;
@@ -358,6 +396,10 @@ export async function captureNativeHarnessTurn(
       try { if (stdoutPending.trim()) options.onStdoutLine?.(stdoutPending); } catch { /* fail-open-ok: presentation-only consumer */ }
       try { if (stderrPending.trim()) options.onStderrLine?.(stderrPending); } catch { /* fail-open-ok: presentation-only consumer */ }
       const exit = { ...(code !== null ? { exitCode: code } : {}), ...(signal ? { signalName: signal } : {}) };
+      if (onReleasedExit) {
+        try { onReleasedExit({ ...exit, timedOut }); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+        return;
+      }
       if (exceededLimit) {
         return reject(new NativeHarnessTurnError(`${spec.displayName} turn output exceeded 16 MiB`, { ...tails(), ...exit, reason: 'output-limit' }));
       }
@@ -388,10 +430,26 @@ export async function captureNativeHarnessTurn(
       }
       resolve({ stdout, stderr, exitCode: code ?? 1, ...flags });
     };
+    let onReleasedExit: ((exit: ReleasedTurnExit) => void) | undefined;
+    (options.release as BoundTurnRelease | undefined)?.bind({
+      release: (onExit) => {
+        if (settled || onReleasedExit) return false;
+        onReleasedExit = onExit;
+        // The turn is over: stopping it no longer stops this process.
+        options.signal?.removeEventListener('abort', onAbort);
+        resolve({ stdout, stderr, exitCode: 0, ...(truncated ? { truncated: true } : {}) });
+        return true;
+      },
+      terminate: () => { forward('SIGTERM'); later(2_000, 'SIGKILL'); },
+    });
     child.once('error', (error) => {
       if (settled) return;
       settled = true;
       cleanup();
+      if (onReleasedExit) {
+        try { onReleasedExit({ timedOut: false }); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+        return;
+      }
       reject(error);
     });
     // 'exit' fires when the process ends, which can be BEFORE its stdio pipes

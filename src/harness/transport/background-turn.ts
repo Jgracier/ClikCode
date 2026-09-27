@@ -1,7 +1,8 @@
 /** Work a persistent vendor does when ClikCode has no turn running.
  *
- * A Codex app-server or an ACP agent outlives the turn that started it, and
- * so does what that turn started: a background shell still running when the
+ * A Codex app-server or an ACP agent outlives the turn that started it (as
+ * does a Claude Code CLI minding its background tasks, native/held-vendor.ts),
+ * and so does what that turn started: a background shell still running when the
  * reply was written, a sub-agent the model did not wait for, a turn the
  * vendor starts by itself. Everything the vendor says about that work used to
  * arrive with no turn to receive it and was dropped, so a tool row stayed
@@ -32,7 +33,7 @@ export interface BackgroundTurnOutcome {
 }
 
 export interface VendorBackgroundTurn {
-  readonly transport: 'codex-app-server' | 'acp';
+  readonly transport: 'codex-app-server' | 'acp' | 'structured-cli';
   /** `vendor-turn`: the vendor began a turn nobody here asked for.
    * `background-work`: a finished turn left work running (a shell, a
    * sub-agent) and its progress is reported here. */
@@ -60,7 +61,7 @@ export class BackgroundTurnChannel implements VendorBackgroundTurn {
   private readonly unanswered = new Set<(accepted: boolean) => void>();
   private resolveFinished!: (outcome: BackgroundTurnOutcome) => void;
 
-  constructor(readonly transport: 'codex-app-server' | 'acp', public reason: 'vendor-turn' | 'background-work') {
+  constructor(readonly transport: 'codex-app-server' | 'acp' | 'structured-cli', public reason: 'vendor-turn' | 'background-work') {
     this.finished = new Promise((resolve) => { this.resolveFinished = resolve; });
     const forward = (call: Call): void => {
       if (this.settled) return;
