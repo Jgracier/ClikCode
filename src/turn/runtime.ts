@@ -156,8 +156,10 @@ export function nextUsableFailoverAccount(
   matchesTransport: (candidate: AiHarnessAccount) => boolean,
   attempted: ReadonlySet<string>,
 ): AiHarnessAccount | undefined {
+  // An account the vendor is holding for verification refuses every turn
+  // until the user confirms it, so trying it only fails the switch.
   const candidates = state.accounts.filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
-    && candidate.provider === current.provider && candidate.status === 'ready'
+    && candidate.provider === current.provider && candidate.status === 'ready' && !candidate.verification
     && matchesTransport(candidate));
   const usable: Array<{ account: AiHarnessAccount; remaining?: number }> = [];
   for (const candidate of candidates) {

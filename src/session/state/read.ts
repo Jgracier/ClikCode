@@ -66,10 +66,11 @@ function normalizedState(raw: HarnessState): HarnessState {
     status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
     ...normalizedSessionPermission(session),
   }));
-  // Older builds invented a 60-second quota reset. A real limit remains
-  // exhausted until the user explicitly retries that account or the provider
-  // publishes a trustworthy reset signal.
-  const accounts = raw.accounts.map(({ quotaRetryAt: _obsoleteRetryAt, ...account }) => account);
+  // `quotaRetryAt` is kept: it is when a quota refusal stops holding (the
+  // vendor's "resets in" hint, else a default window -- see
+  // quotaMarkExpiresAt). The 60-second value older builds wrote is long past,
+  // which only means that account is tried again and re-marked if it refuses.
+  const accounts = raw.accounts;
   const normalized = {
     ...raw, accounts, sessions, invocations: Array.isArray(raw.invocations) ? raw.invocations : [],
     globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...raw.globalSettings, permissionMode: normalizedPermissionMode(raw.globalSettings?.permissionMode) },
