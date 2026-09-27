@@ -55,7 +55,7 @@ function usageReadingLabel(windows: readonly UsageWindow[]): string | undefined 
 
 /** "resets at 8:00PM", derived from the same vendor-reported `resetsAt` the
  * usage windows already carry -- not computed independently. Only speaks for
- * a window that is actually exhausted right now (matches accountIsExhausted's
+ * a window that is actually exhausted right now (matches accountQuotaSpent's
  * `usedPct >= 100` threshold) and whose reset is still ahead of us; picks the
  * soonest one when more than one window is spent. */
 export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now: number = Date.now()): string | undefined {
@@ -82,23 +82,98 @@ export function usageReadingIsCurrent(reading: { windows?: readonly UsageWindow[
   return !(reading?.windows ?? []).some((window) => window.resetsAt !== undefined && Date.parse(window.resetsAt) <= now);
 }
 
+/** How long a quota refusal is believed when nothing says when it ends.
+ *
+ * Five hours is the shortest window the subscription vendors actually use
+ * (Claude's and Codex's rolling window; Antigravity's Pro refresh), so it is
+ * the soonest a refused account can plausibly have room again. Guessing short
+ * is cheap: the account is tried once, refuses once, and is marked again --
+ * with the vendor's own "resets in" hint when it gives one. Guessing long is
+ * what left eight Antigravity accounts parked for days after their quota came
+ * back, because nothing re-reads a vendor that publishes no usage. */
+export const QUOTA_MARK_DEFAULT_MS = 5 * 60 * 60 * 1000;
+
+/** When the refusal was recorded. Marks written before `quotaExhaustedAt`
+ * existed are dated by the refusal the usage learner stored with them --
+ * recordRefused runs at the same moment the mark is set. */
+export function quotaMarkedAt(account: AiHarnessAccount): number | undefined {
+  const explicit = Date.parse(account.quotaExhaustedAt ?? '');
+  if (Number.isFinite(explicit)) return explicit;
+  const last = Date.parse(account.usageLearning?.hits?.at(-1)?.at ?? '');
+  return Number.isFinite(last) ? last : undefined;
+}
+
+/** When a failover mark stops holding on its own, in epoch ms. Every path
+ * that marks an account dates it (quotaExhaustedAt, or the refusal the usage
+ * learner recorded), so a mark with no date at all is not one ClikCode wrote
+ * in a turn; with nothing to measure a window from, it holds as before. */
+export function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefined {
+  if (account.quotaState !== 'exhausted') return undefined;
+  const retry = Date.parse(account.quotaRetryAt ?? '');
+  if (Number.isFinite(retry)) return retry;
+  const marked = quotaMarkedAt(account);
+  return marked === undefined ? Number.POSITIVE_INFINITY : marked + QUOTA_MARK_DEFAULT_MS;
+}
+
 /** Is this account out of quota right now?
  *
- * Decided on the unrounded `usedPct >= 100`, never on the display string
- * ("0% left" is also what 99.6% used rounds to). Clears itself once every
- * exhausted window's `resetsAt` has passed, so an account is not left parked
- * after its quota came back. A failover-recorded `quotaState: 'exhausted'`
- * holds when no structured reading exists to say otherwise. */
-function accountIsExhausted(account: AiHarnessAccount, now: number = Date.now()): boolean {
-  const windows = (account.usage as AccountUsageReading | undefined)?.windows ?? [];
+ * The one answer every screen and every failover decision uses. Decided on
+ * the unrounded `usedPct >= 100`, never on the display string ("0% left" is
+ * also what 99.6% used rounds to).
+ *
+ * A reading's spent window holds until its own `resetsAt`. A failover mark
+ * (`quotaState: 'exhausted'`) holds until the first of:
+ *  - a window that was spent when the vendor refused has since reset;
+ *  - a reading taken after the refusal shows room;
+ *  - the mark's own expiry (the vendor's hint, else QUOTA_MARK_DEFAULT_MS).
+ * Without these the mark only cleared on a successful turn, and failover
+ * never attempts a turn on an account it believes is spent -- so an account
+ * whose quota had been back for ten hours still read "out of usage". */
+export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now()): boolean {
+  const reading = account.usage as AccountUsageReading | undefined;
+  const windows = reading?.windows ?? [];
   const spent = windows.filter((window) => window.usedPct >= 100);
-  const stillSpent = spent.filter((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > now);
-  if (stillSpent.length) return true;
+  if (spent.some((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > now)) return true;
   if (account.quotaState !== 'exhausted') return false;
-  // Marked exhausted by a failed turn. A window that was spent and has since
-  // reset is the trustworthy signal that the mark is obsolete.
-  return spent.length === 0;
+  const marked = quotaMarkedAt(account);
+  // Only a window still spent at the moment of the refusal explains it. One
+  // that had already reset before then says nothing about why it refused.
+  if (spent.some((window) => marked === undefined || Date.parse(window.resetsAt!) > marked)) return false;
+  const readAt = Date.parse(reading?.at ?? '');
+  if (windows.length && !reading?.failed && marked !== undefined && Number.isFinite(readAt) && readAt > marked) return false;
+  return (quotaMarkExpiresAt(account) ?? 0) > now;
 }
+
+/** Can this account take a turn now? Signed in, not held by the vendor for
+ * verification, and not out of quota by the rule above. Every "has usage"
+ * decision -- failover, Resume in, the preferred account, the pickers, the
+ * status labels -- asks this, so none of them can disagree about an account. */
+export function accountCanTakeTurn(account: AiHarnessAccount, now: number = Date.now()): boolean {
+  return account.status === 'ready' && !account.verification && !accountQuotaSpent(account, now);
+}
+
+/** Record a quota refusal. `retryAt` is the vendor's own reset hint, when the
+ * refusal carried one. */
+export function markQuotaExhausted(account: AiHarnessAccount, now: number = Date.now(), retryAt?: string): void {
+  account.quotaState = 'exhausted';
+  account.quotaExhaustedAt = new Date(now).toISOString();
+  account.quotaRetryAt = retryAt;
+}
+
+export function clearQuotaMark(account: AiHarnessAccount): void {
+  if (account.quotaState === 'exhausted') account.quotaState = 'available';
+  account.quotaExhaustedAt = undefined;
+  account.quotaRetryAt = undefined;
+}
+
+/** Clear a mark the rule no longer upholds, so the stored record says what
+ * every screen already derives. Returns whether anything changed. */
+export function settleQuotaMark(account: AiHarnessAccount, now: number = Date.now()): boolean {
+  if (account.quotaState !== 'exhausted' || accountQuotaSpent(account, now)) return false;
+  clearQuotaMark(account);
+  return true;
+}
+
 /** Two readings a minute, per ACCOUNT rather than per chat. The rate that
  * matters is accounts-in-use divided by this window: the reading now lives on
  * the account record, so any number of open chats on one login still costs one

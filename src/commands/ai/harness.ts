@@ -23,6 +23,7 @@ import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { requiresProviderHandoff } from '../../session/options.js';
 import { signedInAccountId } from './preferred-account.js';
 import { hasAuthEvidence } from '../../harness/accounts/auth-files.js';
+import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
  * it first if needed, and — only inside the interactive terminal session,
@@ -58,8 +59,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   session.route = 'local';
   session.workspace ??= process.cwd();
   const selected = session.accountId ? state.accounts.find((account) => account.id === session.accountId) : undefined;
-  const selectedUsable = selected?.provider === harness.provider && selected.status === 'ready'
-    && selected.quotaState !== 'exhausted' && !selected.verification;
+  const selectedUsable = selected?.provider === harness.provider && accountCanTakeTurn(selected);
   // Tracks whether the account below is being minted right now, not found
   // pre-existing -- needed because harnessNeedsLogin returns false
   // unconditionally for any harness with no statusArgv (Gemini, Antigravity,

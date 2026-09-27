@@ -13,6 +13,7 @@ import { aiHarnessSelect } from '../../commands/ai/harness.js';
 import { chooseOption } from './choose.js';
 import { authEvidencePresent, hasAuthEvidence } from '../../harness/accounts/auth-files.js';
 import { selectProviderConversation } from './conversation.js';
+import { accountQuotaSpent } from '../../harness/accounts/usage-reading.js';
 
 export async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
   for (;;) {
@@ -65,7 +66,7 @@ export async function autoSelectSessionHarness(id: string): Promise<boolean> {
   const candidates = allLocalHarnesses()
     .filter((harness) => harnessCanRunTurns(harness))
     .sort((left, right) => harnessTierRank(left) - harnessTierRank(right));
-  const readyProviders = new Set(state.accounts.filter((item) => item.status === 'ready' && item.quotaState !== 'exhausted').map((item) => item.provider));
+  const readyProviders = new Set(state.accounts.filter((item) => item.status === 'ready' && !accountQuotaSpent(item)).map((item) => item.provider));
   const signedIn = async (harness: AiLocalHarnessDefinition): Promise<boolean> =>
     readyProviders.has(harness.provider) || (hasAuthEvidence(harness) && await authEvidencePresent(harness, {}));
   let fallback: AiLocalHarnessDefinition | undefined;

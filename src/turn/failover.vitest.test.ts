@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent } from './failover';
+import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent, quotaRetryHint } from './failover';
 
 describe('ClikCode account failover', () => {
   it('does not confuse temporary throttling with exhausted quota', () => {
@@ -241,5 +241,22 @@ describe('credit refusals, verbatim', () => {
     expect(classifyAccountFailure(Object.assign(new Error('kilo exited 1'), { stderrTail: '\u001b[91m\u001b[1mError: \u001b[0mAdd credits to continue, or switch to a free model' }))).toBe('quota-exhausted');
     // Command Code 1.65.2.
     expect(classifyAccountFailure(Object.assign(new Error('cmdc exited 10'), { stderrTail: 'Error: Insufficient credits for Command Code.' }))).toBe('quota-exhausted');
+  });
+});
+
+describe('when a quota refusal says it ends', () => {
+  const now = Date.parse('2026-09-27T15:00:00.000Z');
+  const at = (ms: number) => new Date(now + ms).toISOString();
+  it("reads Antigravity's 'Resets in' duration", () => {
+    const refusal = Object.assign(new Error('failed'), { stderrTail: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 76h57m39s.' });
+    expect(quotaRetryHint(refusal, now)).toBe(at(((76 * 60 + 57) * 60 + 39) * 1000));
+  });
+  it('reads spelled-out units and retry-after seconds', () => {
+    expect(quotaRetryHint(new Error("You've hit your usage limit. Try again in 2 days 3 hours 5 minutes."), now)).toBe(at(((2 * 24 + 3) * 60 + 5) * 60_000));
+    expect(quotaRetryHint(new Error('quota exceeded, retry after 3600 seconds'), now)).toBe(at(3_600_000));
+  });
+  it('says nothing for a refusal with no duration or a zone-less wall-clock time', () => {
+    expect(quotaRetryHint(new Error('You have exceeded your monthly quota'), now)).toBeUndefined();
+    expect(quotaRetryHint(new Error('usage limit reached, resets 8pm'), now)).toBeUndefined();
   });
 });

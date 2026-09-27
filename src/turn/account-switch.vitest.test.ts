@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
 import { noteStoredQuota } from './account-switch.js';
-import { nextUsableFailoverAccount } from './runtime.js';
+import { nextUsableFailoverAccount, providerHasAccountForTurn } from './runtime.js';
 
 function account(id: string, extra: Partial<AiHarnessAccount> = {}): AiHarnessAccount {
   return {
@@ -122,5 +122,39 @@ describe('stored-usage account switch', () => {
     ];
     expect(noteStoredQuota(spent, state([spent], invocations), now)).toBe(0);
     expect(spent.quotaState).toBe('exhausted');
+  });
+
+  it('fails over to a same-provider account whose quota came back, ahead of one with nothing known', () => {
+    const recovered = account('recovered', {
+      quotaState: 'exhausted', quotaExhaustedAt: new Date(Date.now() - 13 * 3_600_000).toISOString(),
+      usage: { at: new Date(Date.now() - 12 * 3_600_000).toISOString(), label: '5h 0% left', windows: [{ name: '5h', usedPct: 100, resetsAt: new Date(Date.now() - 10 * 3_600_000).toISOString() }] } as AiHarnessAccount['usage'],
+    });
+    const current = account('current', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    const other = account('other', { provider: 'openai' });
+    expect(nextUsableFailoverAccount(state([current, other, recovered]), current, () => true, new Set())?.id).toBe('recovered');
+    expect(recovered.quotaState).toBe('available');
+  });
+
+  it('never fails over to an account waiting on verification', () => {
+    const pending = account('pending', { quotaState: 'available', verification: { at: new Date().toISOString() } });
+    const current = account('current', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    expect(nextUsableFailoverAccount(state([current, pending]), current, () => true, new Set())).toBeUndefined();
+  });
+
+  it('tries an unreadable-vendor account again once its refusal expired, and not before', () => {
+    const expired = account('expired', { provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: new Date(Date.now() - 6 * 3_600_000).toISOString() });
+    const recent = account('recent', { provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: new Date(Date.now() - 3_600_000).toISOString() });
+    const current = account('current', { provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    expect(nextUsableFailoverAccount(state([current, recent, expired]), current, () => true, new Set())?.id).toBe('expired');
+  });
+
+  it('calls a provider exhausted only when none of its accounts can take the turn', () => {
+    const spent = account('spent', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    const pending = account('pending', { verification: { at: new Date().toISOString() } });
+    const crashed = account('crashed');
+    const elsewhere = account('elsewhere', { provider: 'openai' });
+    expect(providerHasAccountForTurn(state([spent, pending, elsewhere]), 'anthropic', () => true)).toBe(false);
+    // An account that failed some other way still has its quota.
+    expect(providerHasAccountForTurn(state([spent, pending, crashed]), 'anthropic', () => true)).toBe(true);
   });
 });
