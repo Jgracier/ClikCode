@@ -28,6 +28,10 @@ export interface HarnessSession {
    * default until the effort, model or harness changes. */
   effortRefused?: string;
   permissionMode?: AiHarnessPermissionMode;
+  /** How much context ClikCode's own agent spends (agent/context-profile.ts):
+   * absent, it is chosen from the model's window and speed. A per-session
+   * pin for comparing profiles; CLIKCODE_CONTEXT_PROFILE overrides it. */
+  contextProfile?: 'minimal' | 'lean' | 'full';
   name?: string;
   /** Who named it. `user` is a /rename and is never overwritten; `provider` is
    * the harness's own title, or one the first turn asked the model for. A name
@@ -119,7 +123,7 @@ export interface HarnessState {
    *  'provider-default', 'platform' -- and those fake ids then flowed into
    *  usage rollups as if a model by that name had served the request. An
    *  absent model is a fact; a fabricated one corrupts the accounting. */
-  invocations: Array<{ id: string; accountId: string; provider: string; model?: string; at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; sessionId?: string; latencyMs: number }>;
+  invocations: Array<{ id: string; accountId: string; provider: string; model?: string; at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; sessionId?: string; latencyMs: number; contextProfile?: string }>;
   /** Applies to every provider unless a providerSettings entry overrides it. */
   globalSettings: HarnessDefaultSettings;
   /** Keyed by AiLocalHarnessDefinition.provider; only the fields a user has set. */

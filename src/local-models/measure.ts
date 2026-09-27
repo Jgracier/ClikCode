@@ -35,6 +35,18 @@ export async function readMeasurements(machine: string): Promise<Record<string, 
   return (await readStore())[machine] ?? {};
 }
 
+/** The most recent measurement of a model on this host, whatever runtime
+ * build or GPU set it was taken under. Needs no hardware probe, so joining a
+ * running server can report its speed as cheaply as it joins. */
+export async function latestMeasurement(modelId: string): Promise<Measurement | undefined> {
+  let latest: Measurement | undefined;
+  for (const byModel of Object.values(await readStore())) {
+    const entry = byModel?.[modelId];
+    if (entry && (!latest || String(entry.at) > String(latest.at))) latest = entry;
+  }
+  return latest;
+}
+
 export async function writeMeasurement(machine: string, modelId: string, measurement: Measurement): Promise<void> {
   const store = await readStore();
   store[machine] = { ...store[machine], [modelId]: measurement };

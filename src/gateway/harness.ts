@@ -72,6 +72,7 @@ export async function runGatewayHarnessSessionTurn(
     modelClient,
     stateDir,
     ...(mcp.tools.length ? { extraTools: mcp.tools } : {}),
+    ...(session.contextProfile ? { contextProfile: session.contextProfile } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.images?.length ? { images: input.images } : {}),
     onResponseDelta: (text, mode) => {
