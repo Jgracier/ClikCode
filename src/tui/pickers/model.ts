@@ -15,6 +15,44 @@ import { TerminalHarnessPrompter } from '../prompter.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { withVendorTerminal } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
+import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
+
+/** Prefix of a row for a model this machine cannot run: listed, so the
+ * catalog is honest about what exists and why it is out of reach, but
+ * choosing it explains rather than starting a load that would fail. */
+const UNFIT = '__unfit__:';
+
+/** ClikCode Local's /model rows, in the engine's order (best first). */
+export function localModelRows(choices: readonly LocalModelChoice[], current: string | null | undefined): PickerOption<string>[] {
+  return choices.map((choice) => {
+    const parts = [
+      choice.id === current ? 'current' : undefined,
+      choice.fits && choice.recommended ? 'recommended' : undefined,
+      choice.detail,
+    ].filter((part): part is string => Boolean(part));
+    return { label: choice.label, detail: `· ${parts.join(' · ')}`, value: choice.fits ? choice.id : `${UNFIT}${choice.id}` };
+  });
+}
+
+/** The row a picker selection names, as the model to load: a model that
+ * does not fit is refused with the engine's reason. */
+export function localModelSelection(choices: readonly LocalModelChoice[], selected: string): string {
+  if (!selected.startsWith(UNFIT)) return selected;
+  const choice = choices.find((item) => item.id === selected.slice(UNFIT.length));
+  throw new Error(`${choice?.label ?? selected.slice(UNFIT.length)} cannot run on this machine: ${choice?.detail ?? 'it does not fit'}.`);
+}
+
+async function localModelPicker(rl: HarnessPrompter, id: string, current: string | null | undefined): Promise<void> {
+  const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
+  waiting?.startWaiting('checking which models fit this machine…');
+  let choices: LocalModelChoice[];
+  try { choices = await localModelChoices(); } finally { waiting?.stopWaiting(); }
+  const selected = await chooseOption(rl, 'Choose a ClikCode Local model', localModelRows(choices, current));
+  if (!selected) return;
+  // The handler loads it (progress on the waiting line) before the session
+  // switches; the same path `/model <id>` takes.
+  await aiSessionCommand(id, `/model ${localModelSelection(choices, selected)}`);
+}
 
 /** One model as every model list shows it. A harness that drives other
  * providers shows `provider:model`, and a name only where it says something
@@ -44,6 +82,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (isGatewayService(session)) return gatewayModelPicker(rl, id, session.model ?? null);
+  if (session.route === 'clikcode-local') return localModelPicker(rl, id, session.model);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
     : session.provider ? localHarnessForProvider(session.provider) : undefined;

@@ -11,6 +11,7 @@ import chalk from 'chalk';
 import { TERMINAL } from '../tui/active-terminal.js';
 import { compactPath, sessionProviderLabel } from './protocol/labels.js';
 import { nativeModelLabel } from './accounts/model-catalog.js';
+import { localModelLabel } from '../local-models/catalog.js';
 import type { HarnessSession } from '../session/model.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitResult } from '../cli/structured-output.js';
@@ -20,7 +21,7 @@ export function line(label: string, value: unknown): string {
 }
 
 function renderSessionCard(session: HarnessSession, account?: string): string {
-  const modelLabel = nativeModelLabel(session.nativeHarness, session.model);
+  const modelLabel = session.route === 'clikcode-local' ? localModelLabel(session.model) : nativeModelLabel(session.nativeHarness, session.model);
   return [
     chalk.bold.cyan('ClikCode'),
     ...(session.name ? [line('chat', session.name)] : []),

@@ -11,6 +11,8 @@ import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService
 import { hermesTurboFitModelId } from '../../harness/accounts/hermes-discovery.js';
 import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
 import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
+import { localModelChosen, releaseHeldLocalModel } from '../../commands/ai/local-model.js';
+import { localModelChoices, resolveLocalModelId } from '../../local-models/index.js';
 import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
@@ -59,6 +61,36 @@ function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
   const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : harness?.displayName ?? 'This provider';
   return `${who} does not expose an undo/rewind operation to ClikCode, so /undo is not available here. ClikCode will not fake it: use /diff to see what changed and git to revert it${harness?.nativeSlashPassthrough ? `, or send the vendor's own command with //rewind` : ''}.`;
+}
+
+/** `/model` on ClikCode Local. With no name, the catalog as this machine
+ * sees it; with one, that model is downloaded, loaded and answering before
+ * the session moves to it -- a failure (it does not fit, a download failed)
+ * leaves the session on the model it had. */
+async function localModelCommand(session: HarnessSession, value: string): Promise<void> {
+  if (!value) {
+    const choices = await localModelChoices();
+    return emitHarnessOutput({
+      panel: 'models',
+      models: choices.map((choice) => ({
+        model: choice.id, provider: [choice.label, choice.recommended ? 'recommended' : undefined, choice.detail].filter(Boolean).join(' · '),
+        label: choice.label, detail: choice.detail, fits: choice.fits, recommended: choice.recommended,
+      })),
+      selected: session.model,
+    });
+  }
+  const model = resolveLocalModelId(value);
+  await localModelChosen(session.id, model);
+  // Re-read: loading a model can take a minute, and the turn worker or
+  // another command may have written the state since this command read it.
+  const state = await readState();
+  const current = state.sessions.find((item) => item.id === session.id);
+  if (!current) throw new Error(`AI session "${session.id}" was not found`);
+  current.model = model;
+  if (current.reported?.model) delete current.reported.model;
+  current.updatedAt = new Date().toISOString();
+  await writeState(state);
+  return emitHarnessOutput({ panel: 'settings', session: current });
 }
 
 /** What one slash command did, for a caller that must follow it. */
@@ -220,6 +252,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     const trusted = words[0] === '--any';
     if (trusted) words.shift();
     const value = words.join(' ').trim();
+    if (session.route === 'clikcode-local') return localModelCommand(session, value);
     // A Gateway conversation chooses from the Gateway's own list; `auto` hands
     // the choice back to it. The Gateway serves the model from its cheapest
     // provider -- subscription, then free, then paid -- and never another model.
@@ -356,6 +389,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!value) throw new Error(`usage: /settings ${setting} <value>`);
     if (setting === 'route') {
       if (!isAiHarnessRoute(value)) throw new Error(ROUTE_CHOICES_TEXT);
+      // Leaving ClikCode Local lets go of its model at once, not at the
+      // interactive loop's next pass.
+      if (session.route === 'clikcode-local' && value !== 'clikcode-local') await releaseHeldLocalModel(session.id);
       if (value === 'gateway' || value === 'clikcode-local') applyClikCodeAgentSessionPolicy(session, value);
       else if (isClikCodeAgent(session)) applyFreshLocalSessionPolicy(state, session);
       else session.route = 'local';
@@ -363,6 +399,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       // One way to switch accounts, with /account's checks -- this copy of it
       // had none, and moved a conversation with content to another harness.
       return aiSessionCommand(id, `/accounts use ${value}`);
+    } else if (setting === 'model' && session.route === 'clikcode-local') {
+      return localModelCommand(session, value);
     } else if (setting === 'model') {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!(harness?.modelArgvPrefix !== undefined || harness?.acp?.listsModels)) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
@@ -421,6 +459,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
       // Leaving either agent route: an account means a vendor harness.
       const leavingAgentRoute = isClikCodeAgent(session);
+      if (session.route === 'clikcode-local') await releaseHeldLocalModel(session.id);
       if (leavingAgentRoute) applyFreshLocalSessionPolicy(state, session);
       if (session.nativeHarness) {
         const selectedHarness = localHarnessForCommand(session.nativeHarness);

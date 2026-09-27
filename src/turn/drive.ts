@@ -48,6 +48,7 @@ import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
+import { localModelTurnHooks, releaseHeldLocalModel } from '../commands/ai/local-model.js';
 import { hermesTurboFitModelId } from '../harness/accounts/hermes-discovery.js';
 import { closePersistentTransport, DurableTurnCheckpoint, nameSession, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, persistentTransports, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput, line } from '../harness/output.js';
@@ -1002,6 +1003,9 @@ export async function aiGatewaySessionSend(
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  // A session that left ClikCode Local lets go of the model this process
+  // held for it (a worker that ran its earlier turns, say).
+  if (session.route !== 'clikcode-local') await releaseHeldLocalModel(session.id);
   if (!isClikCodeAgent(session)) return aiSessionSend(id, prompt, signal, run);
   const gatewayService = isGatewayService(session);
   // Attribution for the invocation log and the output payload: the route's
@@ -1027,7 +1031,13 @@ export async function aiGatewaySessionSend(
   // Before the checkpoint, so a route that cannot serve a turn (the Gateway
   // not signed in, ClikCode Local's engine absent) fails without recording
   // a turn that never ran.
-  const modelClient = await modelClientForSession(session, config);
+  // ClikCode Local shows its model coming up here: on the waiting line in a
+  // terminal, on stderr headless. In a worker the terminal already brought
+  // it up, so this is a silent join.
+  const localHooks = session.route === 'clikcode-local' ? localModelTurnHooks(session.id) : undefined;
+  let modelClient;
+  try { modelClient = await modelClientForSession(session, config, localHooks); }
+  finally { localHooks?.done(); }
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await DurableTurnCheckpoint.start(state, session, text, run.queuedTurnId);

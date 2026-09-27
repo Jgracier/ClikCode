@@ -20,6 +20,7 @@ import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-b
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
+import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, MessageBlock, PickerOption, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
@@ -830,8 +831,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // a fabricated one is not.
     const rawModel = harness?.modelArgvPrefix ? session.reported?.model ?? session.model ?? undefined : undefined;
     // A Gateway conversation shows the model its user chose; none chosen, the
-    // Gateway picks per step and the line names no model.
-    const model = isGatewayService(session) ? session.model ?? undefined : nativeModelLabel(harness?.command, rawModel);
+    // Gateway picks per step and the line names no model. ClikCode Local's
+    // model is its engine's catalog entry, named by label.
+    const model = session.route === 'clikcode-local' ? localModelLabel(session.model)
+      : isGatewayService(session) ? session.model ?? undefined : nativeModelLabel(harness?.command, rawModel);
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     // The title used to share this line with provider/model/directory, which
     // meant a long title truncated whichever of those came after it — the
