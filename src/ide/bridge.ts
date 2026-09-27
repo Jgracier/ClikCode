@@ -85,6 +85,7 @@ export class IdeBridge {
   private turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error } | undefined;
   private preparedRoute: string | undefined;
   private autoResent: string | undefined;
+  private drainScheduled = false;
   private work: Promise<void> = Promise.resolve();
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
   private readonly timers: NodeJS.Timeout[] = [];
@@ -359,6 +360,26 @@ export class IdeBridge {
         const waiter = this.turnWaiter;
         this.turnWaiter = undefined;
         if (waiter) (waiter.error ? waiter.reject(waiter.error) : waiter.resolve());
+        // A turn this editor only followed (a terminal's, or one the worker
+        // started) ended: what was queued behind it is this client's to send.
+        // Its own turn's caller drains once the turn returns.
+        else this.scheduleDrain();
+        return;
+      }
+      case 'queue-changed':
+        // Something was queued or consumed: nothing runs it but a client, and
+        // the one that queued it may be this editor following another's turn.
+        this.scheduleDrain();
+        return;
+      case 'submit-queued': {
+        // The worker had a turn running and queued this submit behind it.
+        // The waiter resolves at that turn's waiting-stop and the drain sends
+        // the message then; if that stop came first, nothing is left to wait
+        // for, and resending now cannot land in a running turn.
+        if (this.workerTurnRunning) return;
+        const waiter = this.turnWaiter;
+        this.turnWaiter = undefined;
+        waiter?.resolve();
         return;
       }
       case 'shutdown':
@@ -367,6 +388,20 @@ export class IdeBridge {
       default:
         return;
     }
+  }
+
+  /** Send the queue's head once no turn runs. Coalesced: however many
+   * queue-changed arrive, one drain is pending at a time, and none while a
+   * turn runs or this client is sending one (its caller drains after). */
+  private scheduleDrain(): void {
+    if (this.drainScheduled || this.closed || !this.sessionId) return;
+    if (this.workerTurnRunning || this.turnWaiter) return;
+    this.drainScheduled = true;
+    this.enqueue(async () => {
+      this.drainScheduled = false;
+      if (this.workerTurnRunning || this.turnWaiter) return;
+      await this.drainQueue();
+    });
   }
 
   private failTurn(error: Error): void {
