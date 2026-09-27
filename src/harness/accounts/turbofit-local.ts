@@ -22,7 +22,9 @@ import { binaryOnPath } from '../transport/native/binary.js';
 import {
   discoverHermesTurboFitRecommendations, hermesInstallDirectory, selectHermesTurboFitRecommendation, turboFitPluginRoot,
 } from './hermes-discovery.js';
-import { TURBOFIT_CPU_LANES_SCRIPT, TURBOFIT_CPU_LANE_SELECT_SCRIPT, TURBOFIT_PLAN_SCRIPT, TURBOFIT_SUPERVISOR_SCRIPT } from './turbofit-scripts.js';
+import {
+  TURBOFIT_CPU_LANES_SCRIPT, TURBOFIT_CPU_LANE_SELECT_SCRIPT, TURBOFIT_CPU_TUNE_SCRIPT, TURBOFIT_PLAN_SCRIPT, TURBOFIT_SUPERVISOR_SCRIPT,
+} from './turbofit-scripts.js';
 
 /** Hermes model ids that run on TurboFit's local gateway. */
 export function isTurboFitModel(model: string | null | undefined): boolean {
@@ -561,7 +563,25 @@ export async function turboFitCpuLaneRows(
   });
 }
 
+/** Apply this machine's CPU launch settings to one lane (see
+ * TURBOFIT_CPU_TUNE_SCRIPT). A changed launch drops the lane's measurement,
+ * which was taken with the old settings. Returns whether it changed. */
+async function tuneCpuLane(python: string, root: string, environment: Environment, variant: string): Promise<boolean> {
+  const result = await run(python, ['-c', TURBOFIT_CPU_TUNE_SCRIPT, root, variant], { cwd: root, env: toolsEnv(python, root, environment), timeoutMs: 60_000 });
+  const marker = result.output.lastIndexOf('\x00TURBOFIT_TUNED');
+  if (marker < 0) throw new Error(`Could not tune TurboFit for this CPU.\n${tail(result.output)}`);
+  const { changed } = JSON.parse(result.output.slice(marker + '\x00TURBOFIT_TUNED'.length).split('\n')[0]!) as { changed: boolean };
+  if (changed) {
+    const checks = await readChecks(environment);
+    delete checks[laneProfile(variant)];
+    await mkdir(stateDir(environment), { recursive: true });
+    await writeFile(join(stateDir(environment), 'clikcode-model-check.json'), JSON.stringify(checks));
+  }
+  return changed;
+}
+
 async function selectCpuLane(python: string, root: string, environment: Environment, lane: CpuLane): Promise<string> {
+  await tuneCpuLane(python, root, environment, lane.variant);
   // What it will hold: weights, a 64K context, llama.cpp's buffers. Only an
   // input to TurboFit's fit check; llama-server's --fit sizes the real thing.
   const residentMb = Math.round(lane.totalBytes / 1048576 * 1.25 + 1024);
@@ -621,12 +641,16 @@ export async function prepareTurboFitModel(
     return runSelected(prepared, sessionId, model, before, progress);
   }
 
+  // A CPU lane chosen before these launch settings existed gets them now;
+  // its runtime then restarts with the new launch, and it is re-measured.
+  const selectedLane = before?.match(/^manual-cpu-(.+)-64k$/)?.[1];
+  const retuned = selectedLane ? await tuneCpuLane(python, root, environment, selectedLane) : false;
   const checks = await readChecks(environment);
   const userChoice = await readUserChoice(environment);
   if (!(before && before === userChoice)) {
     const lanes = await readCpuLanes(python, root, environment);
     if (lanes.pool === 'cpu' && !(before && meetsBar(checks[before]))) {
-      return chooseCpuLane(prepared, lanes, checks, sessionId, model, before, progress);
+      return chooseCpuLane(prepared, lanes, checks, sessionId, model, retuned ? null : before, progress);
     }
   }
   if (!before) {
@@ -635,7 +659,7 @@ export async function prepareTurboFitModel(
     if (!top) throw new Error('TurboFit found no local model that fits this machine.');
     await selectHermesTurboFitRecommendation(harness, account, top.id);
   }
-  return runSelected(prepared, sessionId, model, before, progress);
+  return runSelected(prepared, sessionId, model, retuned ? null : before, progress);
 }
 
 /** Try CPU lanes until one measures usable; at most three are fetched, so a
