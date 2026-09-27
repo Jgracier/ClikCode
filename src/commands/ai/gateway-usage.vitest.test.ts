@@ -59,3 +59,18 @@ describe('gateway credit', () => {
     await expect(aiGatewayCredit(config, { amount: '2' }, { fetchImpl: fetchImpl as never })).rejects.toThrow('--amount must be a whole number of dollars from 5 to 500');
   });
 });
+
+describe('gateway credit --auto-topup', () => {
+  it('turns automatic top-up on or off with the account\'s own switch, and refuses anything else', async () => {
+    bindGlobalFlags({ json: true });
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ success: true, data: { autoTopUpEnabled: false } }), { status: 200 }));
+    await aiGatewayCredit(config, { autoTopup: 'off' }, { fetchImpl: fetchImpl as never });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(String(url)).toBe('https://clikdeploy.com/api/billing/credit');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(String(init.body))).toEqual({ autoTopUpEnabled: false });
+    expect(JSON.parse(String(write.mock.calls[0]![0]))).toEqual({ apiUrl: 'https://clikdeploy.com', autoTopUpEnabled: false });
+    await expect(aiGatewayCredit(config, { autoTopup: 'maybe' }, { fetchImpl: fetchImpl as never })).rejects.toThrow('--auto-topup must be on or off');
+  });
+});

@@ -222,7 +222,8 @@ when you would rather type than pick.
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
 | `clikcode gateway login [--github]` / `gateway status` | ClikDeploy Gateway sign-in (Google by default) |
 | `clikcode gateway usage [--days N]` | Your AI use and credit as ClikDeploy Gateway records it: every call, by surface and model |
-| `clikcode gateway credit [--amount USD]` | Add AI credit: opens a Stripe checkout ($5–$500). Paying it also saves your card for later top-ups |
+| `clikcode gateway credit [--amount USD]` | Add AI credit: opens a Stripe checkout ($5–$500). Paying it also saves your card for automatic top-ups when credit runs low |
+| `clikcode gateway credit --auto-topup on\|off` | Turn those automatic top-ups on or off |
 
 Output is JSON when it is not going to a terminal, so ClikCode scripts
 cleanly -- one record per line, so a command that reports twice is still

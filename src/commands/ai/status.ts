@@ -77,12 +77,16 @@ export async function aiGatewayUsage(config: Conf, options: { days?: string } = 
  * adds the credit and saves the card for later top-ups. */
 export async function aiGatewayCredit(
   config: Conf,
-  options: { amount?: string } = {},
+  options: { amount?: string; autoTopup?: string } = {},
   deps: { fetchImpl?: typeof fetch; open?: (url: string) => void; environment?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
   const apiUrl = getApiUrl(config);
   const apiKey = getApiKeyForUrl(config, apiUrl);
   if (!apiKey) throw new Error(`Not signed in to ClikDeploy Gateway. Run \`${harnessCommand()} gateway login\`.`);
+  if (options.autoTopup !== undefined) {
+    await setAutoTopUp(apiUrl, apiKey, options.autoTopup, deps.fetchImpl ?? fetch);
+    return;
+  }
   const amountUsd = options.amount === undefined ? undefined : Number(options.amount);
   if (amountUsd !== undefined && (!Number.isInteger(amountUsd) || amountUsd < 5 || amountUsd > 500)) {
     throw new Error('--amount must be a whole number of dollars from 5 to 500');
@@ -102,6 +106,24 @@ export async function aiGatewayCredit(
   const opened = hasLocalDisplay(deps.environment ?? process.env);
   if (opened) (deps.open ?? openLoginUrl)(url);
   emitResult({ apiUrl, checkoutUrl: url, amountCents: body?.data?.amountCents ?? null, opened });
+}
+
+/** Turn automatic top-up on or off: the saved card is charged for more credit
+ * when it runs low. The same switch as the billing settings page. */
+async function setAutoTopUp(apiUrl: string, apiKey: string, value: string, fetchImpl: typeof fetch): Promise<void> {
+  const word = value.trim().toLowerCase();
+  if (word !== 'on' && word !== 'off') throw new Error('--auto-topup must be on or off');
+  const response = await fetchImpl(new URL('/api/billing/credit', apiUrl), {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
+    body: JSON.stringify({ autoTopUpEnabled: word === 'on' }),
+  });
+  const body = await response.json().catch(() => undefined) as { data?: { autoTopUpEnabled?: unknown }; error?: unknown } | undefined;
+  if (!response.ok || typeof body?.data?.autoTopUpEnabled !== 'boolean') {
+    const reason = typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`;
+    throw Object.assign(new Error(`ClikDeploy Gateway auto top-up: ${reason}`), { statusCode: response.status });
+  }
+  emitResult({ apiUrl, autoTopUpEnabled: body.data.autoTopUpEnabled });
 }
 
 /** The models ClikDeploy Gateway offers the signed-in account, cheapest access
