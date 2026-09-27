@@ -3,6 +3,7 @@
  * moves off or closes, and make sure it is up before a turn. The work is in
  * harness/accounts/turbofit-local.ts; this is where it meets the screen. */
 
+import { hermesTurboFitModelId } from '../../harness/accounts/hermes-discovery.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import {
@@ -54,13 +55,17 @@ export async function turboFitModelChanged(
   }
 }
 
-/** Before a turn: a session on a TurboFit model has its runtime running. */
-export async function ensureTurboFitForTurn(
-  harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, sessionId: string, model: string | null | undefined,
-): Promise<void> {
-  if (harness.command !== 'hermes' || !isTurboFitModel(model)) return;
-  const ready = await withProgress('starting TurboFit…', (progress) => ensureTurboFitServing(harness, account, sessionId, model!, progress));
+/** Before a turn: a session on a TurboFit model has its runtime running.
+ * Returns the model as Hermes can route it -- a session saved with the old
+ * `turbofit:` spelling is corrected here, on its next turn. */
+export async function ensureTurboFitForTurn<T extends string | null | undefined>(
+  harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, sessionId: string, model: T,
+): Promise<T> {
+  if (harness.command !== 'hermes' || !isTurboFitModel(model)) return model;
+  const routable = hermesTurboFitModelId(model!) as T;
+  const ready = await withProgress('starting TurboFit…', (progress) => ensureTurboFitServing(harness, account, sessionId, routable!, progress));
   reportNotice(ready.notice);
+  return routable;
 }
 
 /** A session closed: it no longer holds the runtime. */

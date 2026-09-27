@@ -7,6 +7,7 @@
  * need live beside this file, one concern each.
  */
 
+import { hermesTurboFitModelId } from '../../harness/accounts/hermes-discovery.js';
 import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
 import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
 import { randomUUID } from 'node:crypto';
@@ -239,7 +240,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // real model nobody could name.
     // Typed the way the picker shows it (`claude-code:sonnet`), stored the
     // way the harness takes it (`claude-code/sonnet`).
-    const requested = normalizeModelWord(harness ? modelIdFromDisplay(harness, value) : value);
+    const typed = normalizeModelWord(harness ? modelIdFromDisplay(harness, value) : value);
+    const requested = typed && harness?.command === 'hermes' ? hermesTurboFitModelId(typed) : typed;
     if (requested && !trusted) await assertRealModel(harness, account, requested);
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
