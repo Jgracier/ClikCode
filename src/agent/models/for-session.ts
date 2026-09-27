@@ -9,7 +9,7 @@ import type Conf from 'conf';
 import type { ModelClient } from '../model-client.js';
 import { GatewayModelClient } from './gateway-client.js';
 import { OpenAIModelClient } from './openai-client.js';
-import { ensureLocalModel, releaseLocalModelsOnExit, type LocalModelProgress } from '../../local-models/index.js';
+import { ensureLocalModel, prefixCacheFor, releaseLocalModelsOnExit, type LocalModelProgress } from '../../local-models/index.js';
 import { CLIKCODE_LOCAL_LABEL } from '../../session/route.js';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { harnessCommand } from '../../session/state/paths.js';
@@ -92,11 +92,15 @@ export async function modelClientForSession(session: HarnessSession, config: Con
     // engine's default) and lets the status line name it. Persisted with
     // the turn's own state write.
     if (!session.model) session.model = endpoint.model;
+    const prefixes = endpoint.prefixCacheDir ? prefixCacheFor(Number(new URL(endpoint.baseUrl).port), endpoint.prefixCacheDir) : undefined;
     return new OpenAIModelClient({
       // The engine's URL ends in /v1 and the client appends /v1 itself.
       baseUrl: endpoint.baseUrl.replace(/\/v1\/?$/, ''), model: endpoint.model,
       contextWindow: endpoint.contextWindow, label: CLIKCODE_LOCAL_LABEL,
       ...(endpoint.promptPerSecond ? { promptPerSecond: endpoint.promptPerSecond } : {}),
+      // A cold server reads the system prompt and tools from a saved state
+      // instead of from scratch (prefix-cache.ts).
+      ...(prefixes ? { beforeRequest: (payload: Parameters<typeof prefixes.prepare>[0], signal?: AbortSignal) => prefixes.prepare(payload, signal) } : {}),
     });
   }
   throw new Error(`a ${session.route} session runs a vendor harness, not ClikCode's own agent`);

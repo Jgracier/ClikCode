@@ -64,6 +64,9 @@ export interface ServerArgsInput {
   /** Prompt cache kept in RAM, MiB. llama.cpp's default is 8 GiB, which is
    * memory the budget never granted. */
   cacheRamMib: number;
+  /** Where saved prompt prefixes live (prefix-cache.ts); omitted for
+   * models that cannot use them. */
+  slotSavePath?: string;
 }
 
 export function buildServerArgs(input: ServerArgsInput): string[] {
@@ -85,6 +88,7 @@ export function buildServerArgs(input: ServerArgsInput): string[] {
     '--no-webui',
   ];
   if (input.projectorPath) args.push('--mmproj', input.projectorPath);
+  if (input.slotSavePath) args.push('--slot-save-path', input.slotSavePath);
   if (!usesMmap(fit.placement)) args.push('--load-mode', 'none');
   if (fit.placement === 'gpu') args.push('-ngl', 'all');
   else if (fit.placement === 'gpu-partial') args.push('-ngl', 'auto', '--fit', 'on', '--fit-target', String(input.fitTargetMib ?? 1024));

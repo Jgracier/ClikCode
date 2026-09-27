@@ -31,8 +31,10 @@ import { footprintKey, latestMeasurement, machineKey, measureServer, readFootpri
 import { ensureModelFile, missingBytes } from './models.js';
 import { footprintsFile, preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
+import { prefixCacheDir } from './prefix-cache.js';
 
 export { LOCAL_MODEL_CATALOG, localModelLabel, resolveLocalModelId } from './catalog.js';
+export { prefixCacheFor } from './prefix-cache.js';
 export type { CatalogModel } from './catalog.js';
 
 export interface LocalModelProgress {
@@ -69,6 +71,9 @@ export interface LocalModelEndpoint {
    * depends on it. Both the start and the join path read the same stored
    * measurement, so every turn of a session sees the same number. */
   promptPerSecond?: number;
+  /** Where the server saves prompt prefixes, when it was started to
+   * (prefix-cache.ts). */
+  prefixCacheDir?: string;
   notice?: string;
 }
 
@@ -231,9 +236,10 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     await removeLeases(options.sessionId, joinable.modelId);
     const notice = shrinkNotice(joinable.memoryEvent);
     const speed = (await latestMeasurement(joinable.modelId))?.promptPerSecond;
+    const prefixDir = await slotSavePath(joinable.modelId);
     return {
       baseUrl: `http://127.0.0.1:${joinable.port}/v1`, model: joinable.alias, contextWindow: joinable.context,
-      ...(speed ? { promptPerSecond: speed } : {}), ...(notice ? { notice } : {}),
+      ...(speed ? { promptPerSecond: speed } : {}), ...(prefixDir ? { prefixCacheDir: prefixDir } : {}), ...(notice ? { notice } : {}),
     };
   }
 
@@ -276,9 +282,12 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
       const port = await freePort();
       const ramPart = fit.needBytes - fit.gpuBytes;
       const cacheRamMib = Math.max(0, Math.min(2048, Math.floor((view.budget.ramBytes - ramPart) / 1024 ** 2)));
+      // Sliding-window models cannot resume from a saved state (prefix-cache.ts).
+      const prefixDir = model.kv.sliding ? undefined : prefixCacheDir(serverDir(model.id), fit.cacheType);
+      if (prefixDir) await mkdir(prefixDir, { recursive: true });
       const argsFor = (context: number, cacheRam: number): string[] => buildServerArgs({
         modelPath, ...(projectorPath ? { projectorPath } : {}), port, alias: model.id, fit: { ...fit, context },
-        threads: threadPlan(view.hardware), cacheRamMib: cacheRam,
+        threads: threadPlan(view.hardware), cacheRamMib: cacheRam, ...(prefixDir ? { slotSavePath: prefixDir } : {}),
         ...(view.budget.gpu ? { fitTargetMib: view.budget.gpu.fitTargetMib } : {}),
       });
       const args = argsFor(fit.context, cacheRamMib);
@@ -329,10 +338,23 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
   const notice = [stopNotice(stops, model, startedFit ?? { context: record.context }), choice.notice, describe(model, measured)]
     .filter(Boolean).join(' ') || undefined;
   const speed = (await latestMeasurement(model.id))?.promptPerSecond;
+  const prefixDir = await slotSavePath(model.id);
   return {
     baseUrl: `http://127.0.0.1:${record.port}/v1`, model: record.alias, contextWindow: record.context,
-    ...(speed ? { promptPerSecond: speed } : {}), ...(notice ? { notice } : {}),
+    ...(speed ? { promptPerSecond: speed } : {}), ...(prefixDir ? { prefixCacheDir: prefixDir } : {}), ...(notice ? { notice } : {}),
   };
+}
+
+/** The --slot-save-path a model's server was started with: read from its
+ * launch config, so a server an older ClikCode started (without one) is
+ * joined without prefix caching. */
+async function slotSavePath(modelId: string): Promise<string | undefined> {
+  try {
+    const args = (JSON.parse(await readFile(join(serverDir(modelId), 'supervisor-config.json'), 'utf8')) as { args?: unknown }).args;
+    if (!Array.isArray(args)) return undefined;
+    const at = args.indexOf('--slot-save-path');
+    return at >= 0 && typeof args[at + 1] === 'string' ? args[at + 1] as string : undefined;
+  } catch { return undefined; }
 }
 
 /** The session no longer uses a local model. Its server stops once no

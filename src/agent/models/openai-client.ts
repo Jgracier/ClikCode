@@ -37,6 +37,10 @@ export interface OpenAIModelClientOptions {
   label?: string;
   fetchImpl?: typeof fetch;
   onTimings?: (timings: LlamaTimings) => void;
+  /** Runs before each request with what it will send (ClikCode Local
+   * restores a saved system+tools prefix here). Its failure is swallowed:
+   * the request itself then pays whatever it saved. */
+  beforeRequest?: (payload: { messages: ChatMessage[]; tools?: unknown[] }, signal?: AbortSignal) => Promise<void>;
 }
 
 type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
@@ -154,6 +158,15 @@ export class OpenAIModelClient implements ModelClient {
   async step(request: ModelStepRequest): Promise<ModelStepResult> {
     const { options } = this;
     const doFetch = options.fetchImpl ?? fetch;
+    const messages = toChatMessages(request.system, request.items, this.acceptsImages);
+    const tools = toolsBody(request.tools);
+    if (options.beforeRequest) {
+      try { await options.beforeRequest({ messages, ...(tools.tools ? { tools: tools.tools as unknown[] } : {}) }, request.signal); } catch (error) {
+        if (request.signal?.aborted) throw turnCancelledError();
+        // fail-open-ok: preparation only saves time; the request reads what it has to
+        void error;
+      }
+    }
     let response: Response;
     try {
       response = await doFetch(this.endpoint(), {
@@ -165,8 +178,8 @@ export class OpenAIModelClient implements ModelClient {
         },
         body: JSON.stringify({
           model: options.model,
-          messages: toChatMessages(request.system, request.items, this.acceptsImages),
-          ...toolsBody(request.tools),
+          messages,
+          ...tools,
           stream: true,
           // Without this OpenAI sends no usage at all on a stream; servers that
           // report usage anyway (llama-server) accept and ignore it.
