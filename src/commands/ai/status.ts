@@ -2,13 +2,13 @@
 
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
-import { emitJson } from '../../cli/structured-output.js';
+import { emitResult } from '../../cli/structured-output.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
 
 export async function aiModelsList(): Promise<void> {
   const state = await readState();
-  emitJson({
+  emitResult({
     models: state.accounts.flatMap((account) => account.models.map((model) => ({
       accountId: account.id,
       account: account.label,
@@ -30,13 +30,13 @@ export async function aiUsage(): Promise<void> {
     }),
     { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 },
   );
-  emitJson({ ...totals, avgLatencyMs: totals.calls ? Math.round(totals.latencyMs / totals.calls) : 0, invocations: state.invocations });
+  emitResult({ ...totals, avgLatencyMs: totals.calls ? Math.round(totals.latencyMs / totals.calls) : 0, invocations: state.invocations });
 }
 
 /** Reports the separate ClikDeploy OAuth/API-key gateway identity, never a BYO provider login. */
 export async function aiGatewayStatus(config: Conf): Promise<void> {
   const apiUrl = getApiUrl(config);
-  emitJson({
+  emitResult({
     route: 'gateway',
     connected: Boolean(getApiKeyForUrl(config, apiUrl)),
     apiUrl,

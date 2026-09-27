@@ -1,6 +1,6 @@
 /** Durable settings, written globally or for one provider. */
 
-import { emitJson } from '../../cli/structured-output.js';
+import { emitResult } from '../../cli/structured-output.js';
 import type { HarnessDefaultSettings } from '../../session/model.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
@@ -14,7 +14,7 @@ export async function aiSettingsSetGlobal(key: string, value: string, emit = tru
   const state = await readState();
   applyDefaultSetting(state.globalSettings, key, value);
   await writeState(state);
-  if (emit) emitJson({ globalSettings: state.globalSettings });
+  if (emit) emitResult({ globalSettings: state.globalSettings });
 }
 
 /** Overrides the global default for one provider only; existing sessions are untouched. */
@@ -29,7 +29,7 @@ export async function aiSettingsSetProvider(providerOrHarness: string, key: stri
   if (key.toLowerCase() === 'model' && entry.model) await assertRealModel(harness, undefined, entry.model);
   state.providerSettings[harness.provider] = entry;
   await writeState(state);
-  if (emit) emitJson({ provider: harness.provider, settings: entry });
+  if (emit) emitResult({ provider: harness.provider, settings: entry });
 }
 
 /** Removes every override for one provider, falling back to the global defaults. */
@@ -39,5 +39,5 @@ export async function aiSettingsClearProvider(providerOrHarness: string, emit = 
   if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
   delete state.providerSettings[harness.provider];
   await writeState(state);
-  if (emit) emitJson({ provider: harness.provider, settings: {} });
+  if (emit) emitResult({ provider: harness.provider, settings: {} });
 }

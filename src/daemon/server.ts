@@ -12,7 +12,7 @@ import { mkdir, open, readFile, unlink, writeFile, type FileHandle } from 'node:
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type Conf from 'conf';
-import { emitJson } from '../cli/structured-output.js';
+import { emitResult } from '../cli/structured-output.js';
 import { isAllowedLoopbackHost } from './host-allowlist.js';
 import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
 import { readState } from '../session/state/read.js';
@@ -164,7 +164,7 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('local control API did not expose a TCP address');
     await writeFile(runtimePath, `${JSON.stringify({ pid: process.pid, port: address.port, host: '127.0.0.1', installationId: startupState.installationId, startedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    emitJson({ status: 'running', url: `http://127.0.0.1:${address.port}`, installationId: startupState.installationId, credentialBoundary: 'local-only' });
+    emitResult({ status: 'running', url: `http://127.0.0.1:${address.port}`, installationId: startupState.installationId, credentialBoundary: 'local-only' });
     await new Promise<void>((resolve) => {
       const stop = () => server.close(() => resolve());
       process.once('SIGINT', stop);
@@ -185,10 +185,10 @@ export async function aiStatus(): Promise<void> {
     if (typeof runtime.pid === 'number') {
       try { process.kill(runtime.pid, 0); running = true; } catch (error) { running = (error as NodeJS.ErrnoException).code === 'EPERM'; }
     }
-    emitJson({ status: running ? 'running' : 'stale', ...runtime, credentialBoundary: 'local-only' });
+    emitResult({ status: running ? 'running' : 'stale', ...runtime, credentialBoundary: 'local-only' });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    emitJson({ status: 'stopped' });
+    emitResult({ status: 'stopped' });
   }
 }
 
@@ -199,7 +199,7 @@ export async function aiStop(): Promise<void> {
   try {
     runtime = JSON.parse(await readFile(runtimePath, 'utf8')) as typeof runtime;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emitJson({ status: 'stopped' });
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emitResult({ status: 'stopped' });
     throw error;
   }
   if (runtime.installationId !== state.installationId || typeof runtime.pid !== 'number') {
@@ -208,5 +208,5 @@ export async function aiStop(): Promise<void> {
   try { process.kill(runtime.pid, 'SIGTERM'); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
   }
-  emitJson({ status: 'stopping', pid: runtime.pid });
+  emitResult({ status: 'stopping', pid: runtime.pid });
 }

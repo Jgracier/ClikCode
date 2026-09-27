@@ -14,7 +14,7 @@ import { toCliErrorMessage, toCliErrorDebugDetails, toCliErrorJson } from './err
 import { isDebugMode } from './debug-mode.js';
 import { isJsonDefaultMode } from './output-mode.js';
 import { bindGlobalFlags } from './flags.js';
-import { emitJson } from './structured-output.js';
+import { emitResult } from './structured-output.js';
 import { restoreTerminal } from '../tui/restore.js';
 
 export const CLI_VERSION: string = (() => {
@@ -70,7 +70,7 @@ function logCrashToDisk(kind: 'uncaughtException' | 'unhandledRejection', error:
 
 export function handleCommandError(error: unknown): void {
   if (isJsonDefaultMode()) {
-    emitJson(toCliErrorJson(error));
+    emitResult(toCliErrorJson(error));
     process.exitCode = 1;
     return;
   }
@@ -112,8 +112,8 @@ export function buildBaseProgram(config: Conf, options: { banner?: string; versi
     .name('clikcode')
     .description('The terminal harness for all your AI coding providers')
     .version(options.version ?? CLI_VERSION)
-    .option('--json', 'Render structured JSON output (default behavior; accepted for compatibility)')
-    .option('--human', 'Render human-readable output (default is JSON)')
+    .option('--json', 'Write results as JSON, one record per line (the default when output is not a terminal)')
+    .option('--human', 'Write results as readable text (the default in a terminal)')
     .option(
       '--debug',
       'On failure, also print the stack, HTTP status and response body'
@@ -142,7 +142,7 @@ export function runProgram(program: Command, options: { showHelpWhenBare?: boole
   const name = program.name();
   program.on('command:*', () => {
     if (isJsonDefaultMode()) {
-      emitJson({
+      emitResult({
         status: 'clarification_required',
         command: name,
         reason: 'unknown_command',
