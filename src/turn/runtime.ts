@@ -98,6 +98,11 @@ export function setVendorBackgroundTurnHandler(sessionId: string, handler: Vendo
   if (handler) vendorBackgroundTurnHandlers.set(sessionId, handler);
   else vendorBackgroundTurnHandlers.delete(sessionId);
 }
+/** The registered receiver, if any: a transport that can only hand work over
+ * when someone will show it (native/held-vendor.ts) asks first. */
+export function vendorBackgroundTurnHandlerFor(sessionId: string): VendorBackgroundTurnHandler | undefined {
+  return vendorBackgroundTurnHandlers.get(sessionId);
+}
 
 /** One live child per open ClikCode session, keyed by everything that makes a
  * child reusable (harness, account, profile env, cwd). A different key closes

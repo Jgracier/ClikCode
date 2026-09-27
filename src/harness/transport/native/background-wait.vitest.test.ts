@@ -188,3 +188,56 @@ describe('vendor background work read off the stream', () => {
     expect(started).toHaveLength(1);
   });
 });
+
+describe('ending the turn before the background work', () => {
+  it('is quiet at the first result while the task still runs, and at the follow-up\'s result', () => {
+    const records = fixture('claude-background-bash');
+    const [first, last] = results(records);
+    const quietAt: number[] = [];
+    let index = 0;
+    const wait = createBackgroundWait({ onSettled: () => undefined, onQuiet: () => quietAt.push(index) });
+    for (; index < records.length; index += 1) {
+      wait.note(records[index]!);
+      if (index === first) {
+        expect(wait.pending).toBe(1);
+        expect(wait.quiet).toBe(true);
+        expect(wait.settled).toBe(false);
+      }
+    }
+    wait.dispose();
+    expect(quietAt).toEqual([first, last]);
+  });
+
+  it('lets still-running tasks go a bounded while after a result, when asked to', () => {
+    vi.useFakeTimers();
+    let settled = false;
+    const finished: string[] = [];
+    const wait = createBackgroundWait({
+      onSettled: () => { settled = true; }, onTaskFinished: (id, status) => finished.push(`${id}:${status}`), resultGraceMs: 60_000,
+    });
+    wait.note({ type: 'system', subtype: 'init' });
+    wait.note({ type: 'system', subtype: 'task_started', task_id: 'dev', is_backgrounded: true });
+    wait.note({ type: 'result', subtype: 'success', is_error: false });
+    vi.advanceTimersByTime(59_999);
+    expect(settled).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(settled).toBe(true);
+    expect(finished).toEqual(['dev:abandoned']);
+  });
+
+  it('does not let tasks go while a follow-up turn runs', () => {
+    vi.useFakeTimers();
+    let settled = false;
+    const wait = createBackgroundWait({ onSettled: () => { settled = true; }, resultGraceMs: 1_000 });
+    wait.note({ type: 'system', subtype: 'task_started', task_id: 'a', is_backgrounded: true });
+    wait.note({ type: 'system', subtype: 'task_started', task_id: 'b', is_backgrounded: true });
+    wait.note({ type: 'result', subtype: 'success', is_error: false });
+    wait.note({ type: 'system', subtype: 'task_notification', task_id: 'a', status: 'completed' });
+    wait.note({ type: 'system', subtype: 'init' });
+    vi.advanceTimersByTime(5_000);
+    expect(settled).toBe(false);
+    wait.note({ type: 'result', subtype: 'success', is_error: false });
+    vi.advanceTimersByTime(1_000);
+    expect(settled).toBe(true);
+  });
+});
