@@ -131,7 +131,7 @@ export interface PinnedResponse {
   body: AsyncIterable<Uint8Array>;
 }
 
-/** GET unless stated: web_search's Tavily backend is the one caller that POSTs. */
+/** GET unless stated: web_search POSTs to Tavily's API and DuckDuckGo's search form. */
 export interface PinnedRequestOptions {
   signal?: AbortSignal;
   headers: Record<string, string>;
