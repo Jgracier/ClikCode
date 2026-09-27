@@ -50,7 +50,7 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
   session.effort = 'platform-managed';
   session.accountFailover = 'never';
   session.gatewayConfirmed = true;
-  delete session.permissionMode;
+  // The approval setting stays: the Gateway route's agent runs here and honours it.
   delete session.nativeHarness;
   delete session.nativeSessionId;
   delete session.nativeStartedAt;

@@ -14,13 +14,10 @@ export function normalizedPermissionMode(value: unknown): HarnessDefaultSettings
 }
 
 export function normalizedSessionPermission(session: HarnessSession): Pick<HarnessSession, 'permissionMode'> {
-  // Gateway authorization is enforced by the authenticated platform and has
-  // no local Ask/Bypass/Auto override. Keep that distinction in persisted
-  // state too; otherwise every read silently reintroduced `ask` after the
-  // Gateway creation/switch paths deliberately removed it.
-  return session.route === 'gateway'
-    ? { permissionMode: undefined }
-    : { permissionMode: normalizedPermissionMode(session.permissionMode) };
+  // Both routes. The Gateway route runs ClikCode's own agent on this machine,
+  // which asks, bypasses or auto-approves by this setting like any harness;
+  // the Gateway supplies the model, not the decision about local files.
+  return { permissionMode: normalizedPermissionMode(session.permissionMode) };
 }
 
 export function normalizedConversation(session: HarnessSession): Pick<HarnessSession, 'conversationId'> {
