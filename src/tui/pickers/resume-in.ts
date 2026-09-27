@@ -18,10 +18,11 @@ import { preferredAccountId } from '../../commands/ai/preferred-account.js';
 import { discardInterruptedTurn } from '../../turn/runtime.js';
 import { nextQuotaReset, quotaResetPhrase } from '../../turn/usage-exhausted.js';
 import { chooseOption } from './choose.js';
+import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 
-/** An account that can take a turn now. */
+/** An account that can take a turn now -- the one rule failover uses too. */
 export function accountHasUsage(account: AiHarnessAccount): boolean {
-  return account.status === 'ready' && account.quotaState !== 'exhausted' && !account.verification;
+  return accountCanTakeTurn(account);
 }
 
 /** Harnesses other than `current` with an account that has usage, best

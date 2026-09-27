@@ -4,7 +4,7 @@ import { isClikCodeAgent } from '../../session/route.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { learnedUsageReading } from '../../harness/accounts/usage-learning.js';
-import { usageReadingIsCurrent, usageResetLabel, type AccountUsageReading, type UsageWindow } from '../../harness/accounts/usage-reading.js';
+import { accountQuotaSpent, usageReadingIsCurrent, usageResetLabel, type AccountUsageReading, type UsageWindow } from '../../harness/accounts/usage-reading.js';
 
 type Invocation = HarnessState['invocations'][number];
 
@@ -72,7 +72,7 @@ function allowance(account: AiHarnessAccount, state: HarnessState, now: number):
   }
   if (stored?.label && stored.failed !== true && windows.length === 0) return { label: stored.label };
   if (account.status === 'needs_login') return { label: 'needs reauthentication' };
-  if (account.quotaState === 'exhausted') return { label: 'out of usage' };
+  if (accountQuotaSpent(account, now)) return { label: 'out of usage' };
   return { label: 'not reported yet' };
 }
 

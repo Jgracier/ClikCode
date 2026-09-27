@@ -21,6 +21,7 @@ import type { AiHarnessAccount, AiHarnessOptionDefinition, AiHarnessPermissionMo
 import type { PickerOption } from '../harness/prompter.js';
 import type { HarnessDefaultSettings, HarnessSession } from './model.js';
 import { harnessCanLogout } from '../harness/accounts/auth-files.js';
+import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
 
 /** Effort words every harness understands, narrowed per harness by
  * harnessSupportsEffort. */
@@ -361,7 +362,7 @@ function providerAccountPickerOptions(
         detail: [
           account.verification ? chalk.yellow('verify')
             : account.status === 'needs_login' ? chalk.yellow('reauth')
-              : account.quotaState === 'exhausted' ? chalk.yellow('out of usage')
+              : accountQuotaSpent(account) ? chalk.yellow('out of usage')
                 : usage ?? (usagePending ? '…' : ''),
           account.id === session.accountId ? '· current' : '',
         ].filter(Boolean).join(' '),

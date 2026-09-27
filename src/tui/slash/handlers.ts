@@ -56,6 +56,7 @@ import { nativeManagerListing } from './native-manager.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
 import { addSessionDirectory, changeSessionWorkspace, workspaceDiff } from './workspace.js';
 import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from '../../commands/ai/shell-run.js';
+import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 
 function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
@@ -501,9 +502,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       }
       session.accountId = account.id;
       // Explicit selection is the user's retry signal for an account previously
-      // marked exhausted. Automatic routing never guesses a reset time.
-      account.quotaState = 'available';
-      account.quotaRetryAt = undefined;
+      // marked exhausted: it is tried now rather than when the mark expires.
+      clearQuotaMark(account);
       session.provider = account.provider;
       session.route = 'local';
       if (leavingAgentRoute) {
