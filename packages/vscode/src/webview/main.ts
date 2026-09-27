@@ -72,7 +72,9 @@ function renderBanner(current: ChatModel): void {
 
 function noteHtml(note: Note): string {
   if (note.kind === 'panel') {
-    return `<details class="panel" open><summary>${escapeHtml(note.title ?? '')}</summary><pre>${escapeHtml(note.text)}</pre></details>`;
+    // A long panel (/help) starts folded; a short answer is shown.
+    const open = note.text.split('\n').length <= 12 ? ' open' : '';
+    return `<details class="panel"${open}><summary>${escapeHtml(note.title ?? '')}</summary><pre>${escapeHtml(note.text)}</pre></details>`;
   }
   return `<div class="notice ${note.level ?? 'info'}">${escapeHtml(note.text)}</div>`;
 }

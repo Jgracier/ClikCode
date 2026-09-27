@@ -100,7 +100,8 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       }
       await slash(chosen.command)();
     }),
-    vscode.commands.registerCommand('clikcode.askAboutSelection', async () => {
+    // A question passed as the argument (a keybinding's `args`) skips the box.
+    vscode.commands.registerCommand('clikcode.askAboutSelection', async (asked?: unknown) => {
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.selection.isEmpty) {
         void vscode.window.showInformationMessage('Select some code first.');
@@ -114,7 +115,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
         endLine: selection.end.character === 0 && selection.end.line > selection.start.line ? selection.end.line : selection.end.line + 1,
         text: document.getText(selection),
       };
-      const question = await vscode.window.showInputBox({ prompt: `Ask ClikCode about ${selected.path}`, placeHolder: 'What do you want to know or change? (Enter with nothing: put it in the chat box instead)' });
+      const question = typeof asked === 'string' ? asked : await vscode.window.showInputBox({ prompt: `Ask ClikCode about ${selected.path}`, placeHolder: 'What do you want to know or change? (Enter with nothing: put it in the chat box instead)' });
       if (question === undefined) return;
       await view.reveal();
       if (question.trim()) await controller.send(questionWithSelection(question, selected));
