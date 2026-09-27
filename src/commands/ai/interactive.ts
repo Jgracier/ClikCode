@@ -33,7 +33,7 @@ import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { commandDuringTurn, enqueueCommandLine } from '../../tui/slash/queue.js';
 import { impliedHarnessCommand } from '../../tui/slash/infer-provider.js';
 import { aiHarnessSelect } from './harness.js';
-import { nativeUsageReading } from '../../harness/accounts/account-usage.js';
+import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, discardInterruptedTurn, nativeAvailableCommands, persistentTransports, preserveInterruptedTurn, synchronizeNativeTranscript, turnEnvironment } from '../../turn/runtime.js';
@@ -261,6 +261,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     void readState().then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
       if (latest) refreshUsage(latest, latestState);
+      // The other accounts too, but only one whose quota may have come back:
+      // otherwise an account that ran out showed its last "0% left" until
+      // someone happened to open the picker, and read as spent for hours.
+      return recheckRecoveredAccounts(latestState);
     }).catch(() => { /* Usage is optional provider metadata. */ });
     // Half the usage window, so every other tick finds the reading expired and
     // refreshes it. A tick longer than the window would land inside it and
