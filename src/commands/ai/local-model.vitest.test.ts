@@ -36,6 +36,7 @@ const { localModelRows, localModelSelection } = await import('../../tui/pickers/
 const { resolveLocalModelId, localModelLabel } = await import('../../local-models/catalog');
 const { resolveSlashCommand, routeSlashInput, slashRouteAppliesDuringTurn } = await import('../../tui/slash/registry');
 const { readState } = await import('../../session/state/read');
+const { startOrResumeChat } = await import('./harness');
 const { writeState } = await import('../../session/state/write');
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -192,5 +193,24 @@ describe('the model on a session', () => {
     expect((await readState()).sessions[0]!.model).toBe('gpt-oss-20b');
     await expect(aiSessionSet(created.id, { model: 'sonnet' })).rejects.toThrow(/not a ClikCode Local model/);
     await expect(aiSessionCreate({ route: 'clikcode-local', effort: 'high' })).rejects.toThrow(/effort/);
+  });
+});
+
+describe('clikcode send --harness clikcode-local', () => {
+  it('starts a ClikCode Local chat with the model and approval mode asked for', async () => {
+    const id = await startOrResumeChat({ harness: 'clikcode-local', model: 'Qwen3.5 4B', permissions: 'auto' });
+    expect((await readState()).sessions.find((item) => item.id === id)).toMatchObject({
+      route: 'clikcode-local', provider: 'clikcode-local', model: 'qwen3.5-4b', permissionMode: 'auto', accountId: null,
+    });
+  });
+
+  it('refuses a model outside the catalog and a mode that does not exist', async () => {
+    await expect(startOrResumeChat({ harness: 'clikcode-local', model: 'sonnet' })).rejects.toThrow(/not a ClikCode Local model/);
+    await expect(startOrResumeChat({ harness: 'clikcode-local', permissions: 'yolo' })).rejects.toThrow(/permission modes/);
+  });
+
+  it('continues a chat only on the route it is on', async () => {
+    await stored(session({ id: 'aaaaaaaa-1111', route: 'gateway', messages: [{ role: 'user', content: 'hi' }] } as Partial<HarnessSession>));
+    await expect(startOrResumeChat({ harness: 'clikcode-local', chat: 'aaaaaaaa-1111' })).rejects.toThrow(/runs on ClikDeploy Gateway/);
   });
 });
