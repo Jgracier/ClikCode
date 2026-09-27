@@ -33,7 +33,6 @@ describe('a gateway turn runs the agent loop on this machine', () => {
     ]);
     const result = await runGatewayHarnessSessionTurn({
       session: session(cwd), prompt: 'what does src/a.ts export?',
-      baseUrl: 'https://example.invalid', apiKey: 'k', version: '0.0.0-test',
       modelClient: client as never,
       onActivity: (event) => activity.push(`${event.kind}:${event.label}`),
       onResponseDelta: (text) => { answer += text; },
