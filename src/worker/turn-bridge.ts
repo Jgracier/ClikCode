@@ -46,6 +46,21 @@ async function clientFor(sessionId: string): Promise<WorkerClient> {
   return client;
 }
 
+/** Have a conversation's worker get ready for the route it is on now -- see
+ * the `prepare` command. `spawn: false` only reaches a worker this terminal
+ * already has: a conversation that moved off an agent route needs its
+ * servers stopped, but one that never had a worker has nothing to stop. */
+export async function prepareSessionWorker(sessionId: string, options: { spawn: boolean }): Promise<void> {
+  if (!options.spawn && !clients.has(sessionId)) return;
+  (await clientFor(sessionId)).send({ type: 'prepare' });
+}
+
+/** This terminal has left a conversation: its worker stops what it started
+ * for it. The worker itself stays, so going back to it is instant. */
+export function releaseSessionWorker(sessionId: string): void {
+  clients.get(sessionId)?.send({ type: 'release' });
+}
+
 export async function closeAllWorkerClients(): Promise<void> {
   for (const client of clients.values()) { client.send({ type: 'detach' }); client.close(); }
   clients.clear();

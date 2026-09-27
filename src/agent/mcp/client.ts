@@ -39,8 +39,14 @@ export class McpClient {
 
   /** Opens the transport and completes the handshake, or closes what it
    * opened and throws with the server's own explanation attached. */
-  static async connect(spec: McpServerSpec, options: ConnectOptions): Promise<McpClient> {
+  static async connect(spec: McpServerSpec, options: ConnectOptions & { signal?: AbortSignal }): Promise<McpClient> {
     const transport = openTransport(spec, options, options.fetchImpl);
+    // Aborted mid-start (the conversation left the agent route): the server
+    // and everything it spawned go at once, not when the handshake would have
+    // finished or timed out.
+    const onAbort = (): void => { transport.killNow(); };
+    if (options.signal?.aborted) onAbort();
+    options.signal?.addEventListener('abort', onAbort, { once: true });
     try {
       const result = await transport.request('initialize', {
         protocolVersion: MCP_PROTOCOL_VERSION,
@@ -56,6 +62,8 @@ export class McpClient {
       const detail = transport.detail();
       await transport.close().catch(() => undefined);
       throw withDetail(error, detail);
+    } finally {
+      options.signal?.removeEventListener('abort', onAbort);
     }
   }
 

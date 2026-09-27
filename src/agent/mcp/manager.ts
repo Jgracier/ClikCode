@@ -48,6 +48,11 @@ interface ServerState {
   /** Set by `notifications/tools/list_changed`; the next turn re-lists. */
   stale?: boolean;
   failure?: { message: string; at: number; reported?: boolean };
+  /** Shut down or removed from the config. A start still in flight when that
+   * happened must not leave a server behind: it closes what it started. */
+  retired?: boolean;
+  /** Aborts a start in flight, killing the server it spawned. */
+  starting?: AbortController;
 }
 
 function firstLine(error: unknown): string {
@@ -109,6 +114,7 @@ export class McpManager {
   /** Stops every server. Safe to call more than once. */
   async shutdown(): Promise<void> {
     const states = [...this.servers.values()];
+    for (const state of states) { state.retired = true; state.starting?.abort(); }
     this.servers.clear();
     process.off('exit', this.killAll);
     this.exitHookInstalled = false;
@@ -121,6 +127,8 @@ export class McpManager {
     for (const [name, state] of this.servers) {
       const spec = wanted.get(name);
       if (spec && JSON.stringify(spec) === state.key) continue;
+      state.retired = true;
+      state.starting?.abort();
       this.servers.delete(name);
       stopping.push(this.stop(state));
     }
@@ -156,16 +164,25 @@ export class McpManager {
     try {
       if (!state.client) {
         this.installExitHook();
-        state.client = await McpClient.connect(state.spec, {
+        state.starting = new AbortController();
+        const client = await McpClient.connect(state.spec, {
+          signal: state.starting.signal,
           timeoutMs: this.timeouts.connectMs,
           ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
           onNotification: (method) => { if (method === 'notifications/tools/list_changed') state.stale = true; },
         });
+        // Shut down while it was starting: nothing owns it any more, and the
+        // exit hook that would have killed it is gone -- close it now.
+        state.starting = undefined;
+        if (state.retired) { await client.close().catch(() => undefined); return; }
+        state.client = client;
       }
       state.stale = false;
       state.tools = await state.client.listTools(this.timeouts.connectMs);
+      if (state.retired) { await this.stop(state); return; }
       state.failure = undefined;
     } catch (error) {
+      state.starting = undefined;
       const message = firstLine(error);
       state.failure = { message, at: this.now(), reported: state.failure?.message === message && state.failure.reported };
       await this.stop(state);
@@ -238,3 +255,23 @@ async function sharedToolset(stateDir: string): Promise<McpToolset> {
     return { tools: [], notes: [`MCP tools are unavailable this turn: ${firstLine(error)}`] };
   }
 }
+
+/** Start this state directory's servers now, rather than on the first turn:
+ * a conversation that has just chosen an agent route will want them, and
+ * `npx -y` servers take seconds. Never throws; a server that will not start
+ * is reported by the turn that wanted it, as before. */
+export function prepareMcp(stateDir: string): void {
+  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return;
+  void sharedToolset(stateDir).catch(() => undefined);
+}
+
+/** Stop every server this process started: the conversation left the agent
+ * route, or nobody is attached to it any more. The next turn that wants
+ * tools starts them again. */
+export async function releaseMcp(): Promise<void> {
+  const current = shared;
+  shared = undefined;
+  imports = undefined;
+  await current?.manager.shutdown();
+}
+
