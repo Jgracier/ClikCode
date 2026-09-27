@@ -101,7 +101,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action((options: { days?: string }) => aiGatewayUsage(config, options));
   gateway.command('credit').description('Add AI credit to your ClikDeploy Gateway account (opens a Stripe checkout)')
     .option('--amount <usd>', 'Whole dollars, 5-500 (default: your account\'s top-up amount)')
-    .action((options: { amount?: string }) => aiGatewayCredit(config, options));
+    .option('--auto-topup <on|off>', 'Turn automatic top-up of your saved card on or off, instead of buying')
+    .action((options: { amount?: string; autoTopup?: string }) => aiGatewayCredit(config, options));
   gateway.command('login').description('Sign in to ClikDeploy Gateway')
     .option('--github', 'Use GitHub OAuth instead of Google OAuth')
     .action(async (options) => { await gatewayLogin(config, { google: !options.github, github: Boolean(options.github) }); });
