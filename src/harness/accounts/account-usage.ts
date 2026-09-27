@@ -195,9 +195,13 @@ export function accountsDueForUsageRecheck(
 }
 
 /** When each account was last re-checked by this process: a probe that keeps
- * failing is asked at most this often, whatever the poll rate. */
+ * failing is asked at most this often, whatever the poll rate. Fifteen
+ * minutes, not one: for some vendors (Claude) reading usage IS a model turn,
+ * and a re-check that keeps failing once a minute would spend the very quota
+ * it is waiting for. A reset that has passed is still noticed within a
+ * quarter hour, and a turn on the account clears the mark at once anyway. */
 const recheckedAt = new Map<string, number>();
-const RECHECK_MIN_INTERVAL_MS = 60_000;
+const RECHECK_MIN_INTERVAL_MS = 15 * 60_000;
 
 /** Re-read every account that is due (see above). Each probe publishes its
  * reading to the shared record and clears a refusal it overtakes, so every
