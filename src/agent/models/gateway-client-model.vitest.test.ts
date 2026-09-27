@@ -13,4 +13,17 @@ describe('a Gateway step', () => {
     expect(hints[0]).toMatchObject({ model: 'gpt-5.6-sol', effort: 'auto' });
     expect(hints[1]).not.toHaveProperty('model');
   });
+
+  it('fails a stream that goes silent as retryable incomplete_stream, and cancels it', async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('data: {"type":"text-delta","text":"par"}\n\n')); },
+      cancel() { cancelled = true; },
+    });
+    const fetchImpl = vi.fn(async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const error = await new GatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', version: '1', idleTimeoutMs: 100, fetchImpl: fetchImpl as never })
+      .step(step).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: 'incomplete_stream', kind: 'other' });
+    expect(cancelled).toBe(true);
+  });
 });

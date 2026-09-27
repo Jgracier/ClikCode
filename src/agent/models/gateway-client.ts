@@ -18,6 +18,33 @@ interface GatewayModelClientOptions {
   /** The model's window as the Gateway's model list gives it, known before
    * the first step reports one; it picks the context profile. */
   contextWindow?: number;
+  /** Longest silence a step's stream may keep; see STREAM_IDLE_TIMEOUT_MS. */
+  idleTimeoutMs?: number;
+}
+
+/** A model stream that has said nothing for this long is treated as cut off:
+ * the connection is dropped and the step fails as `incomplete_stream`, which
+ * the loop resends when nothing had streamed yet. Without it a stalled
+ * connection -- a proxy that stopped forwarding, a server that wedged
+ * mid-answer -- held the turn open forever with no error to show. Reset by
+ * every chunk, so a slow but live answer is never cut. */
+export const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+/** One read of a model stream, failing as `incomplete_stream` if nothing
+ * arrives within `ms`. Zero or undefined waits as long as it takes. */
+export async function readWithin<T>(reader: ReadableStreamDefaultReader<T>, ms: number | undefined, label: string): Promise<{ done: boolean; value?: T }> {
+  if (!ms || ms <= 0) return reader.read();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new ModelClientError(`${label} sent nothing for ${Math.round(ms / 1000)}s; the connection was dropped`, { kind: 'other', code: 'incomplete_stream' })), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export class ModelClientError extends Error {
@@ -249,7 +276,7 @@ export class GatewayModelClient implements ModelClient {
     const reader = response.body.getReader();
     try {
       for (;;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readWithin(reader, options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS, 'ClikDeploy Gateway');
         if (done) break;
         if (value) for (const event of parser.push(value)) handle(event);
       }

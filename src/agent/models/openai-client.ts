@@ -4,7 +4,7 @@
 import type { ConversationItem, ImageInput, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage, ToolSpec } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
 import type { ContextHints } from '../context-profile.js';
-import { ModelClientError, parseRetryAfter, SseParser, type SseEvent } from './gateway-client.js';
+import { ModelClientError, parseRetryAfter, readWithin, SseParser, STREAM_IDLE_TIMEOUT_MS, type SseEvent } from './gateway-client.js';
 
 /** llama-server's per-request timings, passed through for callers that show speed. */
 export interface LlamaTimings {
@@ -41,7 +41,15 @@ export interface OpenAIModelClientOptions {
    * restores a saved system+tools prefix here). Its failure is swallowed:
    * the request itself then pays whatever it saved. */
   beforeRequest?: (payload: { messages: ChatMessage[]; tools?: unknown[] }, signal?: AbortSignal) => Promise<void>;
+  /** Longest silence once the answer has started (STREAM_IDLE_TIMEOUT_MS). */
+  idleTimeoutMs?: number;
+  /** Longest wait for the first chunk. Far longer than the idle limit: a
+   * server on a CPU reads a deep prompt for minutes before it says anything,
+   * and llama-server sends nothing at all while it reads. */
+  firstChunkTimeoutMs?: number;
 }
+
+const FIRST_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
 type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
@@ -252,8 +260,11 @@ export class OpenAIModelClient implements ModelClient {
 
     const reader = response.body.getReader();
     try {
+      let started = false;
       for (;;) {
-        const { done: ended, value } = await reader.read();
+        const limit = started ? options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS : options.firstChunkTimeoutMs ?? FIRST_CHUNK_TIMEOUT_MS;
+        const { done: ended, value } = await readWithin(reader, limit, this.label);
+        started = true;
         if (ended) break;
         if (value) for (const event of parser.push(value)) handle(event);
       }
