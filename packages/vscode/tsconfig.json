@@ -1,0 +1,17 @@
+{
+  "//": "Type-checks the extension together with the ClikCode sources it takes its protocol types from (../../src/ide/protocol.ts), under the same compiler options, so a protocol change that breaks the extension fails here.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node", "vscode", "mocha"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "test/**/*"]
+}
