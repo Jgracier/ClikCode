@@ -145,8 +145,8 @@ async function searchDuckDuckGo(call: BackendCall): Promise<SearchResult[]> {
     body: new URLSearchParams({ q: call.query }).toString(),
   });
   // No retry: measured here, four quick searches trip a lockout that lasts
-  // well past 30 s, and retrying inside it only prolongs it.
-  if (status === 202 || /anomaly-modal|anomaly\.js/.test(text)) throw new BackendError('DuckDuckGo answered with its bot check instead of results (it does this after a burst of searches); wait a minute before searching again, or set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY');
+  // for minutes, and retrying inside it only prolongs it.
+  if (status === 202 || /anomaly-modal|anomaly\.js/.test(text)) throw new BackendError('DuckDuckGo answered with its bot check instead of results (it does this after a burst of searches, and the lockout can last minutes); search less often, or set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY');
   if (status !== 200) throw httpFailure('DuckDuckGo', status, '');
   const results = parseDuckDuckGoHtml(text);
   if (!results.length && !/class="no-results"|No\s+results\./i.test(text) && /<div class="result\b/.test(text)) {

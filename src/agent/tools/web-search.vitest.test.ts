@@ -214,7 +214,7 @@ describe('web_search tool', () => {
     expect(result.output).toBe([
       'Web search failed.',
       '- Tavily returned HTTP 429 (rate limited or out of quota): slow down',
-      '- DuckDuckGo answered with its bot check instead of results (it does this after a burst of searches); wait a minute before searching again, or set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY',
+      '- DuckDuckGo answered with its bot check instead of results (it does this after a burst of searches, and the lockout can last minutes); search less often, or set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY',
     ].join('\n'));
   });
 
