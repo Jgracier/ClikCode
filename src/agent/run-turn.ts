@@ -9,6 +9,7 @@ import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPerm
 import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
 import { sessionState } from './session-state.js';
+import { discoverSkills, SKILL_TOOL, skillsPromptSection } from './skills.js';
 import { defaultTools, mergeTools, toolSpecs } from './tools/registry.js';
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
 import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind, type ModelStepResult, type ModelToolCall, type TokenUsage } from './model-client.js';
@@ -121,7 +122,9 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   const [loaded, rules, baseSystem] = await abortable(Promise.all([
     store.load(),
     loadPermissionRules(cwd),
-    buildSystemPrompt({ cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir }),
+    // Skills are listed only when the tool that loads them is present.
+    (tools.some((tool) => tool.name === SKILL_TOOL) ? discoverSkills({ cwd, stateDir: input.stateDir, homeDir, turnId }) : Promise.resolve({ skills: [] }))
+      .then((catalog) => buildSystemPrompt({ cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir, skillsSection: skillsPromptSection(catalog.skills) })),
   ]), signal);
   let items: ConversationItem[] = loaded;
   const append = async (...added: ConversationItem[]): Promise<void> => { items.push(...added); await store.append(...added); };
