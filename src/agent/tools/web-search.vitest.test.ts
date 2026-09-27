@@ -135,10 +135,14 @@ describe('web_search tool', () => {
       tool: tool(), args: { query: 'x' }, mode: 'ask', planMode: false, scope, hasApprover: true,
       rules: parsePermissionRules([rule]), command: undefined,
     } as unknown as Parameters<typeof decidePermission>[0]).decision).toBe('allow');
-    expect(decidePermission({
-      tool: tool(), args: { query: 'x' }, mode: 'ask', planMode: false, scope, hasApprover: true,
+    const decideIn = (mode: string) => decidePermission({
+      tool: tool(), args: { query: 'x' }, mode, planMode: false, scope, hasApprover: true,
       rules: parsePermissionRules([]), command: undefined,
-    } as unknown as Parameters<typeof decidePermission>[0]).decision).toBe('ask');
+    } as unknown as Parameters<typeof decidePermission>[0]).decision;
+    // The session's mode is the whole policy: only ask mode asks.
+    expect(decideIn('ask')).toBe('ask');
+    expect(decideIn('auto')).toBe('allow');
+    expect(decideIn('bypass')).toBe('allow');
   });
 
   it('with no keys, searches DuckDuckGo and prints a compact numbered list', async () => {
