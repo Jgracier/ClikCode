@@ -131,9 +131,17 @@ export interface PinnedResponse {
   body: AsyncIterable<Uint8Array>;
 }
 
+/** GET unless stated: web_search's Tavily backend is the one caller that POSTs. */
+export interface PinnedRequestOptions {
+  signal?: AbortSignal;
+  headers: Record<string, string>;
+  method?: 'GET' | 'POST';
+  body?: string;
+}
+
 export interface NetworkSeams {
   lookup?(hostname: string): Promise<ResolvedAddress[]>;
   /** Performs ONE request (no redirect following) against the already
    * vetted address, so a DNS answer cannot change between check and use. */
-  request?(url: URL, pinned: ResolvedAddress, options: { signal?: AbortSignal; headers: Record<string, string> }): Promise<PinnedResponse>;
+  request?(url: URL, pinned: ResolvedAddress, options: PinnedRequestOptions): Promise<PinnedResponse>;
 }
