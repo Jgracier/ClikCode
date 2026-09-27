@@ -1,5 +1,6 @@
 /** `/usage`: quota, tokens, and cost for the provider you are in. */
 
+import { isClikCodeAgent } from '../../session/route.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { learnedUsageReading } from '../../harness/accounts/usage-learning.js';
@@ -113,7 +114,8 @@ export function usageReport(
   const now = options.now ?? Date.now();
   const ids = providerIds(session, options.providerId);
   const providerName = options.providerName ?? session.provider ?? session.nativeHarness ?? 'this provider';
-  const accounts = session.route === 'gateway' ? [] : state.accounts.filter((account) => ids.has(account.provider));
+  // ClikCode's own agent signs in to no vendor account.
+  const accounts = isClikCodeAgent(session) ? [] : state.accounts.filter((account) => ids.has(account.provider));
   const accountIds = new Set(accounts.map((account) => account.id));
   const providerInvocations = state.invocations.filter((item) => accountIds.has(item.accountId) || ids.has(item.provider));
   const totals = { ...sumInvocations(providerInvocations), accounts: accounts.length };

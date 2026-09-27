@@ -7,6 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import { isClikCodeAgent } from '../../session/route.js';
 import { ensureTurboFitForTurn } from './turbofit.js';
 import { chatNamed, latestChat } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
@@ -190,7 +191,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   if (rl instanceof TerminalHarnessPrompter) TERMINAL.active = rl;
   rl.render?.(session);
   let selectionNotice: string | undefined;
-  if (!session.nativeHarness && session.route !== 'gateway') {
+  if (!session.nativeHarness && !isClikCodeAgent(session)) {
     // Nothing here ends ClikCode: Esc on the picker leaves the chat with no
     // provider (the first message or command that needs one asks again), and
     // a harness that cannot be installed from here says how, on screen.
@@ -487,7 +488,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           outcome = { prompt: route.prompt, echo: true };
         }
         else if (route.kind === 'native') {
-          if (commandSession.route === 'gateway') throw new Error('Native harness commands apply only to local harnesses.');
+          if (isClikCodeAgent(commandSession)) throw new Error('Native harness commands apply only to local harnesses.');
           outcome = { prompt: route.prompt, echo: true };
         }
         else if (route.kind === 'unknown') throw new Error(unknownSlashMessage(route));

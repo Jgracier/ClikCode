@@ -6,6 +6,7 @@
  * harness names -- availability is decided from catalog fields only. */
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
+import { AGENT_COMPACTS_ITSELF, isClikCodeAgent, isGatewayService } from '../../session/route.js';
 
 type SlashGroup =
   | 'Common' | 'Conversation' | 'Workspace' | 'Provider' | 'Settings' | 'Sessions' | 'Info' | 'Tools' | 'Custom' | 'Switch harness';
@@ -74,8 +75,18 @@ interface SlashCommandEntry {
 
 const always = (): SlashAvailability => ({ available: true });
 const GATEWAY_MANAGED = 'ClikDeploy Gateway selects this by platform policy; it applies only to local harnesses.';
-const localOnly = (session: HarnessSession | undefined): SlashAvailability =>
-  session?.route === 'gateway' ? { available: false, reason: GATEWAY_MANAGED } : { available: true };
+const CLIKCODE_LOCAL_AGENT = "ClikCode Local runs ClikCode's own agent; this applies only to vendor harnesses.";
+/** Vendor-harness commands: neither route that runs ClikCode's own agent has
+ * a harness for them to reach. The reason names why for each route. */
+const localOnly = (session: HarnessSession | undefined): SlashAvailability => {
+  if (!isClikCodeAgent(session)) return { available: true };
+  return { available: false, reason: isGatewayService(session) ? GATEWAY_MANAGED : CLIKCODE_LOCAL_AGENT };
+};
+/** ClikCode's own agent compacts its context by itself; /compact is the
+ * vendor-harness summary-and-branch path. */
+const vendorCompaction = (session: HarnessSession | undefined): SlashAvailability => (isClikCodeAgent(session)
+  ? { available: false, reason: AGENT_COMPACTS_ITSELF }
+  : { available: true });
 const needsHarness = (what: string) => (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
   const local = localOnly(session);
   if (!local.available) return local;
@@ -91,7 +102,7 @@ const needsRepoAccess = (_name: string) => (): SlashAvailability => ({ available
  * the user's filesystem an agent may touch without asking. */
 const bothRoutes = (what: string) => (
   session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined,
-): SlashAvailability => (session?.route === 'gateway'
+): SlashAvailability => (isClikCodeAgent(session)
   ? { available: true }
   : harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.`, needs: 'provider' });
 
@@ -108,7 +119,7 @@ function entry(
 
 export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
-  entry('compact', 'Conversation', 'summarize the conversation and continue in a fresh native session', { argHint: '[focus]', availability: localOnly }),
+  entry('compact', 'Conversation', 'summarize the conversation and continue in a fresh native session', { argHint: '[focus]', availability: vendorCompaction }),
   entry('history', 'Conversation', 'show this conversation'),
   entry('copy', 'Conversation', 'copy the last answer'),
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),

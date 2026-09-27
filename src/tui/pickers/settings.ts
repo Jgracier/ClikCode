@@ -10,6 +10,7 @@
  * harness. That was only reachable before by typing
  * `/settings provider <id> <key> <value>`. */
 
+import { clikCodeAgentLabel, isClikCodeAgent } from '../../session/route.js';
 import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -57,7 +58,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
     const efforts = harness && harnessSupportsEffort(harness) ? (await effortChoicesFor(harness, account, session.model)).values : [];
-    const permissions = sessionPermissionModes(session, session.route === 'gateway' ? undefined : harness);
+    const permissions = sessionPermissionModes(session, isClikCodeAgent(session) ? undefined : harness);
     const failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';
     const inline = (choices: readonly { label: string; value: string }[], current: string, apply: (value: string) => Promise<void>) => (
       choices.length >= 2 && choices.length <= INLINE_MAX_CHOICES ? { inline: { choices, current, apply } } : {}
@@ -71,7 +72,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     const rows: PickerOption<string>[] = [
       { label: 'Resume', detail: 'choose a conversation', value: 'resume' },
       {
-        label: 'Provider', detail: harness?.displayName ?? (session.route === 'gateway' ? 'ClikDeploy Gateway' : 'none chosen'), value: 'provider',
+        label: 'Provider', detail: harness?.displayName ?? (isClikCodeAgent(session) ? clikCodeAgentLabel(session) : 'none chosen'), value: 'provider',
         ...(harness ? { actions: [{ label: `Use global defaults for ${harness.displayName}`, value: 'clear-provider' }] } : {}),
       },
       ...(!harness ? [

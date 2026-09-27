@@ -27,6 +27,7 @@ export async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter,
     const provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected, configuredProviders));
     if (!provider) return undefined;
     if (provider.kind === 'gateway') return selectProviderConversation(config, rl, id, '__gateway__');
+    if (provider.kind === 'clikcode-local') return selectProviderConversation(config, rl, id, '__clikcode_local__');
     if (provider.kind !== 'provider') continue;
     return selectProviderConversation(config, rl, id, provider.harness);
   }

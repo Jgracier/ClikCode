@@ -12,6 +12,7 @@ import { createHandoffBranch, synchronizeNativeTranscript } from '../../turn/run
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './preferred-account.js';
+import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
 
 /** A fresh conversation on exactly the setup of the one it came from: same
  * provider, same harness, same model, same effort, permissions and vendor
@@ -31,15 +32,18 @@ export function newConversationSession(
   const defaults = resolveDefaultSettings(state, source.provider);
   return {
     id, conversationId: id, route: source.route,
-    accountId: source.route === 'gateway' ? null : source.accountId ?? null,
+    accountId: isClikCodeAgent(source) ? null : source.accountId ?? null,
     provider: source.provider,
     model: source.provider
       ? state.providerSettings[source.provider]?.model ?? (source.nativeHarness === 'claude' ? 'opus' : null)
       : null,
-    ...(source.route !== 'gateway' && source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
+    ...(!isClikCodeAgent(source) && source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
     ...(source.harnessOptions ? { harnessOptions: { ...source.harnessOptions } } : {}),
     effort: source.effort ?? defaults.effort,
-    ...(source.route === 'gateway' ? {} : { permissionMode: source.permissionMode ?? defaults.permissionMode }),
+    // A Gateway /new has always started without a stored mode (read as `ask`).
+    // ClikCode Local carries it: its agent honours the mode, and a fresh chat
+    // silently dropping `auto` back to `ask` would read as a new policy.
+    ...(isGatewayService(source) ? {} : { permissionMode: source.permissionMode ?? defaults.permissionMode }),
     accountFailover: source.accountFailover ?? defaults.accountFailover,
     workspace: source.workspace ?? process.cwd(),
     createdAt: now, updatedAt: now, status: 'active',

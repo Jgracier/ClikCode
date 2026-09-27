@@ -14,7 +14,8 @@ import { conversationIdFor, hasConversationContent, requiresProviderHandoff } fr
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newProviderConversation } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
-import { applyGatewaySessionPolicy } from '../../commands/ai/sessions.js';
+import { applyClikCodeAgentSessionPolicy, applyClikCodeLocalSessionPolicy } from '../../commands/ai/sessions.js';
+import { isClikCodeAgent } from '../../session/route.js';
 import { chooseOption } from './choose.js';
 
 async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<void> {
@@ -34,14 +35,22 @@ async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<vo
   if (!getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a ClikDeploy Gateway credential.');
 }
 
-async function newGatewayConversation(config: Conf, rl: HarnessPrompter, currentId: string): Promise<string> {
-  await ensureGatewayLogin(config, rl);
+/** Moving a conversation onto one of the routes that run ClikCode's own
+ * agent. An empty chat switches in place; one with content branches, carrying
+ * its portable transcript, exactly as a provider handoff does. Only the
+ * Gateway needs a sign-in first -- ClikCode Local has no service to reach. */
+async function newAgentRouteConversation(
+  config: Conf, rl: HarnessPrompter, currentId: string, route: 'gateway' | 'clikcode-local',
+): Promise<string> {
+  if (route === 'gateway') await ensureGatewayLogin(config, rl);
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
   if (!current) throw new Error(`AI session "${currentId}" was not found`);
-  if (current.route === 'gateway') return current.id;
-  if (!hasConversationContent(current) && !current.nativeHarness) {
-    applyGatewaySessionPolicy(current);
+  if (current.route === route) return current.id;
+  // Both agent routes share one transcript format and neither holds a native
+  // vendor session, so moving between them has nothing to branch away from.
+  if ((!hasConversationContent(current) && !current.nativeHarness) || isClikCodeAgent(current)) {
+    applyClikCodeAgentSessionPolicy(current, route);
     current.updatedAt = new Date().toISOString();
     await writeState(state);
     return current.id;
@@ -61,13 +70,15 @@ async function newGatewayConversation(config: Conf, rl: HarnessPrompter, current
     createdAt: now, updatedAt: now, status: 'active',
     gatewayConfirmed: true,
   };
+  if (route === 'clikcode-local') applyClikCodeLocalSessionPolicy(session);
   state.sessions.push(session);
   await writeState(state);
   return session.id;
 }
 
 export async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id: string, selected: string): Promise<string> {
-  if (selected === '__gateway__') return newGatewayConversation(config, rl, id);
+  if (selected === '__gateway__') return newAgentRouteConversation(config, rl, id, 'gateway');
+  if (selected === '__clikcode_local__') return newAgentRouteConversation(config, rl, id, 'clikcode-local');
   const state = await readState();
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);

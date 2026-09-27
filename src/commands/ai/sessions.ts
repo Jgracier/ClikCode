@@ -22,6 +22,9 @@ import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { normalizeModelWord, optionForHarness, parseHarnessOption, sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession } from './conversations.js';
+import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';
+
+const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, model, effort, failover, and native sessions cannot be set per session yet.';
 
 /** A model a user names on `sessions create`/`sessions set` must be one the
  * harness actually publishes -- the same catalog its own picker draws from
@@ -55,6 +58,33 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
   delete session.nativeSessionId;
   delete session.nativeStartedAt;
   delete session.harnessOptions;
+}
+
+/** ClikCode Local runs the same agent as the Gateway route, on a model this
+ * machine serves, so it sheds the same vendor-harness fields. What differs is
+ * everything the Gateway service decided: there is no platform routing to own
+ * the model or effort, so `model` stays unset (the engine's own default) and
+ * effort is `auto` until the engine publishes a control for it. */
+export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
+  session.route = 'clikcode-local';
+  session.accountId = null;
+  session.provider = 'clikcode-local';
+  session.model = null;
+  session.effort = 'auto';
+  session.accountFailover = 'never';
+  // gatewayConfirmed marks an explicit Gateway choice; this is not one.
+  delete session.gatewayConfirmed;
+  delete session.nativeHarness;
+  delete session.nativeSessionId;
+  delete session.nativeStartedAt;
+  delete session.harnessOptions;
+}
+
+/** The policy for whichever agent route `route` names, so a route switch in
+ * any caller cannot apply one route's defaults to the other. */
+export function applyClikCodeAgentSessionPolicy(session: HarnessSession, route: 'gateway' | 'clikcode-local'): void {
+  if (route === 'gateway') applyGatewaySessionPolicy(session);
+  else applyClikCodeLocalSessionPolicy(session);
 }
 
 export function applyFreshLocalSessionPolicy(state: HarnessState, session: HarnessSession): void {
@@ -96,9 +126,12 @@ function findAccount(
 }
 
 export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
-  if (options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
+  if (!isAiHarnessRoute(options.route)) throw new Error(ROUTE_CHOICES_TEXT);
   if (options.route === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
     throw new Error('ClikDeploy Gateway account, provider, model, effort, and failover are selected by platform routing and cannot be overridden per session.');
+  }
+  if (options.route === 'clikcode-local' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
+    throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
   }
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   // `--provider claude` means Claude Code, the same name /claude and
@@ -137,13 +170,14 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     provider: options.route === 'gateway' ? 'gateway' : provider,
     model: options.route === 'gateway' ? null : model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
     effort: options.route === 'gateway' ? 'platform-managed' : options.effort ?? defaults.effort,
-    // Both routes: on the Gateway route the agent is ClikCode's own, running
+    // Every route: on the agent routes the agent is ClikCode's own, running
     // here, and it honours the same approval setting.
     permissionMode: defaults.permissionMode,
     accountFailover: options.route === 'gateway' ? 'never' : options.accountFailover ?? defaults.accountFailover,
     ...(options.route === 'gateway' ? { gatewayConfirmed: true as const } : {}),
     createdAt: now, updatedAt: now, status: 'active',
   };
+  if (options.route === 'clikcode-local') applyClikCodeLocalSessionPolicy(session);
   state.sessions.push(session);
   await writeState(state);
   // Bound to an account now, as the app binds one, so the next command can
@@ -289,7 +323,7 @@ export const aiSessionClose = (id: string): Promise<void> => endSession(id, 'clo
 export const aiSessionLeave = (id: string): Promise<void> => endSession(id, 'leave');
 
 export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; permissions?: AiHarnessPermissionMode; accountFailover?: 'never' | 'on-quota-exhausted'; nativeSession?: string }): Promise<void> {
-  if (options.route !== undefined && options.route !== 'local' && options.route !== 'gateway') throw new Error('route must be local or gateway');
+  if (options.route !== undefined && !isAiHarnessRoute(options.route)) throw new Error(ROUTE_CHOICES_TEXT);
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   if (options.permissions !== undefined && !VALID_PERMISSION_MODES.includes(options.permissions)) throw new Error('permissions must be ask, bypass, or auto');
   const state = await readState();
@@ -299,6 +333,9 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   const effectiveRoute = options.route ?? current.route;
   if (effectiveRoute === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
     throw new Error('ClikDeploy Gateway account, provider, model, effort, failover, and native sessions are selected by platform routing and cannot be overridden per session.');
+  }
+  if (effectiveRoute === 'clikcode-local' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
+    throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
   }
   const account = options.account === undefined
     ? undefined
@@ -339,13 +376,12 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     const choices = (await effortChoicesFor(selectedHarness, effortAccount, model ?? current.model)).values;
     parseHarnessOption(choices.length ? { ...effortOption, values: choices } : effortOption, options.effort);
   }
-  const gatewayAfter = (options.route ?? current.route) === 'gateway';
-  if (options.permissions && !sessionPermissionModes({ route: gatewayAfter ? 'gateway' : 'local' }, selectedHarness).includes(options.permissions)) {
+  if (options.permissions && !sessionPermissionModes({ route: effectiveRoute }, selectedHarness).includes(options.permissions)) {
     if (!selectedHarness) throw new Error('Choose a provider before setting permissions.');
     throw new Error(`${selectedHarness.displayName} does not support ${options.permissions} permissions.`);
   }
   const base: HarnessSession = { ...current };
-  if (options.route === 'local' && current.route === 'gateway') applyFreshLocalSessionPolicy(state, base);
+  if (options.route === 'local' && isClikCodeAgent(current)) applyFreshLocalSessionPolicy(state, base);
   const next: HarnessSession = {
     ...base,
     ...(options.route ? { route: options.route } : {}),
@@ -358,7 +394,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),
   };
-  if (effectiveRoute === 'gateway') applyGatewaySessionPolicy(next);
+  if (effectiveRoute === 'gateway' || effectiveRoute === 'clikcode-local') applyClikCodeAgentSessionPolicy(next, effectiveRoute);
   else if (account) {
     if (account.authKind === 'vendor-cli' && selectedHarness && harnessCanRunTurns(selectedHarness)) {
       if (next.nativeHarness !== selectedHarness.command || current.accountId !== account.id) {

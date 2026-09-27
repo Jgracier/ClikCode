@@ -3,6 +3,7 @@
 import { homedir } from 'node:os';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import type { HarnessSession } from '../../session/model.js';
+import { clikCodeAgentLabel, isClikCodeAgent } from '../../session/route.js';
 
 export function compactPath(path: string): string {
   const home = homedir();
@@ -10,7 +11,7 @@ export function compactPath(path: string): string {
 }
 
 export function sessionProviderLabel(session: HarnessSession): string {
-  if (session.route === 'gateway') return 'ClikDeploy Gateway';
+  if (isClikCodeAgent(session)) return clikCodeAgentLabel(session);
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   return harness?.displayName ?? session.provider ?? 'Not selected';
 }
