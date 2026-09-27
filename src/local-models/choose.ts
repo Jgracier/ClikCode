@@ -142,12 +142,13 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
   return {
     ...smallest!,
     fits: false,
-    reason: `needs ${gib(smallest!.needBytes)} at ${Math.round(smallest!.context / 1024)}K context; ${gib(room)} of ${where} is free for models`,
+    reason: `needs ${gb(smallest!.needBytes)} at ${Math.round(smallest!.context / 1024)}K context; ${gb(room)} of ${where} is free for models`,
   };
 }
 
-function gib(bytes: number): string {
-  return `${(bytes / GIB).toFixed(1)} GB`;
+/** Decimal GB, the unit download sizes are shown in. */
+function gb(bytes: number): string {
+  return `${(bytes / 1e9).toFixed(1)} GB`;
 }
 
 // ---- speed -----------------------------------------------------------------
