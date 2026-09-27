@@ -70,7 +70,7 @@ import { interactiveSessionPicker } from '../../tui/pickers/session.js';
 import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
-import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark } from '../../worker/turn-bridge.js';
+import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerRunningTurn } from '../../worker/turn-bridge.js';
 
 // The CLIKCODE_USE_WORKER escape hatch is gone: an ANSI terminal always runs
 // its turns through a session worker now. What remains below is not a
@@ -326,6 +326,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         refreshUsage(latest, latestState);
         notice = undefined;
         const queued = latest.queuedTurns?.[0];
+        // A turn is running (another window's, or one the worker started):
+        // the queued message waits behind it, so that turn is followed to its
+        // end rather than the message sent into it only to be queued again.
+        const runningTurn = queued && queued.kind !== 'command' && rl instanceof TerminalHarnessPrompter ? workerRunningTurn(latest.id) : undefined;
+        if (runningTurn && rl instanceof TerminalHarnessPrompter) {
+          rl.submitted(runningTurn.prompt);
+          rl.render({ ...latest, messages: sessionTranscriptMessages(latest), pendingTurn: undefined }, account);
+          const followed = await followWorkerTurn(latest.id, rl);
+          if (followed.notice) notice = followed.notice;
+          continue;
+        }
         if (queued?.kind === 'command') {
           fromQueuedCommand = true;
           // A slash command typed while the turn was running. It runs as the

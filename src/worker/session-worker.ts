@@ -246,6 +246,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     }
     socket.write(encodeFrame({ type: 'submit-queued', queuedTurnId }));
     broadcastQueueChanged();
+    // The window follows the running turn until it ends; this brings it up
+    // to date with what has streamed.
+    follow();
   };
 
   const runTurn = async (command: Extract<ClientCommand, { type: 'submit' }>): Promise<void> => {
