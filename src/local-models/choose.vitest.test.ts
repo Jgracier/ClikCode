@@ -226,7 +226,7 @@ describe('launch settings', () => {
       fit: { placement: 'cpu', context: 65_536, cacheType: 'f16', parallel: 2 },
       threads: { threads: 8, threadsBatch: 12 },
     });
-    expect(args.join(' ')).toBe('--host 127.0.0.1 --port 43210 -m /m.gguf -a qwen3.5-4b -c 65536 -np 2 --jinja -fa on -t 8 -tb 12 '
+    expect(args.join(' ')).toBe('--host 127.0.0.1 --port 43210 -m /m.gguf -a qwen3.5-4b -c 65536 -np 2 --kv-unified --jinja -fa on -t 8 -tb 12 '
       + '-ctk f16 -ctv f16 --cache-ram 2048 --no-webui -ngl 0');
   });
 

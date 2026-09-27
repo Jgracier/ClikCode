@@ -52,6 +52,10 @@ export function buildServerArgs(input: ServerArgsInput): string[] {
     '-a', input.alias,
     '-c', String(fit.context),
     '-np', String(fit.parallel),
+    // One KV pool shared by the slots. Without it llama.cpp splits -c
+    // evenly (-np 2 at 64K gave each slot 32K), and a conversation would
+    // overflow at half the context this engine reports.
+    '--kv-unified',
     '--jinja', '-fa', 'on',
     '-t', String(input.threads.threads), '-tb', String(input.threads.threadsBatch),
     '-ctk', fit.cacheType, '-ctv', fit.cacheType,

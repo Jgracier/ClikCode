@@ -241,7 +241,7 @@ async function tick() {
     // Still loading, or busy enough not to answer: not idle.
     lastActive = Date.now();
   }
-  if (Date.now() - lastActive > config.idleMs) stop('idle for ' + Math.round(config.idleMs / 60000) + ' min');
+  if (Date.now() - lastActive > config.idleMs) stop('idle for ' + Math.round(config.idleMs / 1000) + ' s');
 }
 setInterval(() => { tick().catch((error) => note('tick failed: ' + error.message)); }, config.pollMs);
 `;
