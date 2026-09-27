@@ -19,7 +19,7 @@ import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { requiresProviderHandoff } from '../../session/options.js';
-import { preferredAccountId } from './preferred-account.js';
+import { signedInAccountId } from './preferred-account.js';
 import { hasAuthEvidence } from '../../harness/accounts/auth-files.js';
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
@@ -70,11 +70,16 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   // place.
   let accountJustCreated = false;
   if (!selected || selected.provider !== harness.provider || selected.status !== 'ready') {
-    const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli' && account.status === 'ready');
-    if (accounts.length) {
-      session.accountId = preferredAccountId(
-        state, harness.provider, session.accountId, (account) => account.authKind === 'vendor-cli',
-      );
+    const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli');
+    // Signed in is what decides a login, not usable right now: an account out
+    // of quota or waiting on the vendor's verification is still one the user
+    // has, so it is chosen (a usable one first) and its turn says why it
+    // cannot run. Accounts that are all signed out are not replaced by a new
+    // placeholder -- the sign-in below is for them.
+    if (accounts.some((account) => account.status === 'ready')) {
+      session.accountId = signedInAccountId(state, harness.provider, session.accountId, (account) => account.authKind === 'vendor-cli');
+    } else if (accounts.length) {
+      session.accountId = null;
     } else {
       accountJustCreated = true;
       // Same derivation addAccountForHarness uses after an explicit login,
@@ -108,10 +113,16 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   let account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   if (TERMINAL.active && harness.loginArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
-    const shouldCheckLogin = freshInstall
-      || (accountJustCreated && !harness.statusArgv && !hasAuthEvidence(harness))
-      || account?.status !== 'ready'
-      || (accountJustCreated && await harnessNeedsLogin(harness, environment));
+    // Only when the provider has no signed-in account: none existed (the one
+    // just made is a placeholder until the vendor says otherwise), or every
+    // one it has is signed out. A fresh install of the CLI is a reason only
+    // for the first of those -- reinstalling does not sign anyone out of the
+    // accounts ClikCode keeps. Signing in on purpose is /login or /accounts.
+    const shouldCheckLogin = !account
+      || account.status !== 'ready'
+      || (accountJustCreated && (freshInstall
+        || (!harness.statusArgv && !hasAuthEvidence(harness))
+        || await harnessNeedsLogin(harness, environment)));
     if (shouldCheckLogin) {
       await withVendorTerminal(TERMINAL.active, harness, () => loginNativeHarness(harness, environment));
       // Same identity check /account's "add another account" flow uses --
