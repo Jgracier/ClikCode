@@ -19,6 +19,10 @@ export interface ToolContext {
   /** Identity of the tool call being executed (spill files, shell ids). */
   callId?: string;
   emitOutput?(chunk: string): void;
+  /** Bytes of output the model will be given (context.ts toolOutputCap).
+   * A tool that can say where it stopped should stop here itself rather than
+   * have its middle cut out by the loop. */
+  outputCap?: number;
   onPlan?(entries: PlanEntry[]): void;
   net?: NetworkSeams;
   /** Runs a `task` sub-agent under this call. Absent inside a sub-agent. */
