@@ -31,9 +31,65 @@ describe('catalog', () => {
         expect(file.revision).toMatch(/^[0-9a-f]{40}$/);
         expect(file.sha256).toMatch(/^[0-9a-f]{64}$/);
         expect(file.sizeBytes).toBeGreaterThan(100e6);
+        expect(Number.isInteger(file.sizeBytes)).toBe(true);
+        // The downloader fetches one file; a split GGUF's first shard alone
+        // would download, verify and then fail to load.
+        expect(file.file).toMatch(/\.gguf$/);
+        expect(file.file).not.toMatch(/-\d{5}-of-\d{5}\.gguf$/);
       }
       expect(['apache-2.0', 'mit']).toContain(entry.license);
+      expect(entry.activeParamsB).toBeGreaterThan(0);
       expect(entry.activeParamsB).toBeLessThanOrEqual(entry.totalParamsB);
+      expect(entry.defaultContext).toBeGreaterThanOrEqual(MIN_CONTEXT);
+      expect(entry.defaultContext).toBeLessThanOrEqual(entry.maxContext);
+      expect(entry.quality).toBeGreaterThan(0);
+      expect(entry.quality).toBeLessThanOrEqual(100);
+      expect(entry.weights.file).toContain(entry.quantization);
+    }
+  });
+
+  it('names every model once, by id and by label', () => {
+    const ids = LOCAL_MODEL_CATALOG.map((entry) => entry.id.toLowerCase());
+    const labels = LOCAL_MODEL_CATALOG.map((entry) => entry.label.toLowerCase());
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(new Set(labels).size).toBe(labels.length);
+    // resolveLocalModelId matches either, so one model's label must not be
+    // another's id.
+    expect(ids.filter((id) => labels.includes(id))).toEqual([]);
+    for (const id of ids) expect(id).toMatch(/^[a-z0-9][a-z0-9.-]*$/);
+  });
+
+  it('has file sizes that match the parameters and quantization', () => {
+    // Bits per weight a whole GGUF lands at: embeddings and norms are kept
+    // wider than the bulk, so each sits a little above the nominal width.
+    const bitsPerWeight: [RegExp, number, number][] = [
+      [/^(Q4_K_M|Q4_0|MXFP4)$/, 4.3, 5.8], [/^Q6_K$/, 6.4, 7.0], [/^Q8_0$/, 8.4, 8.8],
+    ];
+    for (const entry of LOCAL_MODEL_CATALOG) {
+      const range = bitsPerWeight.find(([pattern]) => pattern.test(entry.quantization));
+      expect(range, entry.id).toBeDefined();
+      const bits = entry.weights.sizeBytes * 8 / (entry.totalParamsB * 1e9);
+      expect(bits, entry.id).toBeGreaterThanOrEqual(range![1]);
+      expect(bits, entry.id).toBeLessThanOrEqual(range![2]);
+    }
+  });
+
+  it('ranks a higher-precision build above its own Q4 but never above a stronger model', () => {
+    const sameModel = (left: CatalogModel, right: CatalogModel): boolean => left.weights.repo === right.weights.repo
+      && left.totalParamsB === right.totalParamsB && left.architecture === right.architecture;
+    for (const entry of LOCAL_MODEL_CATALOG) {
+      for (const other of LOCAL_MODEL_CATALOG) {
+        if (entry === other || !sameModel(entry, other)) continue;
+        expect(entry.kv).toEqual(other.kv);
+        expect(entry.license).toBe(other.license);
+        if (entry.weights.sizeBytes > other.weights.sizeBytes) expect(entry.quality, entry.id).toBeGreaterThan(other.quality);
+      }
+    }
+    for (const entry of LOCAL_MODEL_CATALOG) {
+      const base = LOCAL_MODEL_CATALOG.find((other) => other !== entry && sameModel(entry, other) && other.quantization === 'Q4_K_M');
+      if (!base) continue;
+      const stronger = LOCAL_MODEL_CATALOG.filter((other) => !sameModel(other, entry) && other.quality > base.quality);
+      for (const other of stronger) expect(entry.quality, `${entry.id} vs ${other.id}`).toBeLessThan(other.quality);
     }
   });
 
@@ -43,6 +99,8 @@ describe('catalog', () => {
     expect(sizes.some((size) => size >= 5 && size < 9)).toBe(true);
     expect(sizes.some((size) => size >= 12 && size < 16)).toBe(true);
     expect(sizes.some((size) => size >= 19 && size < 26)).toBe(true);
+    expect(sizes.some((size) => size >= 28 && size < 32)).toBe(true);
+    expect(sizes.some((size) => size >= 36 && size < 40)).toBe(true);
   });
 });
 
@@ -174,7 +232,7 @@ describe('ranking and choice', () => {
 
   it('offers the best model that meets the bar first, slow ones after, misfits last', () => {
     const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, {});
-    expect(ranked[0]!.model.id).toBe('ornith-1.5-35b-a3b');
+    expect(ranked[0]!.model.id).toBe('ornith-1.5-35b-a3b-q6');
     const passing = ranked.filter((row) => row.passes).map((row) => row.model.quality);
     expect(passing).toEqual([...passing].sort((left, right) => right - left));
     const firstSlow = ranked.findIndex((row) => !row.passes);
@@ -182,11 +240,28 @@ describe('ranking and choice', () => {
     expect(ranked.find((row) => row.model.id === 'qwen3.8-27b')!.passes).toBe(false);
   });
 
+  it('takes the most precise build of the best model the memory holds', () => {
+    // The Zen 4's ~34 GiB takes Ornith at Q6_K but not at Q8_0; with less
+    // free, the Q4_K_M; on a 48 GB card, Qwen3.8 27B at Q8_0.
+    const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, {});
+    expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b-q8')!.fit.fits).toBe(false);
+    const busy = memoryBudget({ ...ZEN4, availableRamBytes: 32 * GIB });
+    expect(rankModels(LOCAL_MODEL_CATALOG, ZEN4, busy, {})[0]!.model.id).toBe('ornith-1.5-35b-a3b');
+    const bigRam = memoryBudget({ ...ZEN4, totalRamBytes: 96 * GIB, availableRamBytes: 80 * GIB });
+    expect(rankModels(LOCAL_MODEL_CATALOG, ZEN4, bigRam, {})[0]!.model.id).toBe('ornith-1.5-35b-a3b-q8');
+    const card: HardwareProfile = {
+      ...ZEN4, gpus: [{ name: 'RTX 6000 Ada', vendor: 'nvidia', backend: 'cuda', vramBytes: 48 * GIB, freeVramBytes: 47 * GIB, unified: false, integrated: false }],
+    };
+    const top = rankModels(LOCAL_MODEL_CATALOG, card, memoryBudget(card), {})[0]!;
+    expect(top.model.id).toBe('qwen3.8-27b-q8');
+    expect(top.fit.placement).toBe('gpu');
+  });
+
   it('lets a measurement override the estimate', () => {
-    const slowOrnith = { 'ornith-1.5-35b-a3b': { promptPerSecond: 20, generatePerSecond: 4, toolCalls: true, at: '' } };
+    const slowOrnith = { 'ornith-1.5-35b-a3b-q6': { promptPerSecond: 20, generatePerSecond: 4, toolCalls: true, at: '' } };
     const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, slowOrnith);
-    expect(ranked[0]!.model.id).not.toBe('ornith-1.5-35b-a3b');
-    expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b')!.speed.promptPerSecond).toBe(20);
+    expect(ranked[0]!.model.id).toBe('ornith-1.5-35b-a3b');
+    expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b-q6')!.speed.promptPerSecond).toBe(20);
   });
 
   it('drops a model that measured no tool calls below those that did', () => {
