@@ -18,6 +18,7 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { harnessSupportsEffort, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
+import { localModelLabel } from '../../local-models/catalog.js';
 import { sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { readState } from '../../session/state/read.js';
 import { newConversation } from '../../commands/ai/conversations.js';
@@ -96,6 +97,11 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
       ...(harness && (harness.modelArgvPrefix !== undefined || harness.acp?.listsModels) ? [{
         label: 'Model', detail: session.model ? nativeModelLabel(harness.command, session.model) ?? session.model : 'harness default', value: 'model',
         actions: defaultActions(harness, 'model'),
+      }] : []),
+      // Unset until the engine picks on the first turn; the picker says which
+      // it would choose.
+      ...(session.route === 'clikcode-local' ? [{
+        label: 'Model', detail: localModelLabel(session.model) ?? 'chosen for this machine on the first turn', value: 'model',
       }] : []),
       ...(harness ? [{ label: 'Account', detail: account?.label ?? 'automatic', value: 'account' }] : []),
       ...(efforts.length ? [{
