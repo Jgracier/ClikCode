@@ -12,10 +12,10 @@
  * the loop's callbacks back into the prompter's own transcript rows.
  */
 import { stdout as output } from 'node:process';
-import { GatewayModelClient, ModelClientError } from '../agent/models/gateway-client.js';
+import { ModelClientError } from '../agent/models/gateway-client.js';
 import { runGatewayHarnessTurn } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
-import type { GatewayHarnessTurnResult } from '../agent/model-client.js';
+import type { GatewayHarnessTurnResult, ModelClient } from '../agent/model-client.js';
 import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -36,24 +36,21 @@ export function gatewayHarnessUnavailable(error: unknown): boolean {
 interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   session: HarnessSession;
   prompt: string;
-  baseUrl: string;
-  apiKey: string;
-  version: string;
   prompter?: TurnObserver;
   signal?: AbortSignal;
   images?: readonly string[];
-  /** Injected by tests; production uses the real gateway client. */
-  modelClient?: ConstructorParameters<typeof GatewayModelClient>[0] extends never ? never : Parameters<typeof runGatewayHarnessTurn>[0]['modelClient'];
+  /** Whatever supplies the model step: the Gateway or ClikCode Local, as
+   * modelClientForSession (agent/models/for-session.ts) chose for the route. */
+  modelClient: ModelClient;
 }
 
-/** One gateway turn, run as a real coding agent on this machine. */
+/** One turn of ClikCode's own coding agent, run on this machine. Named for
+ * the Gateway, where it began; ClikCode Local sessions run it too, with a
+ * different model client. */
 export async function runGatewayHarnessSessionTurn(
   input: GatewayHarnessSessionTurn,
 ): Promise<GatewayHarnessTurnResult> {
-  const { session, prompter } = input;
-  const modelClient = input.modelClient ?? new GatewayModelClient({
-    baseUrl: input.baseUrl, apiKey: input.apiKey, version: input.version, sessionId: session.id,
-  });
+  const { session, prompter, modelClient } = input;
   // The gateway picks the model and the effort; what it cannot pick is how
   // much this machine lets the agent do without asking, because that is a
   // decision about the user's own filesystem. It stays local, and `ask` is

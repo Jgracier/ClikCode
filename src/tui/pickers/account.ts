@@ -1,5 +1,6 @@
 /** Adding, choosing and managing the accounts a harness signs in with. */
 
+import { isClikCodeAgent } from '../../session/route.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -42,7 +43,7 @@ export async function interactiveAccountPicker(
     if (!session) throw new Error(`AI session "${id}" was not found`);
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
       : session.provider ? localHarnessForProvider(session.provider) : undefined;
-    if (!harness || session.route === 'gateway') {
+    if (!harness || isClikCodeAgent(session)) {
       rl.panel?.('Accounts', 'Choose a local provider before switching accounts.');
       return undefined;
     }

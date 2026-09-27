@@ -4,9 +4,20 @@ import { commonControlFor } from '../../harness/options.js';
 import type { HarnessSession } from '../../session/model.js';
 import { localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
 import { sessionHarness } from './context.js';
+import { isGatewayService } from '../../session/route.js';
 
 export function capabilitiesText(session: HarnessSession): string {
-  if (session.route === 'gateway') {
+  if (session.route === 'clikcode-local') {
+    return [
+      'ClikCode Local capabilities',
+      'Inference: a local model on this machine',
+      'Tools: ClikCode\'s own tools, MCP servers, and skills',
+      'Permissions: ClikCode\'s own ask / auto / bypass modes',
+      'Sessions: durable ClikCode transcript replay',
+      'Context: compacted locally by ClikCode\'s agent',
+    ].join('\n');
+  }
+  if (isGatewayService(session)) {
     return [
       'ClikDeploy Gateway capabilities',
       'Inference routing: platform managed',

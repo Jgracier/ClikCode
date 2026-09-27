@@ -10,6 +10,7 @@
  * turn loop's file the pickers could not be lifted out without the two
  * importing each other.
  */
+import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent } from './route.js';
 import chalk from 'chalk';
 import { commonControlFor, optionIdsForControl } from '../harness/options.js';
 import { harnessTierRank } from '../runtime/lazy-bridge.js';
@@ -26,20 +27,21 @@ import { harnessCanLogout } from '../harness/accounts/auth-files.js';
 export const VALID_EFFORTS = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export const VALID_PERMISSION_MODES: readonly AiHarnessPermissionMode[] = ['ask', 'bypass', 'auto'];
 
-/** The approval modes a conversation can be set to. On the Gateway route the
- * agent is ClikCode's own, running on this machine, and it implements all
- * three -- the Gateway supplies the model, never the decision about what may
+/** The approval modes a conversation can be set to. On the Gateway and
+ * ClikCode Local routes the agent is ClikCode's own, running on this machine,
+ * and it implements all three -- the inference supplies the model, never the decision about what may
  * touch the user's files. A local harness offers the ones it carries to a real
  * flag. */
 export function sessionPermissionModes(
   session: Pick<HarnessSession, 'route'>, harness: AiLocalHarnessDefinition | undefined,
 ): readonly AiHarnessPermissionMode[] {
-  if (session.route === 'gateway') return VALID_PERMISSION_MODES;
+  if (isClikCodeAgent(session)) return VALID_PERMISSION_MODES;
   return harness ? VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode)) : [];
 }
 
 type ProviderChoice =
   | { kind: 'gateway' }
+  | { kind: 'clikcode-local' }
   | { kind: 'provider'; harness: string };
 
 export type ProviderAccountChoice =
@@ -314,6 +316,12 @@ export function providerPickerOptions(
     label: 'ClikDeploy Gateway',
     detail: `· ${gatewayConnected ? 'connected' : 'sign in with OAuth'}${session.route === 'gateway' ? ' · current' : ''}`,
     value: { kind: 'gateway' },
+  }, {
+    // Always listed, engine or not: choosing it is how a user learns what it
+    // is, and a turn on it says plainly when this build cannot serve one yet.
+    label: CLIKCODE_LOCAL_LABEL,
+    detail: `· local models on this machine${session.route === 'clikcode-local' ? ' · current' : ''}`,
+    value: { kind: 'clikcode-local' },
   }, ...visible.map(({ harness, inspection }) => ({
       label: harness.displayName,
       detail: `${inspection.installed
