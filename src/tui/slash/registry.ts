@@ -147,6 +147,8 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
     argHint: '[name]',
     duringTurn: 'apply',
     availability: (session, harness) => {
+      // The Gateway publishes its own list; the user chooses from it.
+      if (isGatewayService(session)) return { available: true };
       const base = needsHarness('choosing a model')(session, harness);
       if (!base.available) return base;
       return (harness!.modelArgvPrefix !== undefined || harness!.acp?.listsModels) ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };

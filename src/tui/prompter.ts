@@ -15,6 +15,7 @@ import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleS
 import { wrapCodeLine } from './render/wrap.js';
 import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
+import { isGatewayService } from '../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
@@ -828,7 +829,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // harness publishes nothing at all. Showing no model is honest; showing
     // a fabricated one is not.
     const rawModel = harness?.modelArgvPrefix ? session.reported?.model ?? session.model ?? undefined : undefined;
-    const model = nativeModelLabel(harness?.command, rawModel);
+    // A Gateway conversation shows the model its user chose; none chosen, the
+    // Gateway picks per step and the line names no model.
+    const model = isGatewayService(session) ? session.model ?? undefined : nativeModelLabel(harness?.command, rawModel);
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     // The title used to share this line with provider/model/directory, which
     // meant a long title truncated whichever of those came after it — the

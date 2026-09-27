@@ -3,6 +3,8 @@
 
 import { turboFitSessionClosed } from './turbofit.js';
 import { isBlankConversation } from '../../session/options.js';
+import { gatewayModels, isAutomaticModelWord } from '../../gateway/models.js';
+import { harnessCommand } from '../../session/state/paths.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { randomUUID } from 'node:crypto';
 import { emitResult } from '../../cli/structured-output.js';
@@ -41,15 +43,34 @@ export async function assertRealModel(harness: AiLocalHarnessDefinition | undefi
   }
 }
 
+/** A model for a Gateway session: `auto` (and its synonyms) hands the choice
+ * back to the Gateway (null); anything else must be on the Gateway's list for
+ * this account, matched without regard to case. */
+export async function chooseGatewayModel(value: string): Promise<string | null> {
+  if (isAutomaticModelWord(value)) return null;
+  const { models } = await gatewayModels();
+  const wanted = value.trim().toLowerCase();
+  const found = models.find((model) => model.id.toLowerCase() === wanted)
+    ?? models.find((model) => model.id.toLowerCase().endsWith(`/${wanted}`));
+  if (!found) {
+    const near = models.filter((model) => model.id.toLowerCase().includes(wanted)).slice(0, 5).map((model) => model.id);
+    throw new Error(`"${value.trim()}" is not a model ClikDeploy Gateway offers you${near.length ? `. Did you mean: ${near.join(', ')}` : '; see `' + harnessCommand() + ' gateway models`'}.`);
+  }
+  return found.id;
+}
+
 /** Gateway routing owns these fields as one policy unit. Keeping the mutation
  * centralized prevents route switches, slash settings, and headless setters
  * from leaving stale local harness/account controls attached to a remote
  * platform-managed session. */
 export function applyGatewaySessionPolicy(session: HarnessSession): void {
+  // A model chosen from the Gateway's own list stays; one carried over from
+  // another route names a model the Gateway was never asked about.
+  const keepModel = session.route === 'gateway';
   session.route = 'gateway';
   session.accountId = null;
   session.provider = 'gateway';
-  session.model = null;
+  if (!keepModel) session.model = null;
   session.effort = 'platform-managed';
   session.accountFailover = 'never';
   session.gatewayConfirmed = true;
@@ -127,8 +148,8 @@ function findAccount(
 
 export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
   if (!isAiHarnessRoute(options.route)) throw new Error(ROUTE_CHOICES_TEXT);
-  if (options.route === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
-    throw new Error('ClikDeploy Gateway account, provider, model, effort, and failover are selected by platform routing and cannot be overridden per session.');
+  if (options.route === 'gateway' && (options.account || options.provider || options.effort || options.accountFailover)) {
+    throw new Error('ClikDeploy Gateway account, provider, effort, and failover are selected by platform routing and cannot be overridden per session.');
   }
   if (options.route === 'clikcode-local' && (options.account || options.provider || options.model || options.effort || options.accountFailover)) {
     throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
@@ -153,7 +174,8 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
       ? `${provider} is no longer a supported tool; remove the account "${account.label}" with \`clikcode accounts remove ${account.id}\``
       : `unknown local provider "${provider}"`);
   }
-  const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
+  // A Gateway model is checked against the Gateway's list below, not a harness's.
+  const model = options.model === undefined || options.route === 'gateway' ? undefined : normalizeModelWord(options.model);
   if (model && harness && !(harness.modelArgvPrefix !== undefined || harness.acp?.listsModels)) throw new Error(`${harness.displayName} does not publish a model selector.`);
   if (model) await assertRealModel(harness, account, model);
   if (options.effort && harness) {
@@ -168,7 +190,9 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const session: HarnessSession = {
     id, conversationId: id, route: options.route, accountId: options.route === 'gateway' ? null : account?.id ?? null,
     provider: options.route === 'gateway' ? 'gateway' : provider,
-    model: options.route === 'gateway' ? null : model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
+    model: options.route === 'gateway'
+      ? (options.model !== undefined ? await chooseGatewayModel(options.model) : null)
+      : model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
     effort: options.route === 'gateway' ? 'platform-managed' : options.effort ?? defaults.effort,
     // Every route: on the agent routes the agent is ClikCode's own, running
     // here, and it honours the same approval setting.
@@ -331,9 +355,13 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (index < 0) throw new Error(`AI session "${id}" was not found`);
   const current = state.sessions[index];
   const effectiveRoute = options.route ?? current.route;
-  if (effectiveRoute === 'gateway' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
-    throw new Error('ClikDeploy Gateway account, provider, model, effort, failover, and native sessions are selected by platform routing and cannot be overridden per session.');
+  if (effectiveRoute === 'gateway' && (options.account || options.provider || options.effort || options.accountFailover || options.nativeSession)) {
+    throw new Error('ClikDeploy Gateway account, provider, effort, failover, and native sessions are selected by platform routing and cannot be overridden per session.');
   }
+  // The Gateway's model is the user's to choose, from the Gateway's own list.
+  const gatewayModel = effectiveRoute === 'gateway' && options.model !== undefined
+    ? await chooseGatewayModel(options.model)
+    : undefined;
   if (effectiveRoute === 'clikcode-local' && (options.account || options.provider || options.model || options.effort || options.accountFailover || options.nativeSession)) {
     throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
   }
@@ -364,11 +392,12 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (effectiveRoute === 'local' && (options.account || options.provider) && !selectedHarness) {
     throw new Error(`unknown local provider "${options.provider ?? account?.provider}"`);
   }
-  const model = options.model === undefined ? undefined : normalizeModelWord(options.model);
-  if (model && selectedHarness && !(selectedHarness.modelArgvPrefix !== undefined || selectedHarness.acp?.listsModels)) {
+  const model = options.model === undefined ? undefined
+    : effectiveRoute === 'gateway' ? gatewayModel ?? null : normalizeModelWord(options.model);
+  if (model && effectiveRoute !== 'gateway' && selectedHarness && !(selectedHarness.modelArgvPrefix !== undefined || selectedHarness.acp?.listsModels)) {
     throw new Error(`${selectedHarness.displayName} does not publish a model selector.`);
   }
-  if (model) await assertRealModel(selectedHarness, account ?? state.accounts.find((item) => item.id === current.accountId), model);
+  if (model && effectiveRoute !== 'gateway') await assertRealModel(selectedHarness, account ?? state.accounts.find((item) => item.id === current.accountId), model);
   if (options.effort && selectedHarness) {
     const effortOption = optionForHarness(selectedHarness, 'effort');
     if (!effortOption) throw new Error(`${selectedHarness.displayName} does not publish a configurable reasoning-effort flag.`);

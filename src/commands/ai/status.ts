@@ -71,3 +71,14 @@ export async function aiGatewayUsage(config: Conf, options: { days?: string } = 
   }
   emitResult({ apiUrl, ...(body.data as Record<string, unknown>) });
 }
+
+/** The models ClikDeploy Gateway offers the signed-in account, cheapest access
+ * first -- what `/model` and `sessions set --model` choose from. */
+export async function aiGatewayModels(config: Conf): Promise<void> {
+  const { gatewayModels, gatewayModelDetail } = await import('../../gateway/models.js');
+  const { automatic, models } = await gatewayModels({ config, fresh: true });
+  emitResult({
+    automatic,
+    models: models.map((model) => ({ id: model.id, access: model.access, via: gatewayModelDetail(model), providers: model.providers.map((item) => item.provider) })),
+  });
+}

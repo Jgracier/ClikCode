@@ -7,7 +7,7 @@
  * need live beside this file, one concern each.
  */
 
-import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';
+import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService, ROUTE_CHOICES_TEXT } from '../../session/route.js';
 import { hermesTurboFitModelId } from '../../harness/accounts/hermes-discovery.js';
 import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
 import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
@@ -41,7 +41,8 @@ import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
-import { aiSessionClose, aiSessionLeave, applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, assertRealModel } from '../../commands/ai/sessions.js';
+import { aiSessionClose, aiSessionLeave, applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, assertRealModel, chooseGatewayModel } from '../../commands/ai/sessions.js';
+import { gatewayModelDetail, gatewayModels, isAutomaticModelWord } from '../../gateway/models.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
 import { capabilitiesText } from './capabilities-text.js';
 import { compactConversation } from './compact.js';
@@ -219,6 +220,23 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     const trusted = words[0] === '--any';
     if (trusted) words.shift();
     const value = words.join(' ').trim();
+    // A Gateway conversation chooses from the Gateway's own list; `auto` hands
+    // the choice back to it. The Gateway serves the model from its cheapest
+    // provider -- subscription, then free, then paid -- and never another model.
+    if (isGatewayService(session)) {
+      if (!value) {
+        const { models, automatic } = await gatewayModels();
+        return emitHarnessOutput({
+          panel: 'models',
+          models: models.map((model) => ({ model: model.id, provider: gatewayModelDetail(model), access: model.access, providers: model.providers })),
+          selected: session.model ?? automatic,
+        });
+      }
+      session.model = trusted && !isAutomaticModelWord(value) ? value : await chooseGatewayModel(value);
+      session.updatedAt = new Date().toISOString();
+      await writeState(state);
+      return emitHarnessOutput({ panel: 'settings', session });
+    }
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     // No value: show what there is to choose from, which is what
     // /permissions with no value already does. The interactive session opens
