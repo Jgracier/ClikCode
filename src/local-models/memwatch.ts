@@ -8,11 +8,14 @@
  * helpers -- or the embedded copy would fail where the tested one works.
  * A test runs the embedded copies to hold that line.
  *
- * What counts as whose memory. MemAvailable (Linux) counts page cache as
- * available, and that includes the model's own mmapped weights. Those pages
- * are not spare: evicting them makes every token re-read the file from
- * disk, which is thrashing by another name. So
- *   spare  = MemAvailable - the model's resident file pages (RssFile)
+ * What counts as whose memory. On the CPU the server reads its weights
+ * into its own memory (see usesMmap in launch.ts), so its footprint is its
+ * RssAnon and MemAvailable is simply what is spare. A server that maps its
+ * weights (GPU placements) has them in page cache, which MemAvailable
+ * counts as available; those pages are not spare -- evicting them makes
+ * every token re-read the file from disk, thrashing by another name -- so
+ * there the supervisor passes the server's RssFile as `ourFileBytes`, and
+ *   spare  = MemAvailable - ourFileBytes
  * is what other programs can still take without hurting the model, and
  *   others = total - MemAvailable - the model's RssAnon
  * is what they hold now (for the log and the notice; the decision needs
@@ -29,6 +32,9 @@ export interface MemorySample {
   /** Cumulative pages swapped out (Linux pswpout, macOS Swapouts). */
   swapOutPages?: number;
   ourAnonBytes: number;
+  /** The server's mapped weights that are resident; 0 when it reads its
+   * weights into memory instead (whatever RssFile says: that is then only
+   * its binary and libraries). */
   ourFileBytes: number;
 }
 
@@ -207,10 +213,13 @@ export interface FootprintRecord {
   vision: boolean;
   anonBytes: number;
   fileBytes: number;
+  mmap: boolean;
   at: string;
 }
 
+/** A record made with the other loading mode is replaced, not merged: a
+ * mapped run's peak double-counts what a read-in run holds once. */
 export function mergeFootprint(previous: FootprintRecord | undefined, next: FootprintRecord): FootprintRecord {
-  if (!previous) return next;
+  if (!previous || previous.mmap !== next.mmap) return next;
   return { ...next, anonBytes: Math.max(previous.anonBytes, next.anonBytes), fileBytes: Math.max(previous.fileBytes, next.fileBytes) };
 }

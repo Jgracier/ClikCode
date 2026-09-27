@@ -76,10 +76,9 @@ export interface FitOptions {
 }
 
 /** A model's peak resident memory in one configuration, as the supervisor
- * measured it: RssAnon (its allocations -- on a CPU that includes weights
- * llama.cpp repacks for faster kernels, the KV cache and the prompt cache)
- * plus RssFile (the mmapped weights it keeps in page cache, which it needs
- * resident to run at speed). */
+ * measured it: RssAnon (its allocations: weights read into memory, the KV
+ * cache, the prompt cache, buffers) plus, for a server that maps its
+ * weights, RssFile (the mapped weights). */
 export interface Footprint {
   context: number;
   cacheType: string;
@@ -87,6 +86,9 @@ export interface Footprint {
   vision: boolean;
   anonBytes: number;
   fileBytes: number;
+  /** Whether the weights were mapped. Records without it predate reading
+   * weights into memory on the CPU and are ignored there (see measuredNeed). */
+  mmap?: boolean;
   at: string;
 }
 
@@ -137,11 +139,16 @@ export function contextsToTry(model: Pick<CatalogModel, 'defaultContext' | 'maxC
  * the adjustment is the one part the estimate gets right, since the KV
  * cache's size follows from the model's geometry. Undefined before the
  * first run. A run at the same parallelism is required: a different slot
- * count changes buffers the adjustment does not model. */
+ * count changes buffers the adjustment does not model.
+ *
+ * Only runs that read the weights into memory count (this is the CPU fit,
+ * and CPU servers do that; see usesMmap). A run that mapped them on the CPU
+ * counted repacked tensors twice, once in its own memory and once as
+ * mapped file, so its footprint overstates what the model needs. */
 export function measuredNeed(
   model: CatalogModel, footprints: readonly Footprint[] | undefined, context: number, cacheType: CacheType, parallel: number, vision: boolean,
 ): number | undefined {
-  const candidates = (footprints ?? []).filter((item) => item.parallel === parallel && item.anonBytes > 0 && item.context > 0);
+  const candidates = (footprints ?? []).filter((item) => item.mmap === false && item.parallel === parallel && item.anonBytes > 0 && item.context > 0);
   if (!candidates.length) return undefined;
   const distance = (item: Footprint): number => (item.cacheType === cacheType ? 0 : 100) + (item.vision === vision ? 0 : 10)
     + Math.abs(Math.log2(context / item.context));

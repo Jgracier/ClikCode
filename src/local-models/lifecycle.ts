@@ -179,6 +179,9 @@ export interface MemoryWatchConfig {
   cacheType: string;
   parallel: number;
   vision: boolean;
+  /** The server maps its weights (see usesMmap): only then are its
+   * resident file pages its own. */
+  mmap: boolean;
   /** What runs at start. */
   current: Omit<ShrinkStep, 'args'>;
   /** Least drastic first. */
@@ -340,7 +343,7 @@ function sampleMemory(pid) {
     if (!mem.totalBytes || mem.availableBytes === undefined) return undefined;
     const own = parseProcStatus(read('/proc/' + pid + '/status'));
     const swapOutPages = parseVmstatSwapOut(read('/proc/vmstat'));
-    return Object.assign({ at, totalBytes: mem.totalBytes, availableBytes: mem.availableBytes, ourAnonBytes: own.anonBytes, ourFileBytes: own.fileBytes },
+    return Object.assign({ at, totalBytes: mem.totalBytes, availableBytes: mem.availableBytes, ourAnonBytes: own.anonBytes, ourFileBytes: memory.mmap ? own.fileBytes : 0 },
       swapOutPages === undefined ? {} : { swapOutPages });
   }
   if (process.platform === 'darwin') {
@@ -366,7 +369,7 @@ function writeFootprint() {
     const machine = store[memory.machine] || (store[memory.machine] = {});
     machine[current.footprintKey] = mergeFootprint(machine[current.footprintKey], {
       context: current.context, cacheType: memory.cacheType, parallel: memory.parallel, vision: memory.vision,
-      anonBytes: peak.anon, fileBytes: peak.file, at: new Date().toISOString(),
+      anonBytes: peak.anon, fileBytes: peak.file, mmap: Boolean(memory.mmap), at: new Date().toISOString(),
     });
     const temporary = memory.footprintsFile + '.' + process.pid + '.tmp';
     fs.writeFileSync(temporary, JSON.stringify(store, null, 2));
@@ -407,7 +410,7 @@ function memoryTick() {
   const decision = memoryStep({ sample, state: watch, bufferBytes: memory.bufferBytes, busy, shrinks: options });
   watch = decision.state;
   const summary = 'memory ' + decision.level + ': ' + gb(decision.spareBytes) + ' spare (buffer ' + gb(memory.bufferBytes) + '), others hold '
-    + gb(decision.othersBytes) + ', model ' + gb(sample.ourAnonBytes) + ' own + ' + gb(sample.ourFileBytes) + ' weights cached'
+    + gb(decision.othersBytes) + ', model ' + gb(sample.ourAnonBytes) + (memory.mmap ? ' own + ' + gb(sample.ourFileBytes) + ' mapped weights' : '')
     + (decision.swapOutPerSecond ? ', swapping out ' + Math.round(decision.swapOutPerSecond) + ' pages/s' : '');
   const key = decision.level + ' ' + decision.action;
   if (key !== lastLog || decision.action === 'shrink' || decision.action === 'stop' || sample.at - lastStatusAt > 300000) {

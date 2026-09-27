@@ -18,7 +18,7 @@
 
 import { createServer } from 'node:net';
 import { request } from 'node:http';
-import type { Fit } from './choose.js';
+import type { Fit, Placement } from './choose.js';
 import type { HardwareProfile } from './hardware.js';
 
 export interface ThreadPlan { threads: number; threadsBatch: number }
@@ -28,6 +28,28 @@ export function threadPlan(hardware: Pick<HardwareProfile, 'physicalCores' | 'lo
   const threads = Math.max(1, hardware.physicalCores - reserve);
   const threadsBatch = Math.max(threads, Math.min(hardware.logicalCores - reserve, Math.floor(threads * 1.5)));
   return { threads, threadsBatch };
+}
+
+/** Whether llama-server maps the weights file (llama.cpp's default) or
+ * reads it into its own memory (`--load-mode none`, what older builds
+ * called --no-mmap).
+ *
+ * On the CPU it reads them. Mapped, the weights stay in page cache and
+ * llama.cpp copies every tensor it repacks for its faster CPU kernels into
+ * its own memory as well, so a large share of the model is held twice: a
+ * 35B-A3B MoE with a 21.7 GB file held 15.2 GB of its own plus 20.5 GB of
+ * mapped file, and gpt-oss 20B 11.8 + 10.8 GB for a 12.1 GB file. The
+ * mapped copies of repacked tensors are never read again, but they count
+ * as the model's resident memory, so the memory budget cannot tell them
+ * from the pages it needs. Read into buffers instead, each tensor exists
+ * once (repacked ones are converted as they load), the model's footprint is
+ * simply its anonymous memory, and the page cache the read leaves behind is
+ * ordinary reclaimable cache.
+ *
+ * On a GPU (discrete or unified) mapping stays: the weights live in VRAM,
+ * or Metal shares the mapped pages with the GPU without a copy. */
+export function usesMmap(placement: Placement): boolean {
+  return placement !== 'cpu';
 }
 
 export interface ServerArgsInput {
@@ -63,6 +85,7 @@ export function buildServerArgs(input: ServerArgsInput): string[] {
     '--no-webui',
   ];
   if (input.projectorPath) args.push('--mmproj', input.projectorPath);
+  if (!usesMmap(fit.placement)) args.push('--load-mode', 'none');
   if (fit.placement === 'gpu') args.push('-ngl', 'all');
   else if (fit.placement === 'gpu-partial') args.push('-ngl', 'auto', '--fit', 'on', '--fit-target', String(input.fitTargetMib ?? 1024));
   else args.push('-ngl', '0');
