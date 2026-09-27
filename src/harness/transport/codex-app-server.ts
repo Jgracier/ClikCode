@@ -5,6 +5,8 @@ import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 import { categoryOf, formatToolRow } from '../protocol/tools.js';
+import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
+import { createTurnWatchdog, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -40,7 +42,14 @@ export interface CodexSession {
   close(): Promise<void>;
 }
 
-interface CodexSessionOptions { spawn?: CodexSpawn }
+interface CodexSessionOptions {
+  spawn?: CodexSpawn;
+  /** Receives work the vendor does between ClikCode turns. */
+  backgroundTurns?: VendorBackgroundTurnHandler;
+  /** Watchdog budgets (see turn-watchdog.ts); tests shorten them. */
+  idleMs?: number;
+  toolIdleMs?: number;
+}
 
 interface CodexAppServerTurnResult {
   text: string;
@@ -171,6 +180,16 @@ const OUTPUT_BUFFER_LIMIT = 4000;
 const cancelledError = (): Error => Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
 const isCancelled = (error: unknown): boolean => (error as NodeJS.ErrnoException | undefined)?.code === 'ERR_TURN_CANCELLED';
 
+/** Notifications that carry the vendor's work (and so can open a background
+ * turn). Status, usage and server bookkeeping never do. */
+const CONTENT_NOTIFICATION = /^(?:item\/|turn\/(?:started|completed|plan\/updated)$)/;
+
+/** A sub-agent's name as Codex paths it (`/root/run_tests` -> `run_tests`). */
+function subAgentLabel(path: unknown): string {
+  const name = typeof path === 'string' ? path.split('/').filter(Boolean).pop() : undefined;
+  return name && name !== 'root' ? `subagent ${name}` : 'subagent';
+}
+
 interface LiveServer {
   peer: JsonRpcPeer;
   key: string;
@@ -178,37 +197,66 @@ interface LiveServer {
   threadId?: string;
 }
 
-interface ActiveTurn {
-  input: CodexAppServerTurnInput;
-  done: boolean;
-  threadId?: string;
-  turnId?: string;
+/** Whatever is receiving the vendor's notifications right now: the user's
+ * turn, or a background turn when there is none. */
+interface Stream {
+  observer: HarnessTurnObserver;
   lastAgentMessage: string;
   streamedMessage: string;
   sawActivity: boolean;
   lastError?: JsonObject;
   items: Map<string, JsonObject>;
   output: Map<string, { text: string; emittedAt: number }>;
+  watchdog?: TurnWatchdog;
+}
+
+interface ActiveTurn extends Stream {
+  input: CodexAppServerTurnInput;
+  done: boolean;
+  threadId?: string;
+  turnId?: string;
   complete: (error?: Error) => void;
   fail: (error: Error) => void;
 }
 
+interface BackgroundRun extends Stream {
+  channel: BackgroundTurnChannel;
+  /** A turn the vendor started on our thread, until its turn/completed. */
+  vendorTurnId?: string;
+}
+
+/** Work still running on the vendor's side: a tool item of our thread that
+ * has not completed, or a sub-agent thread that is active. */
+interface PendingWork { label: string; turnId?: string }
+
 class CodexSessionImpl implements CodexSession {
   private live?: LiveServer;
   private turn?: ActiveTurn;
+  private background?: BackgroundRun;
+  private readonly pendingWork = new Map<string, PendingWork>();
   private settling?: Promise<void>;
   private turnCompletedWaiter?: () => void;
   private threadId?: string;
+  private lastPermissionMode: AiHarnessPermissionMode = 'ask';
   private isClosed = false;
   private readonly spawn: CodexSpawn;
+  private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
+  private readonly idleMs?: number;
+  private readonly toolIdleMs?: number;
 
   constructor(options: CodexSessionOptions) {
     this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
+    this.onBackgroundTurn = options.backgroundTurns;
+    this.idleMs = options.idleMs;
+    this.toolIdleMs = options.toolIdleMs;
   }
 
   async runTurn(input: CodexAppServerTurnInput): Promise<CodexAppServerTurnResult> {
     if (this.isClosed) throw new Error('Codex session is closed');
     if (this.turn) throw new Error('Codex session already has an active turn');
+    // From here on the user's turn receives what the vendor says.
+    this.finishBackground('superseded');
+    this.lastPermissionMode = input.permissionMode;
     let fail!: (error: Error) => void;
     let complete!: (error?: Error) => void;
     const failure = new Promise<never>((_, reject) => { fail = reject; });
@@ -216,18 +264,21 @@ class CodexSessionImpl implements CodexSession {
     const completion = new Promise<void>((resolve, reject) => { complete = (error) => error ? reject(error) : resolve(); });
     completion.catch(() => undefined);
     const turn: ActiveTurn = {
-      input, done: false, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
+      input, observer: input, done: false, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
       items: new Map(), output: new Map(), complete, fail,
     };
     this.turn = turn;
     const onAbort = (): void => this.cancelTurn(turn);
     input.signal?.addEventListener('abort', onAbort, { once: true });
+    let succeeded = false;
     try {
       if (this.settling) await this.settling;
       if (input.signal?.aborted) throw cancelledError();
       const flow = this.flow(turn, completion);
       flow.catch(() => undefined);
-      return await Promise.race([flow, failure]);
+      const result = await Promise.race([flow, failure]);
+      succeeded = true;
+      return result;
     } catch (error) {
       const failureError = error instanceof Error ? error : new Error(String(error));
       if (!isCancelled(failureError)) {
@@ -239,11 +290,16 @@ class CodexSessionImpl implements CodexSession {
       throw failureError;
     } finally {
       turn.done = true;
+      turn.watchdog?.stop();
       input.onSteerReady?.(undefined);
       input.signal?.removeEventListener('abort', onAbort);
       if (this.turn === turn) this.turn = undefined;
       // A turn/steer in flight when the turn ends is never answered.
       this.live?.peer.rejectPending(new Error('Codex turn ended'), (method) => method !== 'turn/interrupt');
+      // A reply can be written while a shell or a sub-agent it started is
+      // still running. That work is reported as a background turn; after a
+      // failed or stopped turn nothing is known to be running any more.
+      if (!succeeded) { this.pendingWork.clear(); this.settleBackground(); } else if (this.pendingWork.size && this.live) this.openBackground('background-work', undefined, turn.items);
     }
   }
 
@@ -261,6 +317,8 @@ class CodexSessionImpl implements CodexSession {
   async close(): Promise<void> {
     this.isClosed = true;
     if (this.turn) this.cancelTurn(this.turn);
+    this.finishBackground('closed');
+    this.pendingWork.clear();
     if (this.settling) await this.settling;
     const live = this.live;
     this.live = undefined;
@@ -291,8 +349,66 @@ class CodexSessionImpl implements CodexSession {
     const live = this.live;
     if (!live) return;
     this.live = undefined;
+    this.finishBackground('closed');
+    this.pendingWork.clear();
     live.peer.rejectPending(error);
     void live.peer.shutdown();
+  }
+
+  private watchdog(onIdle: (afterMs: number) => void): TurnWatchdog {
+    return createTurnWatchdog({
+      ...(this.idleMs !== undefined ? { idleMs: this.idleMs } : {}),
+      ...(this.toolIdleMs !== undefined ? { toolIdleMs: this.toolIdleMs } : {}),
+      onIdle,
+    });
+  }
+
+  /** Open a background turn and hand it to the owner. Without an owner the
+   * vendor's out-of-turn work is not surfaced, exactly as before. */
+  private openBackground(reason: 'vendor-turn' | 'background-work', vendorTurnId?: string, items?: Map<string, JsonObject>): BackgroundRun | undefined {
+    if (!this.onBackgroundTurn || this.isClosed) return undefined;
+    if (this.background && !this.background.channel.done) return this.background;
+    const channel = new BackgroundTurnChannel('codex-app-server', reason);
+    const run: BackgroundRun = {
+      channel, observer: channel.observer, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
+      items: new Map([...(items ?? [])].filter(([id]) => this.pendingWork.has(`item:${id}`))), output: new Map(),
+      ...(vendorTurnId ? { vendorTurnId } : {}),
+    };
+    run.watchdog = this.watchdog(() => {
+      if (this.background !== run) return;
+      // The ceiling ends the background turn, not the server: whatever is
+      // still running can report into the next turn.
+      this.pendingWork.clear();
+      this.finishBackground('idle-timeout');
+    });
+    for (const key of this.pendingWork.keys()) run.watchdog.toolStarted(key);
+    this.background = run;
+    try { this.onBackgroundTurn(channel); } catch { /* fail-open-ok: the owner's bookkeeping */ }
+    return run;
+  }
+
+  private finishBackground(ended: BackgroundTurnEnd): void {
+    const run = this.background;
+    if (!run) return;
+    this.background = undefined;
+    run.watchdog?.stop();
+    run.channel.finish(ended);
+  }
+
+  private settleBackground(): void {
+    const run = this.background;
+    if (run && !run.vendorTurnId && this.pendingWork.size === 0) this.finishBackground('completed');
+  }
+
+  private workStarted(key: string, work: PendingWork, target: Stream | undefined): void {
+    if (this.pendingWork.has(key)) return;
+    this.pendingWork.set(key, work);
+    target?.watchdog?.toolStarted(key);
+  }
+
+  private workFinished(key: string, target: Stream | undefined): boolean {
+    target?.watchdog?.toolFinished(key);
+    return this.pendingWork.delete(key);
   }
 
   private ensureLive(input: CodexAppServerTurnInput, threadKey: string): LiveServer {
@@ -314,7 +430,11 @@ class CodexSessionImpl implements CodexSession {
         onRequest: (method, params) => this.serverRequest(method, params),
         onNotification: (method, params) => this.notification(method, params),
         onClose: (error) => {
-          if (this.live === live) this.live = undefined;
+          if (this.live === live) {
+            this.live = undefined;
+            this.finishBackground('closed');
+            this.pendingWork.clear();
+          }
           const turn = this.turn;
           if (!turn || turn.done) return;
           const reason = typeof turn.lastError?.message === 'string' ? new Error(turn.lastError.message) : error;
@@ -357,6 +477,9 @@ class CodexSessionImpl implements CodexSession {
     this.threadId = threadId;
     await input.onSessionId?.(threadId);
     stillRunning();
+    // The turn ends on Codex's own turn/completed. This is only the ceiling
+    // for a server that has stopped talking without saying so.
+    turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError('Codex', afterMs)));
     const turnResult = await peer.request('turn/start', {
       threadId,
       input: [
@@ -384,66 +507,159 @@ class CodexSessionImpl implements CodexSession {
       ? { decision: aborted ? 'cancel' : accepted ? 'accept' : 'decline' }
       : { decision: aborted ? 'abort' : accepted ? 'approved' : 'denied' };
     return (async () => {
-      const turn = this.turn;
-      if (!turn || turn.done) return answer(false, true);
-      if (turn.input.permissionMode === 'bypass') return answer(true);
+      const turn = this.turn && !this.turn.done ? this.turn : undefined;
+      // Out of turn, a vendor turn or a sub-agent still asks the user -- via
+      // the background turn, under the permission mode of the last turn.
+      const stream: Stream | undefined = turn ?? this.background ?? this.openBackground('vendor-turn');
+      if (!stream) return answer(false, true);
+      const permissionMode = turn?.input.permissionMode ?? this.lastPermissionMode;
+      if (permissionMode === 'bypass') return answer(true);
       // `auto` delegates routine review to Codex's own auto_review reviewer.
       // Whatever still reaches the client is, by construction, something the
       // reviewer escalated -- so the user decides, exactly as in `ask`.
       const fileChange = /fileChange|applyPatch/.test(method);
-      const item = typeof params.itemId === 'string' ? turn.items.get(params.itemId) : undefined;
-      const accepted = await turn.input.onApproval?.(fileChange ? 'Approve file changes' : 'Approve command', codexApprovalDetail(params, item)) === true;
-      return turn.done ? answer(false, true) : answer(accepted);
+      const item = typeof params.itemId === 'string' ? stream.items.get(params.itemId) : undefined;
+      // Codex is waiting on the user, not wedged.
+      const resume = stream.watchdog?.pause();
+      try {
+        const accepted = await stream.observer.onApproval?.(fileChange ? 'Approve file changes' : 'Approve command', codexApprovalDetail(params, item)) === true;
+        return turn?.done ? answer(false, true) : answer(accepted);
+      } finally {
+        resume?.();
+      }
     })();
   }
 
+  /** Where a notification goes: the user's turn while one runs, otherwise a
+   * background turn -- opened when the vendor starts a turn of its own, or
+   * reports on work a finished turn left running. */
+  private targetFor(method: string, params: JsonObject, ours: boolean): Stream | undefined {
+    // A stopped turn winding down: what it still says belongs to nobody.
+    if (this.turn) return this.turn.done ? undefined : this.turn;
+    const turnId = String(((params.turn as JsonObject | undefined) ?? {}).id ?? '');
+    const vendorTurn = ours && method === 'turn/started' && turnId ? turnId : undefined;
+    if (this.background && !this.background.channel.done) {
+      if (vendorTurn) {
+        this.background.vendorTurnId = vendorTurn;
+        this.background.channel.reason = 'vendor-turn';
+      }
+      return this.background;
+    }
+    if (vendorTurn) return this.openBackground('vendor-turn', vendorTurn);
+    const childStarted = !ours && method === 'turn/started';
+    if ((this.pendingWork.size || childStarted) && CONTENT_NOTIFICATION.test(method)) return this.openBackground('background-work');
+    return undefined;
+  }
+
   private notification(method: string, params: JsonObject): void {
-    if (method === 'turn/completed') this.turnCompletedWaiter?.();
-    const turn = this.turn;
-    if (!turn || turn.done) return;
-    const { input } = turn;
+    const threadId = typeof params.threadId === 'string' ? params.threadId : undefined;
+    // Sub-agents run as threads of their own on this same connection. Their
+    // turns, messages and tools are theirs: a sub-agent finishing is not the
+    // parent's turn/completed, and its prose is not the parent's answer.
+    const ours = threadId === undefined || threadId === this.threadId;
+    if (method === 'turn/completed' && ours) this.turnCompletedWaiter?.();
+    const target = this.targetFor(method, params, ours);
+    target?.watchdog?.activity();
+    if (!ours) this.otherThread(target, method, params, threadId!);
+    else if (target) this.ownThread(target, method, params);
+    else this.bookkeeping(undefined, method, params);
+    this.settleBackground();
+  }
+
+  /** Pending-work bookkeeping for our own thread, whoever is listening. */
+  private bookkeeping(target: Stream | undefined, method: string, params: JsonObject): void {
+    if (method !== 'item/started' && method !== 'item/completed') return;
+    const item = (params.item as JsonObject) ?? {};
+    if (item.type === 'subAgentActivity' && typeof item.agentThreadId === 'string') {
+      const key = `agent:${item.agentThreadId}`;
+      if (item.kind === 'started' && method === 'item/started') {
+        this.workStarted(key, { label: subAgentLabel(item.agentPath) }, target);
+        target?.observer.onActivity?.({ kind: 'tool-start', label: subAgentLabel(item.agentPath), agent: true, id: key });
+      } else if (item.kind === 'completed' && this.workFinished(key, target)) {
+        target?.observer.onActivity?.({ kind: 'tool-done', label: subAgentLabel(item.agentPath), agent: true, id: key });
+      }
+      return;
+    }
+    if (typeof item.id !== 'string') return;
+    const key = `item:${item.id}`;
+    if (method === 'item/started') {
+      if (codexActivityForItem(item, false)?.kind === 'tool-start') {
+        this.workStarted(key, { label: String(item.type), ...(typeof params.turnId === 'string' ? { turnId: params.turnId } : {}) }, target);
+      }
+    } else this.workFinished(key, target);
+  }
+
+  /** A sub-agent thread: one row per sub-agent, open while it works. */
+  private otherThread(target: Stream | undefined, method: string, params: JsonObject, threadId: string): void {
+    const key = `agent:${threadId}`;
+    if (method === 'turn/started') {
+      const known = this.pendingWork.get(key);
+      if (!known) {
+        this.workStarted(key, { label: 'subagent' }, target);
+        target?.observer.onActivity?.({ kind: 'tool-start', label: 'subagent', agent: true, id: key });
+      }
+    } else if (method === 'turn/completed') {
+      const known = this.pendingWork.get(key);
+      if (known && this.workFinished(key, target)) {
+        const failed = ((params.turn as JsonObject | undefined) ?? {}).status === 'failed';
+        target?.observer.onActivity?.({ kind: failed ? 'tool-error' : 'tool-done', label: known.label, agent: true, id: key });
+      }
+    }
+  }
+
+  private ownThread(target: Stream, method: string, params: JsonObject): void {
+    const observer = target.observer;
+    this.bookkeeping(target, method, params);
     if (method === 'item/agentMessage/delta' && typeof params.delta === 'string') {
-      turn.streamedMessage += params.delta;
-      input.onResponseDelta?.(params.delta);
-      input.onPhase?.('generating response');
+      target.streamedMessage += params.delta;
+      observer.onResponseDelta?.(params.delta);
+      observer.onPhase?.('generating response');
     } else if (method === 'item/started' || method === 'item/completed') {
       const item = (params.item as JsonObject) ?? {};
       if (typeof item.id === 'string') {
-        if (method === 'item/started') turn.items.set(item.id, item);
-        else { turn.items.delete(item.id); turn.output.delete(item.id); }
+        if (method === 'item/started') target.items.set(item.id, item);
+        else { target.items.delete(item.id); target.output.delete(item.id); }
       }
       if (item.type === 'agentMessage' && method === 'item/started') {
-        if (turn.streamedMessage) input.onResponseDelta?.('\n\n');
-        turn.streamedMessage = '';
+        if (target.streamedMessage) observer.onResponseDelta?.('\n\n');
+        target.streamedMessage = '';
       }
       if (item.type === 'agentMessage' && method === 'item/completed' && typeof item.text === 'string') {
-        turn.lastAgentMessage = item.text;
+        target.lastAgentMessage = item.text;
         // Deltas are the normal path. Some app-server/provider combinations
         // can still complete an item without publishing them; surface that
         // text immediately instead of leaving the UI blank until the turn is
         // persisted. If only a suffix was missed, append just that suffix.
-        const catchup = completedAgentMessageUpdate(turn.streamedMessage, item.text);
-        if (catchup) input.onResponseDelta?.(catchup.text, catchup.mode);
-        turn.streamedMessage = item.text;
+        const catchup = completedAgentMessageUpdate(target.streamedMessage, item.text);
+        if (catchup) observer.onResponseDelta?.(catchup.text, catchup.mode);
+        target.streamedMessage = item.text;
       }
       const activity = codexActivityForItem(item, method === 'item/completed');
       if (activity) {
-        if (activity.kind !== 'thinking') turn.sawActivity = true;
-        input.onActivity?.(activity);
+        if (activity.kind !== 'thinking') target.sawActivity = true;
+        observer.onActivity?.(activity);
       }
     } else if (/^item\/(commandExecution|fileChange)\/outputDelta$/.test(method) && typeof params.delta === 'string') {
-      this.outputDelta(turn, String(params.itemId ?? ''), params.delta);
+      this.outputDelta(target, String(params.itemId ?? ''), params.delta);
     } else if (/^item\/reasoning\/(summaryTextDelta|textDelta)$/.test(method) && typeof params.delta === 'string') {
-      input.onThought?.(params.delta);
+      observer.onThought?.(params.delta);
     } else if (method === 'turn/plan/updated') {
-      input.onPlan?.(codexPlanEntries(params), typeof params.explanation === 'string' ? params.explanation : undefined);
+      observer.onPlan?.(codexPlanEntries(params), typeof params.explanation === 'string' ? params.explanation : undefined);
     } else if (/token_?usage|token_count/i.test(method)) {
       const usage = params.tokenUsage ?? params.token_usage ?? params.usage ?? params.info ?? params;
-      if (usage && typeof usage === 'object') input.onUsage?.(usage as Record<string, unknown>);
+      if (usage && typeof usage === 'object') observer.onUsage?.(usage as Record<string, unknown>);
     } else if (method === 'account/rateLimits/updated') {
-      input.onRateLimits?.(params.rateLimits);
+      observer.onRateLimits?.(params.rateLimits);
     } else if (method === 'turn/completed') {
       const completedTurn = (params.turn as JsonObject) ?? {};
+      if (target === this.background) {
+        if (completedTurn.id === this.background.vendorTurnId) delete this.background.vendorTurnId;
+        return;
+      }
+      const turn = target as ActiveTurn;
+      // Only the turn we started ends it (a late turn/completed of an earlier
+      // turn must not end this one).
+      if (turn.turnId && completedTurn.id !== undefined && completedTurn.id !== turn.turnId) return;
       if (completedTurn.status === 'failed') {
         const error = (completedTurn.error as JsonObject | undefined) ?? turn.lastError;
         if (error) turn.lastError = error;
@@ -453,26 +669,26 @@ class CodexSessionImpl implements CodexSession {
       turn.complete();
     } else if (method === 'error') {
       const error = (params.error as JsonObject) ?? {};
-      if (params.willRetry === true) input.onPhase?.('retrying');
-      else if (typeof error.message === 'string') turn.lastError = error;
+      if (params.willRetry === true) observer.onPhase?.('retrying');
+      else if (typeof error.message === 'string') target.lastError = error;
     }
   }
 
   /** Live command output. Rate-limited per item: every consumer of activity
    * events persists or repaints, and a build can emit thousands of deltas. */
-  private outputDelta(turn: ActiveTurn, itemId: string, delta: string): void {
+  private outputDelta(target: Stream, itemId: string, delta: string): void {
     if (!itemId) return;
-    const entry = turn.output.get(itemId) ?? { text: '', emittedAt: 0 };
+    const entry = target.output.get(itemId) ?? { text: '', emittedAt: 0 };
     entry.text = `${entry.text}${delta}`.slice(-OUTPUT_BUFFER_LIMIT);
-    turn.output.set(itemId, entry);
+    target.output.set(itemId, entry);
     const now = Date.now();
     if (now - entry.emittedAt < OUTPUT_EMIT_INTERVAL_MS) return;
     entry.emittedAt = now;
-    const item = turn.items.get(itemId);
+    const item = target.items.get(itemId);
     const activity = item ? codexActivityForItem(item, false) : undefined;
     const label = activity?.label ?? 'command';
-    turn.sawActivity = true;
-    turn.input.onActivity?.({
+    target.sawActivity = true;
+    target.observer.onActivity?.({
       kind: 'tool-start', label, id: itemId, output: outputTail(entry.text),
       ...(activity?.category ? { category: activity.category } : {}),
       ...(activity?.agent ? { agent: activity.agent } : {}),
