@@ -43,8 +43,10 @@ async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolConte
   const mode = args.output_mode ?? 'content';
   // --no-require-git: honor .gitignore even outside a git checkout, matching
   // the Node fallback. Hidden files are searched, VCS internals and
-  // node_modules never are.
-  const argv = ['--color', 'never', '--no-messages', '--max-filesize', '5M', '--no-require-git', '--hidden', '--glob', '!**/.git/**', '--glob', '!**/node_modules/**'];
+  // node_modules never are. --sort path: ripgrep's threaded walk returns
+  // files in a different order each run, and an unstable tool result breaks
+  // the prompt-cache prefix of every later step (the Node walker sorts too).
+  const argv = ['--color', 'never', '--no-messages', '--max-filesize', '5M', '--no-require-git', '--hidden', '--sort', 'path', '--glob', '!**/.git/**', '--glob', '!**/node_modules/**'];
   if (mode === 'files') argv.push('--files-with-matches');
   else if (mode === 'count') argv.push('--count');
   else { argv.push('--line-number', '--no-heading', '--with-filename'); if (args.context) argv.push('--context', String(args.context)); }
