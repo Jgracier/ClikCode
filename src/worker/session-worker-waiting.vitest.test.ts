@@ -19,6 +19,8 @@ import type { HarnessSession } from '../session/model.js';
 import { WorkerClient } from './client.js';
 import { readWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
+import type { TerminalHarnessPrompter } from '../tui/prompter.js';
+import { closeAllWorkerClients, followWorkerTurn, questionOrWorker } from './turn-bridge.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
@@ -43,6 +45,7 @@ afterAll(() => {
 });
 
 afterEach(async () => {
+  await closeAllWorkerClients();
   for (const client of clients.splice(0)) client.close();
   for (const pid of workerPids.splice(0)) { try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } }
   await gateway?.close();
@@ -293,5 +296,65 @@ describe('a session worker waits for what it should', () => {
     (await gateway!.next()).respond(text('Written.'));
     await done;
     await expect(access(join(session.workspace, 'out.txt'))).resolves.toBeUndefined();
+  }, 60_000);
+});
+
+/** A window's prompt that waits for a key that never comes, until the bridge interrupts it. */
+const idlePrompt = (signal?: AbortSignal): Promise<string> => new Promise((_resolve, reject) => {
+  signal?.addEventListener('abort', () => reject(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' })), { once: true });
+});
+
+function recordingPrompter(): TerminalHarnessPrompter & { calls: string[] } {
+  const calls: string[] = [];
+  const record = (name: string) => (...args: unknown[]) => { calls.push(`${name}(${args.map((arg) => (typeof arg === 'function' ? '[fn]' : JSON.stringify(arg))).join(',')})`); };
+  return {
+    calls, render: record('render'), response: record('response'), activity: record('activity'), activityEvent: record('activityEvent'),
+    phase: record('phase'), setPlan: record('setPlan'), setTurnUsage: record('setTurnUsage'), startWaiting: record('startWaiting'), stopWaiting: record('stopWaiting'),
+    approval: async (...args: unknown[]) => { record('approval')(...args); return true; },
+    suspend: async () => undefined, resume: record('resume'), restoreDraft: record('restoreDraft'),
+  } as unknown as TerminalHarnessPrompter & { calls: string[] };
+}
+
+describe('a window at its prompt', () => {
+  it('reopening a conversation mid-turn follows the running turn to its end', async () => {
+    const session = await gatewaySession();
+    const other = await attach(session.id);
+    other.send({ type: 'submit', text: 'long question', echo: true });
+    const held = await gateway!.next();
+    // This window arrives while the turn runs: it does not sit at its prompt.
+    const woke = await questionOrWorker(session.id, idlePrompt);
+    expect(woke).toEqual({ woke: 'turn', prompt: 'long question' });
+    const rl = recordingPrompter();
+    const followed = followWorkerTurn(session.id, rl);
+    held.respond(text('the long answer'));
+    await followed;
+    expect(rl.calls.some((entry) => entry.startsWith('startWaiting("thinking"'))).toBe(true);
+    expect(rl.calls.filter((entry) => entry.startsWith('response(')).join('')).toContain('the long answer');
+    expect(rl.calls.at(-1)).toBe('stopWaiting()');
+  }, 60_000);
+
+  it('is interrupted by a turn the worker starts itself, and by a change to the queue', async () => {
+    const session = await gatewaySession();
+    const other = await attach(session.id);
+    // Idle window: the typed-as-the-turn-ended race queues a message.
+    const queued = questionOrWorker(session.id, idlePrompt);
+    other.send({ type: 'steer', text: 'queued while idle', id: 'late-1' });
+    expect(await queued).toEqual({ woke: 'queue' });
+
+    // And a turn started by someone else wakes it with that turn's prompt.
+    const turn = questionOrWorker(session.id, idlePrompt);
+    other.send({ type: 'submit', text: 'from another window', echo: true });
+    expect(await turn).toEqual({ woke: 'turn', prompt: 'from another window' });
+    const rl = recordingPrompter();
+    const followed = followWorkerTurn(session.id, rl);
+    (await gateway!.next()).respond(text('answered'));
+    await followed;
+    expect(rl.calls.filter((entry) => entry.startsWith('response(')).join('')).toContain('answered');
+  }, 60_000);
+
+  it('answers a key normally when nothing happens', async () => {
+    const session = await gatewaySession();
+    await attach(session.id);
+    await expect(questionOrWorker(session.id, async () => 'typed')).resolves.toEqual({ line: 'typed' });
   }, 60_000);
 });

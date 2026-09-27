@@ -1938,7 +1938,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   async question(
     prompt: string,
     commands: readonly PaletteEntry[] = [],
-    settings?: { cancellable?: boolean; rightArrowPalette?: boolean },
+    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; signal?: AbortSignal },
   ): Promise<string> {
     // Kept for the turn this prompt's answer starts: a turn in flight offers
     // the same commands, and this is where they are known.
@@ -2026,6 +2026,25 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         output.write(`${popReadModes()}\u001b[?25h`);
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
+      // Something other than the keyboard needs the screen: a turn this
+      // window did not start is running (worker/turn-bridge.ts). The draft is
+      // kept for the next prompt, and the caller is told why it ended.
+      const interrupt = (): void => {
+        if (finished) return;
+        finished = true;
+        this.paletteActive = false;
+        stopInput();
+        output.write(`${popReadModes()}\u001b[?25h`);
+        this.resumeInput = undefined;
+        if (value) this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${value}` : value;
+        rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
+      };
+      if (settings?.signal?.aborted) {
+        this.queuedDraft = value || undefined;
+        rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
+        return;
+      }
+      settings?.signal?.addEventListener('abort', interrupt, { once: true });
       const handleKey = (key: string): void => {
         const matched = matches();
         // `options` drives selection keys. While an argument is being typed the

@@ -369,6 +369,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
           enqueueSessionTurn(session, { id: command.id ?? randomUUID(), text: command.text.trim(), submittedAt }, submittedAt);
           await writeState(state);
           answer('queued');
+          broadcastQueueChanged();
         } catch (error) {
           answer('error', error instanceof Error ? error.message : String(error));
         }

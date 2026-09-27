@@ -138,6 +138,8 @@ export class WorkerClient extends EventEmitter {
   private buffer = '';
   private early: WorkerEvent[] | undefined = [];
   readonly initialSnapshot: Promise<Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }>>;
+  /** The same event, readable synchronously once attach() has resolved. */
+  initialEvent: Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }> | undefined;
 
   private constructor(private readonly socket: Socket) {
     super();
@@ -151,6 +153,7 @@ export class WorkerClient extends EventEmitter {
         const event = message as WorkerEvent;
         if (!sawInitial && (event.type === 'snapshot' || event.type === 'attach-rejected')) {
           sawInitial = true;
+          this.initialEvent = event;
           resolveInitial(event);
           continue;
         }
@@ -172,7 +175,17 @@ export class WorkerClient extends EventEmitter {
   }
 
   static async attach(sessionId: string): Promise<WorkerClient> {
-    const record = (await usableWorker(sessionId)) ?? await spawnSessionWorker(sessionId);
+    return WorkerClient.connectTo((await usableWorker(sessionId)) ?? await spawnSessionWorker(sessionId));
+  }
+
+  /** The session's worker if one is already running; never starts one. A
+   * window at its prompt uses this to follow turns it did not start. */
+  static async attachExisting(sessionId: string): Promise<WorkerClient | undefined> {
+    const record = await usableWorker(sessionId);
+    return record ? WorkerClient.connectTo(record) : undefined;
+  }
+
+  private static async connectTo(record: WorkerRuntimeRecord): Promise<WorkerClient> {
     const socket = await new Promise<Socket>((resolveSocket, rejectSocket) => {
       const candidate = connect(record.socketPath);
       candidate.once('connect', () => resolveSocket(candidate));

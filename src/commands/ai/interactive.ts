@@ -70,7 +70,7 @@ import { interactiveSessionPicker } from '../../tui/pickers/session.js';
 import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
-import { closeAllWorkerClients, prepareSessionWorker, releaseSessionWorker, runTurnThroughWorker } from '../../worker/turn-bridge.js';
+import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker } from '../../worker/turn-bridge.js';
 
 // The CLIKCODE_USE_WORKER escape hatch is gone: an ANSI terminal always runs
 // its turns through a session worker now. What remains below is not a
@@ -343,6 +343,23 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         } else if (resend) {
           line = resend;
           resend = undefined;
+        } else if (rl instanceof TerminalHarnessPrompter) {
+          // The worker may start a turn while this sits here (another
+          // window's, or a follow-up for a finished background shell), or
+          // queue something: either ends the prompt, keeping the draft.
+          const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, ...(signal ? { signal } : {}) }));
+          if ('woke' in answer) {
+            if (answer.woke === 'turn') {
+              // Shown as this window shows its own turns: the prompt as the
+              // pending message over the conversation, then the answer.
+              rl.submitted(answer.prompt);
+              rl.render({ ...latest, messages: sessionTranscriptMessages(latest), pendingTurn: undefined }, account);
+              const followed = await followWorkerTurn(latest.id, rl);
+              if (followed.notice) notice = followed.notice;
+            }
+            continue;
+          }
+          line = answer.line.trim();
         } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true })).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.

@@ -38,12 +38,73 @@ const clients = new Map<string, WorkerClient>();
 const pendingSubmissions = new Map<string, (event: Extract<WorkerEvent, { type: 'submission' }>) => void>();
 const SUBMISSION_ANSWER_MS = 8_000;
 
-async function clientFor(sessionId: string): Promise<WorkerClient> {
+/** What this window knows of its worker, from a listener that stays on the
+ * connection for its whole life: whether a turn is running (whoever started
+ * it) and with what prompt, and a wake-up for a window sitting at its
+ * prompt. The turn listener below comes and goes with each turn; this does
+ * not, so nothing the worker starts on its own is missed. */
+interface WorkerTracker {
+  running: boolean;
+  prompt?: string;
+  liveText: string;
+  wake?: (reason: 'turn' | 'queue') => void;
+  /** A turn is being shown (driveWorkerTurn), which answers requests itself. */
+  driving: boolean;
+  /** Approvals and sign-ins asked while no turn was being shown -- re-offered
+   * on attach, or asked of a window still at its prompt -- for the turn view
+   * to answer once it opens. */
+  unanswered: WorkerEvent[];
+}
+const trackers = new WeakMap<WorkerClient, WorkerTracker>();
+const connecting = new Map<string, Promise<WorkerClient | undefined>>();
+
+function track(sessionId: string, client: WorkerClient): void {
+  const tracker: WorkerTracker = { running: false, liveText: '', driving: false, unanswered: [] };
+  trackers.set(client, tracker);
+  const initial = client.initialEvent;
+  if (initial?.type === 'snapshot' && initial.live) Object.assign(tracker, { running: true, prompt: initial.live.prompt, liveText: initial.live.text });
+  client.on('event', (event: WorkerEvent) => {
+    if (event.type === 'waiting-start') {
+      Object.assign(tracker, { running: true, prompt: event.prompt, liveText: '' });
+      tracker.wake?.('turn');
+    } else if (event.type === 'waiting-stop') {
+      tracker.running = false;
+      tracker.unanswered = [];
+    } else if (event.type === 'approval-request' || event.type === 'sign-in-request') {
+      if (!tracker.driving) tracker.unanswered.push(event);
+    } else if (event.type === 'snapshot') {
+      // A worker older than this client names no prompt; it still says a
+      // turn is live, and that is what matters here.
+      if (event.live) Object.assign(tracker, { running: true, prompt: event.live.prompt ?? tracker.prompt, liveText: event.live.text });
+    } else if (event.type === 'delta') {
+      tracker.liveText = event.mode === 'replace' ? event.text : tracker.liveText + event.text;
+    } else if (event.type === 'queue-changed') {
+      tracker.wake?.('queue');
+    }
+  });
+  // A worker that exits (idle, retired) is attached afresh next time.
+  client.on('close', () => { if (clients.get(sessionId) === client) clients.delete(sessionId); });
+}
+
+async function connect(sessionId: string, spawn: boolean): Promise<WorkerClient | undefined> {
   const existing = clients.get(sessionId);
   if (existing) return existing;
-  const client = await WorkerClient.attach(sessionId);
-  clients.set(sessionId, client);
-  return client;
+  // One connection per session, however many callers race to make it.
+  const pending = connecting.get(sessionId);
+  if (pending) {
+    const joined = await pending;
+    if (joined || !spawn) return joined;
+  }
+  const attempt = (spawn ? WorkerClient.attach(sessionId) : WorkerClient.attachExisting(sessionId)).then((client) => {
+    if (client) { clients.set(sessionId, client); track(sessionId, client); }
+    return client;
+  }).finally(() => connecting.delete(sessionId));
+  connecting.set(sessionId, attempt);
+  return attempt;
+}
+
+async function clientFor(sessionId: string): Promise<WorkerClient> {
+  return (await connect(sessionId, true))!;
 }
 
 /** Have a conversation's worker get ready for the route it is on now -- see
@@ -81,7 +142,56 @@ export async function runTurnThroughWorker(
   sessionId: string, rl: TerminalHarnessPrompter, promptText: string, turn: WorkerTurnRequest,
 ): Promise<{ notice?: string }> {
   const client = await clientFor(sessionId);
+  return driveWorkerTurn(sessionId, client, rl, () => {
+    client.send({ type: 'submit', text: promptText, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
+  });
+}
+
+/** What a window at its prompt should do instead of waiting for a key. */
+export type IdleWake = { line: string } | { woke: 'turn'; prompt?: string } | { woke: 'queue' };
+
+/** Asks for the next line, unless the worker has something first: a turn it
+ * is running that this window did not start (another window's, or a
+ * follow-up for a finished background shell), or a change to the queue.
+ * The window used to sit at its prompt through both, showing neither -- a
+ * reopened conversation mid-turn looked idle, and a queued message waited
+ * for a keypress. Attaches only to a worker that is already running. */
+export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSignal) => Promise<string>): Promise<IdleWake> {
+  const client = await connect(sessionId, false).catch(() => undefined);
+  const tracker = client ? trackers.get(client) : undefined;
+  if (!tracker) return { line: await ask() };
+  if (tracker.running) return { woke: 'turn', ...(tracker.prompt !== undefined ? { prompt: tracker.prompt } : {}) };
+  const controller = new AbortController();
+  let reason: 'turn' | 'queue' | undefined;
+  tracker.wake = (why) => { reason ??= why; controller.abort(); };
+  try {
+    return { line: await ask(controller.signal) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ERR_PROMPT_INTERRUPTED' || !reason) throw error;
+    return reason === 'turn' ? { woke: 'turn', ...(tracker.prompt !== undefined ? { prompt: tracker.prompt } : {}) } : { woke: 'queue' };
+  } finally {
+    tracker.wake = undefined;
+  }
+}
+
+/** Follows the turn the worker is running to its end, exactly as if this
+ * window had sent it: what has streamed so far, then every event, with
+ * cancel and typed messages going to the worker. */
+export async function followWorkerTurn(sessionId: string, rl: TerminalHarnessPrompter): Promise<{ notice?: string }> {
+  const client = clients.get(sessionId);
+  const tracker = client ? trackers.get(client) : undefined;
+  if (!client || !tracker?.running) return {};
+  return driveWorkerTurn(sessionId, client, rl, () => {
+    if (tracker.liveText) rl.response(tracker.liveText, 'replace');
+  }, () => tracker.running);
+}
+
+async function driveWorkerTurn(
+  sessionId: string, client: WorkerClient, rl: TerminalHarnessPrompter, begin: () => void, stillRunning?: () => boolean,
+): Promise<{ notice?: string }> {
   let notice: string | undefined;
+  const tracker = trackers.get(client);
+  if (tracker) tracker.driving = true;
   try {
     await new Promise<void>((resolveTurn, rejectTurn) => {
       let settled = false;
@@ -228,9 +338,14 @@ export async function runTurnThroughWorker(
         // command, and it runs here when the turn ends.
         (text) => commandDuringTurn(sessionId, text),
       );
-      client.send({ type: 'submit', text: promptText, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
+      begin();
+      for (const event of tracker?.unanswered.splice(0) ?? []) onEvent(event);
+      // Following a turn that ended while this was being set up: its
+      // waiting-stop has already gone by.
+      if (stillRunning && !stillRunning()) finish(() => resolveTurn());
     });
   } finally {
+    if (tracker) tracker.driving = false;
     rl.stopWaiting();
   }
   return notice !== undefined ? { notice } : {};
