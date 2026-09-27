@@ -194,9 +194,11 @@ export interface WebSearchOptions {
 export function createWebSearchTool(options: WebSearchOptions = {}) {
   return defineTool<WebSearchArgs>({
     name: 'web_search',
-    // Read, like the file tools: a search runs no code and changes nothing, and
-    // any page worth opening still goes through web_fetch.
-    class: 'read',
+    // Network, like web_fetch: a search changes nothing here, but the query
+    // leaves the machine for a third party and can carry the project's code,
+    // names or secrets. It asks like any other outbound request; "always"
+    // saves a plain `web_search` rule, since there is no domain to scope to.
+    class: 'network',
     description: 'Search the web and return a numbered list of results (title, URL, snippet). Use web_fetch to read a result in full.',
     parameters: {
       type: 'object', additionalProperties: false, required: ['query'],

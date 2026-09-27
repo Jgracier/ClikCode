@@ -244,7 +244,11 @@ export function suggestPermissionRule(tool: ToolDefinition, args: Record<string,
     if (!words[0] || UNSPLITTABLE.test(String(args.command)) || /&&|\|\||;|\|/.test(String(args.command))) return undefined;
     return `Bash(${words.slice(0, Math.min(2, words.length)).join(' ')}:*)`;
   }
-  if (tool.class === 'network') { const host = hostOf(args.url); return host ? `WebFetch(domain:${host})` : undefined; }
+  if (tool.class === 'network') {
+    const host = hostOf(args.url);
+    // No URL (a search): the rule is the tool itself; rules match tools by name.
+    return host ? `WebFetch(domain:${host})` : args.url === undefined ? tool.name : undefined;
+  }
   if (tool.class === 'write') {
     const first = tool.paths?.(args)[0];
     if (!first) return undefined;
