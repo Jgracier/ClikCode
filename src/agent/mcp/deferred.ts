@@ -21,7 +21,10 @@ import type { ConversationItem } from '../model-client.js';
 export const LOAD_MCP_TOOLS = 'load_mcp_tools';
 
 /** Above this many schema tokens (chars/4) the MCP tools are deferred. Below
- * it, listing them costs about what loading them would, so they are sent. */
+ * it, listing them costs about what loading them would, so they are sent.
+ * The default (lean) budget; the full context profile raises it, because
+ * where tokens are cheap the loader round trip costs more than the schemas
+ * (context-profile.ts). */
 export const DEFER_MCP_SCHEMA_TOKENS = 1_500;
 
 /** Tool names listed per server in the loader's description; more are counted. */
@@ -83,10 +86,11 @@ export interface ToolExposure {
 }
 
 /** Decides once per turn whether MCP schemas are deferred; the answer depends
- * only on the tool set, so it is the same on every turn with the same servers. */
-export function exposeTools(tools: readonly ToolDefinition[]): ToolExposure {
+ * only on the tool set and the session's budget, so it is the same on every
+ * turn with the same servers. */
+export function exposeTools(tools: readonly ToolDefinition[], eagerSchemaTokens = DEFER_MCP_SCHEMA_TOKENS): ToolExposure {
   const mcp = tools.filter((tool) => tool.mcp);
-  if (!mcp.length || schemaTokens(mcp) <= DEFER_MCP_SCHEMA_TOKENS || tools.some((tool) => tool.name === LOAD_MCP_TOOLS)) {
+  if (!mcp.length || schemaTokens(mcp) <= eagerSchemaTokens || tools.some((tool) => tool.name === LOAD_MCP_TOOLS)) {
     return { all: [...tools], advertised: () => [...tools] };
   }
   const loader = loaderTool(mcp);

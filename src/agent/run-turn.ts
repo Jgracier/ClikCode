@@ -17,6 +17,7 @@ import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnes
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
 import type { ToolCategory } from '../harness/prompter.js';
 import { emptyLedger, recordUsage } from './usage.js';
+import { resolveContextProfile } from './context-profile.js';
 import { readImageInputs } from './images.js';
 import { createSubagentRunner } from './subagent.js';
 import { TASK_TOOL_NAME } from './tools/task.js';
@@ -122,7 +123,13 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   if (input.planMode !== undefined) session.plan = { active: input.planMode };
   const checkpoints = new FileCheckpointStore(input.stateDir);
   const store = input.subagent ? memoryConversationStore(input.subagent.transcript) : new ConversationStore(input.stateDir, input.sessionId);
-  const exposure = exposeTools(mergeTools(input.tools ?? defaultTools(), input.extraTools));
+  // Decided from facts fixed for the session (the model's window and speed,
+  // or a forced choice), so every turn sends the same prompt prefix.
+  const profile = resolveContextProfile({
+    hints: { ...input.modelClient.contextHints, contextWindow: input.modelClient.contextHints?.contextWindow ?? input.contextWindow },
+    session: input.contextProfile,
+  });
+  const exposure = exposeTools(mergeTools(input.tools ?? defaultTools(), input.extraTools), profile.mcpEagerSchemaTokens);
   const tools = exposure.all;
   const maxSteps = Math.max(1, Math.floor(input.maxSteps ?? DEFAULT_MAX_STEPS));
 
@@ -133,7 +140,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     // tool that loads them is present.
     input.subagent ? input.subagent.system
       : (tools.some((tool) => tool.name === SKILL_TOOL) ? discoverSkills({ cwd, stateDir: input.stateDir, homeDir, turnId }) : Promise.resolve({ skills: [] }))
-        .then((catalog) => buildSystemPrompt({ cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir, skillsSection: skillsPromptSection(catalog.skills) })),
+        .then((catalog) => buildSystemPrompt({
+          cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir,
+          skillsSection: skillsPromptSection(catalog.skills, profile), toolUsageGuidance: profile.toolUsageGuidance,
+        })),
   ]), signal);
   let items: ConversationItem[] = loaded;
   const append = async (...added: ConversationItem[]): Promise<void> => { items.push(...added); await store.append(...added); };
@@ -169,7 +179,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   let stalledCall: ModelToolCall | undefined;
   let stepRetries = 0;
   let compactedForSize = false;
-  let lastContext: { contextTokens?: number; contextWindow?: number; servedModel?: string } = {};
+  let lastContext: { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile: typeof profile.name } = { contextProfile: profile.name };
 
   // One prompt at a time: parallel reads, and parallel sub-agents, must not stack dialogs.
   const queueApproval = <T>(ask: () => Promise<T>): Promise<T> => {
@@ -179,7 +189,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   };
   const onApproval = input.onApproval;
   const runSubagent = input.subagent ? undefined : createSubagentRunner({
-    parent: input, tools, runTurn: runGatewayHarnessTurn,
+    // A sub-agent runs under its parent's profile, whatever decided it.
+    parent: { ...input, contextProfile: profile.name }, tools, runTurn: runGatewayHarnessTurn,
     ...(onApproval ? { approve: (title: string, detail?: string, rule?: string) => queueApproval(() => onApproval(title, detail, rule)) } : {}),
     // A sub-agent's spend is this turn's spend: it lands in the same ledger
     // and is reported as it happens, not when the task returns.
@@ -191,7 +202,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
 
   const toolContext = (callId: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs, sessionId: input.sessionId, turnId, stateDir: input.stateDir, homeDir, signal, checkpoints, session, callId, emitOutput,
-    outputCap: toolOutputCap(contextWindow),
+    outputCap: toolOutputCap(contextWindow, profile.toolOutputBytes),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
     ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
@@ -208,7 +219,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
         ...(output ? { output } : {}), ...(result.diff ? { diff: result.diff } : {}),
       });
-      return { ...result, output: capHeadTail(result.output, toolOutputCap(contextWindow), 'narrow the request to see the middle').text };
+      return { ...result, output: capHeadTail(result.output, toolOutputCap(contextWindow, profile.toolOutputBytes), 'narrow the request to see the middle').text };
     };
     if (!tool) {
       return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(exposure.advertised(items), session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
@@ -295,7 +306,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   };
 
   const result = (extra: Partial<GatewayHarnessTurnResult> & Pick<GatewayHarnessTurnResult, 'stopReason'>): GatewayHarnessTurnResult => ({
-    text: segments.join('\n\n').trim(), nativeSessionId: input.sessionId, usage: ledger.total, steps, ...extra,
+    text: segments.join('\n\n').trim(), nativeSessionId: input.sessionId, usage: ledger.total, steps, contextProfile: profile.name, ...extra,
   });
 
   try {
@@ -324,7 +335,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       try {
         step = await abortable(input.modelClient.step({
           system, items, signal,
-          tools: finalOnly ? [] : toolSpecs(visibleTools(exposure.advertised(items), session.plan.active)),
+          tools: finalOnly ? [] : profile.shapeSpecs(toolSpecs(visibleTools(exposure.advertised(items), session.plan.active))),
           onTextDelta: (text) => {
             if (!text || signal?.aborted) return;
             if (!streamedThisStep && needsSeparator) input.onResponseDelta?.('\n\n', 'append');
@@ -390,6 +401,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       contextWindow = step.contextWindow ?? contextWindow;
       servedModel = step.servedModel ?? servedModel;
       lastContext = {
+        contextProfile: profile.name,
         contextTokens: estimateContextTokens(system, items, step.usage),
         contextWindow: contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW,
         ...(servedModel ? { servedModel } : {}),
