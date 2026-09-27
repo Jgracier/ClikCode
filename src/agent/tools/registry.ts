@@ -12,6 +12,7 @@ import { skillTool } from './skill.js';
 import { taskTool } from './task.js';
 import { todoWriteTool } from './todo-write.js';
 import { webFetchTool } from './web-fetch.js';
+import { webSearchTool } from './web-search.js';
 import { writeFileTool } from './write-file.js';
 
 export function defaultTools(): ToolDefinition[] {
@@ -19,7 +20,7 @@ export function defaultTools(): ToolDefinition[] {
     readFileTool, listDirTool, globTool, grepTool,
     writeFileTool, editFileTool, multiEditTool,
     bashTool, bashOutputTool, killBashTool,
-    webFetchTool, todoWriteTool, exitPlanModeTool, skillTool,
+    webFetchTool, webSearchTool, todoWriteTool, exitPlanModeTool, skillTool,
     taskTool,
   ];
 }

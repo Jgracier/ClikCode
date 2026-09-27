@@ -8,7 +8,7 @@ import https from 'node:https';
 import net from 'node:net';
 import { OUTPUT_CAPS } from '../security.js';
 import { turnCancelledError } from '../cancellation.js';
-import { type NetworkSeams, type PinnedResponse, type ResolvedAddress } from '../model-client.js';
+import { type NetworkSeams, type PinnedRequestOptions, type PinnedResponse, type ResolvedAddress } from '../model-client.js';
 import { defineTool } from '../tool-contract.js';
 
 interface WebFetchArgs { url: string; raw?: boolean }
@@ -84,11 +84,11 @@ async function defaultLookup(hostname: string): Promise<ResolvedAddress[]> {
   return answers.map((answer) => ({ address: answer.address, family: answer.family === 6 ? 6 : 4 }));
 }
 
-function defaultRequest(url: URL, pinned: ResolvedAddress, options: { signal?: AbortSignal; headers: Record<string, string> }): Promise<PinnedResponse> {
+function defaultRequest(url: URL, pinned: ResolvedAddress, options: PinnedRequestOptions): Promise<PinnedResponse> {
   return new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;
     const request = transport.request(url, {
-      method: 'GET', headers: options.headers, signal: options.signal,
+      method: options.method ?? 'GET', headers: options.headers, signal: options.signal,
       // Pin the socket to the vetted address; TLS still verifies the hostname.
       lookup: (_hostname, lookupOptions, callback) => {
         const wantsAll = typeof lookupOptions === 'object' && lookupOptions !== null && (lookupOptions as { all?: boolean }).all === true;
@@ -101,7 +101,7 @@ function defaultRequest(url: URL, pinned: ResolvedAddress, options: { signal?: A
       resolve({ status: response.statusCode ?? 0, headers, body: response });
     });
     request.once('error', reject);
-    request.end();
+    request.end(options.body);
   });
 }
 
@@ -126,6 +126,16 @@ async function vetUrl(raw: string, seams: NetworkSeams = {}): Promise<{ url: URL
 
 const ENTITIES: Readonly<Record<string, string>> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–', hellip: '…', copy: '©', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”' };
 
+/** Named entities cover what real pages use in running text; numeric ones
+ * cover the rest, so the table does not need to be complete. */
+export function decodeHtmlEntities(text: string): string {
+  return text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, code: string) => {
+    if (code[0] !== '#') return ENTITIES[code.toLowerCase()] ?? match;
+    const point = code[1].toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+    try { return Number.isFinite(point) ? String.fromCodePoint(point) : match; } catch { return match; }
+  });
+}
+
 function htmlToText(html: string): string {
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.trim();
   let text = html
@@ -137,13 +147,60 @@ function htmlToText(html: string): string {
     .replace(/<\/?(?:p|div|section|article|header|footer|main|nav|aside|br|tr|table|ul|ol|pre|blockquote|h[1-6]|hr)\b[^>]*>/gi, '\n')
     .replace(/<\/t[dh]>/gi, '\t')
     .replace(/<[^>]+>/g, '');
-  text = text.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, code: string) => {
-    if (code[0] !== '#') return ENTITIES[code.toLowerCase()] ?? match;
-    const point = code[1].toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
-    try { return Number.isFinite(point) ? String.fromCodePoint(point) : match; } catch { return match; }
-  });
+  text = decodeHtmlEntities(text);
   text = text.replace(/[ \t\f\v]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   return title ? `Title: ${title.replace(/\s+/g, ' ')}\n\n${text}` : text;
+}
+
+export interface VettedResponse {
+  /** The final URL after redirects. */
+  url: URL;
+  status: number;
+  headers: Readonly<Record<string, string>>;
+  body: Buffer;
+  bytes: number;
+  truncated: boolean;
+}
+
+/** One request with web_fetch's full protection: every hop is vetted and
+ * pinned, redirects are capped, and the body stops at `maxBytes`. Shared so
+ * that any tool reaching the network gets the same SSRF guarantees. Returns
+ * undefined when the redirect limit is exceeded. */
+export async function fetchVetted(rawUrl: string, options: {
+  net?: NetworkSeams;
+  signal: AbortSignal;
+  headers: Record<string, string>;
+  method?: 'GET' | 'POST';
+  body?: string;
+  maxBytes: number;
+}): Promise<VettedResponse | undefined> {
+  let target = rawUrl;
+  let method = options.method ?? 'GET';
+  let body = options.body;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const { url, pinned } = await vetUrl(target, options.net);
+    const response = await (options.net?.request ?? defaultRequest)(url, pinned, {
+      signal: options.signal, headers: options.headers,
+      ...(method !== 'GET' ? { method } : {}), ...(body !== undefined ? { body } : {}),
+    });
+    if (response.status >= 300 && response.status < 400 && response.headers.location) {
+      for await (const _chunk of response.body) { /* drain */ }
+      target = new URL(response.headers.location, url).toString();
+      // Browsers re-send a POST body only on 307/308; everything else becomes a GET.
+      if (response.status !== 307 && response.status !== 308) { method = 'GET'; body = undefined; }
+      continue;
+    }
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    let truncated = false;
+    for await (const chunk of response.body) {
+      bytes += chunk.length;
+      if (bytes > options.maxBytes) { truncated = true; break; }
+      chunks.push(chunk);
+    }
+    return { url, status: response.status, headers: response.headers, body: Buffer.concat(chunks), bytes, truncated };
+  }
+  return undefined;
 }
 
 export const webFetchTool = defineTool<WebFetchArgs>({
@@ -161,37 +218,21 @@ export const webFetchTool = defineTool<WebFetchArgs>({
     const onAbort = (): void => timeout.abort();
     ctx.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      let target = args.url;
-      for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-        const { url, pinned } = await vetUrl(target, ctx.net);
-        const response = await (ctx.net?.request ?? defaultRequest)(url, pinned, {
-          signal: timeout.signal,
-          headers: { 'user-agent': 'ClikCode/1', accept: 'text/html,text/plain,application/json,*/*;q=0.5', 'accept-encoding': 'identity' },
-        });
-        if (response.status >= 300 && response.status < 400 && response.headers.location) {
-          for await (const _chunk of response.body) { /* drain */ }
-          target = new URL(response.headers.location, url).toString();
-          continue;
-        }
-        const chunks: Uint8Array[] = [];
-        let bytes = 0;
-        let truncated = false;
-        for await (const chunk of response.body) {
-          bytes += chunk.length;
-          if (bytes > OUTPUT_CAPS.webFetchBytes) { truncated = true; timeout.abort(); break; }
-          chunks.push(chunk);
-        }
-        const contentType = response.headers['content-type'] ?? '';
-        if (!/^(?:text\/|application\/(?:json|xml|xhtml|javascript|x-ndjson|.*\+(?:json|xml)))/i.test(contentType) && contentType) {
-          return { output: `${url} returned ${contentType} (${bytes} bytes), which is not text.`, isError: response.status >= 400 };
-        }
-        const body = Buffer.concat(chunks).toString('utf8');
-        let text = !args.raw && /html/i.test(contentType) ? htmlToText(body) : body;
-        if (text.length > OUTPUT_CAPS.webFetchTextChars) text = `${text.slice(0, OUTPUT_CAPS.webFetchTextChars)}\n\n… [${text.length - OUTPUT_CAPS.webFetchTextChars} more characters not shown]`;
-        const header = `${url} → HTTP ${response.status}${truncated ? ' [body exceeded 10 MB; truncated]' : ''}`;
-        return { output: `${header}\n\n${text || '(empty body)'}`, isError: response.status >= 400 };
+      const response = await fetchVetted(args.url, {
+        net: ctx.net, signal: timeout.signal, maxBytes: OUTPUT_CAPS.webFetchBytes,
+        headers: { 'user-agent': 'ClikCode/1', accept: 'text/html,text/plain,application/json,*/*;q=0.5', 'accept-encoding': 'identity' },
+      });
+      if (!response) return { output: `Too many redirects (more than ${MAX_REDIRECTS}).`, isError: true };
+      const { url, bytes, truncated } = response;
+      const contentType = response.headers['content-type'] ?? '';
+      if (!/^(?:text\/|application\/(?:json|xml|xhtml|javascript|x-ndjson|.*\+(?:json|xml)))/i.test(contentType) && contentType) {
+        return { output: `${url} returned ${contentType} (${bytes} bytes), which is not text.`, isError: response.status >= 400 };
       }
-      return { output: `Too many redirects (more than ${MAX_REDIRECTS}).`, isError: true };
+      const body = response.body.toString('utf8');
+      let text = !args.raw && /html/i.test(contentType) ? htmlToText(body) : body;
+      if (text.length > OUTPUT_CAPS.webFetchTextChars) text = `${text.slice(0, OUTPUT_CAPS.webFetchTextChars)}\n\n… [${text.length - OUTPUT_CAPS.webFetchTextChars} more characters not shown]`;
+      const header = `${url} → HTTP ${response.status}${truncated ? ' [body exceeded 10 MB; truncated]' : ''}`;
+      return { output: `${header}\n\n${text || '(empty body)'}`, isError: response.status >= 400 };
     } catch (error) {
       if (ctx.signal?.aborted) throw turnCancelledError();
       if (timeout.signal.aborted) return { output: `Timed out after ${TIMEOUT_MS / 1000}s fetching ${args.url}.`, isError: true };
