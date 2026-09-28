@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConversationStore } from './conversation.js';
-import { GatewayModelClient } from './models/gateway-client.js';
+import { gatewayModelClient } from './models/for-session.js';
 import type { ConversationItem, ModelClient, ModelStepRequest } from './model-client.js';
 import { runGatewayHarnessTurn } from './run-turn.js';
 import { ScriptedModelClient } from './testing.js';
@@ -72,19 +72,19 @@ describe('image input', () => {
     expect(raw).not.toMatch(/"keep":\[[^\]]*"images"/);
   });
 
-  it('never sends images to the Gateway, whose schema has no field for them', async () => {
-    let sent: { items: Record<string, unknown>[] } | undefined;
+  it('never sends images to the Gateway, which takes text only', async () => {
+    let sent: { messages: Array<{ role: string; content: unknown }> } | undefined;
     const fetchImpl = (async (_url: string, init: RequestInit) => {
       sent = JSON.parse(String(init.body)) as typeof sent;
-      return new Response('data: {"type":"finish","stopReason":"stop"}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      return new Response('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
     }) as unknown as typeof fetch;
-    const gateway = new GatewayModelClient({ baseUrl: 'http://gateway.test', apiKey: 'k', version: 't', fetchImpl });
+    const gateway = gatewayModelClient({ baseUrl: 'http://gateway.test', apiKey: 'k', fetchImpl });
     const request: ModelStepRequest = {
       system: 's', tools: [], onTextDelta: () => undefined,
       items: [{ type: 'text', role: 'user', text: 'look [Attached image files: a.png]', images: [{ mimeType: 'image/png', data: 'AAAA' }] }],
     };
     await gateway.step(request);
-    expect(sent?.items).toEqual([{ type: 'text', role: 'user', text: 'look [Attached image files: a.png]' }]);
+    expect(sent?.messages[1]).toEqual({ role: 'user', content: 'look [Attached image files: a.png]' });
   });
 
   it('answers a call with broken JSON arguments without running it', async () => {

@@ -1,39 +1,68 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GatewayModelClient } from './gateway-client.js';
+import { gatewayModelClient } from './for-session.js';
 
-const finished = () => new Response('data: {"type":"finish","stopReason":"stop"}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+const sse = (...frames: unknown[]) => new Response(`${frames.map((frame) => `data: ${typeof frame === 'string' ? frame : JSON.stringify(frame)}\n\n`).join('')}`, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+const finished = () => sse({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }, '[DONE]');
 const step = { system: 's', items: [{ type: 'text', role: 'user', text: 'hi' }], tools: [], onTextDelta: () => undefined } as never;
+const sent = (fetchImpl: ReturnType<typeof vi.fn>, index = 0) => {
+  const [url, init] = fetchImpl.mock.calls[index] as unknown as [string, RequestInit];
+  return { url, headers: init.headers as Record<string, string>, body: JSON.parse(String(init.body)) as Record<string, unknown> };
+};
 
 describe('a Gateway step', () => {
-  it('carries the chosen model, and none when the Gateway is to choose', async () => {
+  it('is an OpenAI chat completion on the Gateway\'s API, with the chosen model or `auto`', async () => {
     const fetchImpl = vi.fn(async () => finished());
-    await new GatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', version: '1', sessionId: 's', model: 'gpt-5.6-sol', fetchImpl: fetchImpl as never }).step(step);
-    await new GatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', version: '1', sessionId: 's', fetchImpl: fetchImpl as never }).step(step);
-    const hints = fetchImpl.mock.calls.map((call) => JSON.parse(String((call as unknown as [string, RequestInit])[1].body)).hints);
-    expect(hints[0]).toMatchObject({ model: 'gpt-5.6-sol', effort: 'auto' });
-    expect(hints[1]).not.toHaveProperty('model');
+    await gatewayModelClient({ baseUrl: 'https://g/', apiKey: 'k', sessionId: 's1', model: 'gpt-5.6-sol', fetchImpl: fetchImpl as never }).step(step);
+    await gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', sessionId: 's1', fetchImpl: fetchImpl as never }).step(step);
+    const first = sent(fetchImpl);
+    expect(first.url).toBe('https://g/api/gateway/v1/chat/completions');
+    expect(first.headers).toMatchObject({ authorization: 'Bearer k', 'x-session-id': 's1' });
+    expect(first.headers['x-client']).toMatch(/^clikcode\//);
+    expect(first.body).toMatchObject({ model: 'gpt-5.6-sol', stream: true, stream_options: { include_usage: true } });
+    expect(sent(fetchImpl, 1).body.model).toBe('auto');
+  });
+
+  it('reads the model that answered, the window it serves and what the step cost', async () => {
+    const fetchImpl = vi.fn(async () => sse(
+      { model: 'glm-5', context_window: 200_000, choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] },
+      { model: 'glm-5', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+      { model: 'glm-5', choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, cost: 0.0015 } },
+      '[DONE]',
+    ));
+    const result = await gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: fetchImpl as never }).step(step);
+    expect(result).toMatchObject({ text: 'ok', servedModel: 'glm-5', contextWindow: 200_000, usage: { input: 10, output: 2, costMicroUsd: 1500 } });
+    expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k' }).contextHints.hosted).toBe(true);
+  });
+
+  it('turns the Gateway\'s codes into the ones the loop acts on', async () => {
+    const limited = vi.fn(async () => sse({ error: { message: 'slow down', type: 'rate_limit_error', code: 'rate_limit_exceeded', retry_after: 7 } }));
+    await expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: limited as never }).step(step))
+      .rejects.toMatchObject({ kind: 'quota', code: 'MODEL_RATE_LIMITED', retryAfter: 7 });
+    const disabled = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'off', type: 'server_error', code: 'gateway_disabled' } }), { status: 503 }));
+    await expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: disabled as never }).step(step))
+      .rejects.toMatchObject({ statusCode: 503, code: 'CLIKCODE_DISABLED' });
   });
 
   it('fails a stream that goes silent as retryable incomplete_stream, and cancels it', async () => {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({
-      start(controller) { controller.enqueue(new TextEncoder().encode('data: {"type":"text-delta","text":"par"}\n\n')); },
+      start(controller) { controller.enqueue(new TextEncoder().encode('data: {"choices":[{"index":0,"delta":{"content":"par"}}]}\n\n')); },
       cancel() { cancelled = true; },
     });
     const fetchImpl = vi.fn(async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
-    const error = await new GatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', version: '1', idleTimeoutMs: 100, fetchImpl: fetchImpl as never })
-      .step(step).catch((caught: unknown) => caught);
+    const client = gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: fetchImpl as never });
+    Object.assign((client as unknown as { options: Record<string, unknown> }).options, { idleTimeoutMs: 100 });
+    const error = await client.step(step).catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: 'incomplete_stream', kind: 'other' });
     expect(cancelled).toBe(true);
   });
 
   it('tells a user out of credit how to add more', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ success: false, error: "You're out of AI credit.", code: 'AI_CREDIT_EXHAUSTED', balanceMicroUsd: '0' }), { status: 402 }));
-    const client = new GatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', version: '1', sessionId: 's', fetchImpl: fetchImpl as never });
-    await expect(client.step(step)).rejects.toMatchObject({
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: { message: "You're out of AI credit.", type: 'insufficient_quota', code: 'insufficient_credits' } }), { status: 402 }));
+    await expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: fetchImpl as never }).step(step)).rejects.toMatchObject({
       kind: 'quota',
       code: 'AI_CREDIT_EXHAUSTED',
-      message: "You're out of AI credit. Run `clikcode gateway credit` to add credit.",
+      message: expect.stringMatching(/out of AI credit\..*Run `clikcode gateway credit` to add credit\.$/),
     });
   });
 });

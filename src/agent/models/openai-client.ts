@@ -47,6 +47,14 @@ export interface OpenAIModelClientOptions {
    * server on a CPU reads a deep prompt for minutes before it says anything,
    * and llama-server sends nothing at all while it reads. */
   firstChunkTimeoutMs?: number;
+  /** A hosted service rather than a server on this machine (context-profile.ts). */
+  hosted?: boolean;
+  /** The server's own error codes, as the codes the agent loop acts on
+   * (run-turn.ts stepRecovery), e.g. `{ rate_limit_exceeded: 'MODEL_RATE_LIMITED' }`.
+   * An unmapped code is kept in the message only. */
+  errorCodes?: Readonly<Record<string, string>>;
+  /** Added to an out-of-credit refusal (HTTP 402): how to add credit. */
+  creditHint?: string;
 }
 
 const FIRST_CHUNK_TIMEOUT_MS = 30 * 60_000;
@@ -138,6 +146,9 @@ function isContextOverflow(status: number, code: string | undefined, message: st
   return status === 400 && /context (?:length|size|window)|maximum context|too many tokens|exceeds? the available context/i.test(message);
 }
 
+/** Out of quota or credit, in the words servers use for it. */
+const QUOTA_CODES = new Set(['rate_limit_exceeded', 'insufficient_quota', 'insufficient_credits', 'rate_limit_error']);
+
 function numberOf(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -151,6 +162,7 @@ export class OpenAIModelClient implements ModelClient {
   constructor(private readonly options: OpenAIModelClientOptions) {
     this.acceptsImages = options.vision === true;
     this.contextHints = {
+      ...(options.hosted ? { hosted: true } : {}),
       ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}),
       ...(options.promptPerSecond ? { promptPerSecond: options.promptPerSecond } : {}),
     };
@@ -211,6 +223,7 @@ export class OpenAIModelClient implements ModelClient {
     let stopReason: string | undefined;
     let done = false;
     let servedModel: string | undefined;
+    let servedWindow: number | undefined;
     let timings: LlamaTimings | undefined;
 
     const handle = (event: SseEvent): void => {
@@ -220,12 +233,18 @@ export class OpenAIModelClient implements ModelClient {
       try { frame = JSON.parse(event.data) as Record<string, unknown>; } catch { return; }
       if (!frame || typeof frame !== 'object') return;
       if (frame.error) {
-        const error = (typeof frame.error === 'object' ? frame.error : { message: frame.error }) as { message?: unknown; code?: unknown; type?: unknown };
+        const error = (typeof frame.error === 'object' ? frame.error : { message: frame.error }) as { message?: unknown; code?: unknown; type?: unknown; retry_after?: unknown };
         const message = typeof error.message === 'string' && error.message ? error.message : `${this.label} reported an error`;
         const code = typeof error.code === 'string' ? error.code : typeof error.type === 'string' ? error.type : undefined;
-        throw new ModelClientError(`${this.label}: ${message}`, { kind: 'other', ...(isContextOverflow(400, code, message) ? { code: 'CONTEXT_TOO_LARGE' } : {}) });
+        const loopCode = isContextOverflow(400, code, message) ? 'CONTEXT_TOO_LARGE' : code ? options.errorCodes?.[code] : undefined;
+        const retryAfter = parseRetryAfter(error.retry_after);
+        const kind = code && QUOTA_CODES.has(code) ? 'quota' : 'other';
+        throw new ModelClientError(`${this.label}: ${message}`, { kind, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
       }
       if (typeof frame.model === 'string' && frame.model) servedModel = frame.model;
+      // Not OpenAI's: a gateway saying how large the serving model's window is.
+      const window = numberOf(frame.context_window);
+      if (window) servedWindow = window;
       if (frame.usage && typeof frame.usage === 'object') usage = { ...usage, ...usageFrom(frame.usage as Record<string, unknown>) };
       if (frame.timings && typeof frame.timings === 'object') timings = frame.timings as LlamaTimings;
       const choice = Array.isArray(frame.choices) ? frame.choices[0] as Record<string, unknown> | undefined : undefined;
@@ -300,7 +319,7 @@ export class OpenAIModelClient implements ModelClient {
       stopReason: stopReason ?? (toolCalls.length ? 'tool-calls' : 'stop'),
       usage,
       ...(servedModel ? { servedModel } : {}),
-      ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}),
+      ...(servedWindow ?? options.contextWindow ? { contextWindow: servedWindow ?? options.contextWindow } : {}),
     };
   }
 
@@ -308,12 +327,13 @@ export class OpenAIModelClient implements ModelClient {
     const status = response.status;
     let message = `${this.label} returned HTTP ${status}`;
     let code: string | undefined;
-    const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
+    let retryAfter = parseRetryAfter(response.headers.get('retry-after'));
     let raw = '';
     try { raw = await response.text(); } catch { /* the status line is the message */ }
     try {
       const body = JSON.parse(raw) as { error?: unknown; message?: unknown; code?: unknown };
-      const nested = body.error && typeof body.error === 'object' ? body.error as { message?: unknown; code?: unknown; type?: unknown } : undefined;
+      const nested = body.error && typeof body.error === 'object' ? body.error as { message?: unknown; code?: unknown; type?: unknown; retry_after?: unknown } : undefined;
+      retryAfter ??= parseRetryAfter(nested?.retry_after);
       const detail = nested?.message ?? body.message ?? (typeof body.error === 'string' ? body.error : undefined);
       if (typeof detail === 'string' && detail) message = `${message}: ${detail}`;
       const rawCode = nested?.code ?? body.code ?? nested?.type;
@@ -327,7 +347,8 @@ export class OpenAIModelClient implements ModelClient {
     // stop it retrying a 5xx (stepRecovery treats an unknown code as final).
     // The server's own code is still in the message.
     if (code && !message.includes(code)) message = `${message} (${code})`;
-    const loopCode = isContextOverflow(status, code, message) ? 'CONTEXT_TOO_LARGE' : undefined;
+    if (status === 402 && this.options.creditHint) message = `${message} ${this.options.creditHint}`;
+    const loopCode = isContextOverflow(status, code, message) ? 'CONTEXT_TOO_LARGE' : code ? this.options.errorCodes?.[code] : undefined;
     return new ModelClientError(message, { kind, statusCode: status, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
   }
 }
@@ -340,6 +361,9 @@ function usageFrom(raw: Record<string, unknown>): TokenUsage {
   const completionDetails = (raw.completion_tokens_details && typeof raw.completion_tokens_details === 'object' ? raw.completion_tokens_details : {}) as Record<string, unknown>;
   const cached = numberOf(promptDetails.cached_tokens);
   const reasoning = numberOf(completionDetails.reasoning_tokens);
+  // USD; OpenRouter and the ClikDeploy Gateway report what the call cost.
+  const cost = numberOf(raw.cost);
+  if (cost !== undefined) out.costMicroUsd = Math.round(cost * 1_000_000);
   if (input !== undefined) out.input = input;
   if (output !== undefined) out.output = output;
   if (cached !== undefined) out.cached = cached;

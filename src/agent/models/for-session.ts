@@ -7,8 +7,8 @@
 
 import type Conf from 'conf';
 import type { ModelClient } from '../model-client.js';
-import { GatewayModelClient } from './gateway-client.js';
 import { OpenAIModelClient } from './openai-client.js';
+import { STREAM_IDLE_TIMEOUT_MS } from './gateway-client.js';
 import { ensureLocalModel, prefixCacheFor, releaseLocalModelsOnExit, type LocalModelProgress } from '../../local-models/index.js';
 import { CLIKCODE_LOCAL_LABEL } from '../../session/route.js';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
@@ -33,6 +33,42 @@ export function gatewayConnection(config: Conf): { baseUrl: string; apiKey: stri
   const apiKey = getApiKeyForUrl(config, baseUrl);
   if (!apiKey) throw new Error(`ClikDeploy Gateway is not connected; run \`${harnessCommand()} gateway login\` first`);
   return { baseUrl, apiKey };
+}
+
+/** The Gateway's own error codes (its OpenAI-compatible API) as the codes
+ * the agent loop acts on (run-turn.ts stepRecovery) or the gateway route
+ * checks (gateway/harness.ts). */
+export const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
+  rate_limit_exceeded: 'MODEL_RATE_LIMITED',
+  upstream_error: 'MODEL_ERROR',
+  internal_error: 'INTERNAL_ERROR',
+  context_length_exceeded: 'CONTEXT_TOO_LARGE',
+  model_not_found: 'MODEL_UNAVAILABLE',
+  no_model_available: 'NO_MODEL_AVAILABLE',
+  gateway_disabled: 'CLIKCODE_DISABLED',
+  insufficient_credits: 'AI_CREDIT_EXHAUSTED',
+};
+
+/** ClikDeploy Gateway's OpenAI-compatible API (`{baseUrl}/api/gateway/v1`),
+ * the same one any OpenAI client uses. `model` is a name from its list;
+ * none sends `auto` and the Gateway picks. The session id keeps a
+ * conversation on one provider, so its prompt stays cached. */
+export function gatewayModelClient(input: { baseUrl: string; apiKey: string; sessionId?: string; model?: string; contextWindow?: number; fetchImpl?: typeof fetch }): OpenAIModelClient {
+  return new OpenAIModelClient({
+    baseUrl: `${input.baseUrl.replace(/\/+$/, '')}/api/gateway`,
+    apiKey: input.apiKey,
+    model: input.model ?? 'auto',
+    label: 'ClikDeploy Gateway',
+    hosted: true,
+    headers: { 'x-client': `clikcode/${CLIKCODE_VERSION}`, ...(input.sessionId ? { 'x-session-id': input.sessionId } : {}) },
+    errorCodes: GATEWAY_ERROR_CODES,
+    // A hosted model starts answering in seconds: the long first-chunk wait
+    // is for a CPU reading a deep prompt, not for a stalled connection.
+    firstChunkTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
+    creditHint: `Run \`${harnessCommand()} gateway credit\` to add credit.`,
+    ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
+    ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+  });
 }
 
 /** How long a turn waits on the Gateway's model list for a window. The list
@@ -68,13 +104,7 @@ export async function modelClientForSession(session: HarnessSession, config: Con
   if (session.route === 'gateway') {
     const { baseUrl, apiKey } = gatewayConnection(config);
     const contextWindow = await gatewayModelWindow(session, config);
-    return new GatewayModelClient({
-      baseUrl, apiKey, version: CLIKCODE_VERSION, sessionId: session.id,
-      ...(contextWindow ? { contextWindow } : {}),
-      // The model the user chose from the Gateway's list, served from its
-      // cheapest provider; none, and the Gateway picks.
-      ...(session.model ? { model: session.model } : {}),
-    });
+    return gatewayModelClient({ baseUrl, apiKey, sessionId: session.id, ...(session.model ? { model: session.model } : {}), ...(contextWindow ? { contextWindow } : {}) });
   }
   if (session.route === 'clikcode-local') {
     // Every process that may take a lease lets go of it on exit, so a

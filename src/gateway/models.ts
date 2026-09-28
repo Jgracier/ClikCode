@@ -1,11 +1,10 @@
 /** The models ClikDeploy Gateway offers this account, for choosing one.
  *
- * The Gateway owns the list: one entry per model across the providers it has
- * connected, each with the cheapest access it can serve it through right now
- * (subscription, then free, then paid). Choosing one stores its id on the
- * session and sends it with every step; the Gateway then serves that model
- * from its cheapest provider and never swaps in a different one. No choice
- * (`null`) leaves the pick to the Gateway. */
+ * The Gateway owns the list (`GET /api/gateway/v1/models`, OpenAI's model
+ * list): one entry per model, whichever of its providers serves it. Choosing
+ * one stores its id on the session and sends it as `model` with every step;
+ * the Gateway serves that model from its cheapest provider and never swaps in
+ * a different one. No choice (`null`) sends `auto`: the Gateway picks. */
 
 import Conf from 'conf';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -14,14 +13,9 @@ import { stateDirectory } from '../session/store/paths.js';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 
-export type GatewayModelAccess = 'subscription' | 'free-tier' | 'metered';
-
 export interface GatewayModel {
   id: string;
-  access: GatewayModelAccess;
-  providers: { provider: string; access: GatewayModelAccess }[];
   contextWindow?: number;
-  vision?: boolean;
   /** What a call costs this account, $ per 1M tokens: the full price, the
    * discount in force, and the price charged. Absent when the account is not
    * charged (unlimited) or the Gateway predates prices. */
@@ -38,11 +32,6 @@ export interface GatewayModelList {
   /** What the Gateway picks when nothing is chosen. */
   automatic: string | null;
   models: GatewayModel[];
-}
-
-/** How the access tier reads beside a model. */
-export function gatewayAccessLabel(access: GatewayModelAccess): string {
-  return access === 'subscription' ? 'subscription' : access === 'free-tier' ? 'free' : 'paid';
 }
 
 /** One row's detail: the model's token price, and nothing else. Which of the
@@ -99,19 +88,58 @@ export async function gatewayModels(
 ): Promise<GatewayModelList> {
   const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
   if (!options.fresh && cached && cached.baseUrl === baseUrl && Date.now() - cached.at < TTL_MS) return cached.list;
-  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/api/clikcode/v1/models`, {
+  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/api/gateway/v1/models`, {
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
   });
-  const body = await response.json().catch(() => undefined) as { data?: GatewayModelList; error?: unknown } | undefined;
-  if (!response.ok || !body?.data || !Array.isArray(body.data.models)) {
-    // A Gateway that predates model choice answers 404.
-    const reason = typeof body?.error === 'string' ? body.error : response.status === 404 ? 'this Gateway does not offer a model choice yet' : `HTTP ${response.status}`;
+  const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown } | undefined;
+  if (!response.ok || !Array.isArray(body?.data)) {
+    // A Gateway that predates its OpenAI-compatible API answers 404.
+    const error = body?.error;
+    const message = typeof error === 'string' ? error : error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string' ? (error as { message: string }).message : undefined;
+    const reason = message ?? (response.status === 404 ? 'this Gateway does not offer a model choice yet' : `HTTP ${response.status}`);
     throw Object.assign(new Error(`ClikDeploy Gateway models: ${reason}`), { statusCode: response.status });
   }
-  cached = { baseUrl, at: Date.now(), list: body.data };
+  const list = fromOpenAIModelList(body.data);
+  cached = { baseUrl, at: Date.now(), list };
   // fail-open-ok: a list that cannot be saved still answers this request; only the next instant open is lost.
-  await saveGatewayModels(baseUrl, body.data).catch(() => undefined);
-  return body.data;
+  await saveGatewayModels(baseUrl, list).catch(() => undefined);
+  return list;
+}
+
+/** The id the Gateway takes for "you choose". */
+export const GATEWAY_AUTO_MODEL = 'auto';
+
+/** OpenAI's model list, as the Gateway sends it, to the list ClikCode shows:
+ * `auto` names the automatic pick (its `root`) rather than being a row. */
+export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList {
+  let automatic: string | null = null;
+  const models: GatewayModel[] = [];
+  for (const raw of data) {
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = raw as { id?: unknown; root?: unknown; context_length?: unknown; pricing?: Record<string, unknown> };
+    if (typeof entry.id !== 'string' || !entry.id) continue;
+    if (entry.id === GATEWAY_AUTO_MODEL) {
+      if (typeof entry.root === 'string' && entry.root) automatic = entry.root;
+      continue;
+    }
+    const pricing = entry.pricing;
+    const num = (key: string) => (typeof pricing?.[key] === 'number' ? pricing[key] as number : undefined);
+    const charged = { inMTok: num('input_per_mtok'), outMTok: num('output_per_mtok') };
+    models.push({
+      id: entry.id,
+      ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
+      ...(charged.inMTok !== undefined && charged.outMTok !== undefined
+        ? {
+            price: {
+              full: { inMTok: num('full_input_per_mtok') ?? charged.inMTok, outMTok: num('full_output_per_mtok') ?? charged.outMTok },
+              discountPercent: num('discount_percent') ?? 0,
+              charged: { inMTok: charged.inMTok, outMTok: charged.outMTok },
+            },
+          }
+        : {}),
+    });
+  }
+  return { automatic, models };
 }
 
 /** Test seam. */
