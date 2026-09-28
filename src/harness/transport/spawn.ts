@@ -2,9 +2,16 @@
  * directly without unsafe shell interpolation. cross-spawn preserves argv as
  * distinct values while resolving shebangs and PATHEXT on every platform. */
 import crossSpawn from 'cross-spawn';
-import type { ChildProcess } from 'node:child_process';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import { childEnvironment } from '../../runtime/electron-env.js';
 
-export const spawnPortable = crossSpawn;
+/** cross-spawn, with an environment free of ClikCode's own
+ * ELECTRON_RUN_AS_NODE (see runtime/electron-env.ts). */
+export const spawnPortable = ((command: string, args?: readonly string[] | SpawnOptions, options?: SpawnOptions): ChildProcess => {
+  if (!Array.isArray(args)) return spawnPortable(command, [], args as SpawnOptions | undefined);
+  const env = childEnvironment(command, options?.env ?? process.env);
+  return crossSpawn(command, args as string[], env === (options?.env ?? process.env) ? options : { ...options, env });
+}) as typeof crossSpawn;
 
 export function terminatePortable(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): void {
   if (child.exitCode !== null || child.signalCode !== null) return;

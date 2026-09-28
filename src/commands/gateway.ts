@@ -13,6 +13,7 @@
  * API keys, `--return-url`, `--exchange`.
  */
 import { spawn } from 'node:child_process';
+import { childEnvironment } from '../runtime/electron-env.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type Conf from 'conf';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
@@ -54,7 +55,7 @@ function openBrowserDefault(url: string): void {
   if (process.platform === 'darwin') { cmd = 'open'; args = [url]; }
   else if (process.platform === 'win32') { cmd = 'cmd'; args = ['/c', 'start', '', url]; }
   else { cmd = 'xdg-open'; args = [url]; }
-  const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+  const child = spawn(cmd, args, { stdio: 'ignore', detached: true, env: childEnvironment(cmd) });
   child.on('error', () => {});
   child.unref();
 }

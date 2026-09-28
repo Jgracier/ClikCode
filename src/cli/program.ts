@@ -162,5 +162,8 @@ export function runProgram(program: Command, options: { showHelpWhenBare?: boole
     program.outputHelp();
   }
 
-  program.parse();
+  // Always `node <script> args`: on VS Code's Electron (ELECTRON_RUN_AS_NODE,
+  // the extension's fallback runtime) commander would otherwise read the
+  // script path and command as arguments, and ClikCode could not start.
+  program.parse(process.argv, { from: 'node' });
 }
