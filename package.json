@@ -1,10 +1,11 @@
 {
   "name": "clikcode",
+  "//version": "MAJOR.MINOR only: ClikDeploy computes the patch and stamps the full version into its own build copy before `npm publish`, so the patch digit here is ignored. Bump the minor (or major) here for a release line; never the patch.",
   "version": "1.0.0",
   "description": "The terminal harness that logs in all your favorite AI coding providers. Chats you can resume in any of them, and automatic account switching when you hit a usage limit.",
   "type": "module",
   "bin": {
-    "clikcode": "./dist/index.js"
+    "clikcode": "dist/index.js"
   },
   "files": [
     "dist",
