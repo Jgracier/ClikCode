@@ -35,8 +35,16 @@ it. Nothing to click. You find out afterwards.
 ## Install
 
 ```sh
-npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz
+npm install -g clikcode
 ```
+
+Update the same way: `npm install -g clikcode@latest`. Without access to the npm
+registry, install the same release from GitHub:
+`npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`.
+
+For VS Code (and VSCodium, Cursor, Windsurf), the **ClikCode** extension
+(`clikcode.clikcode`, on the Visual Studio Marketplace and Open VSX) puts the
+same chats in a panel beside your code; it runs the ClikCode you installed.
 
 Requires **Node.js 22.12 or newer**. Nothing to configure. You do not need any
 of the coding tools installed first — where a vendor ships an installable CLI,
@@ -416,7 +424,7 @@ pnpm type-check     # tsc over src/ and over packages/clikrouter
 pnpm test           # the ClikCode suite
 pnpm test:router    # the router package's suite
 pnpm test:smoke     # build, then --help and doctor against the built binary
-pnpm test:pack      # assert tarball contents, install it in a temp dir, run it
+pnpm test:pack      # assert tarball contents, npm install -g it into a temp prefix, run it
 ```
 
 Two packages, one lockfile:
@@ -435,6 +443,10 @@ cross-spawn, marked) so startup is a single file read, which is why the
 published package declares a single runtime dependency (`yaml`) — a property
 the build asserts rather than assumes. The version reported by `--version` is
 injected at build time from `package.json`.
+
+Releases are published by ClikDeploy, not by hand or by CI: `package.json`
+holds MAJOR.MINOR, and ClikDeploy assigns the patch, stamps it, and publishes
+to npm with a matching GitHub release (see `packages/vscode/PUBLISHING.md`).
 
 ## License
 
