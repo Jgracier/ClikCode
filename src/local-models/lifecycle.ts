@@ -19,7 +19,7 @@ import { execFile, spawn } from 'node:child_process';
 import { closeSync, openSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { memoryStep, mergeFootprint, parseMeminfo, parseProcStatus, parseVmStatMac, parseVmstatSwapOut } from './memwatch.js';
+import { memoryStep, mergeFootprint, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmStatMac, parseVmstatSwapOut } from './memwatch.js';
 import { safeName, serversDir } from './paths.js';
 
 export function processAlive(pid: number): boolean {
@@ -242,6 +242,7 @@ const fs = require('fs'), path = require('path'), http = require('http'), os = r
 const memoryStep = (${String(memoryStep)});
 const parseMeminfo = (${String(parseMeminfo)});
 const parseVmstatSwapOut = (${String(parseVmstatSwapOut)});
+const parseMemoryPressure = (${String(parseMemoryPressure)});
 const parseProcStatus = (${String(parseProcStatus)});
 const parseVmStatMac = (${String(parseVmStatMac)});
 const mergeFootprint = (${String(mergeFootprint)});
@@ -347,8 +348,9 @@ function sampleMemory(pid) {
     if (!mem.totalBytes || mem.availableBytes === undefined) return undefined;
     const own = parseProcStatus(read('/proc/' + pid + '/status'));
     const swapOutPages = parseVmstatSwapOut(read('/proc/vmstat'));
+    const pressureSomeAvg10 = parseMemoryPressure(read('/proc/pressure/memory'));
     return Object.assign({ at, totalBytes: mem.totalBytes, availableBytes: mem.availableBytes, ourAnonBytes: own.anonBytes, ourFileBytes: memory.mmap ? own.fileBytes : 0 },
-      swapOutPages === undefined ? {} : { swapOutPages });
+      swapOutPages === undefined ? {} : { swapOutPages }, pressureSomeAvg10 === undefined ? {} : { pressureSomeAvg10 });
   }
   if (process.platform === 'darwin') {
     let vm = {}, rss = 0;
@@ -415,6 +417,7 @@ function memoryTick() {
   watch = decision.state;
   const summary = 'memory ' + decision.level + ': ' + gb(decision.spareBytes) + ' spare (buffer ' + gb(memory.bufferBytes) + '), others hold '
     + gb(decision.othersBytes) + ', model ' + gb(sample.ourAnonBytes) + (memory.mmap ? ' own + ' + gb(sample.ourFileBytes) + ' mapped weights' : '')
+    + (sample.pressureSomeAvg10 ? ', memory stalls ' + sample.pressureSomeAvg10.toFixed(1) + '%' : '')
     + (decision.swapOutPerSecond ? ', swapping out ' + Math.round(decision.swapOutPerSecond) + ' pages/s' : '');
   const key = decision.level + ' ' + decision.action;
   if (key !== lastLog || decision.action === 'shrink' || decision.action === 'stop' || sample.at - lastStatusAt > 300000) {

@@ -106,25 +106,25 @@ describe('catalog', () => {
 });
 
 describe('budget', () => {
-  it('keeps a buffer of 10% of RAM, at least 4 GiB (a quarter of a small machine), at most 8 GiB', () => {
+  it('keeps a buffer of 12% of RAM, at least 4 GiB (a quarter of a small machine), at most 8 GiB', () => {
     expect(memoryBuffer(8 * GIB)).toBe(2 * GIB);
     expect(memoryBuffer(16 * GIB)).toBe(4 * GIB);
     expect(memoryBuffer(32 * GIB)).toBe(4 * GIB);
-    expect(memoryBuffer(57.6 * GIB)).toBeCloseTo(5.76 * GIB);
+    expect(memoryBuffer(57.6 * GIB)).toBeCloseTo(6.912 * GIB);
     expect(memoryBuffer(128 * GIB)).toBe(8 * GIB);
   });
 
-  it('adds a start margin of 5% of RAM, 1 to 4 GiB', () => {
+  it('adds a start margin of 2% of RAM, 1 to 2 GiB', () => {
     expect(startMargin(8 * GIB)).toBe(1 * GIB);
-    expect(startMargin(57.6 * GIB)).toBeCloseTo(2.88 * GIB);
-    expect(startMargin(128 * GIB)).toBe(4 * GIB);
+    expect(startMargin(57.6 * GIB)).toBeCloseTo(1.152 * GIB);
+    expect(startMargin(128 * GIB)).toBe(2 * GIB);
   });
 
   it('is available memory less the buffer and the margin, with no fixed ceiling', () => {
-    expect(memoryBudget(ZEN4).ramBytes).toBeCloseTo(40 * GIB - 5.76 * GIB - 2.88 * GIB);
-    expect(memoryBudget(ZEN4).bufferBytes).toBeCloseTo(5.76 * GIB);
+    expect(memoryBudget(ZEN4).ramBytes).toBeCloseTo(40 * GIB - 6.912 * GIB - 1.152 * GIB);
+    expect(memoryBudget(ZEN4).bufferBytes).toBeCloseTo(6.912 * GIB);
     const idle = { ...ZEN4, availableRamBytes: 56 * GIB };
-    expect(memoryBudget(idle).ramBytes).toBeCloseTo(56 * GIB - 8.64 * GIB);
+    expect(memoryBudget(idle).ramBytes).toBeCloseTo(56 * GIB - 8.064 * GIB);
     expect(memoryBudget({ ...ZEN4, availableRamBytes: 1 * GIB }).ramBytes).toBe(0);
   });
 
@@ -284,7 +284,7 @@ describe('fit from a measured footprint', () => {
 
   it('fits Ornith at 39 GB available: weights, cache and buffers counted once', () => {
     const machine = { ...ZEN4, availableRamBytes: 39e9 };
-    const estimated = fitModel(model('ornith-1.5-35b-a3b'), memoryBudget(machine), { footprints: [mappedRun] });
+    const estimated = fitModel(model('ornith-1.5-35b-a3b'), memoryBudget(machine), { context: 65_536, footprints: [mappedRun] });
     expect(estimated).toMatchObject({ fits: true, placement: 'cpu' });
     expect(estimated.measured).toBeUndefined();
     expect(estimated.context).toBeGreaterThanOrEqual(65_536);
@@ -295,7 +295,7 @@ describe('fit from a measured footprint', () => {
     const ornith = model('ornith-1.5-35b-a3b');
     const machine = { ...ZEN4, availableRamBytes: 39e9 };
     // A run that held far more than estimated keeps it out.
-    const heavy: Footprint = { ...readRun, anonBytes: 33e9 };
+    const heavy: Footprint = { ...readRun, anonBytes: 40e9 };
     expect(fitModel(ornith, memoryBudget(machine), { footprints: [heavy] })).toMatchObject({ fits: false, measured: true });
     const fit = fitModel(ornith, memoryBudget(machine), { footprints: [readRun] });
     expect(fit).toMatchObject({ fits: true, measured: true });
@@ -307,7 +307,7 @@ describe('fit from a measured footprint', () => {
     const ornithFits = (footprints: Footprint[]) => rankModels(LOCAL_MODEL_CATALOG, machine, memoryBudget(machine), {}, { 'ornith-1.5-35b-a3b': footprints })
       .find((row) => row.model.id === 'ornith-1.5-35b-a3b')!.fit.fits;
     expect(ornithFits([mappedRun])).toBe(true);
-    expect(ornithFits([{ ...readRun, anonBytes: 33e9 }])).toBe(false);
+    expect(ornithFits([{ ...readRun, anonBytes: 40e9 }])).toBe(false);
   });
 });
 
