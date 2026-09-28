@@ -4,17 +4,18 @@
  * Two amounts are kept for other programs, and the model gets the rest of
  * what is available when it starts:
  *  - The buffer: what the supervisor defends while the model runs (see
- *    memwatch.ts). 10% of RAM, at least 4 GiB (or a quarter of RAM on a
+ *    memwatch.ts). 12% of RAM, at least 4 GiB (or a quarter of RAM on a
  *    machine under 16 GiB, where 4 GiB would be most of what a model has),
  *    at most 8 GiB. It is room for what other programs do next without
  *    swapping -- a browser opening tabs, a build, the editor's language
  *    server -- which on a desktop is a few GB whatever the machine's size,
  *    and more on bigger machines that run bigger workloads.
- *  - The start margin: 5% of RAM, 1-4 GiB, on top of the buffer at start
+ *  - The start margin: 2% of RAM, 1-2 GiB, on top of the buffer at start
  *    only. Without it a model sized to the last byte would put spare memory
  *    right on the buffer's edge, and the first ordinary swing of another
  *    program (a tsc run is 1-3 GB) would have the supervisor shrink it. The
- *    margin is what lets normal activity come and go without that.
+ *    margin reduces restarts from small, short-lived memory swings. The
+ *    supervisor still backs off when another workload needs its buffer.
  * Available, not total: memory other programs hold now is theirs.
  *
  * There is no fixed ceiling (such as a share of total RAM): a machine
@@ -55,11 +56,11 @@ export interface MemoryBudget {
 }
 
 export function memoryBuffer(totalRamBytes: number): number {
-  return Math.min(8 * GIB, Math.max(Math.min(4 * GIB, totalRamBytes / 4), totalRamBytes * 0.1));
+  return Math.min(8 * GIB, Math.max(Math.min(4 * GIB, totalRamBytes / 4), totalRamBytes * 0.12));
 }
 
 export function startMargin(totalRamBytes: number): number {
-  return Math.min(4 * GIB, Math.max(1 * GIB, totalRamBytes * 0.05));
+  return Math.min(2 * GIB, Math.max(1 * GIB, totalRamBytes * 0.02));
 }
 
 export function vramReserve(vramBytes: number): number {

@@ -31,6 +31,8 @@ export interface MemorySample {
   availableBytes: number;
   /** Cumulative pages swapped out (Linux pswpout, macOS Swapouts). */
   swapOutPages?: number;
+  /** Linux PSI: percent of the last 10 s with at least one task stalled on memory. */
+  pressureSomeAvg10?: number;
   ourAnonBytes: number;
   /** The server's mapped weights that are resident; 0 when it reads its
    * weights into memory instead (whatever RssFile says: that is then only
@@ -83,31 +85,31 @@ export interface WatchDecision {
 /** One sample in, one decision out.
  *
  * Thresholds, with a 2 s sampling interval:
- *  - low: spare under the buffer. Acted on after 15 s: a compile step or a
- *    page-cache refill dips for a few seconds and recovers; 15 s of deficit
- *    is a workload that is staying.
- *  - critical: spare under half the buffer, or the kernel swapping out at
- *    1 MiB/s or more while under it. Acted on after 4 s (two samples, so
- *    one odd reading is not enough) -- by then the machine is about to
- *    swap, or already does. Swap-out alone, with spare above the buffer, is
- *    not pressure: kernels page out cold memory on idle machines too.
+ *  - low: spare under the buffer for 6 s. A brief cache refill can recover;
+ *    a sustained deficit triggers a smaller context or a stop.
+ *  - critical: spare under half the buffer for 2 s, or Linux PSI reporting
+ *    at least 1% memory stalls near the buffer. The kernel swapping out at
+ *    1 MiB/s or more near the buffer acts at once.
+ *    Swap-out alone, well above the buffer, is not pressure: kernels page
+ *    out cold memory on idle machines too.
  *    Swap-in never is: it is old pages coming back.
  *  - A running request defers a restart or stop while merely low, for up
- *    to 60 s, so a turn is not cut off for a deficit that can wait; when
+ *    to 12 s; when
  *    critical nothing waits.
- *  - After an action, 20 s to settle before the next (only a machine that
- *    is actively swapping cuts that short), so one restart is judged on
+ *  - After an action, 10 s to settle before the next (critical pressure
+ *    cuts that short), so one restart is judged on
  *    what it freed before the next step.
  *  - The first shrink that frees the deficit plus a quarter of the buffer
  *    is taken (the margin keeps it from landing right on the line and
  *    tripping again); if none does, the model stops: it must never be the
  *    reason the machine swaps. */
 export function memoryStep(input: WatchInput): WatchDecision {
-  const SUSTAIN_MS = 15_000;
-  const CRITICAL_MS = 4_000;
-  const SETTLE_MS = 20_000;
-  const BUSY_GRACE_MS = 60_000;
+  const SUSTAIN_MS = 6_000;
+  const CRITICAL_MS = 2_000;
+  const SETTLE_MS = 10_000;
+  const BUSY_GRACE_MS = 12_000;
   const SWAP_OUT_PAGES_PER_SECOND = 256;
+  const PRESSURE_PERCENT = 1;
   const gb = (bytes: number): string => `${(bytes / 1e9).toFixed(1)} GB`;
 
   const sample = input.sample;
@@ -125,16 +127,20 @@ export function memoryStep(input: WatchInput): WatchDecision {
   const base = { state, spareBytes, othersBytes, swapOutPerSecond };
 
   const deficit = input.bufferBytes - spareBytes;
-  if (deficit <= 0) return { ...base, level: 'ok', action: 'none' };
-
   const swapping = swapOutPerSecond >= SWAP_OUT_PAGES_PER_SECOND;
-  const critical = spareBytes < input.bufferBytes / 2 || swapping;
+  // MemAvailable can stay high while allocations stall on reclaim. Linux PSI
+  // catches that boundary before the nominal free-memory buffer is crossed.
+  const pressureGuard = input.bufferBytes + Math.min(1024 ** 3, input.bufferBytes * 0.25);
+  const pressure = ((sample.pressureSomeAvg10 ?? 0) >= PRESSURE_PERCENT || swapping) && spareBytes < pressureGuard;
+  if (deficit <= 0 && !pressure) return { ...base, level: 'ok', action: 'none' };
+
+  const critical = spareBytes < input.bufferBytes / 2 || swapping || pressure;
   const level: WatchLevel = critical ? 'critical' : 'low';
   state.lowSince = previous.lowSince ?? sample.at;
   const lowFor = sample.at - state.lowSince;
   const settling = previous.lastActionAt !== undefined && sample.at - previous.lastActionAt < SETTLE_MS;
-  if (settling && !swapping) return { ...base, level, action: 'none' };
-  if (lowFor < (critical ? CRITICAL_MS : SUSTAIN_MS)) return { ...base, level, action: 'none' };
+  if (settling && !critical) return { ...base, level, action: 'none' };
+  if (!swapping && lowFor < (critical ? CRITICAL_MS : SUSTAIN_MS)) return { ...base, level, action: 'none' };
   if (!critical && input.busy && lowFor < BUSY_GRACE_MS) {
     return { ...base, level, action: 'wait', reason: 'a request is running' };
   }
@@ -142,9 +148,11 @@ export function memoryStep(input: WatchInput): WatchDecision {
   // Worded by what is left, not by who took it: the model's own prompt
   // cache filling lowers spare memory too, and the buffer is defended all
   // the same.
-  const why = `only ${gb(Math.max(0, spareBytes))} was left for other programs, under the ${gb(input.bufferBytes)} kept for them`
+  const why = (pressure
+    ? `${swapping ? `swapping out ${Math.round(swapOutPerSecond)} pages/s` : `memory stalls ${sample.pressureSomeAvg10?.toFixed(1)}%`} with ${gb(Math.max(0, spareBytes))} left for other programs, approaching the ${gb(input.bufferBytes)} buffer`
+    : `only ${gb(Math.max(0, spareBytes))} was left for other programs, under the ${gb(input.bufferBytes)} buffer`)
     + ` (they hold ${gb(othersBytes)}${swapping ? ', and the machine is swapping' : ''})`;
-  const wanted = deficit + input.bufferBytes / 4;
+  const wanted = (pressure ? pressureGuard - spareBytes : deficit) + input.bufferBytes / 4;
   state.lastActionAt = sample.at;
   delete state.lowSince;
   for (let index = 0; index < input.shrinks.length; index++) {
@@ -178,6 +186,12 @@ export function parseMeminfo(text: string): { totalBytes?: number; availableByte
 /** /proc/vmstat: the cumulative swap-out page count. */
 export function parseVmstatSwapOut(text: string): number | undefined {
   const match = /^pswpout\s+(\d+)/m.exec(text);
+  return match ? Number(match[1]) : undefined;
+}
+
+/** Linux pressure stall information, sampled with MemAvailable. */
+export function parseMemoryPressure(text: string): number | undefined {
+  const match = /^some\s+avg10=([\d.]+)/m.exec(text);
   return match ? Number(match[1]) : undefined;
 }
 

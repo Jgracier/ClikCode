@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Script } from 'node:vm';
 import { SUPERVISOR_SCRIPT } from './lifecycle';
 import {
-  memoryStep, mergeFootprint, parseMeminfo, parseProcStatus, parseVmStatMac, parseVmstatSwapOut,
+  memoryStep, mergeFootprint, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmStatMac, parseVmstatSwapOut,
   type MemorySample, type ShrinkOption, type WatchDecision, type WatchInput, type WatchState,
 } from './memwatch';
 
@@ -47,26 +47,26 @@ describe('memory decisions', () => {
     expect(decisions.at(-1)!.state.lowSince).toBeUndefined();
   });
 
-  it('acts on a deficit sustained for 15 s: the least drastic shrink that covers it', () => {
+  it('acts on a deficit sustained for 6 s: the least drastic shrink that covers it', () => {
     // Spare 5 GB, buffer 5.76: deficit 0.76 GB, wanted 0.76 + 1.44 = 2.2 GB.
     const decisions = run(Array(10).fill(7 * GB), { shrinks: SHRINKS });
     const first = decisions.findIndex((decision) => decision.action !== 'none');
-    expect(first).toBe(8); // t = 16 s, the first sample 15 s past the first low one
+    expect(first).toBe(3); // t = 6 s
     expect(decisions[first]).toMatchObject({ action: 'shrink', shrinkIndex: 2, level: 'low' });
-    expect(decisions[first]!.reason).toMatch(/only 5\.0 GB was left for other programs, under the 5\.8 GB kept for them.*16K context/);
+    expect(decisions[first]!.reason).toMatch(/only 5\.0 GB was left for other programs, under the 5\.8 GB buffer.*16K context/);
   });
 
   it('stops when no shrink frees enough', () => {
     const decisions = run(Array(10).fill(7 * GB), { shrinks: [{ context: 32_768, freesBytes: 1 * GB }] });
-    expect(decisions[8]).toMatchObject({ action: 'stop' });
-    expect(decisions[8]!.reason).toMatch(/no smaller setting of this model frees/);
+    expect(decisions[3]).toMatchObject({ action: 'stop' });
+    expect(decisions[3]!.reason).toMatch(/no smaller setting of this model frees/);
   });
 
-  it('acts within 4 s when critical: under half the buffer', () => {
+  it('acts within 2 s when critical: under half the buffer', () => {
     const decisions = run([2 * GB, 2 * GB, 2 * GB, 2 * GB], { shrinks: SHRINKS });
     expect(decisions.map((decision) => decision.level)).toEqual(['critical', 'critical', 'critical', 'critical']);
     // Deficit 5.76 GB: no shrink covers it.
-    expect(decisions.map((decision) => decision.action)).toEqual(['none', 'none', 'stop', 'none']);
+    expect(decisions.slice(0, 2).map((decision) => decision.action)).toEqual(['none', 'stop']);
   });
 
   it('treats swapping out while under the buffer as critical, and swap-out alone as nothing', () => {
@@ -79,30 +79,59 @@ describe('memory decisions', () => {
     step(0, 20 * GB, 1000);
     // 5000 pages in 2 s with plenty spare: the kernel paging out cold memory.
     expect(step(2000, 20 * GB, 6000).level).toBe('ok');
-    expect(step(4000, 7 * GB, 11_000)).toMatchObject({ level: 'critical', swapOutPerSecond: 2500 });
-    expect(step(6000, 7 * GB, 16_000).action).toBe('none');
-    expect(step(8000, 7 * GB, 21_000).action).toBe('stop');
+    expect(step(4000, 7 * GB, 11_000)).toMatchObject({ level: 'critical', swapOutPerSecond: 2500, action: 'stop' });
   });
 
-  it('defers while a request runs if merely low, but not past 60 s', () => {
+  it('backs off on swap-out just above the buffer', () => {
+    const first = memoryStep({ sample: sample(0, 8.2 * GB, { swapOutPages: 1000 }), state: {}, bufferBytes: BUFFER, busy: true, shrinks: [] });
+    const second = memoryStep({ sample: sample(2000, 8.2 * GB, { swapOutPages: 6000 }), state: first.state,
+      bufferBytes: BUFFER, busy: true, shrinks: [] });
+    expect(first).toMatchObject({ level: 'ok', action: 'none' });
+    expect(second).toMatchObject({ level: 'critical', action: 'stop' });
+    expect(second.reason).toMatch(/swapping out/);
+  });
+
+  it('defers while a request runs if merely low, but not past 12 s', () => {
     const decisions = run(Array(32).fill(7 * GB), { shrinks: SHRINKS, busy: true });
-    expect(decisions[8]!.action).toBe('wait');
-    expect(decisions[29]!.action).toBe('wait');
-    expect(decisions[30]!.action).toBe('shrink'); // t = 60 s
+    expect(decisions[3]!.action).toBe('wait');
+    expect(decisions[5]!.action).toBe('wait');
+    expect(decisions[6]!.action).toBe('shrink'); // t = 12 s
   });
 
   it('does not defer when critical', () => {
     const decisions = run([2 * GB, 2 * GB, 2 * GB], { busy: true });
-    expect(decisions[2]!.action).toBe('stop');
+    expect(decisions[1]!.action).toBe('stop');
   });
 
-  it('lets an action settle for 20 s before the next, unless the machine swaps', () => {
+  it('backs off on sustained Linux memory stalls before the RAM buffer is crossed', () => {
+    const pressured = run([8 * GB, 8 * GB], {
+      shrinks: [{ context: 16_384, freesBytes: 5 * GB }],
+    });
+    expect(pressured.every((decision) => decision.level === 'ok')).toBe(true);
+    let state: WatchState = {};
+    const decisions = [0, 2000].map((at) => {
+      const decision = memoryStep({ sample: sample(at, 8 * GB, { pressureSomeAvg10: 1.44 }), state,
+        bufferBytes: BUFFER, busy: true, shrinks: [{ context: 16_384, freesBytes: 5 * GB }] });
+      state = decision.state;
+      return decision;
+    });
+    expect(decisions[0]).toMatchObject({ level: 'critical', action: 'none' });
+    expect(decisions[1]).toMatchObject({ level: 'critical', action: 'shrink' });
+    const roomy = memoryStep({ sample: sample(4000, 20 * GB, { pressureSomeAvg10: 1.44 }), state: {},
+      bufferBytes: BUFFER, busy: false, shrinks: [] });
+    expect(roomy).toMatchObject({ level: 'ok', action: 'none' });
+  });
+
+  it('acts on critical pressure even during the post-shrink settling window', () => {
+    const decisions = run([2 * GB, 2 * GB], {}, { lastActionAt: 0 });
+    expect(decisions[1]!.action).toBe('stop');
+  });
+
+  it('lets an action settle for 10 s before the next, unless pressure is critical', () => {
     const decisions = run(Array(30).fill(7 * GB), { shrinks: SHRINKS });
     const actions = decisions.map((decision, index) => [index, decision.action] as const).filter(([, action]) => action !== 'none');
-    // Shrink at t=16 s; the spell restarts after the settle, so the next
-    // action is 15 s past the end of it (t=16+20=36 s at the earliest).
-    expect(actions[0]).toEqual([8, 'shrink']);
-    expect(actions[1]![0] * 2000).toBeGreaterThanOrEqual(36_000);
+    expect(actions[0]).toEqual([3, 'shrink']);
+    expect(actions[1]![0] * 2000).toBeGreaterThanOrEqual(16_000);
   });
 });
 
@@ -116,6 +145,11 @@ describe('memory readers', () => {
   it('reads the swap-out counter', () => {
     expect(parseVmstatSwapOut('pswpin 134386157\npswpout 227903104\n')).toBe(227903104);
     expect(parseVmstatSwapOut('nr_free_pages 1\n')).toBeUndefined();
+  });
+
+  it('reads Linux memory pressure', () => {
+    expect(parseMemoryPressure('some avg10=1.44 avg60=0.24 avg300=0.05 total=123\nfull avg10=0.00\n')).toBe(1.44);
+    expect(parseMemoryPressure('')).toBeUndefined();
   });
 
   it('reads a process\'s anonymous and file-backed resident memory', () => {
@@ -162,7 +196,7 @@ describe('the supervisor\'s embedded copies', () => {
   it('decides as the module does: nothing outside their bodies is referenced', () => {
     // Evaluated alone, as the supervisor does, with no module scope around them.
     const embedded = new Function(`${SUPERVISOR_SCRIPT.slice(SUPERVISOR_SCRIPT.indexOf('const memoryStep'), SUPERVISOR_SCRIPT.indexOf('const config'))}
-      return { memoryStep, parseMeminfo, parseProcStatus, parseVmstatSwapOut, parseVmStatMac, mergeFootprint };`)() as {
+      return { memoryStep, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmstatSwapOut, parseVmStatMac, mergeFootprint };`)() as {
       memoryStep: typeof memoryStep; parseMeminfo: typeof parseMeminfo; parseProcStatus: typeof parseProcStatus;
     };
     let state: WatchState = {};
@@ -174,6 +208,7 @@ describe('the supervisor\'s embedded copies', () => {
     }
     expect(last).toMatchObject({ action: 'shrink', shrinkIndex: 2 });
     expect(embedded.parseMeminfo('MemTotal: 2 kB\nMemAvailable: 1 kB\n')).toEqual({ totalBytes: 2048, availableBytes: 1024 });
+    expect(embedded.parseMemoryPressure('some avg10=1.44 avg60=0.24')).toBe(1.44);
     expect(embedded.parseProcStatus('RssAnon:\t1 kB\nRssFile:\t2 kB\n')).toEqual({ anonBytes: 1024, fileBytes: 2048 });
   });
 });
