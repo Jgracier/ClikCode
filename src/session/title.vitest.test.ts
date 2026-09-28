@@ -149,12 +149,9 @@ describe('an account switch mid-turn', () => {
     expect(shown).not.toContain('<clikcode-title>');
   });
 
-  it('gives back the attempt when the retry no longer asks for a name', () => {
-    // The vendor-CLI failover re-drives the carried thread with "carry on",
-    // which carries no title request: this turn cannot produce a name, so it
-    // must not have spent the chat's chance at one.
+  it('never re-asks after the one title request was spent', () => {
     const session = { name: undefined, titleAttempts: 1 };
-    expect(shouldRequestTitle(session)).toBe(true);
+    expect(shouldRequestTitle(session)).toBe(false);
     refundTitleRequest(session);
     expect(session.titleAttempts).toBe(0);
     expect(shouldRequestTitle(session)).toBe(true);
@@ -187,23 +184,23 @@ describe('the title stream for one attempt', () => {
     expect(second!.title).toBe('Prod Disk Cleanup');
   });
 
-  it('drops it and refunds when the retry prompt no longer asks', () => {
+  it('does not refund a title request replaced by a retry', () => {
     const state = session(1);
     const stream = titleStreamForAttempt(undefined, withTitleRequest('clean up the prod disk'), state);
     stream!.push('Looking at the wor', 'append');
     // What the vendor-CLI failover sends instead: carry on with the thread.
     const next = titleStreamForAttempt(stream, 'Continue the interrupted latest request.', state);
     expect(next).toBeUndefined();
-    expect(state.titleAttempts).toBe(0);
+    expect(state.titleAttempts).toBe(1);
   });
 
-  it('refunds once, however many retries follow', () => {
+  it('does not refund across repeated retries', () => {
     const state = session(1);
     const stream = titleStreamForAttempt(undefined, withTitleRequest('x'), state);
     let next = titleStreamForAttempt(stream, 'carry on', state);
     next = titleStreamForAttempt(next, 'carry on', state);
     expect(next).toBeUndefined();
-    expect(state.titleAttempts).toBe(0);
+    expect(state.titleAttempts).toBe(1);
   });
 
   it('keeps a title it already found, whatever the next prompt says', () => {
