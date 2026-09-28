@@ -91,8 +91,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // --- Vendor background turns (persistent transports) -------------------
   // Work a Codex app-server or ACP agent does between turns: broadcast,
   // persisted, and keeping this worker alive while it runs. See
-  // worker/vendor-background.ts. Kept to this block, userTurnEnded() in
-  // runTurn's finally, and `vendorBackground.busy` in scheduleIdleExit.
+  // worker/vendor-background.ts. Kept to this block, settled() before a
+  // turn, saveSuperseded() and userTurnEnded() in runTurn's finally, and
+  // `vendorBackground.busy` in scheduleIdleExit.
   const vendorBackground = createVendorBackgroundRunner({
     sessionId, observer, userTurnRunning: () => turnRunning, changed: () => scheduleIdleExit(),
   });
@@ -275,6 +276,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // `finally`, covering success, a caught failure, and cancellation alike.
     observer.startTurn('thinking', command.text);
     try {
+      // A background turn's record still being saved: this turn's checkpoint
+      // would read the conversation without it and then write it back whole.
+      await vendorBackground.settled();
       await aiGatewaySessionSend(config, sessionId, command.text, controller.signal, {
         persistentTransports: true,
         prompter: observer,
@@ -322,6 +326,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // was over, cleared the message's row, redrew from a queue that did
       // not have it yet -- and the message vanished until the next key.
       await Promise.allSettled([...submissions]);
+      // What background work this turn superseded did, now that the turn's own
+      // save (which rewrites the transcript) is done.
+      await vendorBackground.saveSuperseded();
       // Render before stopWaiting, deliberately: a client (see
       // worker/turn-bridge.ts) treats waiting-stop as "the turn is over,
       // stop listening" and detaches its event handler the instant it

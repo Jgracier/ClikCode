@@ -32,6 +32,12 @@ export interface VendorBackgroundRunner {
   readonly handle: (turn: VendorBackgroundTurn) => void;
   /** A background turn is running or waiting to. */
   readonly busy: boolean;
+  /** Settles once no background record is being written. A user turn awaits
+   * it before it reads the conversation, so neither save erases the other. */
+  settled(): Promise<void>;
+  /** Saves the records of background turns a user turn superseded, now that
+   * its own save is done. Resolves to the conversation as saved, if any were. */
+  saveSuperseded(): Promise<HarnessSession | undefined>;
   /** Call when a user turn ends: a background turn that arrived meanwhile starts. */
   userTurnEnded(): void;
 }
@@ -55,14 +61,30 @@ export function appendBackgroundRecord(session: HarnessSession, record: string, 
 export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBackgroundRunner {
   const waiting: VendorBackgroundTurn[] = [];
   let active: VendorBackgroundTurn | undefined;
+  /** Records of background turns a user turn superseded: that turn's
+   * checkpoint rewrites the whole transcript as it goes, so one appended
+   * beside it was erased. They are saved once it is done (saveSuperseded). */
+  const superseded: string[] = [];
+  /** Every background save, in order; a user turn waits for it (settled). */
+  let saving: Promise<unknown> = Promise.resolve();
 
-  const persist = async (record: string): Promise<HarnessSession | undefined> => {
-    const state = await readState();
-    const session = state.sessions.find((item) => item.id === deps.sessionId);
-    if (!session) return undefined;
-    appendBackgroundRecord(session, record, new Date().toISOString());
-    await writeState(state);
-    return session;
+  const persist = (records: readonly string[]): Promise<HarnessSession | undefined> => {
+    const write = saving.then(async () => {
+      const state = await readState();
+      const session = state.sessions.find((item) => item.id === deps.sessionId);
+      if (!session) return undefined;
+      const now = new Date().toISOString();
+      for (const record of records) appendBackgroundRecord(session, record, now);
+      await writeState(state);
+      return session;
+    });
+    saving = write.catch(() => undefined);
+    return write;
+  };
+
+  const saveSuperseded = (): Promise<HarnessSession | undefined> => {
+    if (!superseded.length) return Promise.resolve(undefined);
+    return persist(superseded.splice(0)).catch(() => undefined);
   };
 
   const run = async (turn: VendorBackgroundTurn): Promise<void> => {
@@ -71,6 +93,9 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
     const { observer } = deps;
     const finished: string[] = [];
     observer.startTurn(BACKGROUND_TURN_LABEL);
+    // The waiting line is this turn's until another turn starts over it.
+    const generation = observer.turnGeneration;
+    const owned = (): boolean => observer.turnGeneration === generation && !deps.userTurnRunning();
     const sink: HarnessTurnObserver = {
       onResponseDelta: (text, mode) => observer.response(text, mode ?? 'append'),
       onActivity: (event) => {
@@ -85,12 +110,19 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
     try {
       const outcome = await turn.finished;
       const record = backgroundTurnRecord(outcome, finished);
-      const session = record ? await persist(record).catch(() => undefined) : undefined;
-      // A user turn that superseded this one owns the windows' waiting line.
-      if (!deps.userTurnRunning()) {
-        if (session) observer.render(session);
-        observer.stopWaiting();
+      if (!owned()) {
+        // A user turn superseded this one: it owns the windows' waiting line,
+        // and the conversation until it is saved.
+        if (record) superseded.push(record);
+        return;
       }
+      const session = record ? await persist([record]).catch(() => undefined) : undefined;
+      // Still this turn's to end: a user turn may have started (and even
+      // finished) while that was saved -- and the waiting-stop belongs to
+      // whatever turn is showing now, not to this one.
+      if (observer.turnGeneration !== generation) return;
+      if (session) observer.render(session);
+      observer.stopWaiting();
     } finally {
       active = undefined;
       deps.changed();
@@ -107,6 +139,12 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
   return {
     handle: (turn) => { waiting.push(turn); next(); },
     get busy() { return Boolean(active) || waiting.length > 0; },
-    userTurnEnded: next,
+    settled: () => saving.then(() => undefined),
+    saveSuperseded,
+    userTurnEnded: () => {
+      // Superseded late -- after the user turn's own save already ran.
+      void saveSuperseded();
+      next();
+    },
   };
 }
