@@ -929,13 +929,15 @@ export async function aiSessionSend(
       // reaching the screen because the stream that would have stripped it
       // belonged to an attempt this reply replaced.
       const answer = extractSessionTitle(result.text);
-      await checkpoint.complete(answer.text);
+      // Name before completing: checkpoint completion persists the session, so
+      // the title must be present before that write takes its snapshot.
       await nameSession(session, {
         title: titleStream?.title ?? answer.title,
         ...(titleSource === 'vendor'
           ? { vendor: () => nativeGeneratedTitle(harness, session.nativeSessionId, session.workspace, environment) }
           : {}),
       });
+      await checkpoint.complete(answer.text);
       // The vendor subprocess owns persistence. Re-read its transcript after
       // exit so any source-side turns/events that were not represented by the
       // final response are reflected in ClikCode before the turn is saved.

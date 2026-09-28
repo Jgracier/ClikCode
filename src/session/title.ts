@@ -32,13 +32,10 @@ export function sessionTitleSource(harness: AiLocalHarnessDefinition | undefined
   return 'ask';
 }
 
-/** How many turns get an embedded title request before ClikCode stops
- * asking. Retried once past the first turn: a model that ignores it is more
- * often a one-off (a tool call before any text, an odd first prompt) than a
- * standing refusal, and a second try is nearly free. Not retried forever --
- * one that still ignores it twice is telling ClikCode something, and asking
- * on every turn of an otherwise-normal chat would eventually be noise. */
-export const TITLE_REQUEST_ATTEMPTS = 2;
+/** Only the first meaningful turn gets an embedded title request. The request
+ * is spent whether or not the model returns a title; continued conversations
+ * must never be prompted for a title again. */
+export const TITLE_REQUEST_ATTEMPTS = 1;
 
 /** Whether this turn should carry an embedded title request. */
 export function shouldRequestTitle(session: Pick<HarnessSession, 'name' | 'titleAttempts'>): boolean {
@@ -79,10 +76,8 @@ export function titleStreamForAttempt(
     current?.restart();
     return current ?? new StreamingTitle();
   }
-  // The prompt stopped asking, so no name is coming from this turn. Give the
-  // attempt back rather than let a chat lose one of its two chances to a
-  // reply it was never going to get.
-  if (current) refundTitleRequest(session);
+  // The request was already sent on the original attempt. A retry that replaces
+  // it must not make the next user turn ask for a title again.
   return undefined;
 }
 
