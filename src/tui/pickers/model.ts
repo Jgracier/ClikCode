@@ -3,7 +3,7 @@
 import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
-import { gatewayModelDetail, gatewayModels } from '../../gateway/models.js';
+import { gatewayModelDetail, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
 import { localHarnessForCommand, localHarnessForProvider, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
@@ -177,18 +177,29 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
  * model is chosen, the Gateway serves it from its cheapest provider --
  * subscription, then free, then paid -- and never swaps in another. */
 async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: string | null): Promise<void> {
-  const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  waiting?.startWaiting('finding ClikDeploy Gateway models…');
-  let list: Awaited<ReturnType<typeof gatewayModels>>;
-  try { list = await gatewayModels(); } finally { waiting?.stopWaiting(); }
-  const options: PickerOption<string>[] = [
-    { label: 'Automatic', detail: `· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}${current ? '' : ' · current'}`, value: 'auto' },
-    ...list.models.map((model) => ({
-      label: model.id,
-      detail: `· ${gatewayModelDetail(model)}${model.id === current ? ' · current' : ''}`,
-      value: model.id,
-    })),
+  // Open at once from the last list this machine received, and refresh it in
+  // place: the Gateway can take seconds to answer, and the picker must not.
+  let list = await savedGatewayModels();
+  const fresh = gatewayModels({ fresh: true }).then((latest) => { list = latest; });
+  if (!list) {
+    const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
+    waiting?.startWaiting('finding ClikDeploy Gateway models…');
+    try { await fresh; } finally { waiting?.stopWaiting(); }
+  } else {
+    // fail-open-ok: the saved list is on screen; a failed refresh leaves it there.
+    fresh.catch(() => undefined);
+  }
+  const options = (): PickerOption<string>[] => [
+    { label: 'Automatic', detail: `· the Gateway chooses${list!.automatic ? ` (now ${list!.automatic})` : ''}${current ? '' : ' · current'}`, value: 'auto' },
+    ...list!.models.map((model) => {
+      const price = gatewayModelDetail(model);
+      return {
+        label: model.id,
+        detail: `${price ? `· ${price}` : ''}${model.id === current ? ' · current' : ''}`,
+        value: model.id,
+      };
+    }),
   ];
-  const selected = await chooseOption(rl, 'Choose a ClikDeploy Gateway model', options);
+  const selected = await chooseOption(rl, 'Choose a ClikDeploy Gateway model', options(), undefined, { refreshedOptions: options, refresh: fresh });
   if (selected) await aiSessionCommand(id, `/model ${selected}`);
 }

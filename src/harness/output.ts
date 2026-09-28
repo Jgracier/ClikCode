@@ -124,7 +124,11 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
   }
   if (payload.panel === 'models' && Array.isArray(payload.models)) {
     const models = payload.models as Array<Record<string, unknown>>;
-    write(`\n${chalk.bold('Models')}\n` + (models.length ? models.map((model) => `  ${model.model} ${chalk.dim(`(${model.provider ?? model.account})`)}`).join('\n') : `  ${chalk.dim('Using the provider default. Set one with /model <name>.')}`) + '\n\n');
+    write(`\n${chalk.bold('Models')}\n` + (models.length ? models.map((model) => {
+      // A Gateway model shows its price; a local account's model, where it comes from.
+      const note = 'price' in model ? (model.price ? `· ${model.price}` : '') : `(${model.provider ?? model.account})`;
+      return `  ${model.model}${note ? ` ${chalk.dim(String(note))}` : ''}`;
+    }).join('\n') : `  ${chalk.dim('Using the provider default. Set one with /model <name>.')}`) + '\n\n');
     return;
   }
   if (payload.panel === 'sessions' && Array.isArray(payload.sessions)) {

@@ -277,7 +277,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         const { models, automatic } = await gatewayModels();
         return emitHarnessOutput({
           panel: 'models',
-          models: models.map((model) => ({ model: model.id, provider: gatewayModelDetail(model), access: model.access, providers: model.providers })),
+          // The model and its price only: which provider serves it is the Gateway's decision.
+          models: models.map((model) => ({ model: model.id, price: gatewayModelDetail(model) })),
           selected: session.model ?? automatic,
         });
       }

@@ -8,6 +8,9 @@
  * (`null`) leaves the pick to the Gateway. */
 
 import Conf from 'conf';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { stateDirectory } from '../session/store/paths.js';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 
@@ -42,12 +45,11 @@ export function gatewayAccessLabel(access: GatewayModelAccess): string {
   return access === 'subscription' ? 'subscription' : access === 'free-tier' ? 'free' : 'paid';
 }
 
-/** One row's detail: the access it will run on first, through whom, and its price. */
+/** One row's detail: the model's token price, and nothing else. Which of the
+ * Gateway's providers serves it, and on what terms, is the Gateway's own
+ * decision (the cheapest available) and not the user's concern. */
 export function gatewayModelDetail(model: GatewayModel): string {
-  const first = model.providers.find((item) => item.access === model.access)?.provider ?? model.providers[0]?.provider;
-  const also = model.providers.length > 1 ? ` (+${model.providers.length - 1} more)` : '';
-  const price = model.price ? ` · ${gatewayPriceLabel(model.price)}` : '';
-  return `${gatewayAccessLabel(model.access)}${first ? ` · ${first}${also}` : ''}${price}`;
+  return model.price ? gatewayPriceLabel(model.price) : '';
 }
 
 /** `$4/$20 per 1M`, or with a discount `$4/$20 → $3/$15 per 1M (25% off)`: input/output. */
@@ -62,6 +64,30 @@ export function gatewayPriceLabel(price: GatewayModelPrice): string {
 
 const TTL_MS = 60_000;
 let cached: { baseUrl: string; at: number; list: GatewayModelList } | undefined;
+
+/** The last list this machine received, kept on disk so /model opens at once
+ * and refreshes in place instead of waiting on the Gateway. */
+function diskCachePath(): string {
+  return join(stateDirectory(), 'cache', 'gateway-models.json');
+}
+
+/** The last list received from `baseUrl`, however old, or undefined. */
+export async function savedGatewayModels(options: { config?: Conf } = {}): Promise<GatewayModelList | undefined> {
+  const { baseUrl } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
+  try {
+    const saved = JSON.parse(await readFile(diskCachePath(), 'utf8')) as { baseUrl?: string; list?: GatewayModelList };
+    return saved.baseUrl === baseUrl && Array.isArray(saved.list?.models) ? saved.list : undefined;
+  } catch {
+    // fail-open-ok: no saved list (first use, or unreadable) means the picker waits for the Gateway, as before.
+    return undefined;
+  }
+}
+
+async function saveGatewayModels(baseUrl: string, list: GatewayModelList): Promise<void> {
+  const file = diskCachePath();
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ baseUrl, at: Date.now(), list }), { mode: 0o600 });
+}
 
 /** Words that mean "let the Gateway choose" rather than a model id. */
 export function isAutomaticModelWord(value: string): boolean {
@@ -83,6 +109,8 @@ export async function gatewayModels(
     throw Object.assign(new Error(`ClikDeploy Gateway models: ${reason}`), { statusCode: response.status });
   }
   cached = { baseUrl, at: Date.now(), list: body.data };
+  // fail-open-ok: a list that cannot be saved still answers this request; only the next instant open is lost.
+  await saveGatewayModels(baseUrl, body.data).catch(() => undefined);
   return body.data;
 }
 

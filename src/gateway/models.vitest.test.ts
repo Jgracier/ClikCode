@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('../agent/models/for-session.js', () => ({
   gatewayConnection: () => ({ baseUrl: 'https://clikdeploy.com', apiKey: 'cd_live_key' }),
@@ -18,7 +21,10 @@ const LIST = {
 
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
-beforeEach(() => { resetGatewayModelCache(); vi.unstubAllGlobals(); });
+// The list is saved to disk (savedGatewayModels): never into the real ~/.clikcode.
+const home = mkdtempSync(join(tmpdir(), 'cc-gw-models-'));
+beforeEach(() => { process.env.CLIKCODE_HOME = home; rmSync(join(home, 'cache'), { recursive: true, force: true }); resetGatewayModelCache(); vi.unstubAllGlobals(); });
+afterAll(() => { delete process.env.CLIKCODE_HOME; rmSync(home, { recursive: true, force: true }); });
 
 describe('the Gateway\'s model list', () => {
   it('is read with the account\'s key, and kept briefly', async () => {
@@ -38,10 +44,17 @@ describe('the Gateway\'s model list', () => {
       .rejects.toThrow('this Gateway does not offer a model choice yet');
   });
 
-  it('labels each model by the access it runs on first, and through whom', () => {
-    expect(gatewayModelDetail(LIST.models[0] as never)).toBe('subscription · openai (+1 more)');
-    expect(gatewayModelDetail(LIST.models[1] as never)).toBe('free · groq');
-    expect(gatewayModelDetail(LIST.models[2] as never)).toBe('paid · aws-bedrock');
+  it('shows a model by its price only: which provider serves it is the Gateway\'s decision', () => {
+    expect(gatewayModelDetail(LIST.models[0] as never)).toBe('');
+    expect(gatewayModelDetail({ ...LIST.models[0], price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 0, charged: { inMTok: 4, outMTok: 20 } } } as never))
+      .toBe('$4/$20 per 1M');
+  });
+
+  it('keeps the last list on disk, so /model opens at once from it', async () => {
+    const { savedGatewayModels } = await import('./models.js');
+    expect(await savedGatewayModels()).toBeUndefined();
+    await gatewayModels({ fetchImpl: (async () => reply({ success: true, data: LIST })) as never });
+    expect(await savedGatewayModels()).toEqual(LIST);
   });
 });
 
@@ -54,7 +67,7 @@ describe('a Gateway model\'s price', () => {
     expect(gatewayModelDetail({
       id: 'gpt-5.6-sol', access: 'metered', providers: [{ provider: 'nous', access: 'metered' }],
       price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 25, charged: { inMTok: 3, outMTok: 15 } },
-    })).toBe('paid · nous · $4/$20 → $3/$15 per 1M (25% off)');
+    })).toBe('$4/$20 → $3/$15 per 1M (25% off)');
   });
 });
 

@@ -133,9 +133,10 @@ export async function aiGatewayModels(config: Conf): Promise<void> {
   const { automatic, models } = await gatewayModels({ config, fresh: true });
   emitResult({
     automatic,
+    // The model and its price: which provider serves it is the Gateway's decision.
     models: models.map((model) => ({
-      id: model.id, access: model.access, via: gatewayModelDetail(model), providers: model.providers.map((item) => item.provider),
-      ...(model.price ? { price: model.price } : {}),
+      id: model.id,
+      ...(model.price ? { price: gatewayModelDetail(model), priceUsdPerMTok: model.price } : {}),
     })),
   });
 }
