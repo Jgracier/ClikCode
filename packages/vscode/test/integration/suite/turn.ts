@@ -2,6 +2,9 @@
  * session worker -> a vendor harness (OpenCode's free model) and back. */
 import * as assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import * as vscode from 'vscode';
 import type { ClikCodeApi } from '../../../src/extension';
 import type { ChatModel } from '../../../src/model';
@@ -103,6 +106,29 @@ export function turnSuite(): void {
       assert.strictEqual(chatTabs()[0]!.label, 'ClikCode');
       await screenshot('editor-tab');
       await vscode.window.tabGroups.close(chatTabs());
+    });
+
+    it('offers an update when ClikCode is too old for the extension, or the extension for ClikCode', async () => {
+      const settings = () => vscode.workspace.getConfiguration('clikcode');
+      const original = settings().inspect<string>('path')?.globalValue;
+      const dir = mkdtempSync(join(tmpdir(), 'clikcode-it-compat-'));
+      const fake = (name: string, body: string): string => { const path = join(dir, name); writeFileSync(path, body); return path; };
+      const noBridge = fake('no-bridge.js', `process.stderr.write("error: unknown command 'ide-bridge'\\n"); process.exit(1);`);
+      const oldBridge = fake('old-bridge.js', `process.send({ type: 'ready', version: '0.9.0', pid: process.pid }); process.on('message', (m) => { if (m.type === 'close') process.exit(0); });`);
+      const newBridge = fake('new-bridge.js', `process.send({ type: 'ready', version: '9.0.0', protocol: 999, pid: process.pid }); process.on('message', (m) => { if (m.type === 'close') process.exit(0); });`);
+      try {
+        // Alternating, so each one's offer is a change the test sees.
+        for (const [entry, remedy] of [[noBridge, 'update-clikcode'], [newBridge, 'update-extension'], [oldBridge, 'update-clikcode']] as const) {
+          await settings().update('path', entry, vscode.ConfigurationTarget.Global);
+          const model = await until(api, (state) => state.remedy === remedy, `the ${remedy} offer for ${entry}`);
+          assert.strictEqual(model.connection, 'error');
+          if (remedy === 'update-clikcode') assert.match(model.connectionError ?? '', /npm install -g clikcode@latest/);
+          else assert.match(model.connectionError ?? '', /Update the ClikCode extension/);
+        }
+      } finally {
+        await settings().update('path', original, vscode.ConfigurationTarget.Global);
+      }
+      await until(api, (state) => state.connection === 'ready' && !state.remedy, 'the real ClikCode to reconnect');
     });
   });
 }

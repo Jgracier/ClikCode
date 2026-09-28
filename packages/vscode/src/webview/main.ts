@@ -56,12 +56,18 @@ function renderHeader(current: ChatModel): void {
     + (current.accountUsage ? `<div class="usage">${escapeHtml(current.accountUsage)}</div>` : '');
 }
 
+const REMEDY_BUTTONS: Record<NonNullable<ChatModel['remedy']>, { command: string; label: string }> = {
+  'install': { command: 'clikcode.install', label: 'Install ClikCode' },
+  'update-clikcode': { command: 'clikcode.update', label: 'Update ClikCode' },
+  'update-extension': { command: 'clikcode.updateExtension', label: 'Update Extension' },
+};
+
 function renderBanner(current: ChatModel): void {
   if (current.connection === 'ready' && current.sessionId) { banner.hidden = true; banner.innerHTML = ''; return; }
   banner.hidden = false;
   if (current.connection === 'error' || current.connection === 'stopped') {
     banner.innerHTML = `<p>${escapeHtml(current.connectionError ?? 'ClikCode stopped.')}</p><div class="actions">`
-      + (current.installHint ? '<button data-command="clikcode.install">Install ClikCode</button>' : '')
+      + (current.remedy ? `<button data-command="${REMEDY_BUTTONS[current.remedy].command}">${REMEDY_BUTTONS[current.remedy].label}</button>` : '')
       + '<button data-command="clikcode.restart">Retry</button><button class="secondary" data-command="clikcode.configure">Settings</button>'
       + '<button class="secondary" data-command="clikcode.showLog">Log</button></div>';
     return;

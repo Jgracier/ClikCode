@@ -17,9 +17,9 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, extname, join } from 'node:path';
+import { INSTALL_HELP } from './compat';
 
 export const MINIMUM_NODE = '22.12.0';
-export const INSTALL_COMMAND = 'npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz';
 
 export interface Runtime {
   /** The Node.js executable. */
@@ -112,7 +112,7 @@ export function resolveEntry(setting: string | undefined, host: RuntimeHost): st
     const entry = entryFor(candidate, host);
     if (entry) return entry;
   }
-  throw new RuntimeError(`ClikCode is not installed (no \`clikcode\` on PATH). Install it with: ${INSTALL_COMMAND}`, 'clikcode-missing');
+  throw new RuntimeError(`ClikCode is not installed (no \`clikcode\` on PATH). Install it with: ${INSTALL_HELP}`, 'clikcode-missing');
 }
 
 export async function resolveNode(setting: string | undefined, host: RuntimeHost): Promise<Pick<Runtime, 'node' | 'env' | 'nodeSource'>> {

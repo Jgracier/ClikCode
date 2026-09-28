@@ -67,7 +67,7 @@ import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
 import type { WorkerEvent } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
-import { encodeTerminalSpec, type IdeEvent, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
+import { encodeTerminalSpec, IDE_PROTOCOL, type IdeEvent, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
 
 /** A turn's own failure. The worker has already reported it (its turn-error
  * reaches the editor as a worker event), so the bridge does not say it twice. */
@@ -102,7 +102,7 @@ export class IdeBridge {
     claim.unref();
     usage.unref();
     this.timers.push(claim, usage);
-    this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
+    this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
   }
 
   handle(request: IdeRequest): void {

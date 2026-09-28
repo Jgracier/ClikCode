@@ -26,6 +26,7 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
   private readonly pending = new Map<string, Pending>();
   private exited = false;
   readonly build: string | undefined;
+  private readonly stderrClosed: Promise<void>;
 
   private constructor(private readonly child: ChildProcess, readonly runtime: Runtime) {
     super();
@@ -53,6 +54,7 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
     };
     child.stdout?.on('data', logLines(''));
     child.stderr?.on('data', logLines(''));
+    this.stderrClosed = child.stderr ? new Promise((resolve) => child.stderr!.once('close', () => resolve())) : Promise.resolve();
     child.on('error', (error) => this.emit('log', `bridge process error: ${error.message}`));
     child.on('exit', (code, signal) => {
       this.exited = true;
@@ -70,6 +72,12 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
       windowsHide: true,
     });
     return new BridgeClient(child, runtime);
+  }
+
+  /** Resolves once everything the process wrote to stderr has been logged,
+   * or after `timeoutMs` (a detached grandchild can hold stderr open). */
+  logDrained(timeoutMs: number): Promise<void> {
+    return Promise.race([this.stderrClosed, new Promise<void>((resolve) => setTimeout(resolve, timeoutMs).unref())]);
   }
 
   get running(): boolean {

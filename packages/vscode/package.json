@@ -120,7 +120,7 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "markdownDescription": "Path to the `clikcode` executable or its `dist/index.js`. Empty: found on `PATH`. Install ClikCode with `npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`."
+          "markdownDescription": "Path to the `clikcode` executable or its `dist/index.js`. Empty: found on `PATH`. Install ClikCode with `npm install -g clikcode@latest` (or, without the npm registry, `npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`)."
         },
         "clikcode.nodePath": {
           "type": "string",

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type Conf from 'conf';
 import { IdeBridge } from './bridge.js';
 import type { WorkerEvent } from '../worker/protocol.js';
+import { IDE_PROTOCOL } from './protocol.js';
 
 interface Internals {
   sessionId: string | undefined;
@@ -92,5 +93,16 @@ describe('the editor bridge and the queue', () => {
     event({ type: 'queue-changed' });
     await settle();
     expect(calls).toBe(2);
+  });
+});
+
+describe('the editor bridge handshake', () => {
+  it('announces the protocol version the editor checks compatibility against', () => {
+    const sent: unknown[] = [];
+    const bridge = new IdeBridge({} as Conf, { send: (message) => { sent.push(message); } });
+    bridge.start();
+    for (const timer of (bridge as unknown as { timers: NodeJS.Timeout[] }).timers) clearInterval(timer);
+    expect(sent[0]).toMatchObject({ type: 'ready', protocol: IDE_PROTOCOL.version });
+    expect(IDE_PROTOCOL.oldestSupported).toBeLessThanOrEqual(IDE_PROTOCOL.version);
   });
 });
