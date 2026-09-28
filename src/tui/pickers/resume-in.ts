@@ -19,6 +19,7 @@ import { discardInterruptedTurn } from '../../turn/runtime.js';
 import { nextQuotaReset, quotaResetPhrase } from '../../turn/usage-exhausted.js';
 import { chooseOption } from './choose.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
+import { turnBackendForAccount } from '../../turn/account-routing.js';
 
 /** An account that can take a turn now -- the one rule failover uses too. */
 export function accountHasUsage(account: AiHarnessAccount): boolean {
@@ -28,7 +29,7 @@ export function accountHasUsage(account: AiHarnessAccount): boolean {
 /** Whether an account of the chat's own provider can take the turn. While
  * one can, the same-provider switch is the one to make, not another provider. */
 export function sessionProviderHasUsage(accounts: readonly AiHarnessAccount[], provider: string | null | undefined): boolean {
-  return accounts.some((account) => account.provider === provider && account.authKind === 'vendor-cli' && accountHasUsage(account));
+  return accounts.some((account) => account.provider === provider && turnBackendForAccount(account) === 'vendor' && accountHasUsage(account));
 }
 
 export async function sameProviderCanTakeTurn(id: string): Promise<boolean> {
