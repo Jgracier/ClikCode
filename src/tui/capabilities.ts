@@ -29,6 +29,10 @@ export function reducedMotion(environment: NodeJS.ProcessEnv = process.env): boo
 export function terminalUiSupported(
   stdinTty = Boolean(input.isTTY), stdoutTty = Boolean(output.isTTY), environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  // The line-oriented path also serves as a compatibility escape hatch for
+  // terminals whose alternate screen or cursor updates are unreliable. Keep
+  // the screen-reader choice authoritative when both are set.
+  if (environment.CLIKCODE_TUI?.trim().toLowerCase() === 'classic') return false;
   // `TERM=dumb` explicitly promises no cursor addressing. The line-oriented
   // fallback remains usable in CI consoles, IDE output panes, Emacs shells,
   // and other pseudo-terminals that expose a TTY without ANSI capabilities.

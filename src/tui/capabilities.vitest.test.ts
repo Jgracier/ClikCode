@@ -7,5 +7,7 @@ describe('terminal capabilities', () => {
     expect(terminalUiSupported(true, true, { WT_SESSION: '1' })).toBe(true);
     expect(terminalUiSupported(true, true, { TERM: 'dumb' })).toBe(false);
     expect(terminalUiSupported(false, true, { TERM: 'xterm' })).toBe(false);
+    expect(terminalUiSupported(true, true, { TERM: 'linux', CLIKCODE_TUI: 'classic' })).toBe(false);
+    expect(terminalUiSupported(true, true, { TERM: 'linux', CLIKCODE_TUI: 'fullscreen' })).toBe(true);
   });
 });

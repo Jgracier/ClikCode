@@ -116,6 +116,7 @@ by accident. (In the composer it moves the cursor, as you would expect.)
 | **Ctrl+C** | Stop the answer. On a draft, clears it; twice within two seconds exits |
 | **Ctrl+D** | Exit, on an empty line |
 | **Ctrl+Z** | Drop to a shell; `fg` brings you back |
+| **Ctrl+L** | Redraw the fullscreen view if a terminal loses or garbles cells; keeps the chat and draft |
 | **PgUp / PgDn** | Scroll back through the conversation |
 
 Enter sends. For a newline that works in every terminal and over every SSH
@@ -406,6 +407,7 @@ streams at full speed.
 | `CLIKCODE_REDUCED_MOTION` | Any value other than empty, `0` or `false` holds the spinner on one frame and slows repainting. The turn still streams |
 | `NO_MOTION` | Same as `CLIKCODE_REDUCED_MOTION`, used when that is unset |
 | `CLIKCODE_SCREEN_READER` | Any value other than empty, `0` or `false` switches to the append-only, line-oriented renderer so output is announced once, in order |
+| `CLIKCODE_TUI` | `classic` uses the terminal's native scrollback and a line-oriented prompt if fullscreen rendering misbehaves; `fullscreen` uses the interactive alternate-screen view (the default on capable terminals) |
 | `FORCE_COLOR` | `0` disables color; `1`–`3` force a color level |
 | `CLIKCODE_OUTPUT_MODE` | `json` or `human`, the same as `--json` / `--human` |
 | `CLIKCODE_DEBUG` | `1` is the same as `--debug` |

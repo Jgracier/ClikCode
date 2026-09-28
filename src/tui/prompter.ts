@@ -193,6 +193,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private approvalQueue: ApprovalRequest[] = [];
   private approvalRestoreLabel?: string;
   private readonly onWaitingKey = (key: string): void => {
+    // The terminal can lose cells during a mobile resize or a remote redraw.
+    // Rebuild the whole viewport from our retained state, including the live
+    // answer and any approval, without changing the turn or the draft.
+    if (key === '\u000c') {
+      this.forgetScreenPosition();
+      this.paintWaiting();
+      return;
+    }
     // Before approvals and before the draft: a turn running is when someone
     // wants to read what went past.
     if (!this.pendingApproval && this.handleScrollKey(key)) return;
@@ -2047,6 +2055,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       settings?.signal?.addEventListener('abort', interrupt, { once: true });
       const handleKey = (key: string): void => {
+        if (key === '\u000c') {
+          this.forgetScreenPosition();
+          return draw();
+        }
         const matched = matches();
         // `options` drives selection keys. While an argument is being typed the
         // palette is only a hint -- unless it is listing the argument's own
