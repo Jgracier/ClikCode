@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BridgeClient } from '../../src/bridge-client';
+import { BridgeClient, bridgeEnvironment } from '../../src/bridge-client';
 import type { IdeEvent } from '../../src/protocol';
 
 /** A stand-in bridge speaking the real message shapes over the IPC channel. */
@@ -40,5 +40,15 @@ describe('BridgeClient', () => {
     expect(client.running).toBe(false);
     expect(logs).toContain('stray stdout line');
     expect(client.build).toMatch(/^\d+:\d+$/);
+  });
+});
+
+describe('the bridge environment', () => {
+  it('passes ELECTRON_RUN_AS_NODE only when the runtime sets it, never from the extension host', () => {
+    const host = { PATH: '/bin', ELECTRON_RUN_AS_NODE: '1' };
+    expect(bridgeEnvironment(host, {})).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
+    expect(bridgeEnvironment(host, {}).PATH).toBe('/bin');
+    expect(bridgeEnvironment({ PATH: '/bin' }, { ELECTRON_RUN_AS_NODE: '1' }).ELECTRON_RUN_AS_NODE).toBe('1');
+    expect(bridgeEnvironment({}, {})).toMatchObject({ CLIKCODE_OUTPUT_MODE: 'json', NO_COLOR: '1' });
   });
 });

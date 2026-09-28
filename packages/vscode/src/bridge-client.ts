@@ -65,7 +65,7 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
   static start(runtime: Runtime, cwd: string | undefined): BridgeClient {
     const child = spawn(runtime.node, [runtime.entry, 'ide-bridge'], {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-      env: { ...process.env, ...runtime.env, CLIKCODE_OUTPUT_MODE: 'json', NO_COLOR: '1' },
+      env: bridgeEnvironment(process.env, runtime.env),
       ...(cwd ? { cwd } : {}),
       windowsHide: true,
     });
@@ -110,4 +110,13 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
     setTimeout(() => { if (!this.exited) child.kill(); }, 3_000).unref();
     try { child.disconnect(); } catch { /* already */ }
   }
+}
+
+/** The bridge's environment. ELECTRON_RUN_AS_NODE comes only from the
+ * runtime (set when the bridge runs on VS Code's own Electron), never from
+ * the extension host's environment: ClikCode drops it again as it starts, so
+ * its workers, vendor CLIs and shells never see it (src/runtime/electron-env.ts). */
+export function bridgeEnvironment(inherited: NodeJS.ProcessEnv, runtimeEnv: Readonly<Record<string, string>>): NodeJS.ProcessEnv {
+  const { ELECTRON_RUN_AS_NODE: _inherited, ...rest } = inherited;
+  return { ...rest, ...runtimeEnv, CLIKCODE_OUTPUT_MODE: 'json', NO_COLOR: '1' };
 }

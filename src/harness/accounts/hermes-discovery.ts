@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { childEnvironment } from '../../runtime/electron-env.js';
 import { access, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -176,7 +177,7 @@ function runHermes(
 ): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
     execFile(harness.binary, [...args], {
-      timeout, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, ...environment },
+      timeout, maxBuffer: 8 * 1024 * 1024, env: childEnvironment(harness.binary, { ...process.env, ...environment }),
     }, (error, stdout, stderr) => {
       const exitCode = error && 'code' in error && typeof error.code === 'number' ? error.code : undefined;
       resolve({ code: exitCode ?? (error ? 1 : 0), output: `${String(stdout ?? '')}${String(stderr ?? '')}` });
