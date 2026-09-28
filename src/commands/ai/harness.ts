@@ -297,9 +297,15 @@ async function startOrResumeAgentChat(options: { route: 'clikcode-local' | 'gate
   }
   if (!session) throw new Error(`AI session "${options.chat}" was not found`);
   if (options.model) {
-    if (options.route === 'gateway') throw new Error('ClikDeploy Gateway selects the model by platform policy.');
-    const { resolveLocalModelId } = await import('../../local-models/catalog.js');
-    session.model = resolveLocalModelId(options.model);
+    if (options.route === 'gateway') {
+      // The same choice /model makes: a model from this account's Gateway list
+      // (served from its cheapest listing), or `auto` to hand it back.
+      const { chooseGatewayModel } = await import('./sessions.js');
+      session.model = await chooseGatewayModel(options.model);
+    } else {
+      const { resolveLocalModelId } = await import('../../local-models/catalog.js');
+      session.model = resolveLocalModelId(options.model);
+    }
   }
   await writeState(state);
   if (options.permissions) await setChatPermissions(session.id, options.permissions);
