@@ -79,6 +79,34 @@ SCENARIOS = {
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
         'final_contains': ['grok-4-fast'],
     },
+    'redraw-idle': {
+        'turns': [{'blocks': ['The final commit is live.']}],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30),
+            ('settle', 2), ('damage_and_redraw', 'The final commit is live.'),
+        ],
+        'watch': [], 'final_contains': ['The final commit is live.'],
+    },
+    'redraw-command-list': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/'), ('wait_for', '/settings', 5), ('damage_and_redraw', '/settings')],
+        'watch': [], 'final_contains': ['/settings'],
+    },
+    'redraw-while-waiting': {
+        'turns': [TWO_BLOCKS],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'Checking the workspace first.', 30),
+            ('damage_and_redraw', 'Checking the workspace first.'),
+            ('wait_for', 'The final commit is live.', 30), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['Checking the workspace first.', 'The final commit is live.'],
+    },
+    'classic-fallback': {
+        'classic': True,
+        'turns': [{'blocks': ['The final commit is live.']}],
+        'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30)],
+        'watch': [], 'final_contains': ['The final commit is live.'],
+    },
 }
 
 
@@ -100,6 +128,7 @@ def run(name, spec, entry, keep):
         # clipboard binary on the machine running the test.
         'SSH_CONNECTION': '127.0.0.1 1 127.0.0.1 22',
     }
+    if spec.get('classic'): env['CLIKCODE_TUI'] = 'classic'
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(workspace)
@@ -132,10 +161,22 @@ def run(name, spec, entry, keep):
             os.write(fd, b'\r')
             if typed_at is None: typed_at = time.time() - start
             pump(0.3)
+        elif step[0] == 'keys':
+            os.write(fd, step[1].encode()); pump(0.3)
         elif step[0] == 'wait_for':
             if not pump(step[2], step[1]): problems.append(f'timed out waiting for {step[1]!r}')
         elif step[0] == 'settle':
             pump(step[1])
+        elif step[0] == 'damage_and_redraw':
+            # Simulate cells lost by the client: the app's cached frame is still
+            # intact, but the emulated display is blank. Ctrl+L must rebuild it.
+            stream.feed(b'\x1b[2J')
+            before = len(raw)
+            os.write(fd, b'\x0c')
+            pump(0.6)
+            if b'\x1b[2J' not in raw[before:]: problems.append('Ctrl+L did not force a full repaint')
+            if step[1] not in '\n'.join(screen.display):
+                problems.append(f'Ctrl+L did not restore {step[1]!r}')
         elif step[0] == 'select':
             # Press on the phrase's first cell, drag across it, release on its
             # last -- the mouse reports a terminal sends with SGR reporting on.
