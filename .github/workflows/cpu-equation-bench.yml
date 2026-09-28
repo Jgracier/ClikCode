@@ -1,0 +1,24 @@
+name: CPU equation validation
+
+on:
+  push:
+    branches: [experiment/cpu-equation-ci]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Benchmark pinned GGUF models on a different CPU
+        run: bash .github/bench/run-cpu-equation.sh
+      - name: Preserve measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-equation-${{ github.run_id }}
+          path: result/
+          retention-days: 7
