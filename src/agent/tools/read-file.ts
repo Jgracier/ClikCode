@@ -3,6 +3,7 @@ import path from 'node:path';
 import { OUTPUT_CAPS } from '../security.js';
 import { defineTool } from '../tool-contract.js';
 import { displayPath, IMAGE_EXTENSIONS, looksBinary, resolveForRead } from './fs-helpers.js';
+import { isNotebookPath, parseNotebook, renderNotebook } from './notebook.js';
 
 interface ReadFileArgs { path: string; offset?: number; limit?: number }
 
@@ -39,6 +40,17 @@ export const readFileTool = defineTool<ReadFileArgs>({
     ctx.session.readFiles.set(resolved.real, { mtimeMs: stat.mtimeMs, size: stat.size });
     const text = buffer.toString('utf8');
     if (!text) return { output: `${shown} is empty.` };
+    // A notebook reads as its cells (with the ids notebook_edit uses), not
+    // as JSON whose outputs can be megabytes of base64 images.
+    if (isNotebookPath(resolved.real)) {
+      try {
+        const rendered = renderNotebook(parseNotebook(text));
+        const budget = (ctx.outputCap ?? OUTPUT_CAPS.toolOutputBytes) - 200;
+        return { output: rendered.length > budget ? `${rendered.slice(0, budget)}\n\n[Notebook truncated: use grep to find a cell.]` : rendered };
+      } catch {
+        // fail-open-ok: a .ipynb that is not a valid notebook is shown as the text it is.
+      }
+    }
     const lines = text.split(/\r?\n/);
     if (lines[lines.length - 1] === '') lines.pop();
     const start = Math.max(1, args.offset ?? 1);

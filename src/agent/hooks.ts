@@ -21,6 +21,12 @@
  *     reason (stderr or the JSON's). A hook can never grant a permission.
  *   - PostToolUse: exit 2 (stderr) or `{"decision":"block","reason"}` is fed
  *     back to the model after the tool's own output.
+ *   - UserPromptSubmit: exit 2 / `decision: "block"` refuses the prompt with
+ *     the reason; plain stdout or `additionalContext` is added to it.
+ *   - SessionStart (matcher: `startup` or `resume`): stdout or
+ *     `additionalContext` is added to the first message.
+ *   - Stop: exit 2 / `decision: "block"` keeps the agent working, the reason
+ *     given to it; `stop_hook_active` is true on a turn a Stop hook continued.
  *   - Any other exit is a hook error: reported, never blocking. */
 
 import { spawn } from 'node:child_process';
@@ -32,7 +38,8 @@ import type { ToolRunResult } from './tool-contract.js';
 
 interface HookCommand { type?: string; command?: string; timeout?: number }
 interface HookGroup { matcher?: string; hooks?: HookCommand[] }
-type HookEvent = 'PreToolUse' | 'PostToolUse';
+type HookEvent = 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop';
+const HOOK_EVENTS: readonly HookEvent[] = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'SessionStart', 'Stop'];
 export type HookConfig = Partial<Record<HookEvent, HookGroup[]>>;
 
 /** ClikCode's tool names as Claude Code names them. MCP tools share Claude's `mcp__server__tool` form. */
@@ -42,6 +49,7 @@ const CLAUDE_TOOL_NAMES: Record<string, string> = {
   list_dir: 'LS', glob: 'Glob', grep: 'Grep',
   web_fetch: 'WebFetch', web_search: 'WebSearch',
   todo_write: 'TodoWrite', task: 'Task', skill: 'Skill', exit_plan_mode: 'ExitPlanMode',
+  ask_user: 'AskUserQuestion', notebook_edit: 'NotebookEdit',
 };
 
 export function claudeToolName(name: string): string {
@@ -50,8 +58,10 @@ export function claudeToolName(name: string): string {
 
 /** Claude's argument names: a file tool's `path` is `file_path`. */
 function claudeToolInput(name: string, args: Record<string, unknown>): Record<string, unknown> {
-  if (!['read_file', 'write_file', 'edit_file', 'multi_edit'].includes(name) || typeof args.path !== 'string') return args;
+  if (typeof args.path !== 'string') return args;
   const { path: filePath, ...rest } = args;
+  if (name === 'notebook_edit') return { notebook_path: filePath, ...rest };
+  if (!['read_file', 'write_file', 'edit_file', 'multi_edit'].includes(name)) return args;
   return { file_path: filePath, ...rest };
 }
 
@@ -92,7 +102,7 @@ export async function readClaudeHooks(cwd: string, home: string = homedir()): Pr
   ];
   const merged: HookConfig = {};
   for (const config of await Promise.all(files.map(readHookFile))) {
-    for (const event of ['PreToolUse', 'PostToolUse'] as const) {
+    for (const event of HOOK_EVENTS) {
       const groups = config?.[event];
       if (Array.isArray(groups)) merged[event] = [...(merged[event] ?? []), ...groups];
     }
@@ -136,14 +146,38 @@ function blockReason(run: HookRun, event: HookEvent): string | undefined {
   return undefined;
 }
 
+/** Context a hook adds: `hookSpecificOutput.additionalContext`, else plain stdout on exit 0. */
+function addedContext(run: HookRun): string | undefined {
+  if (run.code !== 0) return undefined;
+  const text = run.stdout.trim();
+  if (!text) return undefined;
+  try {
+    const out = JSON.parse(text) as { hookSpecificOutput?: { additionalContext?: string } };
+    return out.hookSpecificOutput?.additionalContext?.trim() || undefined;
+  } catch {
+    // fail-open-ok: plain stdout is the context itself, as in Claude Code.
+    return text;
+  }
+}
+
 /** The loop's hooks for this config, or undefined when it declares none. */
 export function toolHooksFrom(config: HookConfig, onError?: (message: string) => void): {
   preToolUse?(call: ModelToolCall, info: { sessionId: string; cwd: string }): Promise<{ deny?: string } | void>;
   postToolUse?(call: ModelToolCall, result: ToolRunResult, info: { sessionId: string; cwd: string }): Promise<{ output?: string } | void>;
+  userPromptSubmit?(prompt: string, info: { sessionId: string; cwd: string }): Promise<{ block?: string; context?: string } | void>;
+  sessionStart?(info: { sessionId: string; cwd: string; source: 'startup' | 'resume' }): Promise<{ context?: string } | void>;
+  stop?(info: { sessionId: string; cwd: string; stopHookActive: boolean }): Promise<{ continueWith?: string } | void>;
 } | undefined {
   const pre = config.PreToolUse ?? [];
   const post = config.PostToolUse ?? [];
-  if (!pre.length && !post.length) return undefined;
+  const submit = config.UserPromptSubmit ?? [];
+  const start = config.SessionStart ?? [];
+  const stop = config.Stop ?? [];
+  if (!pre.length && !post.length && !submit.length && !start.length && !stop.length) return undefined;
+  /** Every command hook of groups whose matcher names `subject`; `undefined`
+   * ignores matchers (UserPromptSubmit and Stop have none in Claude Code). */
+  const hooksOf = (groups: HookGroup[], subject?: string) =>
+    commandsFor(subject === undefined ? groups.map((group) => ({ ...group, matcher: '' })) : groups, subject ?? '');
   const commandsFor = (groups: HookGroup[], tool: string) =>
     groups.filter((group) => hookMatches(group.matcher, tool)).flatMap((group) => group.hooks ?? [])
       .filter((hook) => (hook.type ?? 'command') === 'command' && typeof hook.command === 'string' && hook.command.trim());
@@ -180,6 +214,43 @@ export function toolHooksFrom(config: HookConfig, onError?: (message: string) =>
           tool_response: { output: result.output, isError: result.isError === true },
         }, info.cwd);
         return feedback ? { output: `${result.output}\n\n[PostToolUse hook] ${feedback}` } : undefined;
+      },
+    } : {}),
+    ...(submit.length ? {
+      async userPromptSubmit(prompt, info) {
+        const contexts: string[] = [];
+        for (const hook of hooksOf(submit)) {
+          const outcome = await runHookCommand(hook.command!, { session_id: info.sessionId, cwd: info.cwd, hook_event_name: 'UserPromptSubmit', prompt }, info.cwd, Math.max(1, hook.timeout ?? 60));
+          const block = blockReason(outcome, 'UserPromptSubmit');
+          if (block) return { block };
+          const context = addedContext(outcome);
+          if (context) contexts.push(context);
+          else if (outcome.code !== 0) onError?.(`UserPromptSubmit hook \`${hook.command}\` failed (exit ${outcome.code ?? 'none'}): ${outcome.stderr.trim().slice(0, 300)}`);
+        }
+        return contexts.length ? { context: contexts.join('\n\n') } : undefined;
+      },
+    } : {}),
+    ...(start.length ? {
+      async sessionStart(info) {
+        const contexts: string[] = [];
+        for (const hook of hooksOf(start, info.source)) {
+          const outcome = await runHookCommand(hook.command!, { session_id: info.sessionId, cwd: info.cwd, hook_event_name: 'SessionStart', source: info.source }, info.cwd, Math.max(1, hook.timeout ?? 60));
+          const context = addedContext(outcome);
+          if (context) contexts.push(context);
+          else if (outcome.code !== 0) onError?.(`SessionStart hook \`${hook.command}\` failed (exit ${outcome.code ?? 'none'}): ${outcome.stderr.trim().slice(0, 300)}`);
+        }
+        return contexts.length ? { context: contexts.join('\n\n') } : undefined;
+      },
+    } : {}),
+    ...(stop.length ? {
+      async stop(info) {
+        for (const hook of hooksOf(stop)) {
+          const outcome = await runHookCommand(hook.command!, { session_id: info.sessionId, cwd: info.cwd, hook_event_name: 'Stop', stop_hook_active: info.stopHookActive }, info.cwd, Math.max(1, hook.timeout ?? 60));
+          const reason = blockReason(outcome, 'Stop');
+          if (reason) return { continueWith: reason };
+          if (outcome.code !== 0) onError?.(`Stop hook \`${hook.command}\` failed (exit ${outcome.code ?? 'none'}): ${outcome.stderr.trim().slice(0, 300)}`);
+        }
+        return undefined;
       },
     } : {}),
   };

@@ -353,6 +353,43 @@ describe('runGatewayHarnessTurn', () => {
     expect(prompts).toHaveLength(1);
   });
 
+  it('ends the turn on an ask_user question, whose answer is the next message', async () => {
+    const h = harness([
+      { toolCalls: [{ name: 'ask_user', args: { question: 'Which database?', options: ['Postgres', 'SQLite'] } }] },
+      { text: 'should not run' },
+    ]);
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(result.stopReason).toBe('completed');
+    expect(result.text).toBe('Which database?\n\n1. Postgres\n2. SQLite\n\nReply with a number, or in your own words.');
+    expect(h.client.requests).toHaveLength(1);
+  });
+
+  it('refuses a prompt a UserPromptSubmit hook blocks, and adds the context one returns', async () => {
+    const blocked = harness([{ text: 'never' }], { hooks: { userPromptSubmit: async () => ({ block: 'no deploys on Friday' }) } });
+    const refused = await runGatewayHarnessTurn(blocked.input);
+    expect(refused).toMatchObject({ isError: true, text: 'Your message was blocked by a UserPromptSubmit hook: no deploys on Friday' });
+    expect(blocked.client.requests).toHaveLength(0);
+
+    const enriched = harness([{ text: 'ok' }], {
+      hooks: { userPromptSubmit: async () => ({ context: 'branch: main' }), sessionStart: async () => ({ context: 'on-call: ana' }) },
+    });
+    await runGatewayHarnessTurn(enriched.input);
+    const first = enriched.client.requests[0]!.items.find((item) => item.type === 'text' && item.role === 'user');
+    expect(first?.type === 'text' && first.text).toMatch(/<hook-context>\non-call: ana\n\nbranch: main\n<\/hook-context>/);
+  });
+
+  it('lets a Stop hook send the agent back to work, a bounded number of times', async () => {
+    let asked = 0;
+    const h = harness([{ text: 'done' }, { text: 'ran the tests' }, { text: 'x' }, { text: 'y' }, { text: 'z' }], {
+      hooks: { stop: async ({ stopHookActive }) => { asked += 1; return stopHookActive && asked > 1 ? undefined : { continueWith: 'run the tests first' }; } },
+    });
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(result.stopReason).toBe('completed');
+    expect(result.text).toContain('ran the tests');
+    const nudge = h.client.requests[1]!.items.at(-1);
+    expect(nudge?.type === 'text' && nudge.text).toBe('[Stop hook] run the tests first');
+  });
+
   it('plan mode hides write/exec tools and unlocks them once the plan is approved', async () => {
     const exits: string[] = [];
     const h = harness([
