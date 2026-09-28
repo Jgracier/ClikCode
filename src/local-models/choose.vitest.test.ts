@@ -355,8 +355,17 @@ describe('ranking and choice', () => {
     const memoryOnly = fitModel(small, budget);
     const ranked = rankModels([small], ZEN4, budget, {})[0]!;
     expect(memoryOnly.context).toBeGreaterThan(65_536);
-    expect(ranked.fit.context).toBe(16_384);
+    expect(ranked.fit.context).toBe(32_768);
     expect(ranked.speed.generatePerSecond).toBeLessThan(8);
+  });
+
+  it('falls back to 16K when the 32K working window would consume the buffer', () => {
+    const small = model('qwen3.5-4b');
+    const unlimited = { ramBytes: 1e12, bufferBytes: 0, ramReserveBytes: 0 };
+    const at16 = fitModel(small, unlimited, { context: 16_384 });
+    const at32 = fitModel(small, unlimited, { context: 32_768 });
+    const tight = { ramBytes: (at16.needBytes + at32.needBytes) / 2, bufferBytes: 0, ramReserveBytes: 0 };
+    expect(rankModels([small], ZEN4, tight, {})[0]!.fit).toMatchObject({ fits: true, context: 16_384 });
   });
 
   it('offers the best model that meets the bar first, slow ones after, misfits last', () => {
@@ -413,10 +422,20 @@ describe('ranking and choice', () => {
     expect(() => chooseModel(ranked, 'no-such-model')).toThrow(/not a ClikCode Local model/);
   });
 
-  it('falls back to the fastest fitting model, with a notice, when none meets the bar', () => {
+  it('falls back to the best coding model near the quickest, with a notice, when none meets the bar', () => {
     const slowBox: HardwareProfile = { ...ZEN4, physicalCores: 2, logicalCores: 4 };
     const choice = chooseModel(rankModels(LOCAL_MODEL_CATALOG, slowBox, budget, {}));
-    expect(choice.notice).toMatch(/quickest that fits/);
+    expect(choice.notice).toMatch(/near the quickest that fits/);
+  });
+
+  it('does not sacrifice coding quality for a two-second first-reply estimate difference', () => {
+    const measurements = {
+      'gemma-4-26b-a4b': { promptPerSecond: 99.16, generatePerSecond: 15.91, toolCalls: true, at: '' },
+      'ornith-1.5-35b-a3b': { promptPerSecond: 80.92, generatePerSecond: 17.86, toolCalls: true, at: '' },
+    };
+    const ranked = rankModels([model('gemma-4-26b-a4b'), model('ornith-1.5-35b-a3b')], ZEN4, budget, measurements);
+    expect(ranked[0]!.model.id).toBe('ornith-1.5-35b-a3b');
+    expect(ranked[0]!.firstReply.long - ranked[1]!.firstReply.long).toBeLessThan(3);
   });
 });
 

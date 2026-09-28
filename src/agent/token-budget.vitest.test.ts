@@ -308,7 +308,7 @@ describe('context profiles', () => {
     expect(new Set(seen)).toEqual(new Set(['full']));
     seen.length = 0;
     const cpu = measure(await runSession({ sessionId: 'auto-cpu', hints: { contextWindow: 32_768, promptPerSecond: 70 }, extraTools: syntheticMcpTools(), onUsage }));
-    expect(new Set(seen)).toEqual(new Set(['lean']));
+    expect(new Set(seen)).toEqual(new Set(['minimal']));
     expect(hosted.firstStep.tools - cpu.firstStep.tools).toBeGreaterThan(7_000);
   });
 

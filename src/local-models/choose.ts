@@ -335,16 +335,28 @@ function fitForConversation(
   const memoryFit = fitModel(model, budget, { footprints });
   if (!memoryFit.fits || memoryFit.placement !== 'cpu') return memoryFit;
   let smallest = memoryFit;
+  let workingWindow: Fit | undefined;
+  // A 16K window compacts a coding task after ~13K tokens. On Ornith the
+  // repeated compaction made seven-task runs slower despite faster tokens:
+  // 32K kept the same 6/7 pass rate and cut total time ~13%. Do not trade
+  // that working room away merely to improve a single deep-token estimate.
+  const workingMinimum = Math.min(32_768, model.maxContext);
   for (const context of contextsToTry(model)) {
     const fit = fitModel(model, budget, { context, footprints });
     if (!fit.fits || fit.placement !== 'cpu') continue;
+    // fitModel prefers f16 across *all* contexts before considering q8_0.
+    // Its explicit-context call can fall back to q8_0 at a larger window;
+    // never undo that global choice while tuning context for speed.
+    if (fit.cacheType !== memoryFit.cacheType) continue;
     const room = budget.ramBytes - fit.needBytes;
     if (context > model.defaultContext && room < PROMPT_CACHE_ALLOWANCE) continue;
     smallest = fit;
+    if (context >= workingMinimum) workingWindow = fit;
     const speed = speedAtContext(model, hardware, fit, measured, budget.gpu?.backend);
-    if (estimatedTurnSeconds(speed) * DEEP_TIME_MARGIN <= MAX_DEEP_TURN_SECONDS) return fit;
+    if (estimatedTurnSeconds(speed) * DEEP_TIME_MARGIN <= MAX_DEEP_TURN_SECONDS
+      && (context >= workingMinimum || !workingWindow)) return fit;
   }
-  return smallest;
+  return workingWindow ?? smallest;
 }
 
 export function estimateSpeed(model: CatalogModel, hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>, fit: Pick<Fit, 'placement' | 'gpuBytes' | 'needBytes'>, gpuBackend?: string): SpeedEstimate {
@@ -396,9 +408,11 @@ export interface RankedModel {
 }
 
 /** Every catalog model in the order it should be offered: models that fit
- * and meet both the first-reply and deep-turn targets, best quality first;
- * then models that fit but are slow, quickest first reply first; then models
- * that do not fit, smallest first. A
+ * and meet both response targets, best quality first; then models within
+ * 15% of the quickest fitting tool-capable model, best quality first. A
+ * difference smaller than the CPU equation's held-out error cannot justify
+ * sacrificing coding quality. Clearly slower, tool-incapable, and unfit
+ * models follow in that order. A
  * measurement stands in for the estimate wherever there is one. */
 export function rankModels(
   catalog: readonly CatalogModel[], hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>, budget: MemoryBudget,
@@ -420,10 +434,21 @@ export function rankModels(
       ...(measured ? { measured } : {}),
     };
   });
-  const group = (row: RankedModel): number => (row.passes ? 0 : row.fit.fits ? 1 : 2);
+  const responseCost = (row: RankedModel): number => Math.max(
+    row.firstReply.long / MAX_FIRST_REPLY_SECONDS,
+    estimatedTurnSeconds(row.speed) * DEEP_TIME_MARGIN / MAX_DEEP_TURN_SECONDS,
+  );
+  const viable = ranked.filter((row) => row.fit.fits && row.measured?.toolCalls !== false);
+  const quickestFirst = Math.min(...viable.map((row) => row.firstReply.long));
+  const quickestDeep = Math.min(...viable.map((row) => estimatedTurnSeconds(row.speed)));
+  const group = (row: RankedModel): number => row.passes ? 0
+    : !row.fit.fits ? 4
+      : row.measured?.toolCalls === false ? 3
+        : row.firstReply.long <= quickestFirst * 1.15
+          && estimatedTurnSeconds(row.speed) <= quickestDeep * 1.15 ? 1 : 2;
   return ranked.sort((left, right) => group(left) - group(right)
-    || (group(left) === 0 ? right.model.quality - left.model.quality
-      : group(left) === 1 ? left.firstReply.long - right.firstReply.long
+    || (group(left) <= 1 ? right.model.quality - left.model.quality
+      : group(left) <= 3 ? responseCost(left) - responseCost(right)
         : left.fit.needBytes - right.fit.needBytes));
 }
 
@@ -432,7 +457,7 @@ export interface Choice { row: RankedModel; notice?: string }
 /** The model to run. The user's explicit pick always wins over the
  * ranking -- a slow model they chose is their call -- but never over the
  * budget. With no pick: the best model that meets the bar, or, when none
- * does, the fastest that fits, with a notice saying so. */
+ * does, the best quality near the quickest, with a notice saying so. */
 export function chooseModel(ranked: readonly RankedModel[], pick?: string): Choice {
   if (pick) {
     const row = ranked.find((item) => item.model.id === pick);
@@ -451,6 +476,7 @@ export function chooseModel(ranked: readonly RankedModel[], pick?: string): Choi
   return {
     row: best,
     notice: `No local model is estimated to meet both response-speed targets here; `
-      + `${best.model.label} is the quickest that fits (about ${Math.round(best.firstReply.brief)}–${Math.round(best.firstReply.long)} seconds for its first reply after loading).`,
+      + `${best.model.label} is the highest-ranked coding model near the quickest that fits `
+      + `(about ${Math.round(best.firstReply.brief)}–${Math.round(best.firstReply.long)} seconds for its first reply after loading).`,
   };
 }
