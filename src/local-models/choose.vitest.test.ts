@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { memoryBudget, memoryBuffer, startMargin, vramReserve } from './budget';
 import { LOCAL_MODEL_CATALOG, catalogModel, type CatalogModel } from './catalog';
 import {
-  chooseCacheType, chooseModel, contextsToTry, estimateSpeed, fitModel, kvCacheBytes, measuredNeed, meetsBar, rankModels, MIN_CONTEXT,
+  chooseCacheType, chooseModel, contextsToTry, estimateSpeed, firstReplySeconds, fitModel, kvCacheBytes, measuredNeed, meetsBar, rankModels, MIN_CONTEXT,
   PROMPT_CACHE_ALLOWANCE, type Footprint,
 } from './choose';
 import type { HardwareProfile } from './hardware';
@@ -312,6 +312,11 @@ describe('fit from a measured footprint', () => {
 });
 
 describe('speed estimate', () => {
+  it('accounts for a full cold agent prompt and a long generated reply', () => {
+    const first = firstReplySeconds({ promptPerSecond: 99.16, generatePerSecond: 15.91 });
+    expect(first.brief).toBeCloseTo(59.2, 0);
+    expect(first.long).toBeCloseTo(103.2, 0);
+  });
   it('lands within 15% of what Ornith measured on the Zen 4 (97 reading, 20 writing)', () => {
     const ornith = model('ornith-1.5-35b-a3b');
     const estimate = estimateSpeed(ornith, ZEN4, fitModel(ornith, memoryBudget(ZEN4)));
@@ -337,6 +342,14 @@ describe('speed estimate', () => {
 describe('ranking and choice', () => {
   const budget = memoryBudget(ZEN4);
 
+  it('does not recommend the measured Gemma turn as quick', () => {
+    const measured = { 'gemma-4-26b-a4b': { promptPerSecond: 99.16, generatePerSecond: 15.91, toolCalls: true, at: '' } };
+    const gemma = rankModels([model('gemma-4-26b-a4b')], ZEN4, budget, measured)[0]!;
+    expect(gemma.fit.fits).toBe(true);
+    expect(gemma.firstReply.long).toBeGreaterThan(90);
+    expect(gemma.passes).toBe(false);
+  });
+
   it('sizes CPU context by a deep turn instead of taking the largest window memory permits', () => {
     const small = model('qwen3.5-4b');
     const memoryOnly = fitModel(small, budget);
@@ -348,7 +361,7 @@ describe('ranking and choice', () => {
 
   it('offers the best model that meets the bar first, slow ones after, misfits last', () => {
     const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, {});
-    expect(ranked[0]!.model.id).toBe('ornith-1.5-35b-a3b-q6');
+    expect(ranked[0]!.model.id).toBe('ornith-1.5-35b-a3b');
     const passing = ranked.filter((row) => row.passes).map((row) => row.model.quality);
     expect(passing).toEqual([...passing].sort((left, right) => right - left));
     const firstSlow = ranked.findIndex((row) => !row.passes);
@@ -356,21 +369,22 @@ describe('ranking and choice', () => {
     expect(ranked.find((row) => row.model.id === 'qwen3.8-27b')!.passes).toBe(false);
   });
 
-  it('takes the most precise build of the best model that fits the deep-turn target', () => {
-    // The Zen 4's ~34 GiB takes Ornith at Q6_K but not at Q8_0; with less
-    // free, the Q4_K_M. More RAM alone does not make Q8 fast enough for
-    // the deep-turn bar; on a 48 GB card, Qwen3.8 27B at Q8_0.
+  it('chooses the faster build when a higher precision one misses the first-reply target', () => {
+    // The Zen 4 has room for Ornith at Q6_K, but Q4_K_M reads and writes
+    // the opening turn faster. More RAM cannot speed up Q6_K on this CPU.
+    // On the 48 GB card, the faster Q4 build wins because Q8_0 is partly
+    // offloaded and misses the first-reply target.
     const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, {});
     expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b-q8')!.fit.fits).toBe(false);
     const busy = memoryBudget({ ...ZEN4, availableRamBytes: 32 * GIB });
     expect(rankModels(LOCAL_MODEL_CATALOG, ZEN4, busy, {})[0]!.model.id).toBe('ornith-1.5-35b-a3b');
     const bigRam = memoryBudget({ ...ZEN4, totalRamBytes: 96 * GIB, availableRamBytes: 80 * GIB });
-    expect(rankModels(LOCAL_MODEL_CATALOG, ZEN4, bigRam, {})[0]!.model.id).toBe('ornith-1.5-35b-a3b-q6');
+    expect(rankModels(LOCAL_MODEL_CATALOG, ZEN4, bigRam, {})[0]!.model.id).toBe('ornith-1.5-35b-a3b');
     const card: HardwareProfile = {
       ...ZEN4, gpus: [{ name: 'RTX 6000 Ada', vendor: 'nvidia', backend: 'cuda', vramBytes: 48 * GIB, freeVramBytes: 47 * GIB, unified: false, integrated: false }],
     };
     const top = rankModels(LOCAL_MODEL_CATALOG, card, memoryBudget(card), {})[0]!;
-    expect(top.model.id).toBe('qwen3.8-27b-q8');
+    expect(top.model.id).toBe('qwen3.8-27b');
     expect(top.fit.placement).toBe('gpu');
   });
 
@@ -391,7 +405,9 @@ describe('ranking and choice', () => {
 
   it('keeps the user\'s pick even when it is slow, but not when it does not fit', () => {
     const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, {});
-    expect(chooseModel(ranked, 'qwen3.8-27b').row.model.id).toBe('qwen3.8-27b');
+    const chosen = chooseModel(ranked, 'qwen3.8-27b');
+    expect(chosen.row.model.id).toBe('qwen3.8-27b');
+    expect(chosen.notice).toMatch(/first reply after loading/);
     const small = rankModels(LOCAL_MODEL_CATALOG, ZEN4, { ramBytes: 6 * GIB, ramReserveBytes: 2 * GIB }, {});
     expect(() => chooseModel(small, 'ornith-1.5-35b-a3b')).toThrow(/does not fit/);
     expect(() => chooseModel(ranked, 'no-such-model')).toThrow(/not a ClikCode Local model/);
@@ -400,7 +416,7 @@ describe('ranking and choice', () => {
   it('falls back to the fastest fitting model, with a notice, when none meets the bar', () => {
     const slowBox: HardwareProfile = { ...ZEN4, physicalCores: 2, logicalCores: 4 };
     const choice = chooseModel(rankModels(LOCAL_MODEL_CATALOG, slowBox, budget, {}));
-    expect(choice.notice).toMatch(/fastest that fits/);
+    expect(choice.notice).toMatch(/quickest that fits/);
   });
 });
 

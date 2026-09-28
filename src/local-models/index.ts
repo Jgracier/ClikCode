@@ -408,7 +408,7 @@ export interface LocalModelChoice {
   label: string;
   detail: string;
   fits: boolean;
-  /** Passes the speed bar (measured, or estimated where not yet run). */
+  /** Passes the first-reply and deep-turn speed bars. */
   recommended: boolean;
   downloadBytes: number;
 }
@@ -419,7 +419,7 @@ function placementLabel(row: RankedModel, view: MachineView): string {
 }
 
 /** Pinned catalog and remote-header rows, filtered to models that fit memory.
- * Deep-conversation speed decides which are recommended and their order. */
+ * First-reply and deep-conversation speed decide recommendation and order. */
 export async function localModelChoices(): Promise<LocalModelChoice[]> {
   const initial = await viewMachine();
   await discoverHuggingFaceModels(initial.budget.ramBytes + (initial.budget.gpu?.bytes ?? 0));
@@ -432,7 +432,9 @@ export async function localModelChoices(): Promise<LocalModelChoice[]> {
     const speed = row.measured?.promptPerSecond
       ? `${basis}: ${Math.round(row.speed.promptPerSecond)} tok/s reading, ${Math.round(row.speed.generatePerSecond)} writing (calibrated after a short run)${row.measured.toolCalls ? '' : ', no tool calls'}`
       : `${basis}: ${Math.round(row.speed.promptPerSecond)} tok/s reading, ${Math.round(row.speed.generatePerSecond)} writing`;
-    const parts = [placementLabel(row, view), speed, `${Math.round(row.fit.context / 1024)}K context`,
+    const first = row.firstReply;
+    const firstLabel = `first reply ~${Math.round(first.brief)}–${Math.round(first.long)}s after loading`;
+    const parts = [placementLabel(row, view), firstLabel, speed, `${Math.round(row.fit.context / 1024)}K context`,
       ...(row.model.discovered ? [`Hugging Face ${row.model.weights.repo}`, 'tool use unverified'] : [])];
     parts.push(downloadBytes ? `${formatBytes(downloadBytes)} download` : 'downloaded');
     rows.push({ id: row.model.id, label: row.model.label, detail: parts.join(' · '), fits: row.fit.fits, recommended: row.passes, downloadBytes });
