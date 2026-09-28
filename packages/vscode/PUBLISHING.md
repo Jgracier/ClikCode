@@ -30,7 +30,7 @@ pnpm run package                             # -> packages/vscode/clikcode-<vers
 ```
 
 `vsce ls` must list exactly: `CHANGELOG.md`, `LICENSE`, `README.md`, `package.json`,
-`dist/extension.js`, `dist/webview.js`, `media/activity.svg`, `media/chat.css`, `media/icon.png`.
+`dist/extension.js`, `dist/webview.js`, `media/activity.svg`, `media/editor-light.svg`, `media/editor-dark.svg`, `media/chat.css`, `media/icon.png`.
 
 Optional smoke test of the .vsix in your own VS Code:
 
