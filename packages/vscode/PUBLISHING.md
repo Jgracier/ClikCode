@@ -1,89 +1,130 @@
-# Publishing the ClikCode VS Code extension
+# Publishing ClikCode and the VS Code extension
 
-Nothing here has been published. The publisher id and both access tokens are yours to create;
-this is the whole procedure, in order.
+Both artifacts of this repository are published by **ClikDeploy**, automatically. Nobody runs
+`npm publish`, `vsce publish` or `ovsx publish` by hand in the normal flow, and the GitHub workflow
+(`.github/workflows/test.yml`) only tests: a second publisher would race ClikDeploy for version
+numbers.
 
-## 0. Before the first release
+| Artifact | Where | Id |
+| --- | --- | --- |
+| CLI | npm, plus a GitHub release `v<version>` with `clikcode-<version>.tgz` and `clikcode.tgz` | `clikcode` |
+| Extension | Visual Studio Marketplace and Open VSX | `clikcode.clikcode` (publisher and namespace `clikcode`) |
 
-1. **Choose the publisher id.** `package.json` has `"publisher": "clikcode"` as a placeholder.
-   Replace it with the id you create in step 1 (Marketplace ids are global and first-come; if
-   `clikcode` is free, keep it). The extension's full id becomes `<publisher>.clikcode`.
-2. **README images.** The screenshot is linked as
-   `https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/chat.png`.
-   It shows on the Marketplace only if the GitHub repository is public. If it is private, host the
-   image somewhere public and change the link in `README.md`.
-3. Bump `version` in `package.json` and add a `CHANGELOG.md` entry for every later release.
+## Tokens
 
-## 1. Build and check the package
+The npm token, the Marketplace personal access token (Azure DevOps, scope *Marketplace → Manage*,
+all accessible organizations) and the Open VSX access token live in the **ClikDeploy admin console →
+Resources → Platform**. Rotate them there; nothing in this repository holds a token.
 
-From the repository root:
+## When a release happens
+
+On ClikDeploy's cadence, or at once with **Publish now** in the admin console. A run publishes only
+what changed since that artifact's last release:
+
+- **Extension**: `packages/vscode/**`, `src/ide/**`, `src/worker/protocol.ts`.
+- **CLI**: everything else except `*.md` (and except `packages/vscode/**`).
+
+When both changed, the CLI is published first and the extension after it in the same run, so an
+extension never reaches users before the ClikCode it needs.
+
+## Versions
+
+`version` in the root `package.json` and in `packages/vscode/package.json` holds **MAJOR.MINOR**
+only; the patch digit in the file is ignored. ClikDeploy computes the patch, stamps the full version
+into `package.json` in its own build workspace (never committed back), and publishes that. The CLI
+and the extension are versioned independently.
+
+- To start a new release line, bump the minor (or major) here, e.g. `0.1.0` → `0.2.0`.
+- Never bump the patch by hand.
+- `clikcode --version` prints the stamped version: `scripts/build.mjs` injects `package.json`'s
+  version at build time, and `pnpm test:pack` checks the installed binary reports it.
+
+## What ClikDeploy runs
+
+CLI, from the repository root:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm type-check
+pnpm test:all
+pnpm build:strict
+pnpm test:pack          # packs, npm install -g's the tarball into a clean prefix, runs
+                        # clikcode --version, --help, ide-bridge --help and doctor
+# stamp the version into package.json, then:
+npm publish --access public
+# then the GitHub release v<version> with clikcode-<version>.tgz and clikcode.tgz
+```
+
+Extension:
+
+```sh
+pnpm --dir packages/vscode type-check
+pnpm --dir packages/vscode test
+pnpm --dir packages/vscode run package    # must print no warnings
+# stamp the version into packages/vscode/package.json, package again, then:
+vsce publish --no-dependencies --packagePath clikcode-<version>.vsix
+ovsx publish clikcode-<version>.vsix
+```
+
+`vsce ls --no-dependencies` must list exactly: `CHANGELOG.md`, `LICENSE`, `README.md`,
+`package.json`, `dist/extension.js`, `dist/webview.js`, `media/activity.svg`, `media/chat.css`,
+`media/editor-dark.svg`, `media/editor-light.svg`, `media/icon.png` (`.vscodeignore` is an
+allowlist).
+
+## Extension ↔ ClikCode compatibility
+
+The extension runs the user's installed ClikCode (`clikcode ide-bridge`), never a bundled copy. The
+bridge protocol's version and the oldest one the extension accepts are in one place,
+`src/ide/protocol-version.ts`; the bridge sends its version in the `ready` event and the extension
+checks it (`packages/vscode/src/compat.ts`):
+
+- ClikCode too old (no `ide-bridge`, or an older protocol): the chat shows **Update ClikCode**, which
+  runs `npm install -g clikcode@latest` (the GitHub release tgz is offered as the fallback).
+- ClikCode newer than the extension knows: the chat shows **Update Extension**.
+
+Bump `IDE_PROTOCOL.version` only for a change an older extension cannot handle; new optional fields
+and new event types need no bump.
+
+## Before a release reaches users
+
+Worth doing locally for a change to the extension:
 
 ```sh
 pnpm install
-node scripts/build.mjs                       # ClikCode itself, for the integration test
-cd packages/vscode
-pnpm run type-check
-pnpm test                                    # unit tests
-xvfb-run -a pnpm run test:integration        # real VS Code, real turns (drop xvfb-run with a display)
-pnpm run package                             # -> packages/vscode/clikcode-<version>.vsix
-./node_modules/.bin/vsce ls --no-dependencies
+node scripts/build.mjs                                  # ClikCode itself, for the integration test
+xvfb-run -a pnpm --dir packages/vscode test:integration # real VS Code, real turns (drop xvfb-run with a display)
 ```
 
-`vsce ls` must list exactly: `CHANGELOG.md`, `LICENSE`, `README.md`, `package.json`,
-`dist/extension.js`, `dist/webview.js`, `media/activity.svg`, `media/editor-light.svg`, `media/editor-dark.svg`, `media/chat.css`, `media/icon.png`.
+Keep a `CHANGELOG.md` entry per release line. The README screenshot is served from
+`https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/chat.png`,
+which works because the repository is public.
 
-Optional smoke test of the .vsix in your own VS Code:
+## Manual fallback
+
+Only if ClikDeploy cannot publish, and never while it is publishing the same artifact. Pick a
+version above the latest published one (`npm view clikcode version`; the Marketplace and Open VSX
+listings for the extension), stamp it locally without committing it, and:
 
 ```sh
-code --install-extension clikcode-<version>.vsix
-code --list-extensions --show-versions | grep clikcode
+# CLI, from the repository root
+npm pkg set version=<version>
+pnpm build:strict && pnpm test:pack
+npm publish --access public --//registry.npmjs.org/:_authToken=<npm-token>
+gh release create v<version> clikcode-<version>.tgz clikcode.tgz --title "ClikCode <version>"
+git checkout package.json
+
+# Extension
+cd packages/vscode
+npm pkg set version=<version>
+pnpm run package                                    # -> clikcode-<version>.vsix
+VSCE_PAT=<marketplace-token> ./node_modules/.bin/vsce publish --no-dependencies --packagePath clikcode-<version>.vsix
+./node_modules/.bin/ovsx publish clikcode-<version>.vsix -p <open-vsx-token>
+git checkout package.json
 ```
 
-## 2. Visual Studio Marketplace
+For the release assets, `npm pack` produces `clikcode-<version>.tgz`; copy it to `clikcode.tgz` as
+well (the name `releases/latest/download/clikcode.tgz` resolves to).
 
-1. Sign in at <https://dev.azure.com> with the Microsoft account that will own the extension and
-   create an organization if you have none.
-2. Create a Personal Access Token: *User settings → Personal access tokens → New Token*.
-   Organization: **All accessible organizations**. Scopes: *Custom defined → Marketplace →
-   **Manage***. Copy the token.
-3. Create the publisher at <https://marketplace.visualstudio.com/manage/createpublisher> with the
-   id you put in `package.json`.
-4. Publish the package you tested:
-
-   ```sh
-   cd packages/vscode
-   ./node_modules/.bin/vsce login <publisher>           # paste the token when asked
-   ./node_modules/.bin/vsce publish --no-dependencies --packagePath clikcode-<version>.vsix
-   ```
-
-   Or without storing the token: `VSCE_PAT=<token> ./node_modules/.bin/vsce publish --no-dependencies --packagePath clikcode-<version>.vsix`.
-5. The listing appears at `https://marketplace.visualstudio.com/items?itemName=<publisher>.clikcode`
-   after verification (usually minutes).
-
-## 3. Open VSX (VSCodium, Cursor, Windsurf, Gitpod, …)
-
-1. Sign in at <https://open-vsx.org> with GitHub and accept the Eclipse Foundation Open VSX
-   Publisher Agreement (profile settings; this needs an eclipse.org account linked to GitHub).
-2. Create an access token at <https://open-vsx.org/user-settings/tokens>.
-3. Create the namespace once — it must equal the `publisher` field:
-
-   ```sh
-   cd packages/vscode
-   ./node_modules/.bin/ovsx create-namespace <publisher> -p <open-vsx-token>
-   ```
-
-4. Publish the same .vsix:
-
-   ```sh
-   ./node_modules/.bin/ovsx publish clikcode-<version>.vsix -p <open-vsx-token>
-   ```
-
-5. Optional: claim namespace ownership (the "verified" badge) by opening an issue at
-   <https://github.com/EclipseFdn/open-vsx.org/issues> as the docs describe.
-
-## 4. After publishing
-
-- Tag the release: `git tag vscode-v<version> && git push origin vscode-v<version>`.
-- Users still need ClikCode itself (`npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`);
-  the extension offers that install when it is missing. An extension release that relies on a new
-  `ide-bridge` capability should go out after the ClikCode release that ships it.
+Listings: <https://www.npmjs.com/package/clikcode>,
+<https://marketplace.visualstudio.com/items?itemName=clikcode.clikcode>,
+<https://open-vsx.org/extension/clikcode/clikcode>.
