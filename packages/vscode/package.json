@@ -2,10 +2,12 @@
   "name": "clikcode",
   "displayName": "ClikCode",
   "description": "Chat with Claude Code, Codex, Gemini, Copilot, OpenCode and 20 more coding agents from one panel: resumable conversations, account switching when a usage limit hits, diff-reviewed approvals.",
+  "//version": "MAJOR.MINOR only: ClikDeploy computes the patch and stamps the full version into its own build copy before publishing, so the patch digit here is ignored. Bump the minor (or major) here for a new release line; never the patch. Versioned independently of the clikcode npm package.",
   "version": "0.1.0",
-  "//publisher": "PLACEHOLDER: replace `clikcode` with the Marketplace publisher id you create (see PUBLISHING.md). It must match on Open VSX too.",
   "publisher": "clikcode",
   "license": "MIT",
+  "pricing": "Free",
+  "qna": "https://github.com/Jgracier/ClikCode/issues",
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#16181d",
@@ -26,18 +28,30 @@
   "categories": [
     "AI",
     "Chat",
-    "Programming Languages",
+    "Machine Learning",
     "Other"
   ],
   "keywords": [
-    "ai",
-    "agent",
+    "clikcode",
     "claude code",
+    "claude",
     "codex",
     "gemini",
     "copilot",
     "opencode",
-    "coding assistant"
+    "qwen",
+    "cursor agent",
+    "ai agent",
+    "coding agent",
+    "multi-agent",
+    "ai",
+    "chat",
+    "coding assistant",
+    "llm",
+    "anthropic",
+    "openai",
+    "account switching",
+    "usage limits"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [

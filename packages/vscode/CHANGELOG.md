@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.1.0
+Releases are numbered MAJOR.MINOR.PATCH; the patch is assigned at publish time, so each
+section covers a release line.
+
+## 0.1
 
 First release.
 
@@ -14,3 +17,5 @@ First release.
 - Every ClikCode slash command, from the chat or the command palette.
 - Ask About Selection and Attach File, with the workspace folder as the chat's directory.
 - Status bar item showing the chat's harness and model.
+- Detects a ClikCode too old for the extension (or newer than it knows) and offers *Update ClikCode*
+  (`npm install -g clikcode@latest`) or an extension update.

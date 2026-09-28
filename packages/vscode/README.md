@@ -35,12 +35,15 @@ and keeps one conversation you can move between them.
 - **ClikCode** installed and on your `PATH`:
 
   ```sh
-  npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz
+  npm install -g clikcode
   ```
 
   The extension runs *your* installed ClikCode rather than a copy of its own, so the editor and the
   terminal always share one version, one set of accounts and one history. If ClikCode is missing,
-  the chat offers to install it.
+  the chat offers to install it; if it is too old for this extension, the chat says so and offers
+  *Update ClikCode* (`npm install -g clikcode@latest`). Without access to the npm registry, install
+  the same release from GitHub:
+  `npm install -g https://github.com/Jgracier/ClikCode/releases/latest/download/clikcode.tgz`.
 - **Node.js 22.12 or newer** for ClikCode. The extension uses `node` from your `PATH`, or VS Code's
   built-in Node.js when that is new enough, or the `clikcode.nodePath` setting.
 - At least one coding agent account. The first message offers to sign in to one.
