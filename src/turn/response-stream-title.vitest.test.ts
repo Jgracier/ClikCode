@@ -25,8 +25,13 @@ import { describe, expect, it } from 'vitest';
  * consolidation would always break.
  */
 describe('streamed answers go through the title filter', () => {
+  const turnSources = async (): Promise<string> => (await Promise.all(
+    ['vendor-turn.ts', 'direct-turn.ts', 'agent-turn.ts', 'platform-assistant-turn.ts']
+      .map((file) => readFile(new URL(file, import.meta.url), 'utf8')),
+  )).join('\n');
+
   it('has no onResponseDelta that writes the raw text to the screen', async () => {
-    const source = await readFile(new URL('./drive.ts', import.meta.url), 'utf8');
+    const source = await turnSources();
     const lines = source.split('\n');
     const offenders: string[] = [];
     for (const [index, line] of lines.entries()) {
@@ -44,7 +49,7 @@ describe('streamed answers go through the title filter', () => {
   });
 
   it('filters through titleStream wherever a delta is painted', async () => {
-    const source = await readFile(new URL('./drive.ts', import.meta.url), 'utf8');
+    const source = await turnSources();
     // Every painted value is produced by the title filter. Named variables
     // only -- a literal (the empty string that clears the slot for a retry)
     // is not a delta.
@@ -60,7 +65,7 @@ describe('streamed answers go through the title filter', () => {
   });
 
   it('routes every transport through the one shared delta emitter', async () => {
-    const source = await readFile(new URL('./drive.ts', import.meta.url), 'utf8');
+    const source = await turnSources();
     // The real invariant after consolidation: ONE filter site per execution
     // path, not one per transport. The three that remain are the vendor-CLI
     // path (where three transports now share a single emitter), the api-key

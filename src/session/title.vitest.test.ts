@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SESSION_TITLE_MAX, StreamingTitle, TITLE_REQUEST_ATTEMPTS, extractSessionTitle, normalizeSessionTitle,
-  refundTitleRequest, sessionTitleSource, shouldRequestTitle, titleStreamForAttempt, withTitleRequest,
+  prepareSessionTitle, sessionTitleSource, shouldRequestTitle, titleStreamForAttempt, withTitleRequest,
 } from './title.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition';
 
@@ -152,17 +152,19 @@ describe('an account switch mid-turn', () => {
   it('never re-asks after the one title request was spent', () => {
     const session = { name: undefined, titleAttempts: 1 };
     expect(shouldRequestTitle(session)).toBe(false);
-    refundTitleRequest(session);
-    expect(session.titleAttempts).toBe(0);
-    expect(shouldRequestTitle(session)).toBe(true);
+    expect(prepareSessionTitle(session, 'continue')).toEqual({ prompt: 'continue' });
+    expect(session.titleAttempts).toBe(1);
   });
 
-  it('never refunds below zero, and never re-asks a named chat', () => {
+  it('spends the request exactly once and leaves named chats alone', () => {
     const fresh = { name: undefined, titleAttempts: 0 };
-    refundTitleRequest(fresh);
-    expect(fresh.titleAttempts).toBe(0);
+    const first = prepareSessionTitle(fresh, 'fix the parser');
+    expect(first.prompt).toContain(OPEN);
+    expect(first.stream).toBeInstanceOf(StreamingTitle);
+    expect(fresh.titleAttempts).toBe(1);
+    expect(prepareSessionTitle(fresh, 'continue')).toEqual({ prompt: 'continue' });
     const named = { name: 'Prod Disk Cleanup', titleAttempts: TITLE_REQUEST_ATTEMPTS };
-    refundTitleRequest(named);
+    expect(prepareSessionTitle(named, 'continue')).toEqual({ prompt: 'continue' });
     expect(shouldRequestTitle(named)).toBe(false);
   });
 });

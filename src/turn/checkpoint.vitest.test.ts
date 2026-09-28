@@ -19,6 +19,32 @@ function session(): HarnessSession {
 }
 
 describe('durable turn checkpoints', () => {
+  it('persists the title and cleaned answer with the completed turn', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clikcode-complete-'));
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    try {
+      const { completeTurnCheckpoint, startTurnCheckpoint } = await import('./runtime.js');
+      const target = { ...session(), id: randomUUID(), attachments: ['/tmp/example.png'], shellNotes: [] };
+      const state = { v: 1, sessions: [target], accounts: [] } as never;
+      const checkpoint = await startTurnCheckpoint(state, target, 'Fix the parser', {});
+      const answer = await completeTurnCheckpoint(
+        target, checkpoint, '<clikcode-title>Parser Repair</clikcode-title>\nFixed it.',
+      );
+      expect(answer).toBe('Fixed it.');
+      const { readState } = await import('../session/state/read.js');
+      const saved = (await readState()).sessions.find((item) => item.id === target.id);
+      expect(saved?.name).toBe('Parser Repair');
+      expect(saved?.messages?.at(-1)).toEqual({ role: 'assistant', content: 'Fixed it.' });
+      expect(saved?.attachments).toEqual([]);
+      expect(saved?.pendingTurn).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_HOME;
+      else process.env.CLIKCODE_HOME = previous;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('makes a submitted prompt and streamed response portable before completion', () => {
     const target = session();
     beginPendingTurn(target, 'Continue the work', '2026-01-02T00:00:00.000Z');
