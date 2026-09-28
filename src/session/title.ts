@@ -9,9 +9,7 @@
  * Code names its own threads and records the name in its transcript -- that
  * one is used. Where it does not, the first turn asks for one: twenty
  * characters, on its own line, stripped out of the answer before anyone sees
- * it. A model that ignores the request leaves the chat unnamed and the next
- * turn asks again, which is a better outcome than a name that is really just
- * the first thing the user happened to type.
+ * it. A model that ignores the one request leaves the chat unnamed.
  */
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -40,6 +38,15 @@ export const TITLE_REQUEST_ATTEMPTS = 1;
 /** Whether this turn should carry an embedded title request. */
 export function shouldRequestTitle(session: Pick<HarnessSession, 'name' | 'titleAttempts'>): boolean {
   return !session.name && (session.titleAttempts ?? 0) < TITLE_REQUEST_ATTEMPTS;
+}
+
+/** Spend the conversation's single title request on this turn, if eligible. */
+export function prepareSessionTitle(
+  session: Pick<HarnessSession, 'name' | 'titleAttempts'>, prompt: string,
+): { prompt: string; stream?: StreamingTitle } {
+  if (!shouldRequestTitle(session)) return { prompt };
+  session.titleAttempts = (session.titleAttempts ?? 0) + 1;
+  return { prompt: withTitleRequest(prompt), stream: new StreamingTitle() };
 }
 
 /** Whether the prompt about to be sent asks for a name.
@@ -79,15 +86,6 @@ export function titleStreamForAttempt(
   // The request was already sent on the original attempt. A retry that replaces
   // it must not make the next user turn ask for a title again.
   return undefined;
-}
-
-/** Give back the request this turn spent, because the turn stopped being the
- * one that asked. An account switch mid-turn re-drives the vendor's own
- * thread with "carry on" and no longer carries the title request, so no title
- * can arrive -- and a chat that is still unnamed deserves to be asked again
- * on its next turn rather than quietly losing one of its two chances. */
-export function refundTitleRequest(session: Pick<HarnessSession, 'titleAttempts'>): void {
-  session.titleAttempts = Math.max(0, (session.titleAttempts ?? 1) - 1);
 }
 
 const OPEN = '<clikcode-title>';
