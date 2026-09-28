@@ -5,9 +5,11 @@
  *
  * `--production` minifies without source maps (what is packaged);
  * `--tests` also builds the integration test runner and suite into out/.
- * Protocol types come from ../../src/ide/protocol.ts and are erased here:
- * nothing of ClikCode itself is bundled -- the extension runs the user's
- * installed ClikCode (see src/runtime.ts for why).
+ * Protocol types come from ../../src/ide/protocol.ts and are erased here;
+ * the one value taken from ClikCode is IDE_PROTOCOL
+ * (../../src/ide/protocol-version.ts, which imports nothing). No ClikCode code
+ * is bundled -- the extension runs the user's installed ClikCode (see
+ * src/runtime.ts for why).
  */
 import { build } from 'esbuild';
 import { rm } from 'node:fs/promises';

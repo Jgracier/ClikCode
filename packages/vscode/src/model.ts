@@ -12,6 +12,7 @@
 import type { HarnessActivityEvent, HarnessSession, IdeEvent, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { stripAnsi } from './text';
+import type { Remedy } from './compat';
 
 export interface Activity {
   key: string;
@@ -42,8 +43,9 @@ export interface Approval {
 export interface ChatModel {
   connection: 'starting' | 'ready' | 'stopped' | 'error';
   connectionError?: string;
-  /** Offer to install ClikCode, not merely report. */
-  installHint?: boolean;
+  /** What the banner offers besides Retry: install ClikCode, update it (too
+   * old for this extension), or update the extension (ClikCode is newer). */
+  remedy?: Remedy;
   version?: string;
   sessionId?: string;
   title?: string;
@@ -180,7 +182,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
 export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
   switch (event.type) {
     case 'ready':
-      return { ...model, connection: 'ready', version: event.version, connectionError: undefined, installHint: undefined };
+      return { ...model, connection: 'ready', version: event.version, connectionError: undefined, remedy: undefined };
     case 'session':
       return applySession(model, event.session, event.account);
     case 'worker':

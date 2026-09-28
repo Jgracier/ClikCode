@@ -6,7 +6,8 @@ import { BridgeClient } from './bridge-client';
 import { ChatViewProvider } from './chat-view';
 import { answeredApproval, applyEvent, emptyModel, localNote, typedDuringTurn, type ChatModel } from './model';
 import type { IdeEvent, IdeSlashCommand, WorkerEvent } from './protocol';
-import { entryBuild, INSTALL_COMMAND, resolveRuntime, RuntimeError } from './runtime';
+import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
+import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { diffSides } from './text';
 import { BridgeQuestion, DiffDocuments, fileNameIn, runInTerminal } from './ui';
 import type { FromWebview } from './webview-protocol';
@@ -63,7 +64,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   private async start(sessionToResume?: string): Promise<void> {
     if (this.disposed) return;
-    this.setModel({ ...this.model, connection: 'starting', connectionError: undefined, installHint: undefined });
+    this.setModel({ ...this.model, connection: 'starting', connectionError: undefined, remedy: undefined });
     const settings = vscode.workspace.getConfiguration('clikcode');
     let runtime;
     try {
@@ -71,13 +72,14 @@ export class ClikCodeController implements vscode.Disposable {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log.appendLine(message);
-      this.setModel({ ...this.model, connection: 'error', connectionError: message, installHint: error instanceof RuntimeError && error.kind === 'clikcode-missing' });
+      this.setModel({ ...this.model, connection: 'error', connectionError: message, remedy: error instanceof RuntimeError && error.kind === 'clikcode-missing' ? 'install' : undefined });
       return;
     }
     this.log.appendLine(`Starting ${runtime.entry} with ${runtime.node} (${runtime.nodeSource})`);
     const bridge = BridgeClient.start(runtime, this.workspaceFolder());
     this.bridge = bridge;
-    bridge.on('log', (line) => this.log.appendLine(line));
+    const startLog: string[] = [];
+    bridge.on('log', (line) => { this.log.appendLine(line); if (startLog.length < 200) startLog.push(line); });
     bridge.on('exit', ({ code, signal }) => {
       if (this.bridge !== bridge) return;
       this.log.appendLine(`ClikCode exited (${signal ?? code})`);
@@ -92,25 +94,59 @@ export class ClikCodeController implements vscode.Disposable {
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('ClikCode did not start within 30 seconds. See the log for details.')), 30_000);
       bridge.on('event', (event) => {
-        if (event.type === 'ready') { clearTimeout(timer); resolve(); }
+        if (event.type === 'ready') {
+          clearTimeout(timer);
+          const compatibility = bridgeCompatibility(event);
+          if (!compatibility.ok) {
+            this.incompatible(bridge, compatibility.message, compatibility.remedy);
+            reject(new Error(compatibility.message));
+            return;
+          }
+          resolve();
+        }
         this.onBridgeEvent(event);
       });
       bridge.once('exit', ({ code }) => {
         clearTimeout(timer);
-        reject(new Error(`ClikCode exited before it was ready (exit ${code}). Is it older than this extension? Update it with: ${INSTALL_COMMAND}`));
+        // stderr can still be arriving when the process has exited.
+        void bridge.logDrained(1_000).then(() => {
+          if (this.bridge === bridge && bridgeCommandMissing(startLog)) {
+            const message = tooOldToStartMessage();
+            this.incompatible(bridge, message, 'update-clikcode');
+            reject(new Error(message));
+            return;
+          }
+          reject(new Error(`ClikCode exited before it was ready (exit ${code}). See the log for details.`));
+        });
       });
     });
     try {
       await ready;
+      if (this.bridge !== bridge) return;
       const resume = sessionToResume ?? this.model.sessionId;
       const mode = resume ? 'resume' : settings.get<'continue' | 'new'>('startWith') ?? 'continue';
       await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}) });
     } catch (error) {
+      if (this.bridge !== bridge) return; // replaced, or refused as incompatible (already reported)
       const message = error instanceof Error ? error.message : String(error);
       this.log.appendLine(message);
-      if (this.bridge === bridge) this.setModel({ ...this.model, connection: bridge.running ? 'ready' : 'error', connectionError: message });
+      this.setModel({ ...this.model, connection: bridge.running ? 'ready' : 'error', connectionError: message });
       if (bridge.running) this.note(message, 'error');
     }
+  }
+
+  /** The bridge cannot drive this extension: stop it, say why, and offer the
+   * update that fixes it. */
+  private incompatible(bridge: BridgeClient, message: string, remedy: Exclude<Remedy, 'install'>): void {
+    if (this.bridge !== bridge) return;
+    this.bridge = undefined;
+    bridge.dispose();
+    this.log.appendLine(message);
+    this.setModel({ ...this.model, connection: 'error', running: false, connectionError: message, remedy });
+    const action = remedy === 'update-clikcode' ? 'Update ClikCode' : 'Update Extension';
+    void vscode.window.showErrorMessage(message, action).then((choice) => {
+      if (choice) void vscode.commands.executeCommand(remedy === 'update-clikcode' ? 'clikcode.update' : 'clikcode.updateExtension');
+    });
   }
 
   async restart(): Promise<void> {

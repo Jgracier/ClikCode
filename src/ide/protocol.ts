@@ -20,6 +20,7 @@ import type { HarnessSession } from '../session/model.js';
 import type { ClientCommand, WorkerEvent } from '../worker/protocol.js';
 
 export type { ClientCommand, WorkerEvent };
+export { IDE_PROTOCOL } from './protocol-version.js';
 
 /** One row of a quick pick. `actions` and `deleteAction` are the row's Tab
  * and Delete actions in the terminal picker; `inline` is a setting cycled in
@@ -64,7 +65,9 @@ export type IdeRequest =
 export interface IdeSlashCommand { command: string; description: string; argHint?: string; group?: string }
 
 export type IdeEvent =
-  | { type: 'ready'; version: string; build?: string; pid: number }
+  /** `protocol` is IDE_PROTOCOL.version (protocol-version.ts); a ClikCode
+   * from before it sends none. */
+  | { type: 'ready'; version: string; protocol?: number; build?: string; pid: number }
   /** The conversation shown, from the state file: on open, on a switch, and
    * after anything that changed it outside a turn. */
   | { type: 'session'; session: HarnessSession; account?: string }

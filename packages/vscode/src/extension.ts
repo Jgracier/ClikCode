@@ -4,7 +4,7 @@ import { ChatViewProvider } from './chat-view';
 import { ClikCodeController } from './controller';
 import { questionWithSelection } from './editor-context';
 import type { ChatModel } from './model';
-import { INSTALL_COMMAND } from './runtime';
+import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND } from './compat';
 import { DiffDocuments } from './ui';
 
 /** What activate() returns: used by the integration tests, and a stable
@@ -75,12 +75,21 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.cancel', () => controller.cancel(true)),
     vscode.commands.registerCommand('clikcode.restart', () => controller.restart()),
     vscode.commands.registerCommand('clikcode.showLog', () => log.show()),
-    vscode.commands.registerCommand('clikcode.install', async () => {
-      const terminal = vscode.window.createTerminal({ name: 'Install ClikCode' });
+    // Install and update are the same npm command; the fallback is for a machine that cannot reach the npm registry.
+    ...(['install', 'update'] as const).map((verb) => vscode.commands.registerCommand(`clikcode.${verb}`, async () => {
+      const terminal = vscode.window.createTerminal({ name: verb === 'install' ? 'Install ClikCode' : 'Update ClikCode' });
       terminal.show();
       terminal.sendText(INSTALL_COMMAND);
-      const choice = await vscode.window.showInformationMessage('When the install finishes, reconnect ClikCode.', 'Reconnect');
-      if (choice) await controller.restart();
+      log.appendLine(`Running: ${INSTALL_COMMAND}\nIf the npm registry is not reachable, run instead: ${INSTALL_FALLBACK_COMMAND}`);
+      const choice = await vscode.window.showInformationMessage(`When \`${INSTALL_COMMAND}\` finishes, reconnect ClikCode.`, 'Reconnect', 'Install from GitHub instead');
+      if (choice === 'Install from GitHub instead') {
+        terminal.sendText(INSTALL_FALLBACK_COMMAND);
+        if (await vscode.window.showInformationMessage('When the install finishes, reconnect ClikCode.', 'Reconnect')) await controller.restart();
+      } else if (choice) await controller.restart();
+    })),
+    vscode.commands.registerCommand('clikcode.updateExtension', async () => {
+      await vscode.commands.executeCommand('workbench.extensions.search', `@id:${context.extension.id}`);
+      await vscode.commands.executeCommand('workbench.extensions.action.checkForUpdates');
     }),
     vscode.commands.registerCommand('clikcode.runSlashCommand', async () => {
       let commands;
