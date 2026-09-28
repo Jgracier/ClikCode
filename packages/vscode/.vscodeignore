@@ -3,6 +3,8 @@
 !dist/webview.js
 !media/icon.png
 !media/activity.svg
+!media/editor-light.svg
+!media/editor-dark.svg
 !media/chat.css
 !README.md
 !CHANGELOG.md

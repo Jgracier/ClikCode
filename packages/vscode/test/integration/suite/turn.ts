@@ -88,5 +88,21 @@ export function turnSuite(): void {
       await vscode.commands.executeCommand('clikcode.focus');
       await screenshot('selection');
     });
+
+    it('opens the chat as one editor tab from the editor title bar', async () => {
+      const extension = vscode.extensions.all.find((item) => item.packageJSON?.name === 'clikcode')!;
+      const titleBar = extension.packageJSON.contributes.menus['editor/title'] as Array<{ command: string }>;
+      assert.ok(titleBar.some((item) => item.command === 'clikcode.openInEditor'), 'the editor title bar has the button');
+      const chatTabs = () => vscode.window.tabGroups.all.flatMap((group) => group.tabs)
+        .filter((tab) => tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith('clikcode.chatEditor'));
+      await screenshot('title-button');
+      await vscode.commands.executeCommand('clikcode.openInEditor');
+      await vscode.commands.executeCommand('clikcode.openInEditor');
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      assert.strictEqual(chatTabs().length, 1, 'a second click reuses the tab');
+      assert.strictEqual(chatTabs()[0]!.label, 'ClikCode');
+      await screenshot('editor-tab');
+      await vscode.window.tabGroups.close(chatTabs());
+    });
   });
 }

@@ -73,6 +73,7 @@
     },
     "commands": [
       { "command": "clikcode.focus", "title": "Open Chat", "category": "ClikCode" },
+      { "command": "clikcode.openInEditor", "title": "Open Chat in Editor", "category": "ClikCode", "icon": { "light": "media/editor-light.svg", "dark": "media/editor-dark.svg" } },
       { "command": "clikcode.newChat", "title": "New Chat", "category": "ClikCode", "icon": "$(add)" },
       { "command": "clikcode.resumeChat", "title": "Resume Chat…", "category": "ClikCode", "icon": "$(history)" },
       { "command": "clikcode.chooseProvider", "title": "Choose Provider…", "category": "ClikCode" },
@@ -92,7 +93,11 @@
       "view/title": [
         { "command": "clikcode.newChat", "when": "view == clikcode.chat", "group": "navigation@1" },
         { "command": "clikcode.resumeChat", "when": "view == clikcode.chat", "group": "navigation@2" },
-        { "command": "clikcode.openSettings", "when": "view == clikcode.chat", "group": "navigation@3" }
+        { "command": "clikcode.openSettings", "when": "view == clikcode.chat", "group": "navigation@3" },
+        { "command": "clikcode.openInEditor", "when": "view == clikcode.chat", "group": "navigation@4" }
+      ],
+      "editor/title": [
+        { "command": "clikcode.openInEditor", "group": "navigation@100" }
       ],
       "editor/context": [
         { "command": "clikcode.askAboutSelection", "when": "editorHasSelection", "group": "clikcode@1" },
@@ -105,7 +110,8 @@
     "keybindings": [
       { "command": "clikcode.focus", "key": "ctrl+alt+c", "mac": "ctrl+cmd+c" },
       { "command": "clikcode.askAboutSelection", "key": "ctrl+alt+q", "mac": "ctrl+cmd+q", "when": "editorTextFocus && editorHasSelection" },
-      { "command": "clikcode.cancel", "key": "escape", "when": "focusedView == clikcode.chat && clikcode.turnRunning" }
+      { "command": "clikcode.cancel", "key": "escape", "when": "focusedView == clikcode.chat && clikcode.turnRunning" },
+      { "command": "clikcode.cancel", "key": "escape", "when": "activeWebviewPanelId == clikcode.chatEditor && clikcode.turnRunning" }
     ],
     "configuration": {
       "title": "ClikCode",
