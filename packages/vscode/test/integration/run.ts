@@ -22,7 +22,11 @@ async function main(): Promise<void> {
   const workspace = join(root, 'workspace');
   mkdirSync(join(workspace, '.vscode'), { recursive: true });
   writeFileSync(join(workspace, 'hello.ts'), 'export const greeting = "hello";\n');
-  writeFileSync(join(workspace, '.vscode', 'settings.json'), JSON.stringify({ 'clikcode.path': entry, 'clikcode.startWith': 'new' }, null, 2));
+  writeFileSync(join(workspace, '.vscode', 'settings.json'), JSON.stringify({ 'clikcode.startWith': 'new' }, null, 2));
+  // clikcode.path is machine-scoped: VS Code ignores it in workspace settings, and the
+  // test would silently run whatever \`clikcode\` is on PATH. User settings it is.
+  mkdirSync(join(root, 'user-data', 'User'), { recursive: true });
+  writeFileSync(join(root, 'user-data', 'User', 'settings.json'), JSON.stringify({ 'clikcode.path': entry }, null, 2));
   const local = process.env.CLIKCODE_TEST_VSCODE ?? '/usr/share/code/code';
   await runTests({
     ...(existsSync(local) ? { vscodeExecutablePath: local } : {}),
