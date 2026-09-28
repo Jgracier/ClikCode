@@ -4,8 +4,7 @@
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { binaryFingerprint, harnessBinaryIdentity, rememberVersion, rememberedVersion, resetVersionMemo, saveVersionMemo } from './version-memo.js';
 import { resolveBinaryPath } from './binary.js';
-import { installFailureTail, runCaptured, startSpinner } from '../../install-progress.js';
-import { installInstructions } from '../../install-hints.js';
+import { ensureHarnessInstalled, type HarnessInstallReporter } from './install.js';
 import { NativeHarnessSpec, binaryOnPath } from './binary.js';
 
 interface NativeHarnessInspection {
@@ -140,28 +139,12 @@ async function inspectNativeHarnessUncached(
   });
 }
 
-/** Install only a vendor-declared npm package; never infer package names from user input. */
-export async function ensureNativeHarness(spec: NativeHarnessSpec, options: { quiet?: boolean } = {}): Promise<void> {
-  if (spec.surface === 'editor-extension') {
-    throw new Error(`${spec.displayName} is an editor extension, not a standalone terminal harness; ClikCode cannot broker it as a native TUI.`);
-  }
-  if (await binaryOnPath(spec.binary)) return;
-  if (!spec.npmPackage) throw new Error(installInstructions(spec.displayName, spec.command, spec.binary));
-  // Captured, not inherited: npm's progress bars, deprecation warnings and
-  // audit footer used to land in the middle of the UI, several screens of it
-  // on a phone, for a decision the user has already made.
-  // `quiet`: the caller shows its own "installing…" (the app's waiting line);
-  // a second, raw spinner was drawn over it.
-  const spinner = options.quiet ? { stop: () => undefined } : startSpinner(`Installing ${spec.displayName}…`);
-  let result;
-  try { result = await runCaptured('npm', ['install', '--global', spec.npmPackage]); }
-  catch (error) { spinner.stop(); throw error; }
-  if (result.code !== 0) {
-    spinner.stop();
-    const tail = installFailureTail(result.output);
-    throw new Error(`Could not install ${spec.displayName} (npm exited ${result.code ?? 'abnormally'}).${tail ? `\n${tail}` : ''}`);
-  }
-  spinner.stop(`Installed ${spec.displayName}.`);
-  clearNativeHarnessInspectionCache(spec.command);
-  if (!await binaryOnPath(spec.binary)) throw new Error(`${spec.displayName} installed but its binary is not on PATH; open a new terminal and retry.`);
+/** Install the harness if it is missing (install.ts), and forget what was
+ * cached about it when that happened. True when it was installed just now. */
+export async function ensureNativeHarness(
+  spec: Parameters<typeof ensureHarnessInstalled>[0], options: { reporter?: HarnessInstallReporter } = {},
+): Promise<boolean> {
+  const installed = await ensureHarnessInstalled(spec, options);
+  if (installed) clearNativeHarnessInspectionCache(spec.command);
+  return installed;
 }

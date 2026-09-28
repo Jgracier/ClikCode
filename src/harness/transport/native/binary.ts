@@ -3,6 +3,7 @@
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, join } from 'node:path';
+import type { AiHarnessInstaller } from '../../definition.js';
 
 export interface NativeHarnessSpec {
   command: string;
@@ -10,6 +11,9 @@ export interface NativeHarnessSpec {
   displayName: string;
   surface?: 'terminal' | 'editor-extension';
   npmPackage?: string;
+  installer?: AiHarnessInstaller;
+  /** A separate ACP executable, which an install must also provide. */
+  acp?: { binary?: string };
   loginArgv?: readonly string[];
   loginCapturable?: boolean;
   versionArgv?: readonly string[];

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { installFailureTail, startSpinner } from './install-progress.js';
-import { HARNESS_INSTALL_HINTS, installInstructions } from './install-hints.js';
 
 describe('installFailureTail', () => {
   it('keeps the error and drops npm\'s funding and audit noise', () => {
@@ -38,56 +37,5 @@ describe('startSpinner', () => {
     spinner.stop();
     expect(written[0]).toContain('Installing X…');
     expect(written[written.length - 1]).toBe('\r\u001b[2K');
-  });
-});
-
-describe('installInstructions', () => {
-  it('gives a verified command with where it came from', () => {
-    const text = installInstructions('Cursor Agent', 'cursor', 'cursor-agent');
-    expect(text).toContain('curl https://cursor.com/install -fsS | bash');
-    expect(text).toContain('cursor.com/docs');
-    expect(text).toContain('retry /cursor');
-  });
-
-  it('says ClikCode will not run the installer', () => {
-    expect(installInstructions('Cursor Agent', 'cursor', 'cursor-agent'))
-      .toContain('ClikCode will not run an installer for you');
-  });
-
-  it('points at the docs AND quotes the command, now that Kiro has one', () => {
-    // This test used to assert the opposite, on the belief that Kiro
-    // "publishes downloads rather than a scriptable installer". It does have
-    // one -- `curl -fsSL https://cli.kiro.dev/install | bash`, which is how
-    // kiro-cli got onto the machine this was corrected on. The docs link
-    // stays; what changed is that the user is no longer sent to read it.
-    const text = installInstructions('Kiro CLI', 'kiro', 'kiro-cli');
-    expect(text).toContain('https://kiro.dev');
-    expect(text).toContain('curl -fsSL https://cli.kiro.dev/install');
-  });
-
-  it('falls back to a plain instruction for a harness with no hint at all', () => {
-    // The case the assertion above used to stand in for. No real harness is
-    // in it any more, so it is exercised directly.
-    const text = installInstructions('Imaginary CLI', 'imaginary', 'imag');
-    expect(text).toContain('imag');
-    expect(text).not.toContain('curl');
-  });
-
-  it('quotes the vendor command where one was verified', () => {
-    const text = installInstructions('Goose', 'goose', 'goose');
-    expect(text).toContain('download_cli.sh');
-    expect(text).toContain('Then retry /goose.');
-  });
-
-  it('still says something useful for a harness with no hint at all', () => {
-    const text = installInstructions('Mystery CLI', 'mystery', 'mystery');
-    expect(text).toContain('binary on PATH');
-    expect(text).toContain('retry /mystery');
-  });
-
-  it('never ships a hint that claims a command without naming its source', () => {
-    for (const [command, hint] of Object.entries(HARNESS_INSTALL_HINTS)) {
-      if (hint.command) expect(hint.source, `${command} has a command but no source`).toBeTruthy();
-    }
   });
 });

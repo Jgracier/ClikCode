@@ -3,7 +3,7 @@
 import { isClikCodeAgent } from '../../session/route.js';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
-import { ensureNativeHarness, inspectNativeHarness } from '../../harness/transport/native/inspect.js';
+import { ensureNativeHarness } from '../../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
@@ -37,11 +37,9 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
   if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} does not publish a non-interactive turn contract (CLI or ACP) required by the centralized ClikCode UI.`);
-  const freshInstall = !(await inspectNativeHarness(harness)).installed;
-  if (freshInstall) {
-    TERMINAL.active?.startWaiting(`installing ${harness.displayName}…`);
-    try { await ensureNativeHarness(harness, { quiet: Boolean(TERMINAL.active) }); } finally { TERMINAL.active?.stopWaiting(); }
-  }
+  // Installed now, while the user watches it happen (install.ts shows it on
+  // whatever surface this is), rather than as a surprise on the first turn.
+  const freshInstall = await ensureNativeHarness(harness);
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);

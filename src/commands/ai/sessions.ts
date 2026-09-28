@@ -23,6 +23,7 @@ import { writeState } from '../../session/state/write.js';
 import { setEmitHarnessOutput } from '../account.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
+import { ensureNativeHarness } from '../../harness/transport/native/inspect.js';
 import { normalizeModelWord, optionForHarness, parseHarnessOption, sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession } from './conversations.js';
@@ -449,6 +450,14 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
       delete next.nativeSessionId;
       delete next.nativeStartedAt;
     }
+  }
+  // Choosing a harness installs it here too, as it does from /provider: before
+  // the change is saved, so a harness that cannot be installed leaves the
+  // session as it was, with the reason. An install takes a while, and the
+  // state read above may be stale by then -- so after one, start over.
+  if (effectiveRoute === 'local' && (options.provider || options.account) && selectedHarness && harnessCanRunTurns(selectedHarness)
+    && await ensureNativeHarness(selectedHarness)) {
+    return aiSessionSet(id, options);
   }
   state.sessions[index] = next;
   await writeState(state);

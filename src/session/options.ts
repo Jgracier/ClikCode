@@ -22,6 +22,7 @@ import type { PickerOption } from '../harness/prompter.js';
 import type { HarnessDefaultSettings, HarnessSession } from './model.js';
 import { harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
+import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 
 /** Effort words every harness understands, narrowed per harness by
  * harnessSupportsEffort. */
@@ -327,7 +328,7 @@ export function providerPickerOptions(
       label: harness.displayName,
       detail: `${inspection.installed
         ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
-        : harness.npmPackage ? '· install when needed' : '· vendor install required'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''}`,
+        : harnessInstallRoute(harness).kind !== 'none' ? '· installs when chosen' : '· install it yourself'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''}`,
       value: { kind: 'provider' as const, harness: harness.command },
     })),
   ];
