@@ -60,6 +60,7 @@ import { emitHarnessOutput, line } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
 import { harnessTurnTransport } from '../harness/transport/select.js';
+import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessAcpLaunch, harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelProvider, isDirectModelProvider, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
 import { prepareAttachments } from '../session/attachments.js';
@@ -156,6 +157,18 @@ export async function aiSessionSend(
     if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
     if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
     if (harness.provider !== account.provider) throw new Error(`session provider ${harness.displayName} does not match account "${account.label}"`);
+    // Installed before anything spawns it: model discovery below, then
+    // whichever transport runs the turn -- the app-server and ACP ones too,
+    // which spawn the binary themselves. A chat whose harness this machine
+    // does not have (chosen elsewhere, or uninstalled since) installs it here
+    // instead of failing "not found".
+    await ensureNativeHarness(harness, prompter ? {
+      reporter: {
+        start: (label) => prompter.phase(label),
+        done: (message) => prompter.activity(chalk.dim(message)),
+        failed: () => undefined,
+      },
+    } : {});
     // Resolve a real model here too, not only when a session is OPENED.
     // A headless send -- `sessions send`, and every member of a fan-out --
     // never goes through the interactive open path, so it recorded no model

@@ -12,6 +12,7 @@ import chalk from 'chalk';
 import { emitResult } from '../cli/structured-output.js';
 import { captureNativeHarnessOutput, runNativeHarnessCommand } from '../harness/transport/native/command.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
+import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { accountVerification, verificationNotice } from '../turn/failover.js';
 import { localHarnessForCommand, localHarnessForProvider, localRouter } from '../runtime/lazy-bridge.js';
@@ -67,6 +68,18 @@ export async function aiAccountProviders(): Promise<void> {
 }
 
 /** Read-only compatibility report for every catalog entry. */
+/** How `doctor` describes a harness's install: the route choosing it takes,
+ * and the same install as a command to run by hand. */
+function installSummary(harness: Parameters<typeof harnessInstallRoute>[0]): Record<string, unknown> {
+  const route = harnessInstallRoute(harness);
+  if (route.kind === 'none') return { kind: 'none', automatic: false, note: route.reason };
+  return {
+    kind: route.kind, automatic: true,
+    ...(route.kind === 'npm' ? { package: route.package } : route.kind === 'script' ? { url: route.step.url } : { package: route.step.package }),
+    command: manualInstallCommand(route),
+  };
+}
+
 export async function aiDoctor(): Promise<void> {
   // One write for the whole sweep: every harness inspected here contributes a
   // version memo, and flushing per harness would be 24 writes for one answer.
@@ -80,9 +93,7 @@ export async function aiDoctor(): Promise<void> {
       surface: harness.surface,
       binary: harness.binary,
       integration: localRouter().harnessIntegrationLevel(harness),
-      install: harness.npmPackage
-        ? { kind: 'npm' as const, package: harness.npmPackage, automatic: true }
-        : { kind: 'vendor-managed' as const, automatic: false, note: `ClikCode has no publisher to install from; put a \`${harness.binary}\` binary on PATH using ${harness.displayName}'s own installer.` },
+      install: installSummary(harness),
       ...inspection,
       capabilities: {
         centralizedTurns: Boolean(harness.turn),

@@ -4,6 +4,7 @@
  * per-vendor fact is a declared field on the catalog entry. */
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { augmentProcessPath } from '../harness/transport/native/install-locations.js';
 import type { AiHarnessAcpLaunch, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition, AiRouterRuntime } from '../harness/definition.js';
 
 const require = createRequire(import.meta.url);
@@ -17,6 +18,7 @@ export function localRouter(): AiRouterRuntime {
       if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
       routerRuntime = require(fileURLToPath(new URL('./ai-router-runtime.cjs', import.meta.url))) as AiRouterRuntime;
     }
+    augmentProcessPath(routerRuntime.allLocalHarnesses());
   }
   return routerRuntime;
 }
@@ -41,6 +43,10 @@ function localCatalog(): HarnessCatalogRuntime {
         catalogRuntime = localRouter();
       }
     }
+    // Every harness spawn reads the catalog first, so this is the one place
+    // that sees them all before any: the directories vendor installers (and
+    // ClikCode's own npm prefix) put binaries in go on the end of PATH.
+    augmentProcessPath(catalogRuntime.allLocalHarnesses());
   }
   return catalogRuntime;
 }

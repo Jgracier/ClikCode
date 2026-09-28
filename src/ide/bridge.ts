@@ -37,6 +37,7 @@ import { setVendorSignInRunner, type VendorSignInRequest } from '../harness/tran
 import { launchSession, aiSessionLeave } from '../commands/ai/sessions.js';
 import { newConversation, newProviderConversation, releaseQueuedTurn } from '../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../commands/ai/harness.js';
+import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { ensureLocalModelForTurn, reconcileLocalModelLeases } from '../commands/ai/local-model.js';
 import { isShellCommandLine } from '../commands/ai/shell-run.js';
@@ -789,6 +790,18 @@ export function captureStdout(channel: IdeChannel, stream: NodeJS.WriteStream = 
   }) as NodeJS.WriteStream['write'];
 }
 
+export function ideInstallReporter(channel: IdeChannel): HarnessInstallReporter {
+  return {
+    start: (label) => channel.send({ type: 'busy', label }),
+    done: (message) => {
+      channel.send({ type: 'busy' });
+      channel.send({ type: 'notice', message, level: 'info' });
+    },
+    // The error itself reaches the editor as the failed request's notice.
+    failed: () => channel.send({ type: 'busy' }),
+  };
+}
+
 export async function runIdeBridge(config: Conf): Promise<void> {
   const send = process.send?.bind(process);
   if (!send) throw new Error('ide-bridge is started by an editor extension, over an IPC channel');
@@ -801,6 +814,9 @@ export async function runIdeBridge(config: Conf): Promise<void> {
     },
   };
   captureStdout(channel);
+  // Choosing a harness that is not installed installs it (install.ts); here
+  // that shows as the chat's busy line, then a notice.
+  setHarnessInstallReporter(ideInstallReporter(channel));
   const bridge = new IdeBridge(config, channel);
   process.on('message', (message) => {
     if (message && typeof message === 'object' && typeof (message as { type?: unknown }).type === 'string') bridge.handle(message as IdeRequest);

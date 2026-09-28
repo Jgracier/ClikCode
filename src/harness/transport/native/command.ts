@@ -1,7 +1,7 @@
 /** Running one vendor command and keeping what it printed. */
 
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
-import { NativeHarnessSpec } from './binary.js';
+import { NativeHarnessSpec, binaryOnPath } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
 
 export function run(command: string, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
@@ -60,7 +60,11 @@ export async function captureNativeHarness(spec: NativeHarnessSpec, args: readon
 const CAPTURE_LIMIT_BYTES = 2 * 1024 * 1024;
 
 export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs = 15_000, cwd?: string, stdinText?: string): Promise<string> {
-  await ensureNativeHarness(spec);
+  // Never an install: this runs for probes (status, models, sessions, usage)
+  // of harnesses nobody chose just now, and choosing is what installs one.
+  // Everything that runs a harness because the user asked for it installed
+  // it first (install.ts).
+  if (!await binaryOnPath(spec.binary)) throw Object.assign(new Error(`${spec.displayName} is not installed (no \`${spec.binary}\` on PATH)`), { code: 'ENOENT' });
   return new Promise((resolve, reject) => {
     const child = spawn(spec.binary, [...args], { stdio: [stdinText === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], env: { ...process.env, ...envOverrides }, ...(cwd ? { cwd } : {}) });
     if (stdinText !== undefined) {

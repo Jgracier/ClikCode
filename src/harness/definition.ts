@@ -53,6 +53,17 @@ export interface AiCustomAcpHarnessInput {
   memoryFile?: AiHarnessMemoryFile;
 }
 
+/** Mirrors the catalog's AiHarnessInstallStep / AiHarnessInstaller. */
+export type AiHarnessInstallStep =
+  | { kind: 'script'; url: string; args?: readonly string[]; env?: Readonly<Record<string, string>>; binDirs: readonly string[] }
+  | { kind: 'uv-tool'; package: string; python?: string; binDirs: readonly string[] };
+
+export interface AiHarnessInstaller {
+  posix?: AiHarnessInstallStep;
+  windows?: AiHarnessInstallStep;
+  docs: string;
+}
+
 interface AiHarnessTurnDefinition {
   startArgv: readonly string[];
   resumeArgv?: readonly string[];
@@ -180,6 +191,7 @@ export interface AiLocalHarnessDefinition {
   localAuth: readonly AiHarnessAuthKind[];
   binary: string;
   npmPackage?: string;
+  installer?: AiHarnessInstaller;
   loginArgv?: readonly string[];
   loginCapturable?: boolean;
   statusArgv?: readonly string[];
