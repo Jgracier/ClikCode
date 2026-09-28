@@ -16,6 +16,7 @@ import { stdout as output } from 'node:process';
 import { ModelClientError } from '../agent/models/gateway-client.js';
 import { runGatewayHarnessTurn } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
+import { readClaudeHooks, toolHooksFrom } from '../agent/hooks.js';
 import type { GatewayHarnessTurnResult, ModelClient } from '../agent/model-client.js';
 import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
@@ -68,10 +69,14 @@ export async function runGatewayHarnessSessionTurn(
   // harness. One that is down is named here rather than silently missing.
   const mcp = await mcpToolsForTurn(stateDir, input.signal, input.mcpServers ?? []);
   for (const note of mcp.notes) prompter?.activity(note);
+  // The user's Claude Code tool hooks, so they run whichever lane serves the turn.
+  const workspace = session.workspace ?? process.cwd();
+  const hooks = toolHooksFrom(await readClaudeHooks(workspace), (message) => prompter?.activity(message));
   return runGatewayHarnessTurn({
     sessionId: session.id,
-    cwd: session.workspace ?? process.cwd(),
+    cwd: workspace,
     prompt: input.prompt,
+    ...(hooks ? { hooks } : {}),
     permissionMode,
     // /permissions writes the index from the user's terminal while this turn
     // runs in the worker: read the mode back before each tool call so a switch
