@@ -16,8 +16,10 @@ export function sessionHarness(session: HarnessSession | undefined): AiLocalHarn
 }
 
 export function customCommandsFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): CustomCommand[] {
-  if (isClikCodeAgent(session)) return [];
-  return discoverCustomCommands(harness, { workspace: session.workspace ?? process.cwd(), ...CUSTOM_COMMAND_ROOTS });
+  // ClikCode's own agent (Gateway, Local) reads Claude Code's CLAUDE.md and
+  // .claude/skills, so it reads Claude's command directories too, expanded here.
+  const source = isClikCodeAgent(session) ? localHarnessForCommand('claude') : harness;
+  return discoverCustomCommands(source, { workspace: session.workspace ?? process.cwd(), ...CUSTOM_COMMAND_ROOTS });
 }
 
 /** Test seam: redirect `~` and ClikCode's own command directories. */
