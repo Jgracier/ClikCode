@@ -14,20 +14,26 @@ const PLAN_MAX_ROWS = 6;
 
 /** A compact todo block: at most PLAN_MAX_ROWS rows, windowed around the step
  * in progress so a long plan never crowds the conversation out of view. */
-export function planBlockRows(entries: readonly PlanEntry[], width: number, maxRows = PLAN_MAX_ROWS): string[] {
+export function planBlockRows(
+  entries: readonly PlanEntry[], width: number, maxRows = PLAN_MAX_ROWS,
+  /** The step in progress animates with the waiting spinner while a turn runs; `◐` otherwise. */
+  activeGlyph = '◐',
+): string[] {
   if (!entries.length || maxRows < 1) return [];
-  const done = entries.filter((entry) => entry.status === 'completed').length;
+  const done = entries.filter((entry) => entry.status === 'completed' || entry.status === 'cancelled').length;
   const capacity = Math.max(1, Math.min(maxRows, PLAN_MAX_ROWS));
   let visible = entries.map((entry, index) => ({ entry, index }));
   if (visible.length > capacity) {
-    const active = Math.max(0, entries.findIndex((entry) => entry.status !== 'completed'));
+    const active = Math.max(0, entries.findIndex((entry) => entry.status !== 'completed' && entry.status !== 'cancelled'));
     const start = Math.max(0, Math.min(active - 1, entries.length - (capacity - 1)));
     visible = visible.slice(start, start + capacity - 1);
   }
   const rows = visible.map(({ entry }) => {
     const text = visibleSlice(sanitizeTerminalText(entry.content, { singleLine: true }).trim(), Math.max(4, width - 6));
     return entry.status === 'completed' ? `  ${chalk.green('☑')} ${chalk.dim(text)}`
-      : entry.status === 'in_progress' ? `  ${chalk.cyan('◐')} ${chalk.bold(text)}` : `  ☐ ${text}`;
+      // A two-cell spinner takes one column of the indent, so the text stays aligned with the rows around it.
+      : entry.status === 'in_progress' ? `${[...activeGlyph].length > 1 ? ' ' : '  '}${chalk.cyan(activeGlyph)} ${chalk.bold(text)}`
+        : entry.status === 'cancelled' ? `  ${chalk.dim('☒')} ${chalk.dim.strikethrough(text)}` : `  ☐ ${text}`;
   });
   if (visible.length < entries.length) rows.push(`  ${chalk.dim(`  ${done}/${entries.length} done · ${entries.length - visible.length} more`)}`);
   return rows;

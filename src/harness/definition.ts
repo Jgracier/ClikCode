@@ -220,6 +220,11 @@ export interface AiLocalHarnessDefinition {
    *  argv. Goose is the case: it has no per-run mode flag at all, and an
    *  unset GOOSE_MODE auto-approves every tool call. See turnEnvironment. */
   permissionEnv?: Readonly<Partial<Record<AiHarnessPermissionMode, Readonly<Record<string, string>>>>>;
+  /** Environment every TURN of this harness runs with, whatever the permission
+   * mode: a vendor feature that is off unless asked for. Claude Code offers its
+   * task-list tools in print mode only with CLAUDE_CODE_ENABLE_TODO_TOOLS set
+   * (verified on 2.1.281), and without them it cannot keep a checklist. */
+  turnEnv?: Readonly<Record<string, string>>;
   imageArgvPrefix?: readonly string[];
   imageArgvStyle?: 'separate' | 'concatenated';
   profileEnv?: string;
