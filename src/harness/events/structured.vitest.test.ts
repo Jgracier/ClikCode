@@ -63,3 +63,19 @@ describe('a structured CLI line', () => {
     expect(reportStructuredLine(harness, '{"type":"assistant","message":{"content":[]}}', observer).result).toBeUndefined();
   });
 });
+
+describe('a structured CLI\'s todo list', () => {
+  it('reaches the observer as the plan, but a sub-agent\'s own list does not', async () => {
+    const { reportStructuredLine } = await import('./structured.js');
+    const plans: unknown[] = [];
+    const observer = { onPlan: (entries: unknown) => plans.push(entries) } as never;
+    const line = (parent: string | null) => JSON.stringify({
+      type: 'assistant', parent_tool_use_id: parent,
+      message: { content: [{ type: 'tool_use', id: 't', name: 'TodoWrite', input: { todos: [{ content: 'step', status: 'in_progress' }] } }] },
+    });
+    const harness = { command: 'claude', parser: 'claude-stream-json', turn: { output: 'json-lines' } } as never;
+    reportStructuredLine(harness, line(null), observer);
+    reportStructuredLine(harness, line('toolu_parent'), observer);
+    expect(plans).toEqual([[{ content: 'step', status: 'in_progress' }]]);
+  });
+});

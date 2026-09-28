@@ -1067,7 +1067,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const thoughtRows = this.waitingLabel && this.latestThought && !approval && liveBandBudget > 0
       ? [`  ${chalk.dim(chalk.italic(visibleSlice(`✻ ${this.latestThought}`, Math.max(1, inner))))}`] : [];
     liveBandBudget -= thoughtRows.length;
-    const planRows = paletteRows || this.selecting ? [] : planBlockRows(this.planEntries, width, liveBandBudget);
+    const planGlyph = this.waitingLabel && !this.reducedMotion ? waitingSpinnerGlyph(this.waitingFrame) : undefined;
+    const planRows = paletteRows || this.selecting ? [] : planBlockRows(this.planEntries, width, liveBandBudget, planGlyph);
     liveBandBudget -= planRows.length;
     const panelRows: string[] = [];
     const panel = this.panelState;

@@ -144,7 +144,10 @@ export function turnEnvironment(
   // and not merely offered in the picker. Management commands pass no mode and
   // get none, which is right: they run no tools.
   const permission = permissionMode ? harness.permissionEnv?.[permissionMode] : undefined;
-  return permission ? { ...environment, ...permission } : environment;
+  // A turn (it has a permission mode) also gets the features the catalog says
+  // this vendor keeps off by default -- Claude Code's task-list tools.
+  const turn = permissionMode ? harness.turnEnv : undefined;
+  return { ...environment, ...(turn ?? {}), ...(permission ?? {}) };
 }
 
 /** Name a chat, once, from a title the model produced.
