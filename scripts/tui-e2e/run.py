@@ -109,6 +109,14 @@ SCENARIOS = {
         ],
         'watch': [], 'final_contains': ['Checking the workspace first.', 'The final commit is live.'],
     },
+    'title-after-mobile-resize': {
+        'turns': [{'blocks': ['<clikcode-title>My Mobile Chat</clikcode-title>\nThe final commit is live.']}],
+        'steps': [
+            ('type', 'please check the commit'), ('resize_burst',),
+            ('wait_for', 'The final commit is live.', 30), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['My Mobile Chat', 'The final commit is live.'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -188,11 +196,15 @@ def run(name, spec, entry, keep):
         elif step[0] == 'resize_burst':
             # Keyboard close on the phone changes the reported height several
             # times before settling. Keep the real PTY and emulator in lockstep.
+            before = len(raw)
             for lines in (63, 40, 32):
                 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', lines, 70, 0, 0))
                 screen.resize(lines=lines, columns=70)
                 pump(0.05)
             pump(0.5)
+            mouse_reset = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'
+            resets = raw[before:].count(mouse_reset)
+            if resets != 1: problems.append(f'resize burst sent {resets} mouse resets, expected one')
         elif step[0] == 'select':
             # Press on the phrase's first cell, drag across it, release on its
             # last -- the mouse reports a terminal sends with SGR reporting on.
