@@ -325,18 +325,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.lastColumns = output.columns || 0;
       this.forgetScreenPosition();
       logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
-      // Re-asked here, immediately, before anything is drawn. This is the
-      // whole fix for "a swipe scrolls with the keyboard up but not with it
-      // hidden": hiding the keyboard resizes the pty, the client reapplies
-      // its own defaults across that resize and drops mouse reporting, and
-      // nothing turns it back on. A working client's own byte stream shows
-      // the same four modes going out after every single resize:
-      //
-      //     [[resize 63x70]] ?1000h ?1002h ?1003h ?1006h  ?25l ESC[2J ESC[H
-      //
-      // Idempotent, so a client that never dropped them just sets what is
-      // already set.
-      if (!SELECTION_MODE.active) output.write(ENABLE_MOUSE_TRACKING);
+      // A phone sends several size changes while its keyboard moves. Queue
+      // one mouse-mode reset with the settled repaint. Writing these modes
+      // here left them interleaved with in-flight frames, and sent the same
+      // four private sequences for every intermediate size.
+      if (!SELECTION_MODE.active) this.mouseResetPending = true;
       // No height probe here: it jumps the cursor to the bottom-right corner
       // and asks, at exactly the moment a swipe is being recognised. The size
       // the terminal announces is what the layout uses.
@@ -374,6 +367,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the size has stopped changing. Short enough not to be seen, long enough to
    * land after the client has finished. */
   private resizePaintTimer?: NodeJS.Timeout;
+  private mouseResetPending = false;
   private repaintAfterResize(): void {
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
     this.resizePaintTimer = setTimeout(() => {
@@ -1409,6 +1403,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   private flushFrame(): void {
     if (this.closed || this.suspended) return;
+    // A streaming answer may request a frame while the phone is still
+    // changing size. Keep its durable rows, but wait for the final geometry
+    // before drawing; repaintAfterResize supplies the fresh live rows.
+    if (this.resizePaintTimer) return;
     const pending = this.pendingLive;
     if (!pending) return;
     this.pendingLive = undefined;
@@ -1543,7 +1541,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // bytes and leaves nothing of the old size behind on a screen that just
     // changed shape.
     const clear = full ? '\u001b[2J\u001b[H' : '';
-    const frame = `\u001b[?25l${clear}${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
+    const frame = `${this.mouseResetPending && !SELECTION_MODE.active ? ENABLE_MOUSE_TRACKING : ''}\u001b[?25l${clear}${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
+    this.mouseResetPending = false;
     this.frameInFlight = true;
     terminalModes.painted = true;
     logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
