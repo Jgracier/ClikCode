@@ -65,6 +65,9 @@ const RETRYABLE_STEP_CODES = new Set(['MODEL_ERROR', 'INTERNAL_ERROR', 'MODEL_RA
  * CONTEXT_TOO_LARGE, "Compact and retry"). `retry`: a transient failure --
  * a retryable code, a 5xx, or no response at all. Everything else -- credit,
  * sign-in, a rejected request, no model, the kill switch -- is the answer. */
+/** How many times Stop hooks may send the agent back to work in one turn. */
+const MAX_STOP_HOOK_CONTINUES = 3;
+
 export function stepRecovery(error: unknown): 'compact' | 'retry' | undefined {
   const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown };
   const code = typeof record.code === 'string' ? record.code : undefined;
@@ -157,7 +160,28 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // the prompt prefix stays cacheable across turns (context.ts). A sub-agent
   // lives for one task and its short prompt already carries the date.
   const environment = !input.subagent && needsEnvironmentNote(items) ? `${await abortable(environmentNote({ cwd }), signal)}\n\n` : '';
-  await append({ type: 'text', role: 'user', text: `${environment}${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
+  // The user's hooks (hooks.ts): context for a conversation's first turn, and
+  // the prompt-submit hook, which may refuse the prompt or add to it. A
+  // sub-agent's prompt is the parent's, already through them.
+  const turnHookInfo = { sessionId: input.sessionId, cwd };
+  const hookContexts: string[] = [];
+  let promptBlocked: string | undefined;
+  if (!input.subagent && input.hooks) {
+    const firstTurn = !items.some((item) => item.type === 'text' && item.role === 'user');
+    if (firstTurn && input.hooks.sessionStart) {
+      const started = await abortable(Promise.resolve(input.hooks.sessionStart({ ...turnHookInfo, source: 'startup' })), signal);
+      if (started?.context) hookContexts.push(started.context);
+    }
+    if (input.hooks.userPromptSubmit) {
+      const submitted = await abortable(Promise.resolve(input.hooks.userPromptSubmit(input.prompt, turnHookInfo)), signal);
+      if (submitted?.block) promptBlocked = submitted.block;
+      else if (submitted?.context) hookContexts.push(submitted.context);
+    }
+  }
+  const hookNote = hookContexts.length ? `<hook-context>\n${hookContexts.join('\n\n')}\n</hook-context>\n\n` : '';
+  if (!promptBlocked) {
+    await append({ type: 'text', role: 'user', text: `${environment}${hookNote}${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
+  }
 
   // Steering: text typed mid-turn is queued and lands before the next model step.
   const steerQueue: string[] = [];
@@ -325,7 +349,15 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     text: segments.join('\n\n').trim(), nativeSessionId: input.sessionId, usage: ledger.total, steps, contextProfile: profile.name, ...extra,
   });
 
+  // Stop hooks may keep the agent working; bounded so two hooks cannot loop it forever.
+  let stopContinues = 0;
   try {
+    if (promptBlocked) {
+      const note = `Your message was blocked by a UserPromptSubmit hook: ${promptBlocked}`;
+      input.onResponseDelta?.(note, 'append');
+      segments.push(note);
+      return result({ stopReason: 'completed', isError: true, errorKind: 'other' });
+    }
     for (;;) {
       throwIfAborted();
       if (steerQueue.length) await append(...steerQueue.splice(0).map((text): ConversationItem => ({ type: 'text', role: 'user', text })));
@@ -436,6 +468,14 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         // Steering, or a background shell that finished while this step ran:
         // one more step answers it now rather than in a follow-up turn.
         if (steerQueue.length || (!input.subagent && session.notifications.length)) continue;
+        if (!input.subagent && input.hooks?.stop && stopContinues < MAX_STOP_HOOK_CONTINUES) {
+          const verdict = await abortable(Promise.resolve(input.hooks.stop({ ...turnHookInfo, stopHookActive: stopContinues > 0 })), signal);
+          if (verdict?.continueWith) {
+            stopContinues += 1;
+            await append({ type: 'text', role: 'user', text: `[Stop hook] ${verdict.continueWith}` });
+            continue;
+          }
+        }
         return result({ stopReason: 'completed' });
       }
 
@@ -450,6 +490,17 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
           return outcome ? [{ type: 'tool_result', id: call.id, name: call.name, output: outcome.result.output, ...(outcome.result.isError ? { isError: true } : {}) }] : [];
         });
         if (resultItems.length) await append(...resultItems).catch(() => undefined);
+      }
+
+      // ask_user put a question to the user: the turn ends on it, and their
+      // next message is the answer.
+      if (!input.subagent && session.pendingQuestion) {
+        const question = session.pendingQuestion;
+        session.pendingQuestion = undefined;
+        input.onResponseDelta?.(`${needsSeparator ? '\n\n' : ''}${question}`, 'append');
+        segments.push(question);
+        await append({ type: 'text', role: 'assistant', text: question });
+        return result({ stopReason: 'completed' });
       }
 
       for (const { call, result: outcome } of outcomes) {

@@ -1,5 +1,6 @@
 import type { ToolSpec } from '../model-client.js';
 import type { ToolDefinition } from '../tool-contract.js';
+import { askUserTool } from './ask-user.js';
 import { bashOutputTool, bashTool, killBashTool } from './bash.js';
 import { editFileTool } from './edit-file.js';
 import { exitPlanModeTool } from './exit-plan-mode.js';
@@ -7,6 +8,7 @@ import { globTool } from './glob.js';
 import { grepTool } from './grep.js';
 import { listDirTool } from './list-dir.js';
 import { multiEditTool } from './multi-edit.js';
+import { notebookEditTool } from './notebook.js';
 import { readFileTool } from './read-file.js';
 import { skillTool } from './skill.js';
 import { taskTool } from './task.js';
@@ -18,10 +20,10 @@ import { writeFileTool } from './write-file.js';
 export function defaultTools(): ToolDefinition[] {
   return [
     readFileTool, listDirTool, globTool, grepTool,
-    writeFileTool, editFileTool, multiEditTool,
+    writeFileTool, editFileTool, multiEditTool, notebookEditTool,
     bashTool, bashOutputTool, killBashTool,
     webFetchTool, webSearchTool, todoWriteTool, exitPlanModeTool, skillTool,
-    taskTool,
+    taskTool, askUserTool,
   ];
 }
 

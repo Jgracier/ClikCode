@@ -61,3 +61,26 @@ describe('Claude Code hooks on ClikCode\'s own agent', () => {
     expect(toolHooksFrom(await readClaudeHooks(cwd, home))).toBeUndefined();
   });
 });
+
+describe('the prompt, session and stop hooks', () => {
+  it('lets a UserPromptSubmit hook block a prompt or add context to it, ignoring matchers as Claude does', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { UserPromptSubmit: [{ matcher: 'ignored', hooks: [{ command: 'grep -q secret && { echo "no secrets in prompts" >&2; exit 2; }; echo "branch: main"' }] }] } });
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home))!;
+    expect(await hooks.userPromptSubmit!('here is my secret', info(cwd))).toEqual({ block: 'no secrets in prompts' });
+    expect(await hooks.userPromptSubmit!('fix the bug', info(cwd))).toEqual({ context: 'branch: main' });
+  });
+
+  it('adds SessionStart context for a matching source only', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ command: 'echo \'{"hookSpecificOutput":{"additionalContext":"on-call: ana"}}\'' }] }] } });
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home))!;
+    expect(await hooks.sessionStart!({ ...info(cwd), source: 'startup' })).toEqual({ context: 'on-call: ana' });
+    expect(await hooks.sessionStart!({ ...info(cwd), source: 'resume' })).toBeUndefined();
+  });
+
+  it('lets a Stop hook send the agent back to work, and tells it when it already did', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { Stop: [{ hooks: [{ command: 'grep -q \'"stop_hook_active":true\' && exit 0; echo "tests are not run yet" >&2; exit 2' }] }] } });
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home))!;
+    expect(await hooks.stop!({ ...info(cwd), stopHookActive: false })).toEqual({ continueWith: 'tests are not run yet' });
+    expect(await hooks.stop!({ ...info(cwd), stopHookActive: true })).toBeUndefined();
+  });
+});

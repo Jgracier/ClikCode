@@ -45,6 +45,9 @@ export interface HarnessSessionState {
   readonly readFiles: Map<string, FileReadStamp>;
   readonly shells: Map<string, BackgroundShell>;
   plan: { active: boolean; approvedPlan?: string };
+  /** A question ask_user put to the user: the loop ends the turn with it, and
+   * the user's next message is the answer. */
+  pendingQuestion?: string;
   nextShellNumber: number;
   /** Finished background shells the model has not been told about yet. */
   readonly notifications: ShellNotification[];

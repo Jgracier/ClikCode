@@ -91,6 +91,12 @@ type UsageReport = TokenUsage & { contextTokens?: number; contextWindow?: number
 interface HarnessHooks {
   preToolUse?(call: ModelToolCall, info: { sessionId: string; cwd: string }): Promise<{ deny?: string } | void> | { deny?: string } | void;
   postToolUse?(call: ModelToolCall, result: ToolRunResult, info: { sessionId: string; cwd: string }): Promise<{ output?: string } | void> | { output?: string } | void;
+  /** May refuse the prompt (`block`, shown to the user) or add context to it. */
+  userPromptSubmit?(prompt: string, info: { sessionId: string; cwd: string }): Promise<{ block?: string; context?: string } | void>;
+  /** Context for a conversation's first turn (`startup`) or its first after a restart (`resume`). */
+  sessionStart?(info: { sessionId: string; cwd: string; source: 'startup' | 'resume' }): Promise<{ context?: string } | void>;
+  /** May keep the agent working when it would finish (`continueWith` is given to the model). */
+  stop?(info: { sessionId: string; cwd: string; stopHookActive: boolean }): Promise<{ continueWith?: string } | void>;
 }
 
 export interface GatewayHarnessTurnInput {
