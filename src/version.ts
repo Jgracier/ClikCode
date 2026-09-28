@@ -1,10 +1,11 @@
 /**
  * ClikCode's version, injected at build time.
  *
- * apps/clikcode/scripts/build.mjs passes esbuild
+ * scripts/build.mjs passes esbuild
  * `define: { __CLIKCODE_VERSION__: JSON.stringify(pkg.version) }`, read from
- * apps/clikcode/package.json, so the published binary reports the version it
- * was packed as. Outside that bundle (vitest, tsx, the legacy CLI's tsc build)
+ * package.json when it builds, so the published binary reports the version it
+ * was packed as -- the one ClikDeploy stamps into package.json before
+ * `npm publish` (whose prepack rebuilds). scripts/test-pack.mjs checks it. Outside that bundle (vitest, tsx, the legacy CLI's tsc build)
  * the identifier does not exist; `typeof` on an undeclared global is safe and
  * yields the fallback instead of a ReferenceError.
  */
