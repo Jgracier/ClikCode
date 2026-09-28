@@ -425,6 +425,9 @@ describe('a message typed as the turn ends', () => {
     const client = await attach(session.id);
     let lost = 0;
     for (let round = 0; round < 24; round++) {
+      const all: WorkerEvent[] = [];
+      const record = (event: WorkerEvent): void => { all.push(event); };
+      client.on('event', record);
       const events = eventsUntil(client, 'waiting-stop');
       client.send({ type: 'submit', text: `question ${round}`, echo: true });
       const held = await gateway!.next();
@@ -441,8 +444,13 @@ describe('a message typed as the turn ends', () => {
       if (!answer) {
         // Only acceptable when the turn had already ended: then it is queued
         // durably and announced, after the waiting-stop.
-        const late = (await eventsUntil(client, 'queue-changed', 10_000)).length;
-        expect(late).toBeGreaterThan(0);
+        const deadline = Date.now() + 10_000;
+        const announced = (): boolean => {
+          const at = all.findIndex((event) => event.type === 'submission' && event.id === id);
+          return at >= 0 && all.slice(at).some((event) => event.type === 'queue-changed');
+        };
+        while (!announced() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(announced()).toBe(true);
         expect((await storedSession(session.id)).queuedTurns).toEqual([expect.objectContaining({ id })]);
       } else if (answer.disposition === 'queued') {
         // The last word the window gets on this turn already has it queued.
@@ -452,6 +460,7 @@ describe('a message typed as the turn ends', () => {
       } else {
         expect(answer.disposition).toBe('steered');
       }
+      client.off('event', record);
       // The next round starts from an empty queue (the worker leaves a typed
       // message for the window to send).
       const state = await readState();
