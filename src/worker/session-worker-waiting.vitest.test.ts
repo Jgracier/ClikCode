@@ -56,7 +56,7 @@ afterEach(async () => {
 
 interface TurnRequest { items: { type: string; role?: string; text?: string; name?: string }[]; respond: (frames: Record<string, unknown>[]) => void }
 
-/** The Gateway's turn endpoint, one scripted answer per request, or held
+/** The Gateway's OpenAI-compatible endpoint, one scripted answer per request, or held
  * until the test answers. Everything else it serves is a 404. */
 class FakeGateway {
   readonly requests: TurnRequest[] = [];
@@ -72,10 +72,16 @@ class FakeGateway {
       let raw = '';
       req.on('data', (chunk) => { raw += chunk; });
       req.on('end', () => {
-        if (req.method !== 'POST' || !req.url?.startsWith('/api/clikcode/v1/turn')) { res.writeHead(404).end('{}'); return; }
-        const body = JSON.parse(raw) as { items: TurnRequest['items'] };
+        if (req.method !== 'POST' || req.url !== '/api/gateway/v1/chat/completions') { res.writeHead(404).end('{}'); return; }
+        const body = JSON.parse(raw) as { messages: Array<{ role: string; content?: string | null | Array<{ type: string; text?: string }> }> };
         const request: TurnRequest = {
-          items: body.items,
+          items: body.messages.map((message) => ({
+            type: 'text', role: message.role,
+            text: typeof message.content === 'string' ? message.content
+              : Array.isArray(message.content)
+                ? message.content.filter((part) => part.type === 'text').map((part) => part.text ?? '').join('\n\n')
+                : '',
+          })),
           respond: (frames) => {
             res.writeHead(200, { 'content-type': 'text/event-stream' });
             for (const frame of frames) res.write(`data: ${JSON.stringify(frame)}\n\n`);
@@ -108,8 +114,14 @@ class FakeGateway {
   }
 }
 
-const text = (value: string): Record<string, unknown>[] => [{ type: 'text-delta', text: value }, { type: 'finish', stopReason: 'stop' }];
-const call = (name: string, args: Record<string, unknown>): Record<string, unknown>[] => [{ type: 'tool-call', id: `c-${randomUUID()}`, name, args }, { type: 'finish', stopReason: 'tool-calls' }];
+const text = (value: string): Record<string, unknown>[] => [
+  { choices: [{ index: 0, delta: { content: value }, finish_reason: null }] },
+  { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+];
+const call = (name: string, args: Record<string, unknown>): Record<string, unknown>[] => [
+  { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: `c-${randomUUID()}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] },
+  { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+];
 
 async function gatewaySession(permissionMode: HarnessSession['permissionMode'] = 'bypass', idleExitMs?: number): Promise<HarnessSession & { workspace: string }> {
   root = await mkdtemp(join(tmpdir(), 'clikcode-worker-wait-'));

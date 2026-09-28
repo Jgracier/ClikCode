@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
 import { noteStoredQuota } from './account-switch.js';
 import { nextUsableFailoverAccount, providerHasAccountForTurn } from './runtime.js';
+import { initialAccountChoice, matchesDirectTurnModel, terminalFailoverError, turnBackendForAccount } from './account-routing.js';
+
+vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../runtime/lazy-bridge.js')>(),
+  isDirectModelProvider: (provider: string) => provider === 'anthropic',
+}));
 
 function account(id: string, extra: Partial<AiHarnessAccount> = {}): AiHarnessAccount {
   return {
@@ -23,6 +29,53 @@ const later = new Date(Date.now() + 86_400_000).toISOString();
 const earlier = new Date(Date.now() - 86_400_000).toISOString();
 
 describe('stored-usage account switch', () => {
+  it('can fail over to an API-key account served by the same vendor CLI', () => {
+    const current = account('current', { provider: 'aider', quotaState: 'exhausted' });
+    const key = account('key', { provider: 'aider', authKind: 'api-key', credentialRef: 'env:OPENAI_API_KEY' });
+    expect(turnBackendForAccount(key)).toBe('vendor');
+    expect(nextUsableFailoverAccount(
+      state([current, key]), current, (candidate) => turnBackendForAccount(candidate) === 'vendor', new Set(),
+    )?.id).toBe('key');
+  });
+
+  it('skips a known spent account before the turn and records that attempt', () => {
+    const current = account('current', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    const next = account('next');
+    const attempted = new Set<string>();
+    expect(initialAccountChoice(state([current, next]), current, 'on-quota-exhausted', () => true, attempted))
+      .toEqual({ kind: 'switch', account: next });
+    expect([...attempted]).toEqual(['current']);
+  });
+
+  it('keeps direct API failover on an account that serves the selected model', () => {
+    const direct = account('direct', { authKind: 'api-key', credentialRef: 'env:ANTHROPIC_API_KEY', models: ['claude-sonnet'] });
+    expect(matchesDirectTurnModel(direct, 'claude-sonnet')).toBe(true);
+    expect(matchesDirectTurnModel(direct, 'other-model')).toBe(false);
+    expect(turnBackendForAccount(account('native'))).toBe('vendor');
+  });
+
+  it('reports the actual failure when another account still has quota', () => {
+    const spent = account('spent', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    const crashed = account('crashed');
+    const quotaFailure = new Error('quota reached');
+    const otherFailure = new Error('connection reset');
+    const result = terminalFailoverError({
+      state: state([spent, crashed]), current: crashed, attempted: new Set(['spent', 'crashed']),
+      matchesBackend: () => true, exhaustedAny: true, lastFailure: quotaFailure, lastOtherFailure: otherFailure,
+    });
+    expect(result).toBe(otherFailure);
+  });
+
+  it('reports exhaustion only after every matching account is spent', () => {
+    const spent = account('spent', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    const result = terminalFailoverError({
+      state: state([spent]), current: spent, attempted: new Set(['spent']),
+      matchesBackend: () => true, exhaustedAny: true, lastFailure: new Error('quota reached'),
+    });
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toContain('All accounts exhausted');
+  });
+
   it('picks the account with room left and skips one already refused, even when its saved percent still looks open', () => {
     const empty = account('empty', {
       quotaState: 'exhausted',

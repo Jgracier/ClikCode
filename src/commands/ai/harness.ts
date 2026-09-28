@@ -24,6 +24,7 @@ import { requiresProviderHandoff } from '../../session/options.js';
 import { signedInAccountId } from './preferred-account.js';
 import { hasAuthEvidence } from '../../harness/accounts/auth-files.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
+import { turnBackendForAccount } from '../../turn/account-routing.js';
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
  * it first if needed, and — only inside the interactive terminal session,
@@ -57,7 +58,8 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   session.route = 'local';
   session.workspace ??= process.cwd();
   const selected = session.accountId ? state.accounts.find((account) => account.id === session.accountId) : undefined;
-  const selectedUsable = selected?.provider === harness.provider && accountCanTakeTurn(selected);
+  const selectedUsable = selected?.provider === harness.provider
+    && turnBackendForAccount(selected) === 'vendor' && accountCanTakeTurn(selected);
   // Tracks whether the account below is being minted right now, not found
   // pre-existing -- needed because harnessNeedsLogin returns false
   // unconditionally for any harness with no statusArgv (Gemini, Antigravity,
@@ -72,7 +74,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   // place.
   let accountJustCreated = false;
   if (!selectedUsable) {
-    const accounts = state.accounts.filter((account) => account.provider === harness.provider && account.authKind === 'vendor-cli');
+    const accounts = state.accounts.filter((account) => account.provider === harness.provider && turnBackendForAccount(account) === 'vendor');
     // Signed in is what decides a login, not usable right now. An account out
     // of quota or waiting on the vendor's verification is still an account the
     // user has: it is chosen (the best one first), and its turn says why it
@@ -80,7 +82,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     // on every provider whose accounts were all spent -- Antigravity, Augment,
     // xAI here -- when the user had them and wanted to pick one.
     if (accounts.some((account) => account.status === 'ready')) {
-      session.accountId = signedInAccountId(state, harness.provider, session.accountId, (account) => account.authKind === 'vendor-cli');
+      session.accountId = signedInAccountId(state, harness.provider, session.accountId, (account) => turnBackendForAccount(account) === 'vendor');
     } else if (accounts.length) {
       session.accountId = null;
     } else {
