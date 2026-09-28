@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition';
 import { accountHasUsage, resumeInCandidates, sessionProviderHasUsage } from './resume-in';
+
+vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../runtime/lazy-bridge.js')>(),
+  isDirectModelProvider: (provider: string) => provider === 'anthropic',
+}));
 
 const harness = (command: string, provider: string, tier: number): AiLocalHarnessDefinition & { tier: number } => ({
   command, provider, displayName: command, surface: 'terminal', localAuth: ['vendor-cli'], binary: command, tier,
@@ -45,5 +50,7 @@ describe('resume in', () => {
     const pending = account('a2', 'anthropic', { verification: { at: new Date().toISOString() } });
     expect(sessionProviderHasUsage([spent, pending, account('o1', 'openai')], 'anthropic')).toBe(false);
     expect(sessionProviderHasUsage([spent, pending, account('a3', 'anthropic')], 'anthropic')).toBe(true);
+    expect(sessionProviderHasUsage([spent, account('a4', 'anthropic', { authKind: 'api-key' })], 'anthropic')).toBe(false);
+    expect(sessionProviderHasUsage([account('aider-key', 'aider', { authKind: 'api-key' })], 'aider')).toBe(true);
   });
 });
