@@ -4,8 +4,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import { createStreamState } from '../harness/events/adapters.js';
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountSwitchNotice, accountSwitchPhase, accountVerification, quotaRetryHint, verificationNotice } from './failover.js';
-import { recordRefused } from '../harness/accounts/usage-learning.js';
+import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice } from './failover.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -20,9 +19,8 @@ import { createBackgroundWait, streamJsonUserMessage } from '../harness/transpor
 import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
 import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
-import { noteStoredQuota } from './account-switch.js';
-import { markQuotaExhausted } from '../harness/accounts/usage-reading.js';
-import { recordSuccessfulAccountTurn } from './account-outcome.js';
+import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
+import { initialAccountChoice, terminalFailoverError, turnBackendForAccount } from './account-routing.js';
 import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, type AccountFailureKind } from './failover.js';
 import { carryNativeSession } from '../session/carry.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
@@ -40,7 +38,7 @@ import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
-import { closePersistentTransport, completeTurnCheckpoint, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, providerHasAccountForTurn, startTurnCheckpoint, synchronizeNativeTranscript, turnEnvironment, vendorBackgroundTurnHandlerFor, type TurnRunOptions } from './runtime.js';
+import { closePersistentTransport, completeTurnCheckpoint, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, startTurnCheckpoint, synchronizeNativeTranscript, turnEnvironment, vendorBackgroundTurnHandlerFor, type TurnRunOptions } from './runtime.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
@@ -157,17 +155,12 @@ export async function sendVendorTurn(input: {
   let lastOtherFailure: unknown;
   const attemptedAccounts = new Set<string>();
   try {
-  if (session.accountFailover === 'on-quota-exhausted' && noteStoredQuota(account, state) === 0) {
-    attemptedAccounts.add(account.id);
-    const fallback = nextUsableFailoverAccount(
-      state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
-    );
-    if (!fallback) {
-      await writeState(state);
-      throw new Error(usageExhaustedMessage(
-      state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
-    ));
-    }
+  const initial = initialAccountChoice(
+    state, account, session.accountFailover, (item) => turnBackendForAccount(item) === 'vendor', attemptedAccounts,
+  );
+  if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
+  if (initial.kind === 'switch') {
+    const fallback = initial.account;
     switchedFrom = account.label;
     prompter?.activity(chalk.yellow(accountSwitchNotice('quota-exhausted', fallback.label)));
     prompter?.phase(accountSwitchPhase(fallback.label));
@@ -708,12 +701,8 @@ export async function sendVendorTurn(input: {
       // Only a quota refusal marks the account spent, though: a crash says
       // nothing about how much allowance is left.
       if (failureKind === 'quota-exhausted') {
-        markQuotaExhausted(account, Date.now(), quotaRetryHint(failure));
+        recordQuotaRefusal(state, account, failure);
         exhaustedAnyAccount = true;
-        // The one observation that makes a learned limit possible: this much
-        // was refused. Only recorded for a real quota refusal -- a crash
-        // says nothing about where the ceiling is.
-        account.usageLearning = recordRefused(account.usageLearning, state.invocations, account.id, Date.now());
       }
       else lastOtherFailure = failure;
       attemptedAccounts.add(account.id);
@@ -731,21 +720,15 @@ export async function sendVendorTurn(input: {
         throw new Error(usageExhaustedMessage(account ? [account] : []));
       }
       const fallback = await nextUsableFailoverAccount(
-        state, account, (item) => item.authKind === 'vendor-cli', attemptedAccounts,
+        state, account, (item) => turnBackendForAccount(item) === 'vendor', attemptedAccounts,
       );
       if (!fallback) {
         await checkpoint.persistNow();
-        // Nothing left to try. "Usage Exhausted" only if running out is
-        // actually what happened -- if the last account died of something
-        // else, saying it ran out would be inventing a reason.
-        if (!exhaustedAnyAccount) throw failure;
-        // An account that failed some other way -- a crash, a throttle --
-        // still has its quota. Saying every account ran out would send the
-        // user to another provider while this one can still serve them.
-        if (providerHasAccountForTurn(state, account.provider, (item) => item.authKind === 'vendor-cli')) throw lastOtherFailure ?? failure;
-        throw new Error(usageExhaustedMessage(
-          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
-        ));
+        throw terminalFailoverError({
+          state, current: account, attempted: attemptedAccounts,
+          matchesBackend: (item) => turnBackendForAccount(item) === 'vendor',
+          exhaustedAny: exhaustedAnyAccount, lastFailure: failure, lastOtherFailure,
+        });
       }
       // The vendor's own thread is carried into the account taking over, so
       // it resumes with everything it actually said and did rather than a

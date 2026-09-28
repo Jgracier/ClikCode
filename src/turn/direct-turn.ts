@@ -5,16 +5,13 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
-import { startTurnCheckpoint, completeTurnCheckpoint, nextUsableFailoverAccount, providerHasAccountForTurn, type TurnRunOptions } from './runtime.js';
+import { startTurnCheckpoint, completeTurnCheckpoint, nextUsableFailoverAccount, type TurnRunOptions } from './runtime.js';
 import { writeState } from '../session/state/write.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../daemon/server.js';
-import { noteStoredQuota } from './account-switch.js';
-import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, quotaRetryHint, type AccountFailureKind } from './failover.js';
-import { recordRefused } from '../harness/accounts/usage-learning.js';
-import { markQuotaExhausted } from '../harness/accounts/usage-reading.js';
-import { recordSuccessfulAccountTurn } from './account-outcome.js';
+import { accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, type AccountFailureKind } from './failover.js';
+import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
+import { initialAccountChoice, matchesDirectTurnModel, terminalFailoverError } from './account-routing.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { prepareAttachments } from '../session/attachments.js';
 
@@ -47,17 +44,12 @@ export async function sendDirectApiTurn(input: {
   let switchReason: AccountFailureKind = 'quota-exhausted';
   const attemptedAccounts = new Set<string>();
   try {
-  if (session.accountFailover === 'on-quota-exhausted' && noteStoredQuota(account, state) === 0) {
-    attemptedAccounts.add(account.id);
-    const fallback = await nextUsableFailoverAccount(
-      state, account, (item) => item.authKind === 'api-key' && item.models.includes(model), attemptedAccounts,
-    );
-    if (!fallback) {
-      await writeState(state);
-      throw new Error(usageExhaustedMessage(
-          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
-        ));
-    }
+  const initial = initialAccountChoice(
+    state, account, session.accountFailover, (item) => matchesDirectTurnModel(item, model), attemptedAccounts,
+  );
+  if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
+  if (initial.kind === 'switch') {
+    const fallback = initial.account;
     switchedFrom = account.label;
     prompter?.activity(chalk.yellow(accountSwitchNotice('quota-exhausted', fallback.label)));
     prompter?.phase(accountSwitchPhase(fallback.label));
@@ -112,9 +104,8 @@ export async function sendDirectApiTurn(input: {
       if (session.accountFailover !== 'on-quota-exhausted') throw error;
       const exhaustedAccount = account;
       if (failureKind === 'quota-exhausted') {
-        markQuotaExhausted(exhaustedAccount, Date.now(), quotaRetryHint(error));
+        recordQuotaRefusal(state, exhaustedAccount, error);
         exhaustedAnyApiAccount = true;
-        exhaustedAccount.usageLearning = recordRefused(exhaustedAccount.usageLearning, state.invocations, exhaustedAccount.id, Date.now());
       } else lastOtherApiFailure = error;
       attemptedAccounts.add(exhaustedAccount.id);
       // Preserve every failed candidate before looking for the next one. A
@@ -123,18 +114,16 @@ export async function sendDirectApiTurn(input: {
       await writeState(state);
       const fallback = await nextUsableFailoverAccount(
         state, exhaustedAccount,
-        (item) => item.authKind === 'api-key' && item.models.includes(model),
+        (item) => matchesDirectTurnModel(item, model),
         attemptedAccounts,
       );
       if (!fallback) {
         await writeState(state);
-        if (!exhaustedAnyApiAccount) throw error;
-        // Same rule as the vendor-CLI path: not "exhausted" while an account
-        // that failed some other way still has quota.
-        if (providerHasAccountForTurn(state, exhaustedAccount.provider, (item) => item.authKind === 'api-key' && item.models.includes(model))) throw lastOtherApiFailure ?? error;
-        throw new Error(usageExhaustedMessage(
-          state.accounts.filter((item) => attemptedAccounts.has(item.id) || item.id === account?.id),
-        ));
+        throw terminalFailoverError({
+          state, current: exhaustedAccount, attempted: attemptedAccounts,
+          matchesBackend: (item) => matchesDirectTurnModel(item, model),
+          exhaustedAny: exhaustedAnyApiAccount, lastFailure: error, lastOtherFailure: lastOtherApiFailure,
+        });
       }
       switchedFrom = exhaustedAccount.label;
       switchReason = failureKind;

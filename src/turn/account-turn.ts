@@ -4,7 +4,7 @@ import { isClikCodeAgent } from '../session/route.js';
 import { hermesTurboFitModelId } from '../harness/accounts/hermes-discovery.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
-import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
+import { turnBackendForAccount } from './account-routing.js';
 import type { TurnRunOptions } from './turn-options.js';
 import { sendDirectApiTurn } from './direct-turn.js';
 import { sendVendorTurn } from './vendor-turn.js';
@@ -46,6 +46,6 @@ export async function aiSessionSend(
   const startedAt = Date.now();
 
   const input = { state, session, account, model, text, prepared, turnText, startedAt, signal, run };
-  if (account.authKind === 'vendor-cli' || !isDirectModelProvider(account.provider)) return sendVendorTurn(input);
+  if (turnBackendForAccount(account) === 'vendor') return sendVendorTurn(input);
   return sendDirectApiTurn(input);
 }
