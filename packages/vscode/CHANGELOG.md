@@ -5,6 +5,7 @@
 First release.
 
 - Chat panel in the activity bar (movable to the secondary side bar) on the installed ClikCode.
+- A ClikCode button in the editor title bar opens the same chat as an editor tab beside your code; the tab reopens with VS Code.
 - Streaming Markdown answers with tool activity, plan and token usage.
 - Steer, queue and stop turns; queued messages are sent in order when a turn ends.
 - Approvals with a diff editor preview: approve once, always, or deny.

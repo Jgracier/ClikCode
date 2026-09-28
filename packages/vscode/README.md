@@ -8,6 +8,9 @@ and keeps one conversation you can move between them.
 
 ## Features
 
+- **Where you expect it.** The ClikCode button in the editor title bar (top right) opens the chat as a
+  tab beside your code, as Claude Code and Codex do; it also lives in the activity bar, and can be
+  dragged to the secondary side bar. Every place shows the same chat.
 - **One chat, every agent.** Pick the harness, model, account, reasoning effort and permission mode
   from quick picks (or the chips at the top of the chat). The lists are ClikCode's own pickers, so
   they match the terminal exactly.
@@ -47,6 +50,7 @@ and keeps one conversation you can move between them.
 | Command | Default key |
 | --- | --- |
 | ClikCode: Open Chat | `Ctrl+Alt+C` (`Ctrl+Cmd+C` on macOS) |
+| ClikCode: Open Chat in Editor | the ClikCode button in the editor title bar |
 | ClikCode: Ask About Selection | `Ctrl+Alt+Q` (`Ctrl+Cmd+Q`) with a selection |
 | ClikCode: Stop the Running Turn | `Esc` in the chat |
 | ClikCode: New Chat / Resume Chat… | |

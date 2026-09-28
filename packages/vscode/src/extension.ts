@@ -59,6 +59,10 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('clikcode.path') || event.affectsConfiguration('clikcode.nodePath')) void controller.restart();
     }),
+    vscode.window.registerWebviewPanelSerializer(ChatViewProvider.panelType, {
+      deserializeWebviewPanel: async (panel) => { view.restorePanel(panel); },
+    }),
+    vscode.commands.registerCommand('clikcode.openInEditor', () => view.openInEditor()),
     vscode.commands.registerCommand('clikcode.focus', async () => { await view.reveal(); view.post({ type: 'focus' }); }),
     vscode.commands.registerCommand('clikcode.newChat', async () => { await view.reveal(); await controller.open('new'); }),
     vscode.commands.registerCommand('clikcode.resumeChat', slash('/resume')),
