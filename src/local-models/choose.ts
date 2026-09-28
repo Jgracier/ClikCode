@@ -306,9 +306,24 @@ export function estimatedTurnSeconds(speed: SpeedEstimate): number {
   return 2_000 / speed.promptPerSecond + 300 / speed.generatePerSecond;
 }
 
+/** A newly loaded model must read the agent's instructions and tool schemas
+ * before it can answer. The lower end is a brief answer; the upper end also
+ * covers a long answer or reasoning tokens. These are inference times after
+ * the server is ready, not a promise about model loading or downloading. */
+export function firstReplySeconds(speed: SpeedEstimate): { brief: number; long: number } {
+  const promptSeconds = 4_000 / speed.promptPerSecond;
+  return {
+    brief: promptSeconds + 300 / speed.generatePerSecond,
+    long: promptSeconds + 1_000 / speed.generatePerSecond,
+  };
+}
+
 /** A context is useful when it fits memory and can still complete a typical
  * deep turn near the established 50-read/8-write budget (77.5 seconds). */
 const MAX_DEEP_TURN_SECONDS = 2_000 / MIN_PROMPT_PER_SECOND + 300 / MIN_GENERATE_PER_SECOND;
+/** A first agent reply that may use up to 1,000 output tokens should still
+ * arrive promptly after the model has loaded. */
+const MAX_FIRST_REPLY_SECONDS = 90;
 /** The worst held-out deep turn was 14.4% slower than predicted. Do not
  * advertise a model as meeting the target at that edge. */
 const DEEP_TIME_MARGIN = 1.15;
@@ -375,12 +390,15 @@ export interface RankedModel {
   measured?: Measurement;
   /** The measurement when there is one, else the estimate. */
   speed: SpeedEstimate;
+  /** Inference time of the first reply after loading, at shallow context. */
+  firstReply: ReturnType<typeof firstReplySeconds>;
   passes: boolean;
 }
 
 /** Every catalog model in the order it should be offered: models that fit
- * and meet the speed bar, best quality first; then models that fit but are
- * slow, fastest first; then models that do not fit, smallest first. A
+ * and meet both the first-reply and deep-turn targets, best quality first;
+ * then models that fit but are slow, quickest first reply first; then models
+ * that do not fit, smallest first. A
  * measurement stands in for the estimate wherever there is one. */
 export function rankModels(
   catalog: readonly CatalogModel[], hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>, budget: MemoryBudget,
@@ -391,16 +409,21 @@ export function rankModels(
     const fit = fitForConversation(model, hardware, budget, measured, footprints[model.id] ?? []);
     const estimate = speedAtContext(model, hardware, fit, undefined, budget.gpu?.backend);
     const speed = speedAtContext(model, hardware, fit, measured, budget.gpu?.backend);
+    const shallow = measured?.promptPerSecond && measured.generatePerSecond
+      ? { promptPerSecond: measured.promptPerSecond, generatePerSecond: measured.generatePerSecond }
+      : estimateSpeed(model, hardware, fit, budget.gpu?.backend);
+    const firstReply = firstReplySeconds(shallow);
     return {
-      model, fit, estimate, speed,
-      passes: fit.fits && measured?.toolCalls !== false && estimatedTurnSeconds(speed) * DEEP_TIME_MARGIN <= MAX_DEEP_TURN_SECONDS,
+      model, fit, estimate, speed, firstReply,
+      passes: fit.fits && measured?.toolCalls !== false && estimatedTurnSeconds(speed) * DEEP_TIME_MARGIN <= MAX_DEEP_TURN_SECONDS
+        && firstReply.long <= MAX_FIRST_REPLY_SECONDS,
       ...(measured ? { measured } : {}),
     };
   });
   const group = (row: RankedModel): number => (row.passes ? 0 : row.fit.fits ? 1 : 2);
   return ranked.sort((left, right) => group(left) - group(right)
     || (group(left) === 0 ? right.model.quality - left.model.quality
-      : group(left) === 1 ? right.speed.promptPerSecond - left.speed.promptPerSecond
+      : group(left) === 1 ? left.firstReply.long - right.firstReply.long
         : left.fit.needBytes - right.fit.needBytes));
 }
 
@@ -415,14 +438,19 @@ export function chooseModel(ranked: readonly RankedModel[], pick?: string): Choi
     const row = ranked.find((item) => item.model.id === pick);
     if (!row) throw new Error(`${pick} is not a ClikCode Local model.`);
     if (!row.fit.fits) throw new Error(`${row.model.label} does not fit on this machine: ${row.fit.reason}.`);
-    return { row };
+    return {
+      row,
+      ...(!row.passes ? { notice: row.measured?.toolCalls === false
+        ? `${row.model.label} did not make a tool call in its local check, so coding-agent tasks may fail.`
+        : `${row.model.label} may take about ${Math.round(row.firstReply.brief)}–${Math.round(row.firstReply.long)} seconds for its first reply after loading; longer replies take longer.` } : {}),
+    };
   }
   const [best] = ranked;
   if (!best || !best.fit.fits) throw new Error('No ClikCode Local model fits in the memory this machine has free.');
   if (best.passes) return { row: best };
   return {
     row: best,
-    notice: `No local model is estimated to meet the deep-conversation speed target here; `
-      + `${best.model.label} is the fastest that fits (about ${Math.round(best.speed.promptPerSecond)} reading, ${Math.round(best.speed.generatePerSecond)} writing at 80% context).`,
+    notice: `No local model is estimated to meet both response-speed targets here; `
+      + `${best.model.label} is the quickest that fits (about ${Math.round(best.firstReply.brief)}–${Math.round(best.firstReply.long)} seconds for its first reply after loading).`,
   };
 }
