@@ -21,6 +21,7 @@ import { resolveContextProfile } from './context-profile.js';
 import { readImageInputs } from './images.js';
 import { createSubagentRunner } from './subagent.js';
 import { TASK_TOOL_NAME } from './tools/task.js';
+import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
 const DEFAULT_MAX_STEPS = 60;
 /** Retries of one model step that failed before saying anything. */
@@ -182,6 +183,17 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   let lastContext: { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile: typeof profile.name } = { contextProfile: profile.name };
 
   // One prompt at a time: parallel reads, and parallel sub-agents, must not stack dialogs.
+  // The mode as the user has it NOW (input.currentPermissionMode reads it back
+  // from where /permissions saved it); unreadable falls back to the mode the
+  // turn started with, never to a more permissive one.
+  const permissionModeNow = async (): Promise<AiHarnessPermissionMode> => {
+    try {
+      return (await input.currentPermissionMode?.()) ?? input.permissionMode;
+    } catch {
+      // fail-open-ok: the turn's own starting mode is the fallback, exactly as before this lookup existed.
+      return input.permissionMode;
+    }
+  };
   const queueApproval = <T>(ask: () => Promise<T>): Promise<T> => {
     const next = approvalChain.then(ask);
     approvalChain = next.catch(() => undefined);
@@ -246,7 +258,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       if (output) input.onActivity?.({ kind: 'tool-start', label, id: call.id, output, ...category });
     });
 
-    const verdict = decidePermission({ tool, args: call.args, mode: input.permissionMode, rules: rulesNow, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });
+    const verdict = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: rulesNow, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });
     if (verdict.decision === 'deny') return finish({ output: `Permission denied: ${verdict.reason}. Do not retry this call; choose another approach or tell the user what you need.`, isError: true });
     if (verdict.decision === 'ask') {
       // The rule this call could be answered with once and for all, e.g.
@@ -256,6 +268,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       const rule = suggestPermissionRule(tool, call.args, scope);
       const ask = queueApproval(async () => {
         throwIfAborted();
+        // Queued behind another approval while the user switched modes: judge it
+        // again now, so a switch to bypass stops the prompts that were waiting.
+        const now = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: rulesNow, planMode: session.plan.active, scope, hasApprover: true });
+        if (now.decision === 'allow') return true;
         const prompt = await buildApprovalPrompt(tool, call.args, ctx, verdict.reason);
         input.onPhase?.('waiting for approval');
         return input.onApproval!(prompt.title, prompt.detail, rule);

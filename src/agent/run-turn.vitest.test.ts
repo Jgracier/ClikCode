@@ -324,6 +324,35 @@ describe('runGatewayHarnessTurn', () => {
     expect(await fs.readFile(path.join(cwd, 'new.txt'), 'utf8')).toBe('x\n');
   });
 
+  it('honours a switch from ask to bypass made while the turn is running', async () => {
+    // The user answers the first prompt, then sets /permissions bypass mid-turn.
+    let mode: 'ask' | 'bypass' = 'ask';
+    const prompts: string[] = [];
+    const h = harness([
+      { toolCalls: [{ name: 'write_file', args: { path: 'first.txt', content: '1\n' } }] },
+      { toolCalls: [{ name: 'write_file', args: { path: 'second.txt', content: '2\n' } }] },
+      { text: 'done' },
+    ], {
+      permissionMode: 'ask',
+      currentPermissionMode: async () => mode,
+      onApproval: async (title) => { prompts.push(title); mode = 'bypass'; return true; },
+    });
+    await runGatewayHarnessTurn(h.input);
+    expect(prompts).toHaveLength(1);
+    expect(await fs.readFile(path.join(cwd, 'second.txt'), 'utf8')).toBe('2\n');
+  });
+
+  it('keeps the mode the turn started with when the current mode cannot be read', async () => {
+    const prompts: string[] = [];
+    const h = harness([{ toolCalls: [{ name: 'write_file', args: { path: 'x.txt', content: 'x' } }] }, { text: 'ok' }], {
+      permissionMode: 'ask',
+      currentPermissionMode: async () => { throw new Error('index unreadable'); },
+      onApproval: async (title) => { prompts.push(title); return true; },
+    });
+    await runGatewayHarnessTurn(h.input);
+    expect(prompts).toHaveLength(1);
+  });
+
   it('plan mode hides write/exec tools and unlocks them once the plan is approved', async () => {
     const exits: string[] = [];
     const h = harness([

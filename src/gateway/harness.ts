@@ -20,6 +20,7 @@ import type { GatewayHarnessTurnResult, ModelClient } from '../agent/model-clien
 import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { loadIndex } from '../session/state/index-file.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
@@ -72,6 +73,10 @@ export async function runGatewayHarnessSessionTurn(
     cwd: session.workspace ?? process.cwd(),
     prompt: input.prompt,
     permissionMode,
+    // /permissions writes the index from the user's terminal while this turn
+    // runs in the worker: read the mode back before each tool call so a switch
+    // (ask -> bypass) applies to the rest of this turn.
+    currentPermissionMode: async () => (await loadIndex())?.sessions.find((item) => item.id === session.id)?.permissionMode,
     modelClient,
     stateDir,
     ...(mcp.tools.length ? { extraTools: mcp.tools } : {}),

@@ -100,6 +100,10 @@ export interface GatewayHarnessTurnInput {
   prompt: string;
   images?: readonly string[];
   permissionMode: AiHarnessPermissionMode;
+  /** The mode as it stands NOW, read before every tool call: a change the user
+   * makes mid-turn (ask -> bypass while a turn is running) applies to the rest
+   * of that turn, not only the next one. Absent = `permissionMode` throughout. */
+  currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
   planMode?: boolean;
   modelClient: ModelClient;
   signal?: AbortSignal;
