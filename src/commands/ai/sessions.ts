@@ -90,7 +90,8 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
  * the session already names one (a `sessions set --model` re-applies this
  * policy) and otherwise unset until the engine picks on the first turn; a
  * vendor's model id never survives the move. Effort is `auto` until the
- * engine publishes a control for it. */
+ * engine publishes a control for it. The first turn uses an already
+ * downloaded model; a new weight file is fetched only after /model consent. */
 export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
   session.route = 'clikcode-local';
   session.accountId = null;

@@ -271,7 +271,65 @@ export function cpuPromptRate(quantization: string): number {
 /** Bytes a token reads: the whole file for a dense model, the active
  * share for a mixture of experts. */
 function bytesPerToken(model: CatalogModel): number {
-  return model.weights.sizeBytes * Math.min(1, model.activeParamsB / model.totalParamsB);
+  return model.activeWeightBytes ?? model.weights.sizeBytes * Math.min(1, model.activeParamsB / model.totalParamsB);
+}
+
+/** Estimate the same 2,000-input/300-output turn used in the local benchmarks
+ * at the 80% context depth where conversation compaction begins. The depth
+ * terms were fitted on seven GGUF builds on an eight-core Zen 4, then checked
+ * on four held-out deep runs. A first-run speed measurement calibrates the
+ * shallow part on the actual machine; the depth term remains an estimate. */
+export function speedAtContext(
+  model: CatalogModel, hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>,
+  fit: Fit, measured?: Measurement, gpuBackend?: string,
+): SpeedEstimate {
+  const shallow = estimateSpeed(model, hardware, fit, gpuBackend);
+  const base = measured?.promptPerSecond && measured.generatePerSecond
+    ? { promptPerSecond: measured.promptPerSecond, generatePerSecond: measured.generatePerSecond } : shallow;
+  if (fit.placement !== 'cpu') return base; // GPU depth coefficients await GPU measurements.
+  const depth = Math.floor(fit.context * 0.8);
+  const fullKvWork = model.kv.layers * model.kv.kvHeads * model.kv.keyLength;
+  const headRatio = model.architecture === 'gemma4' || model.architecture === 'gpt-oss' ? 8 : 4;
+  const fullQWork = fullKvWork * headRatio;
+  const cores = Math.max(1, Math.min(8, hardware.physicalCores));
+  const effectiveCores = cores * (1 - 0.3267 * (cores - 1) / 7);
+  const promptExtraSeconds = 0.49697 * (fullQWork / 10_000) * (depth / 1_000_000) / effectiveCores;
+  const generateExtraSeconds = 0.056167 * (fullKvWork / 10_000) * (depth ** 1.5 / 1_000_000)
+    * (8 / cores);
+  return {
+    promptPerSecond: 1 / (1 / base.promptPerSecond + promptExtraSeconds),
+    generatePerSecond: 1 / (1 / base.generatePerSecond + generateExtraSeconds),
+  };
+}
+
+export function estimatedTurnSeconds(speed: SpeedEstimate): number {
+  return 2_000 / speed.promptPerSecond + 300 / speed.generatePerSecond;
+}
+
+/** A context is useful when it fits memory and can still complete a typical
+ * deep turn near the established 50-read/8-write budget (77.5 seconds). */
+const MAX_DEEP_TURN_SECONDS = 2_000 / MIN_PROMPT_PER_SECOND + 300 / MIN_GENERATE_PER_SECOND;
+/** The worst held-out deep turn was 14.4% slower than predicted. Do not
+ * advertise a model as meeting the target at that edge. */
+const DEEP_TIME_MARGIN = 1.15;
+
+function fitForConversation(
+  model: CatalogModel, hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>,
+  budget: MemoryBudget, measured: Measurement | undefined, footprints: readonly Footprint[],
+): Fit {
+  const memoryFit = fitModel(model, budget, { footprints });
+  if (!memoryFit.fits || memoryFit.placement !== 'cpu') return memoryFit;
+  let smallest = memoryFit;
+  for (const context of contextsToTry(model)) {
+    const fit = fitModel(model, budget, { context, footprints });
+    if (!fit.fits || fit.placement !== 'cpu') continue;
+    const room = budget.ramBytes - fit.needBytes;
+    if (context > model.defaultContext && room < PROMPT_CACHE_ALLOWANCE) continue;
+    smallest = fit;
+    const speed = speedAtContext(model, hardware, fit, measured, budget.gpu?.backend);
+    if (estimatedTurnSeconds(speed) * DEEP_TIME_MARGIN <= MAX_DEEP_TURN_SECONDS) return fit;
+  }
+  return smallest;
 }
 
 export function estimateSpeed(model: CatalogModel, hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>, fit: Pick<Fit, 'placement' | 'gpuBytes' | 'needBytes'>, gpuBackend?: string): SpeedEstimate {
@@ -329,13 +387,13 @@ export function rankModels(
   measurements: Readonly<Record<string, Measurement>>, footprints: Readonly<Record<string, readonly Footprint[]>> = {},
 ): RankedModel[] {
   const ranked = catalog.map((model): RankedModel => {
-    const fit = fitModel(model, budget, { footprints: footprints[model.id] ?? [] });
-    const estimate = estimateSpeed(model, hardware, fit, budget.gpu?.backend);
     const measured = measurements[model.id];
-    const speed = measured?.promptPerSecond && measured.generatePerSecond
-      ? { promptPerSecond: measured.promptPerSecond, generatePerSecond: measured.generatePerSecond } : estimate;
+    const fit = fitForConversation(model, hardware, budget, measured, footprints[model.id] ?? []);
+    const estimate = speedAtContext(model, hardware, fit, undefined, budget.gpu?.backend);
+    const speed = speedAtContext(model, hardware, fit, measured, budget.gpu?.backend);
     return {
-      model, fit, estimate, speed, passes: fit.fits && meetsBar({ ...speed, toolCalls: measured?.toolCalls }),
+      model, fit, estimate, speed,
+      passes: fit.fits && measured?.toolCalls !== false && estimatedTurnSeconds(speed) * DEEP_TIME_MARGIN <= MAX_DEEP_TURN_SECONDS,
       ...(measured ? { measured } : {}),
     };
   });
@@ -364,7 +422,7 @@ export function chooseModel(ranked: readonly RankedModel[], pick?: string): Choi
   if (best.passes) return { row: best };
   return {
     row: best,
-    notice: `No local model reaches ${MIN_PROMPT_PER_SECOND} tokens/s reading and ${MIN_GENERATE_PER_SECOND} writing here; `
-      + `${best.model.label} is the fastest that fits (about ${Math.round(best.speed.promptPerSecond)} reading, ${Math.round(best.speed.generatePerSecond)} writing).`,
+    notice: `No local model is estimated to meet the deep-conversation speed target here; `
+      + `${best.model.label} is the fastest that fits (about ${Math.round(best.speed.promptPerSecond)} reading, ${Math.round(best.speed.generatePerSecond)} writing at 80% context).`,
   };
 }

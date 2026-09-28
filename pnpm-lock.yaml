@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@huggingface/gguf':
+        specifier: ^0.4.6
+        version: 0.4.6
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -669,6 +672,14 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@huggingface/gguf@0.4.6':
+    resolution: {integrity: sha512-+S4ysHzzNN77rU0gBcuuGN+x1TYNP4M7EgOEZ2rKaTz8dZ8o2N92qapQaeTjnPPNiWSc23iCV9E8u2A9VvK+rg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  '@huggingface/tasks@0.21.48':
+    resolution: {integrity: sha512-+ujPTb9irMxsiCYjL2Jpjs0+aCioJTTYA8Pp/I/+fm2LenzL3tDOs2/0ELj5phMAUDVoOozLviy4y/e7mBltxA==}
 
   '@inquirer/ansi@1.0.2':
     resolution: {integrity: sha512-S8qNSZiYzFd0wAcyG5AXCvUHC5Sr7xpZ9wZ2py9XR88jUz8wooStVx5M6dRzczbBWjic9NP7+rY0Xi7qqK/aMQ==}
@@ -3198,6 +3209,12 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.1':
     optional: true
+
+  '@huggingface/gguf@0.4.6':
+    dependencies:
+      '@huggingface/tasks': 0.21.48
+
+  '@huggingface/tasks@0.21.48': {}
 
   '@inquirer/ansi@1.0.2': {}
 

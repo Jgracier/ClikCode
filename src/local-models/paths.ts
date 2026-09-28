@@ -21,6 +21,8 @@ export function measurementsFile(): string { return join(localModelsHome(), 'mea
  * writers ever share the file. */
 export function footprintsFile(modelId: string): string { return join(serversDir(), safeName(modelId), 'footprints.json'); }
 export function preferencesFile(): string { return join(localModelsHome(), 'preferences.json'); }
+/** Pinned Hugging Face GGUF candidates inspected from remote headers. */
+export function discoveredModelsFile(): string { return join(localModelsHome(), 'discovered-models.json'); }
 
 /** A file-name-safe form of an id that may come from a user or a session. */
 export function safeName(value: string): string {

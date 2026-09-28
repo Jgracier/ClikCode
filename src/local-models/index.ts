@@ -3,7 +3,7 @@
  * endpoint for the agent loop.
  *
  *   ensureLocalModel   before each turn on a local model: starts it if it
- *                      is not running (downloading what is missing), and
+ *                      is not running (downloads require an explicit choice), and
  *                      holds it for the session. Cheap when it is running.
  *   releaseLocalModel  the session no longer uses a local model.
  *   localModelChoices  rows for a model picker, best first.
@@ -18,9 +18,10 @@
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
 import { memoryBudget, type MemoryBudget } from './budget.js';
-import { LOCAL_MODEL_CATALOG, catalogModel, type CatalogModel } from './catalog.js';
+import { LOCAL_MODEL_CATALOG, allLocalModels, catalogModel, type CatalogModel } from './catalog.js';
 import { chooseModel, fitModel, kvCacheBytes, meetsBar, rankModels, MIN_CONTEXT, type Fit, type Footprint, type Measurement, type RankedModel } from './choose.js';
 import { formatBytes } from './download.js';
+import { discoverHuggingFaceModels } from './discover.js';
 import { probeHardware, type HardwareProfile } from './hardware.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, usesMmap, waitForHealth } from './launch.js';
 import {
@@ -59,6 +60,8 @@ export interface EnsureLocalModelOptions {
    * CLIKCODE_LOCAL_IDLE_MINUTES. */
   idleMinutes?: number;
   signal?: AbortSignal;
+  /** Set only by a user action that has shown and accepted the download size. */
+  allowDownload?: boolean;
 }
 
 export interface LocalModelEndpoint {
@@ -115,7 +118,7 @@ async function viewMachine(): Promise<MachineView> {
   const machine = machineKey(hardware, build.key);
   return {
     hardware, budget: effective, build, machine, measurements: await readMeasurements(machine),
-    footprints: await readFootprints(machine, LOCAL_MODEL_CATALOG.map((model) => model.id)),
+    footprints: await readFootprints(machine, allLocalModels().map((model) => model.id)),
   };
 }
 
@@ -132,7 +135,7 @@ async function liveServer(modelId: string): Promise<ServerRecord | undefined> {
 async function runningModels(): Promise<ServerRecord[]> {
   const records: ServerRecord[] = [];
   for (const name of await readdir(serversDir()).catch(() => [] as string[])) {
-    const model = LOCAL_MODEL_CATALOG.find((item) => item.id === name);
+    const model = allLocalModels().find((item) => item.id === name);
     const record = model ? await liveServer(model.id) : undefined;
     if (record) records.push(record);
   }
@@ -149,7 +152,7 @@ function describe(model: CatalogModel, measured: Measurement | undefined): strin
   const notes: string[] = [];
   if (!measured.toolCalls) notes.push(`${model.label} did not make a tool call when asked, so tools may not work with it.`);
   if (!meetsBar(measured)) {
-    notes.push(`On this machine ${model.label} reads about ${Math.round(measured.promptPerSecond ?? 0)} tokens/s and writes `
+    notes.push(`Near empty context ${model.label} reads about ${Math.round(measured.promptPerSecond ?? 0)} tokens/s and writes `
       + `${Math.round(measured.generatePerSecond ?? 0)}; replies will be slow.`);
   }
   return notes.length ? notes.join(' ') : undefined;
@@ -171,7 +174,7 @@ function shrinkNotice(event: MemoryEvent | undefined): string | undefined {
  * first, each reported once: read and removed. */
 async function takeMemoryStops(): Promise<MemoryEvent[]> {
   const events: MemoryEvent[] = [];
-  for (const model of LOCAL_MODEL_CATALOG) {
+  for (const model of allLocalModels()) {
     const file = memoryStopFile(model.id);
     const event = await readFile(file, 'utf8').then((text) => JSON.parse(text) as MemoryEvent, () => undefined);
     if (!event) continue;
@@ -258,10 +261,13 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
   progress({ stage: 'probe', message: 'checking this machine…' });
   const view = await viewMachine();
   const stops = await takeMemoryStops();
-  const ranked = rankModels(LOCAL_MODEL_CATALOG, view.hardware, view.budget, view.measurements, view.footprints);
+  const ranked = rankModels(allLocalModels(), view.hardware, view.budget, view.measurements, view.footprints);
+  const eligible = pick ? ranked : (await Promise.all(ranked.map(async (row) => ({ row, bytes: await missingBytes([row.model.weights]) }))))
+    .filter(({ bytes }) => bytes === 0).map(({ row }) => row);
   let choice: ReturnType<typeof chooseModel>;
-  try { choice = chooseModel(ranked, pick); } catch (error) {
-    const stopped = stopNotice(stops, ranked[0]!.model, undefined);
+  try { choice = chooseModel(eligible, pick); } catch (error) {
+    const stopped = ranked[0] ? stopNotice(stops, ranked[0].model, undefined) : undefined;
+    if (!pick && !eligible.length) throw new Error('Choose a ClikCode Local model with /model before its first download.');
     throw stopped ? new Error(`${stopped} ${(error as Error).message}`) : error;
   }
   const model = choice.row.model;
@@ -276,12 +282,16 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     }
     await sweepOrphan(model.id);
     const vision = Boolean(options.vision && model.projector);
-    const fit = fitModel(model, view.budget, {
-      ...(options.context ? { context: options.context } : {}), vision, footprints: view.footprints[model.id] ?? [],
+    const fit = !options.context && !vision ? choice.row.fit : fitModel(model, view.budget, {
+      ...(options.context ? { context: options.context } : { context: choice.row.fit.context }),
+      vision, footprints: view.footprints[model.id] ?? [],
     });
     if (!fit.fits) throw new Error(`${model.label} would exceed the memory this machine can spare: ${fit.reason}.`);
     startedFit = fit;
 
+    if (!options.allowDownload && await missingBytes([model.weights])) {
+      throw new Error(`${model.label} is not downloaded. Open /model and confirm its download first.`);
+    }
     const runtime = await ensureRuntime(view.build, (update) => progress({ stage: 'runtime', ...update }));
     const modelPath = await ensureModelFile(model.weights, (update) => progress({ stage: 'download', ...update }), options.signal);
     const projectorPath = options.vision && model.projector
@@ -408,20 +418,22 @@ function placementLabel(row: RankedModel, view: MachineView): string {
   return row.fit.placement === 'cpu' ? 'CPU' : row.fit.placement === 'gpu' ? gpu ?? 'GPU' : `${gpu ?? 'GPU'}+CPU`;
 }
 
-/** Catalog rows for this machine, in the order they should be offered:
- * what fits and is fast enough first (best first), then slow, then what
- * does not fit and why. */
+/** Pinned catalog and remote-header rows, filtered to models that fit memory.
+ * Deep-conversation speed decides which are recommended and their order. */
 export async function localModelChoices(): Promise<LocalModelChoice[]> {
+  const initial = await viewMachine();
+  await discoverHuggingFaceModels(initial.budget.ramBytes + (initial.budget.gpu?.bytes ?? 0));
   const view = await viewMachine();
   const rows: LocalModelChoice[] = [];
-  for (const row of rankModels(LOCAL_MODEL_CATALOG, view.hardware, view.budget, view.measurements, view.footprints)) {
+  for (const row of rankModels(allLocalModels(), view.hardware, view.budget, view.measurements, view.footprints)) {
+    if (!row.fit.fits) continue;
     const downloadBytes = await missingBytes([row.model.weights]);
+    const basis = row.fit.placement === 'cpu' ? 'estimated at 80% context' : 'short-context estimate; deep GPU speed unverified';
     const speed = row.measured?.promptPerSecond
-      ? `measured ${Math.round(row.speed.promptPerSecond)} tok/s reading, ${Math.round(row.speed.generatePerSecond)} writing${row.measured.toolCalls ? '' : ', no tool calls'}`
-      : `about ${Math.round(row.speed.promptPerSecond)} tok/s reading, ${Math.round(row.speed.generatePerSecond)} writing (estimate)`;
-    const parts = row.fit.fits
-      ? [placementLabel(row, view), speed, `${Math.round(row.fit.context / 1024)}K context`]
-      : [`does not fit: ${row.fit.reason}`];
+      ? `${basis}: ${Math.round(row.speed.promptPerSecond)} tok/s reading, ${Math.round(row.speed.generatePerSecond)} writing (calibrated after a short run)${row.measured.toolCalls ? '' : ', no tool calls'}`
+      : `${basis}: ${Math.round(row.speed.promptPerSecond)} tok/s reading, ${Math.round(row.speed.generatePerSecond)} writing`;
+    const parts = [placementLabel(row, view), speed, `${Math.round(row.fit.context / 1024)}K context`,
+      ...(row.model.discovered ? [`Hugging Face ${row.model.weights.repo}`, 'tool use unverified'] : [])];
     parts.push(downloadBytes ? `${formatBytes(downloadBytes)} download` : 'downloaded');
     rows.push({ id: row.model.id, label: row.model.label, detail: parts.join(' · '), fits: row.fit.fits, recommended: row.passes, downloadBytes });
   }

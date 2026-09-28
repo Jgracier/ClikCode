@@ -64,11 +64,11 @@ function reportNotice(sessionId: string, notice: string | undefined): void {
   emitHarnessOutput({ panel: 'notice', message: `ClikCode Local: ${notice}` });
 }
 
-async function ensureWithProgress(sessionId: string, modelId: string | undefined): Promise<LocalModelEndpoint> {
+async function ensureWithProgress(sessionId: string, modelId: string | undefined, allowDownload = false): Promise<LocalModelEndpoint> {
   releaseLocalModelsOnExit();
   const shown = localModelProgress();
   try {
-    const endpoint = await ensureLocalModel({ ...(modelId ? { modelId } : {}), sessionId, progress: shown.progress });
+    const endpoint = await ensureLocalModel({ ...(modelId ? { modelId } : {}), sessionId, progress: shown.progress, allowDownload });
     held.add(sessionId);
     reportNotice(sessionId, endpoint.notice);
     return endpoint;
@@ -90,12 +90,12 @@ export async function ensureLocalModelForTurn(session: HarnessSession | undefine
   await ensureWithProgress(session.id, session.model ?? undefined);
 }
 
-/** `/model <id>` on ClikCode Local: the model is downloaded, loaded and
+/** `/model <id>` after download consent: the model is downloaded, loaded and
  * answering before the session moves to it, so a failure leaves the
  * session on the model it had. The engine drops the session's lease on the
  * previous model once the new one holds it. */
 export async function localModelChosen(sessionId: string, modelId: string): Promise<void> {
-  await ensureWithProgress(sessionId, modelId);
+  await ensureWithProgress(sessionId, modelId, true);
 }
 
 /** The session no longer runs a local model here: closed, moved to another
