@@ -143,8 +143,17 @@ export class BroadcastObserver implements TurnObserver {
     this.startTurn(message);
   }
 
+  /** Counts turns started through this observer, user and background alike,
+   * so a turn can tell whether the waiting line is still its own. */
+  private generation = 0;
+
+  get turnGeneration(): number {
+    return this.generation;
+  }
+
   /** startWaiting, naming the prompt the turn runs, for clients following it. */
   startTurn(message: string, prompt?: string): void {
+    this.generation++;
     this.liveText = '';
     this.waitingLabel = message;
     this.livePrompt = prompt;
