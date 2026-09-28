@@ -82,6 +82,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * there is nothing to abort, not an error worth reporting. */
   let activeController: AbortController | undefined;
   let activeLiveInput: LiveTurnInputBroker | undefined;
+  /** Messages typed during the running turn that the worker is still placing
+   * (steered, or queued durably) and answering. The turn is not over for the
+   * windows until each has been: see runTurn's `finally`. */
+  let activeSubmissions: Set<Promise<void>> | undefined;
   let activeRestoreDraft = false;
 
   // --- Vendor background turns (persistent transports) -------------------
@@ -257,8 +261,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     idleTimer = undefined;
     const controller = new AbortController();
     const liveInput = new LiveTurnInputBroker();
+    const submissions = new Set<Promise<void>>();
     activeController = controller;
     activeLiveInput = liveInput;
+    activeSubmissions = submissions;
     // startWaiting/stopWaiting bracket the call the same way interactive.ts's
     // own runInteractiveTurn does today -- drive.ts itself never calls
     // either, by design (see turn/observer.ts): they are the ORCHESTRATOR
@@ -307,7 +313,15 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       liveInput.close();
       activeController = undefined;
       activeLiveInput = undefined;
+      activeSubmissions = undefined;
       activeRestoreDraft = false;
+      // A message typed as the turn ended may still be on its way into the
+      // queue (the broker falls back to it once steering has closed). The
+      // final snapshot, the queue drained below and its answer to the window
+      // must all come after it lands: otherwise the window was told the turn
+      // was over, cleared the message's row, redrew from a queue that did
+      // not have it yet -- and the message vanished until the next key.
+      await Promise.allSettled([...submissions]);
       // Render before stopWaiting, deliberately: a client (see
       // worker/turn-bridge.ts) treats waiting-stop as "the turn is over,
       // stop listening" and detaches its event handler the instant it
@@ -392,14 +406,21 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         }
         return;
       }
-      try {
-        const result = await activeLiveInput.submit(command.text, command.id);
-        answer(result.disposition === 'steered' ? 'steered' : 'queued');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        answer('error', message);
-        if (!command.id) broadcastNotice(`Could not send: ${message}`);
-      }
+      const liveInput = activeLiveInput;
+      const handled = (async () => {
+        try {
+          const result = await liveInput.submit(command.text, command.id);
+          answer(result.disposition === 'steered' ? 'steered' : 'queued');
+          // Every window shows the queue, not only the one that typed it.
+          if (result.disposition !== 'steered') broadcastQueueChanged();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          answer('error', message);
+          if (!command.id) broadcastNotice(`Could not send: ${message}`);
+        }
+      })();
+      activeSubmissions?.add(handled);
+      await handled;
       return;
     }
   };

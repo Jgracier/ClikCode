@@ -84,6 +84,11 @@ function track(sessionId: string, client: WorkerClient): void {
     } else if (event.type === 'queue-changed') {
       tracker.queueVersion++;
       tracker.wake?.('queue');
+    } else if (event.type === 'submission') {
+      // Here, not on the turn's own listener: that one goes at waiting-stop,
+      // and an answer for a message typed as the turn ended can come after
+      // it -- which left the message's row waiting out the full timeout.
+      pendingSubmissions.get(event.id)?.(event);
     }
   });
   // A worker that exits (idle, retired) is attached afresh next time.
@@ -290,7 +295,7 @@ async function driveWorkerTurn(
             notice = event.message;
             return;
           case 'submission':
-            pendingSubmissions.get(event.id)?.(event);
+            // Answered by the connection's own listener (track).
             return;
           case 'turn-error':
             pendingError = new Error(event.message);
@@ -375,6 +380,9 @@ async function driveWorkerTurn(
     });
   } finally {
     if (tracker) tracker.driving = false;
+    // Messages typed during the turn are placed before it is let go of, as
+    // the in-process path does (interactive.ts).
+    await rl.flushWaitingSubmissions?.();
     rl.stopWaiting();
   }
   return notice !== undefined ? { notice } : {};

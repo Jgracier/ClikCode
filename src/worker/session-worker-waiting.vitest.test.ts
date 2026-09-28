@@ -62,6 +62,8 @@ class FakeGateway {
   readonly requests: TurnRequest[] = [];
   private waiters: ((request: TurnRequest) => void)[] = [];
   private unclaimed: TurnRequest[] = [];
+  /** Set: every request is answered with this at once, instead of waiting. */
+  autoAnswer: Record<string, unknown>[] | undefined;
   private constructor(private readonly server: Server, readonly url: string) {}
 
   static async start(): Promise<FakeGateway> {
@@ -81,6 +83,7 @@ class FakeGateway {
           },
         };
         self.requests.push(request);
+        if (self.autoAnswer) { request.respond(self.autoAnswer); return; }
         const waiter = self.waiters.shift();
         if (waiter) waiter(request); else self.unclaimed.push(request);
       });
@@ -414,4 +417,48 @@ describe('a message sent while another window\'s turn runs', () => {
     expect(saved.queuedTurns ?? []).toEqual([]);
     expect(JSON.stringify(saved.messages)).toContain('my answer');
   }, 60_000);
+});
+
+describe('a message typed as the turn ends', () => {
+  it('is answered, stored and announced before the turn says it is over, whenever it lands', async () => {
+    const session = await gatewaySession();
+    const client = await attach(session.id);
+    let lost = 0;
+    for (let round = 0; round < 24; round++) {
+      const events = eventsUntil(client, 'waiting-stop');
+      client.send({ type: 'submit', text: `question ${round}`, echo: true });
+      const held = await gateway!.next();
+      const id = `late-${round}`;
+      held.respond(text(`answer ${round}`));
+      await new Promise((resolve) => setTimeout(resolve, round));
+      // A message steered in gets one more model step.
+      gateway!.autoAnswer = text(`after steer ${round}`);
+      client.send({ type: 'steer', text: `typed ${round}`, id });
+      const seen = await events;
+      gateway!.autoAnswer = undefined;
+      const answer = seen.find((event) => event.type === 'submission' && event.id === id) as Extract<WorkerEvent, { type: 'submission' }> | undefined;
+      const stored = (await storedSession(session.id)).queuedTurns ?? [];
+      if (!answer) {
+        // Only acceptable when the turn had already ended: then it is queued
+        // durably and announced, after the waiting-stop.
+        const late = (await eventsUntil(client, 'queue-changed', 10_000)).length;
+        expect(late).toBeGreaterThan(0);
+        expect((await storedSession(session.id)).queuedTurns).toEqual([expect.objectContaining({ id })]);
+      } else if (answer.disposition === 'queued') {
+        // The last word the window gets on this turn already has it queued.
+        const finalSnapshot = seen.filter((event) => event.type === 'snapshot').at(-1) as Extract<WorkerEvent, { type: 'snapshot' }>;
+        if (!finalSnapshot.session.queuedTurns?.some((item) => item.id === id)) lost++;
+        expect(stored).toEqual([expect.objectContaining({ id })]);
+      } else {
+        expect(answer.disposition).toBe('steered');
+      }
+      // The next round starts from an empty queue (the worker leaves a typed
+      // message for the window to send).
+      const state = await readState();
+      const found = state.sessions.find((item) => item.id === session.id)!;
+      delete found.queuedTurns;
+      await writeState(state);
+    }
+    expect(lost).toBe(0);
+  }, 120_000);
 });
