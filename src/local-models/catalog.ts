@@ -1,4 +1,4 @@
-/** The models ClikCode Local offers: open-licensed GGUF builds that make
+/** The built-in, quality-tested fallback models: open-licensed GGUF builds that make
  * tool calls reliably and run on mainline llama.cpp, one or more per size
  * tier (about 3, 6, 12-15 and 20-22 GB of weights), then higher-precision
  * builds of the two strongest (29-38 GB) for machines with room to spare.
@@ -25,6 +25,9 @@
  * is what the KV-cache estimate is computed from. Qwen 3.5 and later are
  * hybrids: only every fourth layer keeps a KV cache, the rest carry a fixed
  * recurrent state, which is why their contexts are cheap. */
+
+import { readFileSync } from 'node:fs';
+import { discoveredModelsFile } from './paths.js';
 
 export interface CatalogFile {
   repo: string;
@@ -75,6 +78,10 @@ export interface CatalogModel {
    * the next model, so a quant never outranks a stronger model. */
   quality: number;
   qualityNote: string;
+  /** Derived from a remote GGUF header, rather than the built-in quality set. */
+  discovered?: boolean;
+  /** Weight bytes actually read per generated token, from tensor metadata. */
+  activeWeightBytes?: number;
 }
 
 /** Recurrent state of one Qwen 3.5-style linear-attention layer: a
@@ -97,7 +104,7 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
       file: 'mmproj-F16.gguf', sizeBytes: 672_423_616,
       sha256: 'cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864',
     },
-    architecture: 'qwen35', totalParamsB: 4.21, activeParamsB: 4.21, quantization: 'Q4_K_M',
+    architecture: 'qwen35', totalParamsB: 4.21, activeParamsB: 4.21, activeWeightBytes: 2_729_969_664, quantization: 'Q4_K_M',
     defaultContext: 65_536, maxContext: 262_144, license: 'apache-2.0',
     kv: { layers: 8, kvHeads: 4, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(24, 32) },
     quality: 40, qualityNote: 'smallest tier; for machines with little memory',
@@ -115,7 +122,7 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
       file: 'mmproj-F16.gguf', sizeBytes: 918_166_080,
       sha256: 'f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f',
     },
-    architecture: 'qwen35', totalParamsB: 8.95, activeParamsB: 8.95, quantization: 'Q4_K_M',
+    architecture: 'qwen35', totalParamsB: 8.95, activeParamsB: 8.95, activeWeightBytes: 5_097_424_896, quantization: 'Q4_K_M',
     defaultContext: 65_536, maxContext: 262_144, license: 'apache-2.0',
     kv: { layers: 8, kvHeads: 4, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(24, 32) },
     quality: 55, qualityNote: 'the dense Qwen 3.5 step above 4B',
@@ -128,7 +135,7 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
       file: 'gpt-oss-20b-MXFP4.gguf', sizeBytes: 12_109_566_624,
       sha256: '27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901',
     },
-    architecture: 'gpt-oss', totalParamsB: 20.9, activeParamsB: 3.6, quantization: 'MXFP4',
+    architecture: 'gpt-oss', totalParamsB: 20.9, activeParamsB: 3.6, activeWeightBytes: 2_574_702_336, quantization: 'MXFP4',
     defaultContext: 65_536, maxContext: 131_072, license: 'apache-2.0',
     kv: {
       layers: 12, kvHeads: 8, keyLength: 64, valueLength: 64,
@@ -149,7 +156,7 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
       file: 'mmproj-gemma-4-26B-A4B-it-Q8_0.gguf', sizeBytes: 806_408_320,
       sha256: 'cc4e855736da450bf1e162d8cccfe0ad685727d0c9e04ef7dd8d884f3121039b',
     },
-    architecture: 'gemma4', totalParamsB: 25.2, activeParamsB: 3.8, quantization: 'Q4_0',
+    architecture: 'gemma4', totalParamsB: 25.2, activeParamsB: 3.8, activeWeightBytes: 2_558_837_816, quantization: 'Q4_0',
     defaultContext: 65_536, maxContext: 262_144, license: 'apache-2.0',
     kv: {
       layers: 5, kvHeads: 2, keyLength: 512, valueLength: 512,
@@ -170,7 +177,7 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
       file: 'mmproj-Qwen3.6-35B-A3B-Q8_0.gguf', sizeBytes: 614_194_304,
       sha256: '904cbf8c8e876220066ab3bf676c7efa40f3da372276fdaf8b01d2fb2a37a51d',
     },
-    architecture: 'qwen35moe', totalParamsB: 34.7, activeParamsB: 3, quantization: 'Q4_K_M',
+    architecture: 'qwen35moe', totalParamsB: 34.7, activeParamsB: 3, activeWeightBytes: 2_569_349_632, quantization: 'Q4_K_M',
     defaultContext: 65_536, maxContext: 262_144, license: 'apache-2.0',
     kv: { layers: 10, kvHeads: 2, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(30, 32) },
     quality: 82, qualityNote: 'SWE-bench Verified 73.4',
@@ -191,7 +198,7 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
       file: 'mmproj-Ornith-1.5-35B-BF16.gguf', sizeBytes: 902_822_016,
       sha256: 'd9ce31026d1cb1f3f8d5152e2e2a014d9d2b302b6c93a7dc07bb0a0487f52837',
     },
-    architecture: 'qwen35moe', totalParamsB: 35.5, activeParamsB: 3, quantization: 'Q4_K_M',
+    architecture: 'qwen35moe', totalParamsB: 35.5, activeParamsB: 3, activeWeightBytes: 2_016_506_368, quantization: 'Q4_K_M',
     defaultContext: 65_536, maxContext: 262_144, license: 'mit',
     kv: { layers: 10, kvHeads: 2, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(31, 32) },
     quality: 88, qualityNote: 'SWE-bench Verified 79, Terminal-Bench 2.1 67.8 (its card)',
@@ -211,7 +218,7 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
     },
     // Dense: every token reads all 27B, so on a CPU it is far below the
     // speed bar; it is here for GPUs with the memory for it.
-    architecture: 'qwen35', totalParamsB: 26.9, activeParamsB: 26.9, quantization: 'Q4_K_M',
+    architecture: 'qwen35', totalParamsB: 26.9, activeParamsB: 26.9, activeWeightBytes: 18_247_714_816, quantization: 'Q4_K_M',
     defaultContext: 65_536, maxContext: 262_144, license: 'apache-2.0',
     kv: { layers: 16, kvHeads: 4, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(48, 48) },
     quality: 92, qualityNote: 'Terminal-Bench 2.1 73.0 (its card)',
@@ -285,8 +292,22 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
   },
 ];
 
+/** Remote candidates are registered after the picker refreshes its cache. */
+let remoteModels: readonly CatalogModel[] = [];
+export function registerRemoteModels(models: readonly CatalogModel[]): void { remoteModels = models; }
+try {
+  const saved = JSON.parse(readFileSync(discoveredModelsFile(), 'utf8')) as { models?: CatalogModel[] };
+  if (Array.isArray(saved.models)) remoteModels = saved.models.filter((model) =>
+    model.discovered && model.id?.startsWith('hf:') && model.weights?.sha256?.match(/^[0-9a-f]{64}$/)
+    && model.weights?.revision?.match(/^[0-9a-f]{40}$/) && model.weights.sizeBytes > 0);
+} catch { /* A first run has no cache. */ }
+export function allLocalModels(): readonly CatalogModel[] {
+  const builtIn = new Set(LOCAL_MODEL_CATALOG.map((model) => `${model.weights.repo}/${model.weights.revision}/${model.weights.file}`));
+  return [...LOCAL_MODEL_CATALOG, ...remoteModels.filter((model) =>
+    !builtIn.has(`${model.weights.repo}/${model.weights.revision}/${model.weights.file}`))];
+}
 export function catalogModel(id: string): CatalogModel | undefined {
-  return LOCAL_MODEL_CATALOG.find((model) => model.id === id);
+  return allLocalModels().find((model) => model.id === id);
 }
 
 /** How a session's local model is named on screen: the catalog label, or
@@ -296,12 +317,10 @@ export function localModelLabel(id: string | null | undefined): string | undefin
   return id ? catalogModel(id)?.label ?? id : undefined;
 }
 
-/** A model a user typed, as a catalog id: the id itself or its label, in
- * any case. Anything else is refused with the ids there are, before a
- * session stores a name the engine would reject on its next turn. */
+/** A model a user typed, from the built-ins or pinned Hub discoveries. */
 export function resolveLocalModelId(typed: string): string {
   const wanted = typed.trim().toLowerCase();
-  const model = LOCAL_MODEL_CATALOG.find((item) => item.id.toLowerCase() === wanted || item.label.toLowerCase() === wanted);
-  if (!model) throw new Error(`"${typed.trim()}" is not a ClikCode Local model. Choose one of: ${LOCAL_MODEL_CATALOG.map((item) => item.id).join(', ')}`);
+  const model = allLocalModels().find((item) => item.id.toLowerCase() === wanted || item.label.toLowerCase() === wanted);
+  if (!model) throw new Error(`"${typed.trim()}" is not a ClikCode Local model. Open /model to see models that fit this machine.`);
   return model.id;
 }

@@ -47,11 +47,23 @@ async function localModelPicker(rl: HarnessPrompter, id: string, current: string
   waiting?.startWaiting('checking which models fit this machine…');
   let choices: LocalModelChoice[];
   try { choices = await localModelChoices(); } finally { waiting?.stopWaiting(); }
+  if (!choices.length) {
+    rl.panel?.('ClikCode Local', 'No supported GGUF model fits the memory currently available. Close other programs or free memory, then open /model again.');
+    return;
+  }
   const selected = await chooseOption(rl, 'Choose a ClikCode Local model', localModelRows(choices, current));
   if (!selected) return;
+  const choice = choices.find((item) => item.id === selected);
+  if (choice?.downloadBytes) {
+    const confirmed = await chooseOption(rl, `Download ${choice.label}?`, [
+      { label: 'Cancel', value: false },
+      { label: `Download ${choice.detail.split(' · ').at(-1) ?? ''}`, value: true },
+    ]);
+    if (!confirmed) return;
+  }
   // The handler loads it (progress on the waiting line) before the session
   // switches; the same path `/model <id>` takes.
-  await aiSessionCommand(id, `/model ${localModelSelection(choices, selected)}`);
+  await aiSessionCommand(id, `/model --download ${localModelSelection(choices, selected)}`);
 }
 
 /** One model as every model list shows it. A harness that drives other
@@ -180,4 +192,3 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
   const selected = await chooseOption(rl, 'Choose a ClikDeploy Gateway model', options);
   if (selected) await aiSessionCommand(id, `/model ${selected}`);
 }
-

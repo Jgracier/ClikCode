@@ -13,6 +13,9 @@ import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
 import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
 import { localModelChosen, releaseHeldLocalModel } from '../../commands/ai/local-model.js';
 import { localModelChoices, resolveLocalModelId } from '../../local-models/index.js';
+import { catalogModel } from '../../local-models/catalog.js';
+import { missingBytes } from '../../local-models/models.js';
+import { formatBytes } from '../../local-models/download.js';
 import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
@@ -64,8 +67,8 @@ function undoUnavailableMessage(session: HarnessSession): string {
   return `${who} does not expose an undo/rewind operation to ClikCode, so /undo is not available here. ClikCode will not fake it: use /diff to see what changed and git to revert it${harness?.nativeSlashPassthrough ? `, or send the vendor's own command with //rewind` : ''}.`;
 }
 
-/** `/model` on ClikCode Local. With no name, the catalog as this machine
- * sees it; with one, that model is downloaded, loaded and answering before
+/** `/model` on ClikCode Local. With no name, fitting local and Hub models;
+ * with one, download consent is required before it is loaded and answering, and
  * the session moves to it -- a failure (it does not fit, a download failed)
  * leaves the session on the model it had. */
 async function localModelCommand(session: HarnessSession, value: string): Promise<void> {
@@ -80,7 +83,19 @@ async function localModelCommand(session: HarnessSession, value: string): Promis
       selected: session.model,
     });
   }
-  const model = resolveLocalModelId(value);
+  const explicitDownload = value.startsWith('--download ');
+  const model = resolveLocalModelId(explicitDownload ? value.slice('--download '.length) : value);
+  const entry = catalogModel(model)!;
+  const bytes = await missingBytes([entry.weights]);
+  if (bytes && !explicitDownload) {
+    if (!TERMINAL.active?.select) {
+      throw new Error(`${entry.label} needs a ${formatBytes(bytes)} download. Run /model --download ${model} to authorize it.`);
+    }
+    const confirmed = await TERMINAL.active.select(`Download ${entry.label} (${formatBytes(bytes)})?`, [
+      { label: 'Cancel', value: false }, { label: `Download ${formatBytes(bytes)}`, value: true },
+    ]);
+    if (!confirmed) return;
+  }
   await localModelChosen(session.id, model);
   // Re-read: loading a model can take a minute, and the turn worker or
   // another command may have written the state since this command read it.

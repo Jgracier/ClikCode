@@ -337,6 +337,15 @@ describe('speed estimate', () => {
 describe('ranking and choice', () => {
   const budget = memoryBudget(ZEN4);
 
+  it('sizes CPU context by a deep turn instead of taking the largest window memory permits', () => {
+    const small = model('qwen3.5-4b');
+    const memoryOnly = fitModel(small, budget);
+    const ranked = rankModels([small], ZEN4, budget, {})[0]!;
+    expect(memoryOnly.context).toBeGreaterThan(65_536);
+    expect(ranked.fit.context).toBe(16_384);
+    expect(ranked.speed.generatePerSecond).toBeLessThan(8);
+  });
+
   it('offers the best model that meets the bar first, slow ones after, misfits last', () => {
     const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, {});
     expect(ranked[0]!.model.id).toBe('ornith-1.5-35b-a3b-q6');
@@ -347,15 +356,16 @@ describe('ranking and choice', () => {
     expect(ranked.find((row) => row.model.id === 'qwen3.8-27b')!.passes).toBe(false);
   });
 
-  it('takes the most precise build of the best model the memory holds', () => {
+  it('takes the most precise build of the best model that fits the deep-turn target', () => {
     // The Zen 4's ~34 GiB takes Ornith at Q6_K but not at Q8_0; with less
-    // free, the Q4_K_M; on a 48 GB card, Qwen3.8 27B at Q8_0.
+    // free, the Q4_K_M. More RAM alone does not make Q8 fast enough for
+    // the deep-turn bar; on a 48 GB card, Qwen3.8 27B at Q8_0.
     const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, {});
     expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b-q8')!.fit.fits).toBe(false);
     const busy = memoryBudget({ ...ZEN4, availableRamBytes: 32 * GIB });
     expect(rankModels(LOCAL_MODEL_CATALOG, ZEN4, busy, {})[0]!.model.id).toBe('ornith-1.5-35b-a3b');
     const bigRam = memoryBudget({ ...ZEN4, totalRamBytes: 96 * GIB, availableRamBytes: 80 * GIB });
-    expect(rankModels(LOCAL_MODEL_CATALOG, ZEN4, bigRam, {})[0]!.model.id).toBe('ornith-1.5-35b-a3b-q8');
+    expect(rankModels(LOCAL_MODEL_CATALOG, ZEN4, bigRam, {})[0]!.model.id).toBe('ornith-1.5-35b-a3b-q6');
     const card: HardwareProfile = {
       ...ZEN4, gpus: [{ name: 'RTX 6000 Ada', vendor: 'nvidia', backend: 'cuda', vramBytes: 48 * GIB, freeVramBytes: 47 * GIB, unified: false, integrated: false }],
     };
@@ -368,7 +378,10 @@ describe('ranking and choice', () => {
     const slowOrnith = { 'ornith-1.5-35b-a3b-q6': { promptPerSecond: 20, generatePerSecond: 4, toolCalls: true, at: '' } };
     const ranked = rankModels(LOCAL_MODEL_CATALOG, ZEN4, budget, slowOrnith);
     expect(ranked[0]!.model.id).toBe('ornith-1.5-35b-a3b');
-    expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b-q6')!.speed.promptPerSecond).toBe(20);
+    const calibrated = ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b-q6')!;
+    expect(calibrated.speed.promptPerSecond).toBeLessThan(20);
+    expect(calibrated.speed.promptPerSecond).toBeGreaterThan(0);
+    expect(calibrated.passes).toBe(false);
   });
 
   it('drops a model that measured no tool calls below those that did', () => {

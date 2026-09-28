@@ -11,6 +11,10 @@ const engine = vi.hoisted(() => ({
   releaseLocalModel: vi.fn(async () => undefined),
   localModelChoices: vi.fn(),
 }));
+const files = vi.hoisted(() => ({ missingBytes: vi.fn(async () => 0) }));
+vi.mock('../../local-models/models', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../local-models/models')>(), missingBytes: files.missingBytes,
+}));
 vi.mock('../../local-models/index', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../local-models/index')>(),
   ensureLocalModel: engine.ensureLocalModel,
@@ -52,6 +56,8 @@ beforeEach(() => {
   engine.ensureLocalModel.mockReset();
   engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 8192 });
   engine.releaseLocalModel.mockClear();
+  files.missingBytes.mockReset();
+  files.missingBytes.mockResolvedValue(0);
   vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 });
 afterEach(() => {
@@ -119,6 +125,14 @@ describe('letting go', () => {
 });
 
 describe('/model on ClikCode Local', () => {
+  it('requires an explicit download decision before a headless model switch', async () => {
+    await stored(session());
+    files.missingBytes.mockResolvedValue(2_000_000_000);
+    await expect(aiSessionCommand('s1', '/model gpt-oss-20b')).rejects.toThrow(/needs a 2\.0 GB download.*--download/);
+    expect(engine.ensureLocalModel).not.toHaveBeenCalled();
+    await aiSessionCommand('s1', '/model --download gpt-oss-20b');
+    expect(engine.ensureLocalModel).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gpt-oss-20b', allowDownload: true }));
+  });
   it('loads the model before the session switches to it', async () => {
     await stored(session({ model: 'qwen3.5-4b' }));
     await aiSessionCommand('s1', '/model gpt-oss 20B');
@@ -135,7 +149,7 @@ describe('/model on ClikCode Local', () => {
 
   it('refuses a name outside the catalog before loading anything', async () => {
     await stored(session());
-    await expect(aiSessionCommand('s1', '/model claude-opus')).rejects.toThrow(/not a ClikCode Local model.*qwen3\.5-4b/);
+    await expect(aiSessionCommand('s1', '/model claude-opus')).rejects.toThrow(/not a ClikCode Local model.*Open \/model/);
     expect(engine.ensureLocalModel).not.toHaveBeenCalled();
     await localModelChosen('s1', 'qwen3.5-4b');
     expect(engine.ensureLocalModel).toHaveBeenCalledTimes(1);
