@@ -101,6 +101,14 @@ SCENARIOS = {
         ],
         'watch': [], 'final_contains': ['Checking the workspace first.', 'The final commit is live.'],
     },
+    'mobile-resize-burst': {
+        'turns': [TWO_BLOCKS],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'Checking the workspace first.', 30),
+            ('resize_burst',), ('wait_for', 'The final commit is live.', 30), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['Checking the workspace first.', 'The final commit is live.'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -177,6 +185,14 @@ def run(name, spec, entry, keep):
             if b'\x1b[2J' not in raw[before:]: problems.append('Ctrl+L did not force a full repaint')
             if step[1] not in '\n'.join(screen.display):
                 problems.append(f'Ctrl+L did not restore {step[1]!r}')
+        elif step[0] == 'resize_burst':
+            # Keyboard close on the phone changes the reported height several
+            # times before settling. Keep the real PTY and emulator in lockstep.
+            for lines in (63, 40, 32):
+                fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', lines, 70, 0, 0))
+                screen.resize(lines=lines, columns=70)
+                pump(0.05)
+            pump(0.5)
         elif step[0] == 'select':
             # Press on the phrase's first cell, drag across it, release on its
             # last -- the mouse reports a terminal sends with SGR reporting on.
