@@ -1,27 +1,7 @@
-/** ModelClient for the Gateway turn route:
- * `POST {baseUrl}/api/clikcode/v1/turn`, answered as Server-Sent Events. */
-import type { ConversationItem, HarnessErrorKind, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage } from '../model-client.js';
-import { turnCancelledError } from '../cancellation.js';
-import type { ContextHints } from '../context-profile.js';
-import { harnessCommand } from '../../session/state/paths.js';
-
-interface GatewayModelClientOptions {
-  baseUrl: string;
-  apiKey: string;
-  version: string;
-  fetchImpl?: typeof fetch;
-  sessionId?: string;
-  maxOutputTokens?: number;
-  effort?: string;
-  task?: string;
-  /** A model the user chose from the Gateway's list; absent, the Gateway picks. */
-  model?: string;
-  /** The model's window as the Gateway's model list gives it, known before
-   * the first step reports one; it picks the context profile. */
-  contextWindow?: number;
-  /** Longest silence a step's stream may keep; see STREAM_IDLE_TIMEOUT_MS. */
-  idleTimeoutMs?: number;
-}
+/** What every streamed model client shares: its error type, the SSE parser,
+ * and the idle limit on a stream. (The Gateway itself is an OpenAI-compatible
+ * API, served by openai-client.ts; see for-session.ts gatewayModelClient.) */
+import type { HarnessErrorKind } from '../model-client.js';
 
 /** A model stream that has said nothing for this long is treated as cut off:
  * the connection is dropped and the step fails as `incomplete_stream`, which
@@ -63,24 +43,6 @@ export class ModelClientError extends Error {
     if (details.code !== undefined) this.code = details.code;
     if (details.retryAfter !== undefined) this.retryAfter = details.retryAfter;
   }
-}
-
-function errorKindForStatus(status: number | undefined): HarnessErrorKind {
-  if (status === 401 || status === 403) return 'auth';
-  if (status === 402 || status === 429) return 'quota';
-  return 'other';
-}
-
-const AUTH_CODES = new Set(['unauthorized', 'unauthenticated', 'forbidden', 'auth', 'invalid_api_key', 'auth_required']);
-// The Gateway's own codes are upper case (RATE_LIMIT_EXCEEDED, AI_CREDIT_EXHAUSTED,
-// MODEL_RATE_LIMITED); they are compared lower-cased.
-const QUOTA_CODES = new Set(['quota', 'quota_exceeded', 'quota_exhausted', 'rate_limited', 'rate_limit', 'insufficient_credits', 'payment_required', 'rate_limit_exceeded', 'ai_credit_exhausted', 'model_rate_limited']);
-
-function errorKindForCode(code: unknown): HarnessErrorKind {
-  if (typeof code === 'number') return errorKindForStatus(code);
-  const text = String(code ?? '').toLowerCase();
-  if (/^\d{3}$/.test(text)) return errorKindForStatus(Number(text));
-  return AUTH_CODES.has(text) ? 'auth' : QUOTA_CODES.has(text) ? 'quota' : 'other';
 }
 
 /** `Retry-After` is either delta-seconds or an HTTP date. */
@@ -147,152 +109,5 @@ export class SseParser {
     if (field === 'data') this.data.push(value);
     else if (field === 'event') this.event = value;
     return undefined;
-  }
-}
-
-function numberField(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-/** The Gateway validates items strictly and has no image field, so pixels are
- * dropped here; the item's text already names the attached files. */
-function withoutImages(items: readonly ConversationItem[]): ConversationItem[] {
-  return items.map((item) => {
-    if (item.type !== 'text' || !item.images) return item;
-    const { images: _images, ...rest } = item;
-    return rest;
-  });
-}
-
-export class GatewayModelClient implements ModelClient {
-  /** Hosted: providers read prompts fast and bill cached input at a
-   * fraction, so the loop may spend tokens to save steps. */
-  readonly contextHints: ContextHints;
-
-  constructor(private readonly options: GatewayModelClientOptions) {
-    this.contextHints = { hosted: true, ...(options.contextWindow ? { contextWindow: options.contextWindow } : {}) };
-  }
-
-  async step(request: ModelStepRequest): Promise<ModelStepResult> {
-    const { options } = this;
-    const doFetch = options.fetchImpl ?? fetch;
-    const url = `${options.baseUrl.replace(/\/+$/, '')}/api/clikcode/v1/turn`;
-    let response: Response;
-    try {
-      response = await doFetch(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${options.apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-          system: request.system,
-          items: withoutImages(request.items),
-          tools: request.tools,
-          hints: {
-            task: options.task ?? 'code', effort: options.effort ?? 'auto',
-            ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}),
-            ...(options.model ? { model: options.model } : {}),
-          },
-          client: { name: 'clikcode', version: options.version },
-        }),
-        ...(request.signal ? { signal: request.signal } : {}),
-      });
-    } catch (error) {
-      if (request.signal?.aborted) throw turnCancelledError();
-      throw new ModelClientError(`Could not reach ClikDeploy Gateway: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
-    }
-
-    if (!response.ok) {
-      let message = `ClikDeploy Gateway returned HTTP ${response.status}`;
-      let code: string | undefined;
-      let retryAfter = parseRetryAfter(response.headers.get('retry-after'));
-      try {
-        const body = JSON.parse(await response.text()) as { error?: unknown; message?: unknown; code?: unknown; retryAfter?: unknown };
-        const nested = body.error && typeof body.error === 'object' ? body.error as { message?: unknown; code?: unknown; retryAfter?: unknown } : undefined;
-        const text = nested?.message ?? body.message ?? (typeof body.error === 'string' ? body.error : undefined);
-        if (typeof text === 'string' && text) message = text;
-        const rawCode = nested?.code ?? body.code;
-        if (typeof rawCode === 'string') code = rawCode;
-        retryAfter ??= parseRetryAfter(nested?.retryAfter ?? body.retryAfter);
-      } catch { /* non-JSON error body: the status line is the message */ }
-      // Out of credit is the one refusal the user fixes from here.
-      if (code?.toLowerCase() === 'ai_credit_exhausted') message = `${message} Run \`${harnessCommand()} gateway credit\` to add credit.`;
-      throw new ModelClientError(message, { kind: errorKindForStatus(response.status), statusCode: response.status, ...(code ? { code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
-    }
-    if (!response.body) throw new ModelClientError('ClikDeploy Gateway returned an empty response', { kind: 'other', statusCode: response.status });
-
-    const parser = new SseParser();
-    let text = '';
-    const toolCalls: ModelToolCall[] = [];
-    let usage: TokenUsage = {};
-    let stopReason: string | undefined;
-    let servedModel: string | undefined;
-    let contextWindow: number | undefined;
-
-    const handle = (event: SseEvent): void => {
-      if (!event.data || event.data === '[DONE]') return;
-      let frame: Record<string, unknown>;
-      try { frame = JSON.parse(event.data) as Record<string, unknown>; } catch { return; }
-      if (!frame || typeof frame !== 'object') return;
-      switch (frame.type ?? event.event) {
-        case 'route':
-          if (typeof frame.model === 'string') servedModel = frame.model;
-          contextWindow = numberField(frame, 'contextWindow') ?? contextWindow;
-          break;
-        case 'text-delta':
-          if (typeof frame.text === 'string' && frame.text) { text += frame.text; request.onTextDelta(frame.text); }
-          break;
-        case 'reasoning-delta':
-          if (typeof frame.text === 'string' && frame.text) request.onReasoningDelta?.(frame.text);
-          break;
-        case 'tool-call':
-          if (typeof frame.name === 'string') {
-            toolCalls.push({
-              id: typeof frame.id === 'string' && frame.id ? frame.id : `call_${toolCalls.length + 1}_${Date.now().toString(36)}`,
-              name: frame.name,
-              args: frame.args && typeof frame.args === 'object' && !Array.isArray(frame.args) ? frame.args as Record<string, unknown> : {},
-            });
-          }
-          break;
-        case 'usage': {
-          const next: TokenUsage = {};
-          for (const key of ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd'] as const) {
-            const value = numberField(frame, key);
-            if (value !== undefined) next[key] = value;
-          }
-          usage = { ...usage, ...next };
-          break;
-        }
-        case 'finish':
-          stopReason = typeof frame.stopReason === 'string' ? frame.stopReason : 'stop';
-          break;
-        case 'error': {
-          const retryAfter = parseRetryAfter(frame.retryAfter);
-          throw new ModelClientError(typeof frame.message === 'string' && frame.message ? frame.message : 'ClikDeploy Gateway reported an error', {
-            kind: errorKindForCode(frame.code), ...(typeof frame.code === 'string' ? { code: frame.code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}),
-          });
-        }
-        default: break; // unknown frame types are forward-compatible no-ops
-      }
-    };
-
-    const reader = response.body.getReader();
-    try {
-      for (;;) {
-        const { done, value } = await readWithin(reader, options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS, 'ClikDeploy Gateway');
-        if (done) break;
-        if (value) for (const event of parser.push(value)) handle(event);
-      }
-      for (const event of parser.flush()) handle(event);
-    } catch (error) {
-      await reader.cancel().catch(() => undefined);
-      if (request.signal?.aborted) throw turnCancelledError();
-      if (error instanceof ModelClientError) throw error;
-      throw new ModelClientError(`ClikDeploy Gateway stream failed: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
-    }
-    // A stream that ends without `finish` was cut off; treating the partial
-    // text as a complete answer would silently drop tool calls.
-    if (stopReason === undefined) throw new ModelClientError('ClikDeploy Gateway stream ended before the turn finished', { kind: 'other', code: 'incomplete_stream' });
-    return { text, toolCalls, stopReason, usage, ...(servedModel ? { servedModel } : {}), ...(contextWindow ? { contextWindow } : {}) };
   }
 }
