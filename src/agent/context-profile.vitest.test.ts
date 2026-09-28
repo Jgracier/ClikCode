@@ -6,8 +6,8 @@ describe('selectContextProfile', () => {
   it.each([
     // [label, hints, expected]
     ['nothing known', {}, 'lean'],
-    ['laptop CPU, 32K window', { contextWindow: 32_768, promptPerSecond: 70 }, 'lean'],
-    ['laptop CPU, large window', { contextWindow: 131_072, promptPerSecond: 90 }, 'lean'],
+    ['laptop CPU, 32K window', { contextWindow: 32_768, promptPerSecond: 70 }, 'minimal'],
+    ['laptop CPU, large window', { contextWindow: 131_072, promptPerSecond: 90 }, 'minimal'],
     ['fast GPU, large window', { contextWindow: 65_536, promptPerSecond: 1_800 }, 'full'],
     ['fast GPU, small window', { contextWindow: 16_384, promptPerSecond: 1_800 }, 'lean'],
     ['speed exactly at the threshold', { contextWindow: 65_536, promptPerSecond: LEAN_BELOW_PROMPT_PER_SECOND }, 'full'],
@@ -20,12 +20,9 @@ describe('selectContextProfile', () => {
     expect(selectContextProfile(hints)).toBe(expected);
   });
 
-  it('never picks minimal on its own', () => {
-    for (const contextWindow of [undefined, 4_096, 8_192, 32_768, 1_000_000]) {
-      for (const promptPerSecond of [undefined, 1, 50, 10_000]) {
-        expect(selectContextProfile({ contextWindow, promptPerSecond })).not.toBe('minimal');
-      }
-    }
+  it('keeps an unknown-speed or hosted model out of minimal', () => {
+    expect(selectContextProfile({ contextWindow: 32_768 })).toBe('lean');
+    expect(selectContextProfile({ hosted: true, contextWindow: 32_768, promptPerSecond: 70 })).toBe('lean');
   });
 });
 

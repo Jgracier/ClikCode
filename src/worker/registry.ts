@@ -9,7 +9,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -120,7 +120,16 @@ export async function readWorkerRecord(sessionId: string): Promise<WorkerRuntime
 
 export async function writeWorkerRecord(record: WorkerRuntimeRecord): Promise<void> {
   await mkdir(workersDirectory(), { recursive: true, mode: 0o700 });
-  await writeFile(recordPath(record.sessionId), `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  const target = recordPath(record.sessionId);
+  const temporary = `${target}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await rename(temporary, target);
+  } finally {
+    await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+  }
 }
 
 export function generateWorkerToken(): string {

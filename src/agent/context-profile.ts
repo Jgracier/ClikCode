@@ -13,14 +13,16 @@
  *
  *   full     lean plus: MCP schemas eager up to a much higher budget, larger
  *            tool-output caps, more (and longer) skill descriptions.
- *   lean     the defaults as measured and tuned for local models (unchanged).
- *   minimal  lean minus text that is safe to drop but not yet proven harmless:
+ *   lean     the former local defaults, retained as the rollback profile.
+ *   minimal  lean minus repeated tool guidance and bulky schemas:
  *            the system prompt's "Editing files" / "Shell" bullets that
  *            restate the tool descriptions, `additionalProperties:false` in
  *            the schemas sent (the loop still validates against the full
  *            schema), terser descriptions for tools small models rarely use,
- *            and fewer, shorter skill lines. Only used when forced, until an
- *            evaluation shows it does not cost quality.
+ *            and fewer, shorter skill lines. On Ornith 1.5 35B at 16K,
+ *            this passed 6/7 coding tasks twice versus lean's 5/7 three
+ *            times. Shortening the remaining tool descriptions further
+ *            caused a valid-tool-call failure, so they stay intact.
  *
  * Deliberately NOT in minimal:
  *   - Eliding old or superseded tool results before compaction. Rewriting an
@@ -180,12 +182,14 @@ export function parseContextProfile(value: unknown): ContextProfileName | undefi
   return (CONTEXT_PROFILES as readonly string[]).includes(word) ? word as ContextProfileName : undefined;
 }
 
-/** The automatic choice. Minimal is never chosen automatically: it drops
- * guidance whose absence has not been evaluated yet. Knowing nothing means
- * lean, today's behavior, rather than spending on a guess. */
+/** The automatic choice. A measured slow local model uses the smallest
+ * profile that retained coding-task quality; its environment override can
+ * restore lean for a model that behaves differently. Unknown speed stays
+ * lean until the one-time measurement completes. */
 export function selectContextProfile(hints: ContextHints): ContextProfileName {
   const window = hints.contextWindow && hints.contextWindow > 0 ? hints.contextWindow : undefined;
   const speed = hints.promptPerSecond && hints.promptPerSecond > 0 ? hints.promptPerSecond : undefined;
+  if (speed !== undefined && speed < LEAN_BELOW_PROMPT_PER_SECOND && !hints.hosted) return 'minimal';
   if (window !== undefined && window <= LEAN_MAX_CONTEXT_WINDOW) return 'lean';
   if (speed !== undefined) return speed < LEAN_BELOW_PROMPT_PER_SECOND ? 'lean' : 'full';
   // Speed unknown: only a hosted model is known to read fast. A large window
