@@ -36,7 +36,8 @@ export interface OpenAIModelClientOptions {
   /** Display name for error messages. */
   label?: string;
   fetchImpl?: typeof fetch;
-  onTimings?: (timings: LlamaTimings) => void;
+  /** Optional server timings and total step time, including prompt-cache preparation. */
+  onTimings?: (timings: LlamaTimings, elapsedMs: number) => void;
   /** Runs before each request with what it will send (ClikCode Local
    * restores a saved system+tools prefix here). Its failure is swallowed:
    * the request itself then pays whatever it saved. */
@@ -176,6 +177,7 @@ export class OpenAIModelClient implements ModelClient {
   }
 
   async step(request: ModelStepRequest): Promise<ModelStepResult> {
+    const startedAt = performance.now();
     const { options } = this;
     const doFetch = options.fetchImpl ?? fetch;
     const messages = toChatMessages(request.system, request.items, this.acceptsImages);
@@ -303,7 +305,7 @@ export class OpenAIModelClient implements ModelClient {
     if (stopReason === undefined && !done) throw new ModelClientError(`${this.label} stream ended before the answer finished`, { kind: 'other', code: 'incomplete_stream' });
 
     if (timings) {
-      options.onTimings?.(timings);
+      options.onTimings?.(timings, performance.now() - startedAt);
       // llama-server without usage: its timings carry the same counts.
       const prompt = numberOf(timings.prompt_n);
       const cached = numberOf(timings.cache_n);
