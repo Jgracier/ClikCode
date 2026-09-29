@@ -60,11 +60,17 @@ export async function releaseQueuedTurn(id: string, queuedTurnId: string): Promi
 
 /** Starting a clean conversation leaves the previous one intact and resumable;
  * the caller switches to the returned id. */
-export async function newConversation(currentId: string): Promise<string> {
+export async function newConversation(
+  currentId: string,
+  /** Keep the model the current chat runs, rather than the provider's
+   * default: the conversation board starts in exactly what it shows. */
+  options: { sameModel?: boolean } = {},
+): Promise<string> {
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
   if (!current) throw new Error(`AI session "${currentId}" was not found`);
   const created = newConversationSession(state, current);
+  if (options.sameModel && current.model) created.model = current.model;
   state.sessions.push(created);
   await writeState(state);
   return created.id;

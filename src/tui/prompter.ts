@@ -956,7 +956,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
   }
 
-  private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; hint?: string; hideCursor?: boolean }): void {
+  private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; hint?: string; hideCursor?: boolean; headings?: boolean }): void {
     const session = this.currentSession;
     if (!session || this.suspended) return;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
@@ -1299,7 +1299,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           // A picker's sections read as headings with their size beside them,
           // the way Claude Code's session list does; the command palette keeps
           // its quieter rule.
-          const counted = palette?.hideCursor ? /^(.*?)(?: (\d+))?$/.exec(row.header) : null;
+          const counted = palette?.headings ? /^(.*?)(?: (\d+))?$/.exec(row.header) : null;
           footer.push(counted
             ? `  ${chalk.bold(visibleSlice(counted[1] ?? '', Math.max(1, width - 10)))}${counted[2] ? ` ${chalk.dim(counted[2])}` : ''}`
             : `  ${chalk.dim(visibleSlice(`── ${row.header}`, Math.max(1, width - 4)))}`);

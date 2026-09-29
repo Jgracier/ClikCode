@@ -24,7 +24,7 @@ export interface OptionPickerHost {
   paint(
     composer: string, options: readonly PickerOption<string>[], selected: number,
     prompt: string, cursor: number,
-    palette?: { capacity?: number; hint?: string; hideCursor?: boolean },
+    palette?: { capacity?: number; hint?: string; hideCursor?: boolean; headings?: boolean },
   ): void;
   clearFrame(): void;
   setSelecting(selecting: boolean): void;
@@ -118,7 +118,7 @@ export function runOptionPicker<T>(
       const hint = query
         ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit`
         : `${currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit · type to filter`;
-      host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, hint });
+      host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, headings: true, hint });
     };
     let finished = false;
     const finish = (value: T | undefined, exit: typeof lastPickerExit = 'choose'): void => {
