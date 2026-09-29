@@ -15,9 +15,8 @@ import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocal
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
-import { sessionIsLive } from '../../session/liveness.js';
+import { liveWorkerSessions, sessionIsLive } from '../../session/liveness.js';
 import { pruneSessionClaims } from '../../session/claims.js';
-import { readWorkerRecord } from '../../worker/registry.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
@@ -247,26 +246,6 @@ export async function aiSessionsList(): Promise<void> {
   // heartbeat and the pid instead of trusting the file's existence.
   await pruneSessionClaims(new Set(state.sessions.map((session) => session.id))).catch(() => 0);
   emitResult({ sessions });
-}
-
-/** Which sessions still have a worker process behind them: one directory pass
- *  for the whole list, so every session is judged against one snapshot. */
-async function liveWorkerSessions(
-  sessions: readonly HarnessSession[],
-): Promise<(sessionId: string) => boolean> {
-  const live = new Set<string>();
-  await Promise.all(sessions.map(async (session) => {
-    const record = await readWorkerRecord(session.id).catch(() => undefined);
-    if (!record) return;
-    try {
-      process.kill(record.pid, 0);
-      live.add(session.id);
-    } catch (error) {
-      // EPERM means it exists and belongs to someone else, which still counts.
-      if ((error as NodeJS.ErrnoException).code === 'EPERM') live.add(session.id);
-    }
-  }));
-  return (sessionId: string) => live.has(sessionId);
 }
 
 /** The very first launch on a machine, with nothing to carry forward. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hostname } from 'node:os';
-import { sessionIsLive } from './liveness';
+import { sessionActivity, sessionIsLive } from './liveness';
 import type { HarnessSession } from './model';
 
 const NOW = Date.parse('2026-09-22T18:00:00.000Z');
@@ -66,5 +66,25 @@ describe('liveness is derived, so it cannot go stale', () => {
     expect(sessionIsLive(abandoned, noWorkers, NOW + 86_400_000, HOST)).toBe(false);
     expect(abandoned.status).toBe('active');
     expect(abandoned.closedAt).toBeUndefined();
+  });
+});
+
+describe('what a live session is doing', () => {
+  const turn = { prompt: 'go', startedAt: ago(5_000), updatedAt: ago(1_000), outputStarted: true };
+
+  it('is working while a live session has a turn in flight', () => {
+    expect(sessionActivity(session({ pendingTurn: turn }), workerFor('session-1'), NOW, HOST)).toBe('working');
+  });
+
+  it('is idle while a live session sits between turns', () => {
+    expect(sessionActivity(session(), workerFor('session-1'), NOW, HOST)).toBe('idle');
+  });
+
+  it('is nothing for a crashed turn, whose journal outlives its process on purpose', () => {
+    expect(sessionActivity(session({ pendingTurn: turn }), noWorkers, NOW, HOST)).toBeUndefined();
+  });
+
+  it('is nothing for a chat the user closed, even with a worker still exiting', () => {
+    expect(sessionActivity(session({ status: 'closed' }), workerFor('session-1'), NOW, HOST)).toBeUndefined();
   });
 });
