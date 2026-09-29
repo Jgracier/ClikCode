@@ -1,12 +1,11 @@
 /** How much memory an integrated GPU can address, asked of llama.cpp itself.
  *
- * On Linux amdgpu publishes it (see amdAddressableBytes). Elsewhere -- an
- * AMD APU on Windows -- the operating system reports only the small
- * carve-out, so the integrated GPU would stay unused. llama.cpp's Vulkan
- * build lists every device with the heap it can use, which is the figure
- * that decides what fits. It is asked once per runtime build and GPU, only
- * when a model is being started (the Vulkan build is downloaded for it),
- * and the answer is kept so a model picker can use it without asking. */
+ * The operating system reports only an APU's carve-out (a few GB), but the
+ * GPU can also map system RAM; llama.cpp's Vulkan build lists every device
+ * with the heap it can use, which is the figure that decides what fits. One
+ * way on every OS. It is asked once per runtime build and GPU, only when a
+ * model is being started (the Vulkan build is downloaded for it), and the
+ * answer is kept so a model picker can use it without asking. */
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
