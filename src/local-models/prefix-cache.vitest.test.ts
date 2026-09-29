@@ -17,6 +17,8 @@ function fakeServer(options: { saveStatus?: number } = {}) {
   const slots: FakeSlot[] = [{ id: 0, used: false }, { id: 1, used: false }];
   const files = new Map<string, number[]>();
   const calls: string[] = [];
+  /** Tokens each /completion actually read, after what its slot held. */
+  const reads: number[] = [];
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk) => { raw += chunk; });
@@ -49,13 +51,16 @@ function fakeServer(options: { saveStatus?: number } = {}) {
       }
       if (url.pathname === '/completion') {
         const slot = slots[body.id_slot ?? 1]!;
+        let held = 0;
+        while (slot.tokens && held < slot.tokens.length && slot.tokens[held] === body.prompt[held]) held++;
+        reads.push(body.prompt.length - held);
         slot.tokens = body.prompt; slot.used = true;
         return send(200, { id_slot: slot.id, timings: { prompt_n: body.prompt.length } });
       }
       send(404, {});
     });
   });
-  return { server, slots, files, calls };
+  return { server, slots, files, calls, reads };
 }
 
 let dir: string;
@@ -63,7 +68,7 @@ let fake: ReturnType<typeof fakeServer>;
 let port: number;
 
 const system = `You are ClikCode. ${'Rules. '.repeat(300)}`;
-const request = (user: string) => ({ messages: [{ role: 'system', content: system }, { role: 'user', content: user }], tools: [{ type: 'function', function: { name: 'read_file' } }] });
+const request = (user: string, folder = '') => ({ messages: [{ role: 'system', content: `${system}${folder}` }, { role: 'user', content: user }], tools: [{ type: 'function', function: { name: 'read_file' } }] });
 
 async function listen(options?: { saveStatus?: number }): Promise<void> {
   fake = fakeServer(options);
@@ -76,6 +81,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  savedTokens = new Map();
   fake.server.close();
   await fs.rm(dir, { recursive: true, force: true });
 });
@@ -142,8 +148,48 @@ describe('prefix cache', () => {
     await listen();
     for (let i = 0; i < 6; i++) await fs.writeFile(path.join(dir, `old${i}.bin`), 'x').then(() => fs.utimes(path.join(dir, `old${i}.bin`), i + 1, i + 1));
     await new PrefixCache(port, dir).prepare(request('go'));
-    const left = (await fs.readdir(dir)).sort();
+    const left = (await fs.readdir(dir)).filter((name) => name.endsWith('.bin')).sort();
     expect(left).toHaveLength(4);
     expect(left).not.toContain('old0.bin');
   });
+
+  it('saves what folders share as a layer, so a new folder reads only its own tail', async () => {
+    await listen();
+    await new PrefixCache(port, dir).prepare(request('go', '\nWorking directory: /a'));
+    fake.server.close();
+
+    // A second folder: no saved state is its prefix, but it shares a long run
+    // with the first. That run is saved on its own on the way.
+    await listen();
+    await writeSaved();
+    await new PrefixCache(port, dir).prepare(request('go', '\nWorking directory: /b'));
+    expect(fake.calls.filter((call) => call.includes('action=save'))).toHaveLength(2);
+    fake.server.close();
+
+    // A third folder restores the layer and reads only what is its own.
+    await listen();
+    await writeSaved();
+    await new PrefixCache(port, dir).prepare(request('go', '\nWorking directory: /c'));
+    expect(fake.calls).toContain('POST /slots/0?action=restore');
+    expect(fake.reads).toHaveLength(1);
+    // The folder line and what this fake renders after it, of a ~2,200-token prefix.
+    expect(fake.reads[0]).toBeLessThan(100);
+
+    // And the first folder still restores its own whole prefix.
+    fake.server.close();
+    await listen();
+    await writeSaved();
+    await new PrefixCache(port, dir).prepare(request('go', '\nWorking directory: /a'));
+    expect(fake.reads).toEqual([]);
+  });
 });
+
+/** A fresh fake server knows nothing; the files on disk are the saved states. */
+let savedTokens = new Map<string, number[]>();
+async function writeSaved(): Promise<void> {
+  for (const name of await fs.readdir(dir)) {
+    if (!name.endsWith('.tokens.json')) continue;
+    savedTokens.set(`${name.slice(0, -'.tokens.json'.length)}.bin`, JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')));
+  }
+  for (const [file, tokens] of savedTokens) fake.files.set(file, tokens);
+}
