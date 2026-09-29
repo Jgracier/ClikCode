@@ -116,11 +116,13 @@ export async function runGatewayHarnessSessionTurn(
       prompter?.phase(phase);
     },
     onPlan: (entries) => prompter?.setPlan(entries),
-    // No prompter means a headless run; a turn that cannot ask must not
-    // silently act, so an unattended approval is a refusal.
+    // No prompter means a headless run: no approver is attached, so what
+    // would ask is refused -- and the model is told no one could be asked,
+    // not that the user said no. Told "the user declined", a model stops to
+    // ask what they would prefer; told the truth, it carries on without.
     // The gateway path runs ClikCode's OWN agent, so a rule can be
     // remembered here: the third answer is passed straight through.
-    onApproval: async (title, detail, rule) => (await prompter?.approval(title, detail, undefined, rule)) ?? false,
+    ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string) => (await prompter.approval(title, detail, undefined, rule)) ?? false } : {}),
     ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),
   });
 }
