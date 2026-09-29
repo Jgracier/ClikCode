@@ -68,7 +68,12 @@ import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
 import type { WorkerEvent } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
-import { encodeTerminalSpec, IDE_PROTOCOL, type IdeEvent, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
+import { encodeTerminalSpec, IDE_PROTOCOL, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
+import { selectProviderConversation } from '../tui/pickers/conversation.js';
+import {
+  accountList, chatSettings, conversationList, gatewayCheckoutUrl, gatewayStatus, GATEWAY_ID, LOCAL_ID, modelList, providerList,
+  sessionHarnessDefinition,
+} from './queries.js';
 
 /** A turn's own failure. The worker has already reported it (its turn-error
  * reaches the editor as a worker event), so the bridge does not say it twice. */
@@ -91,6 +96,9 @@ export class IdeBridge {
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
   private readonly timers: NodeJS.Timeout[] = [];
   private closed = false;
+  /** A setting chosen in the editor's own widget is on screen there already:
+   * its "Model set to …" confirmation is not said again in the chat. */
+  quietOutput = 0;
 
   constructor(private readonly config: Conf, private readonly channel: IdeChannel) {
     this.prompter = new IdePrompter(channel);
@@ -103,7 +111,7 @@ export class IdeBridge {
     claim.unref();
     usage.unref();
     this.timers.push(claim, usage);
-    this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
+    this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
   }
 
   handle(request: IdeRequest): void {
@@ -141,7 +149,10 @@ export class IdeBridge {
         return;
       }
       case 'query':
-        void this.query(request.requestId);
+        void this.query(request.requestId, request.query ?? 'slash-commands', request);
+        return;
+      case 'choose':
+        void this.choose(request.requestId, request.choice);
         return;
       case 'refresh':
         this.worker?.client.send({ type: 'refresh' });
@@ -750,17 +761,149 @@ export class IdeBridge {
     return Boolean(session && (session.nativeHarness || isClikCodeAgent(session)));
   }
 
-  private async query(requestId: string): Promise<void> {
+  /** The editor's screens as data (queries.ts). Answered straight away, not
+   * behind the work queue: a list must open while a turn is running. */
+  private async query(requestId: string, query: IdeQueryName, options: { provider?: string; network?: boolean }): Promise<void> {
+    const answer = (data: unknown): void => this.channel.send({ type: 'result', requestId, ok: true, data });
     try {
-      const { session } = await this.current();
-      const harness = sessionHarness(session);
-      const rows = slashPalette(session, harness, slashExtrasFor(session, harness));
-      this.channel.send({
-        type: 'result', requestId, ok: true,
-        data: rows.map((row) => ({ command: row.value, description: row.detail, ...(row.argHint ? { argHint: row.argHint } : {}), group: row.group })),
-      });
+      const state = await readState();
+      const session = this.sessionId ? state.sessions.find((item) => item.id === this.sessionId) : undefined;
+      switch (query) {
+        case 'slash-commands': {
+          const { session: current } = await this.current();
+          const harness = sessionHarness(current);
+          const rows = slashPalette(current, harness, slashExtrasFor(current, harness));
+          answer(rows.map((row) => ({ command: row.value, description: row.detail, ...(row.argHint ? { argHint: row.argHint } : {}), group: row.group })));
+          return;
+        }
+        case 'providers': answer(await providerList(this.config, state, session)); return;
+        case 'models':
+          if (!options.provider) throw new Error('models needs a provider');
+          answer(await modelList(this.config, state, session, options.provider));
+          return;
+        case 'conversations': answer(await conversationList(state, this.sessionId)); return;
+        case 'accounts': answer(await accountList(state, session, Boolean(options.network))); return;
+        case 'chat-settings': answer(session ? await chatSettings(state, session) : {}); return;
+        case 'gateway': answer(await gatewayStatus(this.config)); return;
+        default: throw new Error(`unknown query "${String(query)}"`);
+      }
     } catch (error) {
       this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
+    }
+  }
+
+  /** A choice made in the editor's own widgets, applied with the command the
+   * terminal's picker ends in. A setting that can change mid-turn does so
+   * (commandDuringTurn); anything that moves the conversation waits for no
+   * turn, and says so. */
+  private async choose(requestId: string, choice: IdeChoice): Promise<void> {
+    const done = (data?: unknown): void => this.channel.send({ type: 'result', requestId, ok: true, ...(data === undefined ? {} : { data }) });
+    const failed = (error: unknown): void => this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
+    const setting = async (line: string): Promise<void> => {
+      const id = this.requireSession();
+      this.quietOutput += 1;
+      try {
+        if (this.workerTurnRunning) await commandDuringTurn(id, line);
+        else await aiSessionCommand(id, line);
+      } finally { this.quietOutput -= 1; }
+      await this.emitSession();
+    };
+    const queued = (job: () => Promise<unknown>): void => {
+      this.enqueue(async () => {
+        try { done(await job()); } catch (error) { failed(error); }
+      });
+    };
+    try {
+      switch (choice.kind) {
+        case 'model': {
+          const { session } = await this.current();
+          const line = session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`;
+          await setting(line);
+          done();
+          return;
+        }
+        case 'effort': await setting(`/effort ${choice.value}`); done(); return;
+        case 'permissions': await setting(`/permissions ${choice.value}`); done(); return;
+        case 'failover': await setting(`/accounts failover ${choice.value}`); done(); return;
+        case 'account': await setting(`/settings account ${choice.accountId}`); done(); return;
+        case 'plan': {
+          const { session } = await this.current();
+          const harness = sessionHarnessDefinition(session);
+          if (!harness?.planMode) throw new Error('This provider has no plan mode.');
+          const on = harness.planMode.value === true ? 'on' : String(harness.planMode.value);
+          await setting(`/settings option ${harness.planMode.option} ${choice.on ? on : 'default'}`);
+          done();
+          return;
+        }
+        case 'provider': {
+          if (this.workerTurnRunning) throw new Error('A turn is running: stop it or wait for it to finish before switching provider.');
+          queued(async () => {
+            const id = this.requireSession();
+            const selected = choice.provider === GATEWAY_ID ? '__gateway__' : choice.provider === LOCAL_ID ? '__clikcode_local__' : choice.provider;
+            this.quietOutput += 1;
+            try {
+              const moved = await selectProviderConversation(this.config, this.prompter, id, selected);
+              if (moved !== this.sessionId) await this.switchTo(moved);
+              if (choice.model) {
+                const { session } = await this.current();
+                await aiSessionCommand(session.id, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);
+              } else await this.resolveModel(this.requireSession());
+            } finally { this.quietOutput -= 1; }
+            await this.prepareRoute().catch(() => undefined);
+            await this.emitSession();
+            void this.refreshUsage().catch(() => undefined);
+            return { sessionId: this.sessionId };
+          });
+          return;
+        }
+        case 'add-account':
+          queued(async () => {
+            const harness = localHarnessForCommand(choice.provider);
+            if (!harness) throw new Error(`unknown provider "${choice.provider}"`);
+            const added = await addAccountForHarness(this.prompter, harness);
+            if (added && this.sessionId) {
+              const { session } = await this.current();
+              if (session.provider === harness.provider || session.nativeHarness === harness.command) await useAddedAccount(session.id, harness, added);
+              await this.emitSession();
+            }
+            return { added: added ?? null };
+          });
+          return;
+        case 'account-action':
+          queued(async () => {
+            await manageAccountAction(this.prompter, choice.accountId, choice.action);
+            await this.emitSession().catch(() => undefined);
+          });
+          return;
+        case 'conversation': {
+          const current = choice.sessionId === this.sessionId;
+          if (current && this.workerTurnRunning && (choice.action === 'archive' || choice.action === 'delete')) {
+            throw new Error('A turn is running in this conversation: stop it first.');
+          }
+          queued(async () => {
+            // Putting away the open chat lands on a fresh one with its setup,
+            // as the terminal's list does; made before, while there is a setup.
+            const replacement = current && (choice.action === 'archive' || choice.action === 'delete') ? await newConversation(choice.sessionId) : undefined;
+            if (choice.action === 'rename') {
+              const name = choice.name?.trim();
+              if (!name) throw new Error('A name is needed.');
+              await aiSessionCommand(choice.sessionId, `/rename ${name}`);
+            } else if (choice.action === 'fork') {
+              const forked = await aiSessionCommand(choice.sessionId, '/fork');
+              if (current && forked !== choice.sessionId) await this.switchTo(forked);
+            } else if (choice.action === 'archive') await aiSessionCommand(choice.sessionId, '/archive');
+            else await aiSessionCommand(choice.sessionId, '/delete confirm');
+            if (replacement) await this.switchTo(replacement);
+            else if (this.sessionId) await this.emitSession();
+            return { sessionId: this.sessionId };
+          });
+          return;
+        }
+        case 'gateway-credit': done({ url: await gatewayCheckoutUrl(this.config) }); return;
+        default: throw new Error(`unknown choice "${String((choice as { kind?: unknown }).kind)}"`);
+      }
+    } catch (error) {
+      failed(error);
     }
   }
 }
@@ -808,8 +951,10 @@ export async function runIdeBridge(config: Conf): Promise<void> {
   // Command results as records, which the editor renders -- never as text
   // drawn for a terminal that is not there.
   process.env.CLIKCODE_OUTPUT_MODE = 'json';
+  let bridge: IdeBridge | undefined;
   const channel: IdeChannel = {
     send: (event: IdeEvent) => {
+      if (event.type === 'output' && bridge?.quietOutput && event.payload.panel !== 'error') return;
       if (process.connected) send(event, undefined, {}, () => undefined);
     },
   };
@@ -817,13 +962,14 @@ export async function runIdeBridge(config: Conf): Promise<void> {
   // Choosing a harness that is not installed installs it (install.ts); here
   // that shows as the chat's busy line, then a notice.
   setHarnessInstallReporter(ideInstallReporter(channel));
-  const bridge = new IdeBridge(config, channel);
+  const running = new IdeBridge(config, channel);
+  bridge = running;
   process.on('message', (message) => {
-    if (message && typeof message === 'object' && typeof (message as { type?: unknown }).type === 'string') bridge.handle(message as IdeRequest);
+    if (message && typeof message === 'object' && typeof (message as { type?: unknown }).type === 'string') running.handle(message as IdeRequest);
   });
   // The editor closed or crashed: the channel is gone with it.
-  process.on('disconnect', () => { void bridge.shutdown().finally(() => process.exit(0)); });
-  process.on('SIGTERM', () => { void bridge.shutdown().finally(() => process.exit(0)); });
-  bridge.start();
+  process.on('disconnect', () => { void running.shutdown().finally(() => process.exit(0)); });
+  process.on('SIGTERM', () => { void running.shutdown().finally(() => process.exit(0)); });
+  running.start();
   await new Promise<void>(() => { /* lives as long as the channel */ });
 }

@@ -137,7 +137,7 @@ export async function accountUsageLabel(
   return (await accountUsageReading(account, state, options))?.label;
 }
 
-async function accountUsageReading(
+export async function accountUsageReading(
   account: AiHarnessAccount, state: HarnessState, options: { network?: boolean } = {},
 ): Promise<UsageReading | undefined> {
   if (account.authKind !== 'vendor-cli') return undefined;
