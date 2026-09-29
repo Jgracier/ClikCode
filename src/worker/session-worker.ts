@@ -100,12 +100,29 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   setVendorBackgroundTurnHandler(sessionId, vendorBackground.handle);
   // -------------------------------------------------------------------------
 
+  /** Why this worker cannot be replaced right now, or undefined when it can.
+   * Anything it is doing for the conversation counts -- a turn, the queue
+   * being drained, vendor background work, a shell or a notification the
+   * model is owed -- because replacing it would lose that work. Clients do
+   * not; an idle window simply attaches to the replacement next time. */
+  let retireWhenIdle = false;
+  const retireBlocker = (): string | undefined => {
+    if (turnRunning || draining) return 'a turn is running';
+    if (vendorBackground.busy) return 'vendor background work is running';
+    if (runningShellCount(agentSession) > 0) return 'a background shell is running';
+    if (agentSession.notifications.length) return 'a notification is on its way to the model';
+    return undefined;
+  };
+
   /** Idle means no client, no turn, no background shell whose exit the
    * model is still owed, and no notification on its way to it. A running
    * shell instead arms the abandoned-shell ceiling (ABANDONED_SHELL_MS). */
   const scheduleIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
+    // A newer build asked for this worker while it was busy: the moment it is
+    // not, it goes, and the next window to need one starts that build.
+    if (retireWhenIdle && !retireBlocker()) { void shutdown('replaced by a newer ClikCode build'); return; }
     if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
     if (runningShellCount(agentSession) > 0) {
       const oldest = Math.min(...[...agentSession.shells.values()].filter((shell) => shell.status === 'running').map((shell) => shell.startedAt));
@@ -139,7 +156,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * route, nothing left running that only an agent turn would use. */
   const prepareForRoute = async (): Promise<void> => {
     const { session: current } = await currentSessionAndAccount();
-    if (!isClikCodeAgent(current)) { await releaseMcp(); return; }
+    if (!isClikCodeAgent(current)) { if (!turnRunning) await releaseMcp(); return; }
     prepareMcp(stateDirectory(), routeMcpServers(current, config));
     // Opens the connection the first step will reuse, and has the model list
     // ready for the picker.
@@ -380,7 +397,23 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
     if (command.type === 'refresh') { observer.render((await currentSessionAndAccount()).session); return; }
     if (command.type === 'prepare') { await prepareForRoute(); return; }
-    if (command.type === 'release') { await releaseMcp(); return; }
+    // Another window's turn may be using them: a turn keeps what it started,
+    // and the turn's own end releases them if nobody is left.
+    if (command.type === 'release') { if (!turnRunning) await releaseMcp(); return; }
+    if (command.type === 'retire') {
+      // The worker decides, not the window asking: only it knows whether it
+      // is in the middle of something. A window used to decide from the
+      // state file and SIGTERM it -- killing another window's turn whenever
+      // the file had not caught up with the worker.
+      const blocker = retireBlocker();
+      if (blocker) {
+        retireWhenIdle = true;
+        socket.write(encodeFrame({ type: 'retire-declined', reason: blocker }));
+        return;
+      }
+      void shutdown('replaced by a newer ClikCode build');
+      return;
+    }
     if (command.type === 'detach') { socket.end(); return; }
     if (command.type === 'cancel') {
       // Nothing running is not an error -- a cancel racing the turn's own

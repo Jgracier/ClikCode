@@ -75,6 +75,10 @@ const RETIRE_TIMEOUT_MS = 3_000;
  * running -- which the next attach, after that turn, is. */
 async function retireWorker(record: WorkerRuntimeRecord): Promise<boolean> {
   try { process.kill(record.pid, 'SIGTERM'); } catch { return true; }
+  return socketReleased(record);
+}
+
+async function socketReleased(record: WorkerRuntimeRecord): Promise<boolean> {
   const deadline = Date.now() + RETIRE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (!await workerIsReachable(record.socketPath, 200)) return true;
@@ -95,13 +99,61 @@ async function turnInFlight(sessionId: string): Promise<boolean> {
   }
 }
 
-/** The worker to talk to, or undefined when one has to be started. */
+/** How long a worker has to answer `retire` before it is taken to be one
+ * from before the command existed. A worker answers at once. */
+const RETIRE_ANSWER_MS = 1_500;
+
+/** Asks a worker on another build to step down. It knows whether it is in
+ * the middle of something and the asking window does not -- so it decides:
+ * `retired` (it is shutting down), `declined` (busy; it goes once it is not),
+ * or `unanswered` (a worker older than the question). */
+function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined' | 'unanswered'> {
+  return new Promise((resolveAnswer) => {
+    const socket = connect(record.socketPath);
+    let buffer = '';
+    let answered = false;
+    const answer = (value: 'retired' | 'declined' | 'unanswered'): void => {
+      if (answered) return;
+      answered = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolveAnswer(value);
+    };
+    const timer = setTimeout(() => answer('unanswered'), RETIRE_ANSWER_MS);
+    socket.on('connect', () => {
+      socket.write(encodeFrame({ type: 'attach', token: record.token } satisfies ClientCommand));
+      socket.write(encodeFrame({ type: 'retire' } satisfies ClientCommand));
+    });
+    socket.on('data', (chunk) => {
+      const { messages, rest } = decodeFrames(buffer + chunk.toString('utf8'));
+      buffer = rest;
+      for (const message of messages as WorkerEvent[]) {
+        if (message.type === 'retire-declined') answer('declined');
+        else if (message.type === 'attach-rejected') answer('unanswered');
+        else if (message.type === 'shutdown') answer('retired');
+      }
+    });
+    socket.on('close', () => answer('retired'));
+    socket.on('error', () => answer('retired'));
+  });
+}
+
+/** The worker to talk to, or undefined when one has to be started.
+ *
+ * Any number of windows may share a worker, so no window may stop one out
+ * from under the others: a worker on another build is ASKED to step down,
+ * and it only does when nothing it is doing would be lost. */
 async function usableWorker(sessionId: string): Promise<WorkerRuntimeRecord | undefined> {
   const record = await findRunningWorker(sessionId);
   if (!record) return undefined;
   const build = currentWorkerBuild();
   // Unknown own build: nothing to compare, so nothing is retired.
   if (!build || record.build === build) return record;
+  const answer = await askToRetire(record);
+  if (answer === 'declined') return record;
+  if (answer === 'retired') return (await socketReleased(record)) ? undefined : record;
+  // A worker from before `retire`: the journal is the only evidence left of
+  // what it is doing. These age out as their conversations go idle.
   if (await turnInFlight(sessionId)) return record;
   return (await retireWorker(record)) ? undefined : record;
 }

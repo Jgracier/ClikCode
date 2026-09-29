@@ -17,7 +17,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { WorkerClient } from './client.js';
-import { readWorkerRecord } from './registry.js';
+import { readWorkerRecord, writeWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { closeAllWorkerClients, followWorkerTurn, questionOrWorker, runTurnThroughWorker, workerQueueMark, workerRunningTurn } from './turn-bridge.js';
@@ -289,6 +289,33 @@ describe('a session worker waits for what it should', () => {
     other.send({ type: 'submit', text: 'second', echo: true, queuedTurnId: answered.queuedTurnId });
     await again;
     expect(gateway!.requests).toHaveLength(2);
+  }, 60_000);
+
+  it('lets a window on a newer build open a conversation mid-turn without stopping the turn', async () => {
+    // Two shells: one started the turn, the other runs a newer build of
+    // ClikCode and opens the same conversation. The newer one used to decide
+    // from the state file whether a turn was running and SIGTERM the worker
+    // when the file said no -- "session worker exited mid-turn: SIGTERM".
+    const session = await gatewaySession();
+    const first = await attach(session.id);
+    const turn = eventsUntil(first, 'waiting-stop');
+    first.send({ type: 'submit', text: 'long job', echo: true });
+    const held = await gateway!.next();
+    const before = (await readWorkerRecord(session.id))!;
+    // The file behind the worker: it says nothing is running.
+    const state = await readState();
+    delete state.sessions.find((item) => item.id === session.id)!.pendingTurn;
+    await writeState(state);
+    await writeWorkerRecord({ ...before, build: 'a-different-build' });
+
+    await attach(session.id);
+    expect((await readWorkerRecord(session.id))?.pid).toBe(before.pid);
+
+    held.respond(text('done'));
+    const events = await turn;
+    expect(events.filter((event) => event.type === 'turn-error')).toEqual([]);
+    // Asked to step down while busy, it goes once the turn is over.
+    await processExit(before.pid);
   }, 60_000);
 
   it('asks a window that attaches later for an approval the turn is still waiting on', async () => {
