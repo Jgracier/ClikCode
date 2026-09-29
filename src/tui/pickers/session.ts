@@ -227,7 +227,7 @@ export async function interactiveSessionPicker(
     .finally(() => { discovering = false; });
 
   const histories = new Map<string, PickerOption<string>[]>();
-  const buildOptions = (): PickerOption<string>[] => {
+  const buildFresh = (): PickerOption<string>[] => {
     // Every option gets a single real recency key so the newest conversation is
     // always near the top regardless of which source found it — grouping by
     // source first (every ClikCode session, then every opencode result, then
@@ -302,6 +302,16 @@ export async function interactiveSessionPicker(
       });
     }
     return options;
+  };
+  // Asked for on every keypress (the list redraws, and a picker re-reads its
+  // rows each time). Nothing it reads changes between keys except discovery
+  // landing, so the rows are rebuilt only then -- not all five hundred of
+  // them per arrow press.
+  let built: { discovering: boolean; discovered: AdoptableNativeSession[]; options: PickerOption<string>[] } | undefined;
+  const buildOptions = (): PickerOption<string>[] => {
+    if (built && built.discovering === discovering && built.discovered === discovered) return built.options;
+    built = { discovering, discovered, options: buildFresh() };
+    return built.options;
   };
 
   /** What a row action did to the chat that is open, so the loop can move off
