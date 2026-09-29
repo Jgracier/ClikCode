@@ -27,11 +27,23 @@
  * fork is not required for this shared prefix, which ends before the user's
  * message and is extended by ordinary turns.
  *
+ * Conversations are saved the same way. A request's messages, up to the
+ * end of its last message, render as a prefix of every later request --
+ * except where a template re-renders earlier turns once a new user message
+ * follows them (Qwen drops the reasoning of finished turns), so the stable
+ * point is found the same way as the shared prefix: the tokens a render of
+ * the messages shares with one that adds a user message. Reading up to that
+ * point is work the request does anyway; saving it costs a fraction of a
+ * second. A fresh server restores the longest saved state a request
+ * extends, so reopening a long chat reads only what came after it. Saves
+ * are spaced by what this machine reads in CHECKPOINT_SECONDS: a resume
+ * never rereads more than that, and a GPU that reads fast rarely saves.
+ *
  * Every failure here only costs the time it would have cost anyway: the
  * request that follows reads whatever the server does not already hold. */
 
 import { createHash } from 'node:crypto';
-import { readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rm, stat, statfs, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { httpJson } from './launch.js';
 
@@ -40,9 +52,18 @@ const MIN_PREFIX_TOKENS = 1024;
 /** Tokens given back from the shared prefix so the last one cannot be a
  * piece that merges differently with the text of a real message. */
 const BOUNDARY_SLACK = 4;
-/** Saved prefixes kept per server configuration, newest used first; one
- * is a few hundred MB. */
+/** Saved system+tools prefixes kept per server configuration, newest used
+ * first; one is a few hundred MB. */
 const KEEP_FILES = 4;
+/** Conversation states are bounded by bytes: one grows with its chat. */
+const CONVERSATION_BYTES = 4 * 1024 ** 3;
+/** ...and never more than this share of the disk's free space. */
+const CONVERSATION_DISK_SHARE = 0.1;
+/** The longest reread a resumed chat should pay, in seconds of this
+ * machine's measured prompt reading. */
+const CHECKPOINT_SECONDS = 15;
+/** Used when the machine's prompt speed has not been measured yet. */
+const DEFAULT_CHECKPOINT_TOKENS = 2048;
 /** Beside each saved state: its tokens, for finding what a new prefix shares. */
 const TOKENS_SUFFIX = '.tokens.json';
 /** Reading a long prefix on a slow CPU takes minutes. */
@@ -55,14 +76,26 @@ export interface PrefixRequest {
 
 interface SlotInfo { id: number; is_processing?: boolean; id_task?: number }
 
+/** A saved state: the shared system+tools prefix (or a layer of it), or a
+ * point in one conversation. */
+type Kind = 'prefix' | 'conversation';
+interface Saved { tokens?: number[]; kind: Kind }
+
+export interface PrefixCacheOptions {
+  /** This server's measured prompt reading, tokens per second. */
+  promptPerSecond?: number;
+  /** Overrides the disk budget for conversation states (tests). */
+  conversationBytes?: number;
+}
+
 const caches = new Map<string, PrefixCache>();
 
 /** The one PrefixCache for a server: a turn builds a new model client, and
  * what the last turn made sure of must not be read again. */
-export function prefixCacheFor(port: number, dir: string): PrefixCache {
+export function prefixCacheFor(port: number, dir: string, options: PrefixCacheOptions = {}): PrefixCache {
   const key = `${port}:${dir}`;
   let cache = caches.get(key);
-  if (!cache) caches.set(key, cache = new PrefixCache(port, dir));
+  if (!cache) caches.set(key, cache = new PrefixCache(port, dir, options));
   return cache;
 }
 
@@ -75,7 +108,15 @@ export class PrefixCache {
    * unused slot. */
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly port: number, private readonly dir: string) {}
+  /** Parsed sidecars by file name; a key's tokens never change. */
+  private readonly sidecars = new Map<string, Saved>();
+  private readonly checkpointTokens: number;
+
+  constructor(private readonly port: number, private readonly dir: string, private readonly options: PrefixCacheOptions = {}) {
+    this.checkpointTokens = options.promptPerSecond && options.promptPerSecond > 0
+      ? Math.max(MIN_PREFIX_TOKENS, Math.round(options.promptPerSecond * CHECKPOINT_SECONDS))
+      : DEFAULT_CHECKPOINT_TOKENS;
+  }
 
   /** Make sure the server holds this request's system+tools prefix before
    * the request is sent: restored from disk into a fresh server, or read
@@ -91,35 +132,56 @@ export class PrefixCache {
     const prefix = await this.prefixTokens(request);
     if (!prefix) return;
     const key = keyOf(prefix);
-    if (this.done.has(key)) return;
-    const saved = await this.savedPrefixes();
+    const conversation = await this.stableTokens(request.messages, request.tools);
+    const saved = await this.savedStates();
 
-    // Without an unused slot there is nothing to restore or save into
-    // safely: another session's conversation may be in it. The read below
-    // is then instant when a slot already holds the prefix.
+    // Without an unused slot there is nothing to restore into safely:
+    // another session's conversation may be in it. The server already holds
+    // what it has served, and the reads below reuse it.
     const slot = await this.unusedSlot();
     if (slot !== undefined) {
-      let held = 0;
-      // The longest saved state this prefix extends: itself, or a layer it
-      // shares with other folders' prefixes.
-      const base = saved.has(key) ? { key, length: prefix.length } : longestBase(prefix, saved);
-      if (base && await this.restore(slot, base.key)) {
-        if (base.key === key) { this.done.add(key); return; }
-        held = base.length;
+      // The longest saved state this request extends: this conversation so
+      // far, this folder's prefix, or a layer shared with other folders.
+      const target = conversation && conversation.length > prefix.length ? conversation : prefix;
+      const extended = longestBase(target, saved);
+      const base = (!extended || extended.length < prefix.length) && saved.has(key) ? { key, length: prefix.length } : extended;
+      const held = base && await this.restore(slot, base.key) ? base.length : 0;
+      if (held < prefix.length) {
+        // A miss that shares a long run with another saved prefix (the tools
+        // and fixed instructions, before a folder's own instructions) saves
+        // that run as its own layer, so the next folder reads only its tail.
+        const shared = sharedLength(prefix, saved) - BOUNDARY_SLACK;
+        if (shared > held && shared >= MIN_PREFIX_TOKENS && shared < prefix.length) {
+          const layer = prefix.slice(0, shared);
+          if (await this.read(layer, slot, signal) === undefined) return;
+          await this.save(slot, layer, 'prefix');
+        }
+        if (await this.read(prefix, slot, signal) === undefined) return;
+        if (!saved.has(key)) await this.save(slot, prefix, 'prefix');
       }
-      // A miss that shares a long run with another saved prefix (the tools
-      // and fixed instructions, before a folder's own instructions) saves
-      // that run as its own layer, so the next folder reads only its tail.
-      const shared = sharedLength(prefix, saved) - BOUNDARY_SLACK;
-      if (shared > held && shared >= MIN_PREFIX_TOKENS && shared < prefix.length) {
-        const layer = prefix.slice(0, shared);
-        if (!await this.read(layer, slot, signal)) return;
-        await this.save(slot, keyOf(layer), layer);
-      }
+      this.done.add(key);
+    } else if (!this.done.has(key)) {
+      if (await this.read(prefix, undefined, signal) === undefined) return;
+      this.done.add(key);
     }
-    if (!await this.read(prefix, slot, signal)) return;
-    this.done.add(key);
-    if (slot !== undefined && !saved.has(key)) await this.save(slot, key, prefix);
+    if (conversation) await this.checkpoint(conversation, slot, signal);
+  }
+
+  /** Save this conversation's stable point once it has grown past the last
+   * saved state it extends by more than a resume should reread. */
+  private async checkpoint(conversation: number[], slot: number | undefined, signal?: AbortSignal): Promise<void> {
+    // Read again: the prefix may have been saved a moment ago.
+    const saved = await this.savedStates();
+    const covered = longestBase(conversation, saved)?.length ?? 0;
+    if (conversation.length - covered < this.checkpointTokens) return;
+    // Reads what the request would read, into the slot holding the chat
+    // (the server picks it by shared prefix), and says which slot that was.
+    const used = await this.read(conversation, slot, signal);
+    if (used === undefined || !await this.save(used, conversation, 'conversation')) return;
+    // The chat's earlier points are superseded by this one.
+    for (const [key, state] of saved) {
+      if (state.kind === 'conversation' && state.tokens && commonLength(conversation, state.tokens) === state.tokens.length) await this.remove(key);
+    }
   }
 
   private async restore(slot: number, key: string): Promise<boolean> {
@@ -130,56 +192,94 @@ export class PrefixCache {
     return true;
   }
 
-  /** Reads tokens into the slot, reusing whatever prefix of them it holds. */
-  private async read(tokens: number[], slot: number | undefined, signal?: AbortSignal): Promise<boolean> {
+  /** Reads tokens into a slot, reusing whatever prefix of them it holds;
+   * the slot the server used, or undefined when the read failed. */
+  private async read(tokens: number[], slot: number | undefined, signal?: AbortSignal): Promise<number | undefined> {
     const read = await abortable(httpJson(this.port, 'POST', '/completion', {
       prompt: tokens, n_predict: 0, cache_prompt: true, ...(slot !== undefined ? { id_slot: slot } : {}),
     }, PREFILL_TIMEOUT_MS), signal);
-    return read.status === 200;
+    if (read.status !== 200) return undefined;
+    const used = (read.json as { id_slot?: unknown } | undefined)?.id_slot;
+    return typeof used === 'number' ? used : slot;
   }
 
-  private async save(slot: number, key: string, tokens: number[]): Promise<void> {
+  private async save(slot: number, tokens: number[], kind: Kind): Promise<boolean> {
+    const key = keyOf(tokens);
     const written = await httpJson(this.port, 'POST', `/slots/${slot}?action=save`, { filename: `${key}.bin` }, 120_000);
     // 501/400: started without --slot-save-path (an older ClikCode's server).
-    if (written.status !== 200) { this.unsupported = written.status === 501 || written.status === 400; return; }
-    // The tokens beside the state: what a later prefix shares with it.
-    await writeFile(join(this.dir, `${key}${TOKENS_SUFFIX}`), JSON.stringify(tokens)).catch(() => {});
+    if (written.status !== 200) { this.unsupported = written.status === 501 || written.status === 400; return false; }
+    // Another session's request between the read and the save would leave
+    // the slot holding something else: a state is kept only if it is ours.
+    const count = (written.json as { n_saved?: unknown } | undefined)?.n_saved;
+    if (typeof count === 'number' && count !== tokens.length) { await this.remove(key); return false; }
+    // The tokens beside the state: what a later request shares with it.
+    await writeFile(join(this.dir, `${key}${TOKENS_SUFFIX}`), JSON.stringify({ kind, tokens })).catch(() => {});
     await this.prune();
+    return true;
+  }
+
+  private async remove(key: string): Promise<void> {
+    this.sidecars.delete(`${key}${TOKENS_SUFFIX}`);
+    await rm(join(this.dir, `${key}.bin`), { force: true });
+    await rm(join(this.dir, `${key}${TOKENS_SUFFIX}`), { force: true });
   }
 
   /** Saved states by key, with their tokens when recorded (a file from an
    * older ClikCode has none and can only be restored whole). */
-  private async savedPrefixes(): Promise<Map<string, number[] | undefined>> {
+  private async savedStates(): Promise<Map<string, Saved>> {
     const names = await readdir(this.dir).catch(() => [] as string[]);
-    const saved = new Map<string, number[] | undefined>();
+    const saved = new Map<string, Saved>();
     for (const name of names) {
       if (!name.endsWith('.bin')) continue;
       const key = name.slice(0, -'.bin'.length);
-      const tokens = await readFile(join(this.dir, `${key}${TOKENS_SUFFIX}`), 'utf8')
-        .then((raw) => JSON.parse(raw) as unknown, () => undefined);
-      saved.set(key, Array.isArray(tokens) && tokens.every((token) => typeof token === 'number') ? tokens as number[] : undefined);
+      saved.set(key, await this.sidecar(`${key}${TOKENS_SUFFIX}`));
     }
     return saved;
+  }
+
+  private async sidecar(name: string): Promise<Saved> {
+    const known = this.sidecars.get(name);
+    if (known) return known;
+    const raw = await readFile(join(this.dir, name), 'utf8').then((text) => JSON.parse(text) as unknown, () => undefined);
+    // An array is the first format: a prefix's tokens alone.
+    const body = Array.isArray(raw) ? { kind: 'prefix', tokens: raw } : raw as { kind?: unknown; tokens?: unknown } | undefined;
+    const tokens = Array.isArray(body?.tokens) && body.tokens.every((token) => typeof token === 'number') ? body.tokens as number[] : undefined;
+    const parsed: Saved = { kind: body?.kind === 'conversation' ? 'conversation' : 'prefix', ...(tokens ? { tokens } : {}) };
+    if (tokens) this.sidecars.set(name, parsed);
+    return parsed;
+  }
+
+  /** The tokens of these messages that every later request in the same
+   * conversation starts with: what a render of them shares with one that
+   * adds a user message, less the slack. */
+  private async stableTokens(messages: PrefixRequest['messages'], tools: PrefixRequest['tools']): Promise<number[] | undefined> {
+    if (messages.length < 2) return undefined;
+    const [now, later] = await Promise.all([
+      this.render(messages, tools),
+      this.render([...messages, { role: 'user', content: 'Alpha' }], tools),
+    ]);
+    if (!now || !later) return undefined;
+    const length = commonLength(now, later) - BOUNDARY_SLACK;
+    return length >= MIN_PREFIX_TOKENS ? now.slice(0, length) : undefined;
+  }
+
+  private async render(messages: PrefixRequest['messages'], tools: PrefixRequest['tools']): Promise<number[] | undefined> {
+    const rendered = await httpJson(this.port, 'POST', '/apply-template', { messages, ...(tools?.length ? { tools } : {}) });
+    const prompt = (rendered.json as { prompt?: unknown } | undefined)?.prompt;
+    if (rendered.status !== 200 || typeof prompt !== 'string') return undefined;
+    const tokenized = await httpJson(this.port, 'POST', '/tokenize', { content: prompt, add_special: true, parse_special: true });
+    const list = (tokenized.json as { tokens?: unknown } | undefined)?.tokens;
+    return Array.isArray(list) && list.every((token) => typeof token === 'number') ? list as number[] : undefined;
   }
 
   /** The longest token prefix two renders of this request share when only
    * the user's message differs, less a little slack; undefined when the
    * server cannot render or tokenize, or the prefix is too short. */
   private async prefixTokens(request: PrefixRequest): Promise<number[] | undefined> {
-    const tokens = async (user: string): Promise<number[] | undefined> => {
-      const messages = [request.messages[0], { role: 'user', content: user }];
-      const rendered = await httpJson(this.port, 'POST', '/apply-template', { messages, ...(request.tools?.length ? { tools: request.tools } : {}) });
-      const prompt = (rendered.json as { prompt?: unknown } | undefined)?.prompt;
-      if (rendered.status !== 200 || typeof prompt !== 'string') return undefined;
-      const tokenized = await httpJson(this.port, 'POST', '/tokenize', { content: prompt, add_special: true, parse_special: true });
-      const list = (tokenized.json as { tokens?: unknown } | undefined)?.tokens;
-      return Array.isArray(list) && list.every((token) => typeof token === 'number') ? list as number[] : undefined;
-    };
+    const tokens = (user: string): Promise<number[] | undefined> => this.render([request.messages[0]!, { role: 'user', content: user }], request.tools);
     const [first, second] = await Promise.all([tokens('Alpha'), tokens('Zulu')]);
     if (!first || !second) { this.unsupported = true; return undefined; }
-    let shared = 0;
-    while (shared < first.length && first[shared] === second[shared]) shared++;
-    const length = shared - BOUNDARY_SLACK;
+    const length = commonLength(first, second) - BOUNDARY_SLACK;
     return length >= MIN_PREFIX_TOKENS ? first.slice(0, length) : undefined;
   }
 
@@ -191,15 +291,31 @@ export class PrefixCache {
     return (slots.json as SlotInfo[]).find((slot) => !slot.is_processing && slot.id_task === undefined)?.id;
   }
 
+  /** Prefixes: the newest few. Conversation states: the newest that fit
+   * the byte budget. Newest means last saved or restored. */
   private async prune(): Promise<void> {
-    const names = await readdir(this.dir).catch(() => [] as string[]);
-    const states = names.filter((name) => name.endsWith('.bin'));
-    const dated = await Promise.all(states.map(async (name) => ({ name, at: (await stat(join(this.dir, name)).catch(() => undefined))?.mtimeMs ?? 0 })));
-    const kept = new Set(dated.sort((left, right) => right.at - left.at).slice(0, KEEP_FILES).map((state) => state.name.slice(0, -'.bin'.length)));
-    for (const name of names) {
-      const key = name.endsWith('.bin') ? name.slice(0, -'.bin'.length) : name.endsWith(TOKENS_SUFFIX) ? name.slice(0, -TOKENS_SUFFIX.length) : undefined;
-      if (key !== undefined && !kept.has(key)) await rm(join(this.dir, name), { force: true });
+    const saved = await this.savedStates();
+    const dated = await Promise.all([...saved].map(async ([key, state]) => {
+      const info = await stat(join(this.dir, `${key}.bin`)).catch(() => undefined);
+      return { key, kind: state.kind, at: info?.mtimeMs ?? 0, bytes: info?.size ?? 0 };
+    }));
+    dated.sort((left, right) => right.at - left.at);
+    const budget = await this.conversationBudget();
+    let prefixes = 0, bytes = 0;
+    for (const state of dated) {
+      const keep = state.kind === 'prefix' ? ++prefixes <= KEEP_FILES : (bytes += state.bytes) <= budget;
+      if (!keep) await this.remove(state.key);
     }
+    // Sidecars whose state is gone.
+    for (const name of await readdir(this.dir).catch(() => [] as string[])) {
+      if (name.endsWith(TOKENS_SUFFIX) && !saved.has(name.slice(0, -TOKENS_SUFFIX.length))) await rm(join(this.dir, name), { force: true });
+    }
+  }
+
+  private async conversationBudget(): Promise<number> {
+    if (this.options.conversationBytes !== undefined) return this.options.conversationBytes;
+    const disk = await statfs(this.dir).catch(() => undefined);
+    return disk ? Math.min(CONVERSATION_BYTES, disk.bavail * disk.bsize * CONVERSATION_DISK_SHARE) : CONVERSATION_BYTES;
   }
 }
 
@@ -214,18 +330,18 @@ function commonLength(left: readonly number[], right: readonly number[]): number
 }
 
 /** The longest saved state that is a prefix of these tokens. */
-function longestBase(prefix: readonly number[], saved: ReadonlyMap<string, number[] | undefined>): { key: string; length: number } | undefined {
+function longestBase(prefix: readonly number[], saved: ReadonlyMap<string, Saved>): { key: string; length: number } | undefined {
   let best: { key: string; length: number } | undefined;
-  for (const [key, tokens] of saved) {
+  for (const [key, { tokens }] of saved) {
     if (tokens && tokens.length > (best?.length ?? 0) && commonLength(prefix, tokens) === tokens.length) best = { key, length: tokens.length };
   }
   return best;
 }
 
-/** The most tokens this prefix shares with any saved one. */
-function sharedLength(prefix: readonly number[], saved: ReadonlyMap<string, number[] | undefined>): number {
+/** The most tokens this prefix shares with any saved prefix. */
+function sharedLength(prefix: readonly number[], saved: ReadonlyMap<string, Saved>): number {
   let most = 0;
-  for (const tokens of saved.values()) if (tokens) most = Math.max(most, commonLength(prefix, tokens));
+  for (const { tokens, kind } of saved.values()) if (tokens && kind === 'prefix') most = Math.max(most, commonLength(prefix, tokens));
   return most;
 }
 

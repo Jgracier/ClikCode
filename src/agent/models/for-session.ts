@@ -138,7 +138,7 @@ export async function modelClientForSession(session: HarnessSession, config: Con
     if (!session.model) session.model = endpoint.model;
     // CLIKCODE_LOCAL_PREFIX_CACHE=off reads the prefix from scratch on every
     // start, to rule the cache out when something looks wrong.
-    const prefixes = endpoint.prefixCacheDir && process.env.CLIKCODE_LOCAL_PREFIX_CACHE !== 'off' ? prefixCacheFor(Number(new URL(endpoint.baseUrl).port), endpoint.prefixCacheDir) : undefined;
+    const prefixes = endpoint.prefixCacheDir && process.env.CLIKCODE_LOCAL_PREFIX_CACHE !== 'off' ? prefixCacheFor(Number(new URL(endpoint.baseUrl).port), endpoint.prefixCacheDir, endpoint.promptPerSecond ? { promptPerSecond: endpoint.promptPerSecond } : {}) : undefined;
     return new OpenAIModelClient({
       // The engine's URL ends in /v1 and the client appends /v1 itself.
       baseUrl: endpoint.baseUrl.replace(/\/v1\/?$/, ''), model: endpoint.model,
