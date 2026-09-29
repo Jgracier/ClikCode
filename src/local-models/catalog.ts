@@ -67,11 +67,6 @@ export interface CatalogModel {
   maxContext: number;
   license: 'apache-2.0' | 'mit';
   kv: KvGeometry;
-  /** Multi-token-prediction layers the file carries (GGUF
-   * `nextn_predict_layers`): the model's own draft heads, which llama.cpp
-   * can speculate with. Absent means none -- the server refuses to start
-   * with draft-mtp on a file without them. */
-  draftLayers?: number;
   /** Rough rank for agentic coding, 0-100, used only to order models that
    * all meet the speed bar. From published SWE-bench Verified /
    * Terminal-Bench results where the model card gives them, otherwise by
@@ -206,7 +201,6 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
     architecture: 'qwen35moe', totalParamsB: 35.5, activeParamsB: 3, activeWeightBytes: 2_016_506_368, quantization: 'Q4_K_M',
     defaultContext: 65_536, maxContext: 262_144, license: 'mit',
     kv: { layers: 10, kvHeads: 2, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(31, 32) },
-    draftLayers: 1,
     quality: 88, qualityNote: 'SWE-bench Verified 79, Terminal-Bench 2.1 67.8 (its card)',
   },
   {
@@ -253,7 +247,6 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
     architecture: 'qwen35moe', totalParamsB: 35.5, activeParamsB: 3, quantization: 'Q6_K',
     defaultContext: 65_536, maxContext: 262_144, license: 'mit',
     kv: { layers: 10, kvHeads: 2, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(31, 32) },
-    draftLayers: 1,
     quality: 90, qualityNote: 'Ornith 1.5 35B-A3B at Q6_K; near-lossless against Q4_K_M',
   },
   {
@@ -274,7 +267,6 @@ export const LOCAL_MODEL_CATALOG: readonly CatalogModel[] = [
     architecture: 'qwen35moe', totalParamsB: 35.5, activeParamsB: 3, quantization: 'Q8_0',
     defaultContext: 65_536, maxContext: 262_144, license: 'mit',
     kv: { layers: 10, kvHeads: 2, keyLength: 256, valueLength: 256, recurrentStateBytes: qwen35Recurrent(31, 32) },
-    draftLayers: 1,
     quality: 91, qualityNote: 'Ornith 1.5 35B-A3B at Q8_0',
   },
   {
