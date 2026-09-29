@@ -180,6 +180,8 @@ export type IdeChoice =
   | { kind: 'permissions'; value: string }
   | { kind: 'failover'; value: 'auto' | 'never' }
   | { kind: 'plan'; on: boolean }
+  /** ClikDeploy Gateway: served by the fastest provider instead of the cheapest. */
+  | { kind: 'fast'; on: boolean }
   | { kind: 'account'; accountId: string }
   | { kind: 'add-account'; provider: string }
   | { kind: 'account-action'; accountId: string; action: 'reauthenticate' | 'disconnect' | 'remove' | 'verified' }

@@ -109,7 +109,13 @@ export class DiffDocuments implements vscode.TextDocumentContentProvider {
     const right = vscode.Uri.from({ scheme: DiffDocuments.scheme, path: `/${id}/after/${safeName}` });
     this.contents.set(left.toString(), before);
     this.contents.set(right.toString(), after);
-    await vscode.commands.executeCommand('vscode.diff', left, right, `ClikCode: ${title}`, { preview: true, preserveFocus: true });
+    await vscode.commands.executeCommand('vscode.diff', left, right, `${title} (ClikCode proposes)`, { preview: true, preserveFocus: true });
+  }
+
+  /** The approval a diff editor's document belongs to. */
+  static approvalOf(uri: vscode.Uri | undefined): string | undefined {
+    if (uri?.scheme !== DiffDocuments.scheme) return undefined;
+    return uri.path.split('/')[1] || undefined;
   }
 
   forget(id: string): void {

@@ -1,11 +1,50 @@
-/** Messages between the extension host and the chat webview. */
+/** Messages between the extension host and a chat webview. */
 import type { ChatModel } from './model';
+import type { IdeChoice, IdePickItem, IdeQueryName, IdeUiRequest, IdeUiResult } from './protocol';
+
+/** A composer attachment: a file (or a range of one) the next message names. */
+export interface Mention {
+  path: string;
+  /** Workspace-relative, for display and for the prompt. */
+  label: string;
+  startLine?: number;
+  endLine?: number;
+  /** A selection's text, sent with the message as a fenced block. */
+  text?: string;
+  languageId?: string;
+}
+
+/** Screens the webview shows besides the chat. */
+export type WebviewScreen = 'chat' | 'history' | 'accounts' | 'settings';
 
 export type ToWebview =
   | { type: 'model'; model: ChatModel }
   | { type: 'setDraft'; text: string }
   | { type: 'insert'; text: string }
-  | { type: 'focus' };
+  | { type: 'mention'; mention: Mention }
+  | { type: 'focus' }
+  | { type: 'show'; screen: WebviewScreen }
+  /** The answer to a `request`. */
+  | { type: 'response'; id: string; ok: boolean; data?: unknown; error?: string }
+  /** A terminal picker, drawn in the panel. */
+  | { type: 'ui-request'; id: string; request: IdeUiRequest }
+  | { type: 'ui-update'; id: string; items: readonly IdePickItem[] }
+  | { type: 'ui-cancel'; id: string }
+  /** Integration tests only (extensionMode Test): read or drive the DOM. */
+  | { type: 'probe'; id: string; action: 'query' | 'click' | 'type' | 'key'; selector: string; text?: string };
+
+export type WebviewRequest =
+  | { method: 'query'; query: IdeQueryName; provider?: string; network?: boolean }
+  | { method: 'choose'; choice: IdeChoice }
+  /** Workspace files matching a partial path, for @-mentions. */
+  | { method: 'files'; text: string }
+  | { method: 'open'; mode: 'new' | 'continue' | 'resume'; sessionId?: string }
+  /** Conversation in a new editor tab. */
+  | { method: 'openInTab'; sessionId?: string }
+  /** Continue a conversation in the integrated terminal: `clikcode sessions resume`. */
+  | { method: 'openInTerminal'; sessionId: string }
+  /** An image pasted into the composer, saved where the agent can read it. */
+  | { method: 'saveImage'; name: string; dataBase64: string };
 
 export type FromWebview =
   | { type: 'ready' }
@@ -13,5 +52,12 @@ export type FromWebview =
   | { type: 'cancel'; restoreDraft: boolean }
   | { type: 'approve'; id: string; approved: boolean | 'always' }
   | { type: 'viewDiff'; id: string }
-  | { type: 'command'; command: string }
-  | { type: 'openLink'; href: string };
+  | { type: 'command'; command: string; args?: unknown[] }
+  | { type: 'openLink'; href: string }
+  | { type: 'openFile'; path: string; line?: number }
+  | { type: 'request'; id: string; request: WebviewRequest }
+  | { type: 'ui-response'; id: string; result: IdeUiResult }
+  | { type: 'focusChanged'; focused: boolean }
+  | { type: 'probeResult'; id: string; result: unknown }
+  /** A page error, for the log. */
+  | { type: 'log'; text: string };

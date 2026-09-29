@@ -7,6 +7,7 @@
  * model would get to make from the user's machine.
  */
 import { Marked, type Tokens } from 'marked';
+import { pathIn } from './format';
 
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
@@ -40,7 +41,18 @@ const marked = new Marked({
     },
     code({ text, lang }: Tokens.Code): string {
       const language = (lang ?? '').match(/^[\w+-]+/)?.[0] ?? '';
-      return `<pre class="code"${language ? ` data-lang="${escapeHtml(language)}"` : ''}><code>${escapeHtml(text)}</code></pre>`;
+      return `<div class="codeblock"><div class="codebar"><span>${escapeHtml(language || 'text')}</span>`
+        + '<button class="icon-button codecopy" data-copy title="Copy" aria-label="Copy code"><i class="codicon codicon-copy"></i></button></div>'
+        + `<pre class="code"${language ? ` data-lang="${escapeHtml(language)}"` : ''}><code>${escapeHtml(text)}</code></pre></div>`;
+    },
+    /** Inline code that is a path opens the file. */
+    codespan({ text }: Tokens.Codespan): string {
+      const raw = text;
+      const found = pathIn(raw);
+      if (found && found.index === 0 && found.path.length + (found.line ? String(found.line).length + 1 : 0) === raw.length) {
+        return `<code class="file-link" role="link" tabindex="0" data-file="${escapeHtml(found.path)}"${found.line ? ` data-line="${found.line}"` : ''}>${escapeHtml(text)}</code>`;
+      }
+      return `<code>${escapeHtml(text)}</code>`;
     },
   },
 });

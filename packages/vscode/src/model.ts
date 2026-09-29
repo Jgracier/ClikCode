@@ -9,9 +9,9 @@
  * copy is the prompt this client just submitted, shown until the worker's
  * own snapshot carries it.
  */
-import type { HarnessActivityEvent, HarnessSession, IdeEvent, WorkerEvent } from './protocol';
+import type { HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
-import { stripAnsi } from './text';
+import { diffInDetail, stripAnsi } from './text';
 import type { Remedy } from './compat';
 
 export interface Activity {
@@ -40,8 +40,22 @@ export interface Approval {
   hasDiff: boolean;
 }
 
+/** A finished turn's tool activity, kept beside the answer it produced. The
+ * worker's transcript holds only the messages; this is the editor's own
+ * record of how the answer was reached, and goes with the window. */
+export interface TurnTrace {
+  /** Index in `messages` of the prompt the turn answered. */
+  userIndex: number;
+  activities: Activity[];
+  startedAt: number;
+  endedAt: number;
+}
+
 export interface ChatModel {
   connection: 'starting' | 'ready' | 'stopped' | 'error';
+  /** IDE protocol revision the bridge speaks: 2 and up has the structured
+   * queries the provider menu, history and accounts screens are built on. */
+  revision?: number;
   connectionError?: string;
   /** What the banner offers besides Retry: install ClikCode, update it (too
    * old for this extension), or update the extension (ClikCode is newer). */
@@ -50,6 +64,9 @@ export interface ChatModel {
   sessionId?: string;
   title?: string;
   harness?: string;
+  /** The provider id `choose provider` takes: a harness command, `gateway`,
+   * or `clikcode-local`. */
+  providerId?: string;
   model?: string;
   account?: string;
   effort?: string;
@@ -63,38 +80,81 @@ export interface ChatModel {
   running: boolean;
   /** This client's submitted prompt, until a snapshot carries it. */
   pendingPrompt?: string;
-  live?: { text: string; waitingLabel: string; phase?: string; activities: Activity[] };
+  live?: { text: string; waitingLabel: string; phase?: string; activities: Activity[]; startedAt: number };
+  /** This client started the running turn (else it follows another's). */
+  ownTurn?: boolean;
+  /** Where the running turn's prompt lands in `messages`. */
+  turnUserIndex?: number;
+  traces: TurnTrace[];
   plan: Array<{ content: string; status?: string }>;
   turnUsage?: { inputTokens?: number; outputTokens?: number };
   approvals: Approval[];
   busy?: string;
   /** A message typed during the turn and what became of it. */
   submissions: Array<{ id: string; text: string; disposition?: string }>;
+  /** Read by the extension after each change of conversation (revision 2). */
+  chatSettings?: IdeChatSettings;
+  provider?: IdeProvider;
+  currentAccount?: IdeAccount;
 }
 
 export function emptyModel(): ChatModel {
-  return { connection: 'starting', messages: [], notes: [], queued: [], running: false, plan: [], approvals: [], submissions: [] };
+  return { connection: 'starting', messages: [], notes: [], queued: [], running: false, plan: [], approvals: [], submissions: [], traces: [] };
 }
 
 const MAX_NOTES = 50;
 const MAX_ACTIVITIES = 200;
+const MAX_TRACES = 100;
+
+/** The provider record, only while it is still the chat's: right after a
+ * switch the session has moved and the record not yet been read again. */
+export function currentProvider(model: ChatModel): IdeProvider | undefined {
+  return model.provider && model.provider.id === model.providerId ? model.provider : undefined;
+}
+
+/** The name to show for the chat's provider. */
+export function providerDisplayName(model: ChatModel, known?: ReadonlyArray<{ id: string; name: string }>): string | undefined {
+  const current = currentProvider(model);
+  if (current) return current.name;
+  const listed = known?.find((item) => item.id === model.providerId)?.name;
+  if (listed) return listed;
+  const harness = model.harness;
+  return harness ? harness.replace(/(^|[-_ ])(\w)/g, (_match, space: string, letter: string) => `${space ? ' ' : ''}${letter.toUpperCase()}`) : undefined;
+}
+
+/** What `choose provider` calls the provider a session runs on. */
+export function providerIdOf(session: HarnessSession): string | undefined {
+  if (session.route === 'gateway') return 'gateway';
+  if (session.route === 'clikcode-local') return 'clikcode-local';
+  return session.nativeHarness ?? undefined;
+}
+
+function freshFor(model: ChatModel): ChatModel {
+  return {
+    ...emptyModel(), connection: model.connection,
+    ...(model.version ? { version: model.version } : {}), ...(model.revision ? { revision: model.revision } : {}),
+  };
+}
 
 function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel {
   return { ...model, notes: [...model.notes, { ...note, after: model.messages.length }].slice(-MAX_NOTES) };
 }
 
 export function applySession(model: ChatModel, session: HarnessSession, account?: string): ChatModel {
-  if (model.sessionId && model.sessionId !== session.id) model = { ...emptyModel(), connection: model.connection, ...(model.version ? { version: model.version } : {}) };
+  if (model.sessionId && model.sessionId !== session.id) model = freshFor(model);
   const pending = session.pendingTurn;
   return {
     ...model,
     sessionId: session.id,
     title: session.name,
     harness: session.route === 'gateway' ? 'ClikDeploy Gateway' : session.route === 'clikcode-local' ? 'ClikCode Local' : session.nativeHarness,
+    providerId: providerIdOf(session),
     model: session.reported?.model ?? session.model ?? undefined,
     account,
     effort: session.route === 'gateway' ? undefined : session.effort || undefined,
-    permissions: session.route === 'gateway' ? undefined : session.permissionMode ?? 'ask',
+    // What an agent may do to this machine applies on every route, the
+    // Gateway's included: ClikCode's own agent asks before it edits.
+    permissions: session.permissionMode ?? 'ask',
     route: session.route,
     workspace: session.workspace,
     messages: session.messages ?? [],
@@ -128,23 +188,27 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const next = applySession(model, event.session, event.account);
       // The worker attaches `live` to every snapshot while a turn runs, so
       // one without it says nothing is running there.
-      if (!event.live) return model.live ? { ...next, running: false, live: undefined, pendingPrompt: undefined } : next;
+      if (!event.live) return model.live ? endTurn({ ...next, pendingPrompt: undefined }) : next;
       return {
         ...next,
         running: true,
-        live: { activities: next.live?.activities ?? [], ...next.live, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel) },
+        turnUserIndex: next.turnUserIndex ?? next.messages.length,
+        live: { activities: next.live?.activities ?? [], startedAt: next.live?.startedAt ?? Date.now(), ...next.live, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel) },
       };
     }
     case 'waiting-start':
-      return { ...model, running: true, live: { text: '', waitingLabel: stripAnsi(event.message), activities: [] }, plan: [], submissions: [] };
+      return {
+        ...model, running: true, turnUserIndex: model.messages.length,
+        live: { text: '', waitingLabel: stripAnsi(event.message), activities: [], startedAt: Date.now() }, plan: [], submissions: [],
+      };
     case 'waiting-stop':
-      return { ...model, running: false, live: undefined, pendingPrompt: undefined, approvals: [], submissions: [] };
+      return { ...endTurn(model), pendingPrompt: undefined, approvals: [], submissions: [] };
     case 'delta': {
-      const live = model.live ?? { text: '', waitingLabel: 'thinking', activities: [] };
+      const live = model.live ?? { text: '', waitingLabel: 'thinking', activities: [], startedAt: Date.now() };
       return { ...model, live: { ...live, text: event.mode === 'replace' ? event.text : live.text + event.text } };
     }
     case 'activity': {
-      const live = model.live ?? { text: '', waitingLabel: 'thinking', activities: [] };
+      const live = model.live ?? { text: '', waitingLabel: 'thinking', activities: [], startedAt: Date.now() };
       return { ...model, live: { ...live, activities: upsertActivity(live.activities, event.event) } };
     }
     case 'phase':
@@ -161,7 +225,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
           id: event.id, title: stripAnsi(event.title),
           ...(event.detail ? { detail: stripAnsi(event.detail) } : {}),
           ...(event.rule ? { rule: event.rule } : {}),
-          hasDiff: Boolean(event.preview?.diff),
+          hasDiff: Boolean(event.preview?.diff) || Boolean(diffInDetail(event.detail)),
         }],
       };
     case 'notice':
@@ -171,7 +235,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'submission':
       return { ...model, submissions: model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition } : item)) };
     case 'shutdown':
-      return { ...withNote(model, { kind: 'notice', level: 'warning', text: `The conversation's worker stopped: ${event.reason}` }), running: false, live: undefined, approvals: [] };
+      return { ...endTurn(withNote(model, { kind: 'notice', level: 'warning', text: `The conversation's worker stopped: ${event.reason}` })), approvals: [] };
     default:
       // suspend/resume, sign-in-request (the bridge handles it), restore-draft
       // (arrives separately) and anything a newer worker says.
@@ -179,17 +243,31 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
   }
 }
 
+/** The turn is over: its tool rows are kept beside the answer. */
+function endTurn(model: ChatModel): ChatModel {
+  const activities = model.live?.activities ?? [];
+  const traces = activities.length && model.turnUserIndex !== undefined
+    ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
+      userIndex: model.turnUserIndex, activities, startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
+    }].slice(-MAX_TRACES)
+    : model.traces;
+  return { ...model, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined, traces };
+}
+
 export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
   switch (event.type) {
     case 'ready':
-      return { ...model, connection: 'ready', version: event.version, connectionError: undefined, remedy: undefined };
+      return {
+        ...model, connection: 'ready', version: event.version, connectionError: undefined, remedy: undefined,
+        revision: typeof event.revision === 'number' ? event.revision : 1,
+      };
     case 'session':
       return applySession(model, event.session, event.account);
     case 'worker':
       return applyWorkerEvent(model, event.sessionId, event.event);
     case 'turn-start':
       if (model.sessionId && event.sessionId !== model.sessionId) return model;
-      return { ...model, running: true, pendingPrompt: event.prompt, queued: model.queued.filter((item) => item.id !== event.queuedTurnId) };
+      return { ...model, running: true, ownTurn: true, pendingPrompt: event.prompt, queued: model.queued.filter((item) => item.id !== event.queuedTurnId) };
     case 'turn-end':
       return model;
     case 'busy':
@@ -207,7 +285,7 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
     case 'usage':
       return { ...model, accountUsage: [event.label, event.reset].filter(Boolean).join(' · ') || undefined };
     case 'closed':
-      return event.sessionId === model.sessionId ? { ...emptyModel(), connection: model.connection, ...(model.version ? { version: model.version } : {}) } : model;
+      return event.sessionId === model.sessionId ? freshFor(model) : model;
     default:
       return model;
   }

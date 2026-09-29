@@ -1,11 +1,14 @@
 **
 !dist/extension.js
 !dist/webview.js
+!dist/webview.css
+!dist/codicon.css
+!dist/codicon.ttf
 !media/icon.png
 !media/activity.svg
 !media/editor-light.svg
 !media/editor-dark.svg
-!media/chat.css
+!media/screenshots/*.png
 !README.md
 !CHANGELOG.md
 !LICENSE
