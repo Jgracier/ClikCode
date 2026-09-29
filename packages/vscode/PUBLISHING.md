@@ -96,7 +96,7 @@ xvfb-run -a pnpm --dir packages/vscode test:integration # real VS Code, real tur
 ```
 
 Keep a `CHANGELOG.md` entry per release line. The README screenshot is served from
-`https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/chat.png`,
+`https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/turn.png`,
 which works because the repository is public.
 
 ## Manual fallback

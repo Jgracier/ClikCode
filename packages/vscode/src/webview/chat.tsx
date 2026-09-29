@@ -42,22 +42,24 @@ function activityIcon(activity: Activity): string {
 }
 
 /** A tool label with the path in it made a link to the file. */
-function ActivityLabel({ label }: { label: string }): JSX.Element {
+function ActivityLabel({ label, workspace }: { label: string; workspace?: string }): JSX.Element {
   const found = pathIn(label);
-  if (!found) return <span class="activity-text">{label}</span>;
-  const before = label.slice(0, found.index);
-  const shownPath = found.path + (found.line ? `:${found.line}` : '');
-  const after = label.slice(found.index + shownPath.length);
+  if (!found) return <span class="activity-text" title={label}>{relative(label, workspace)}</span>;
+  const before = relative(label.slice(0, found.index), workspace);
+  const written = found.path + (found.line ? `:${found.line}` : '');
+  const after = relative(label.slice(found.index + written.length), workspace);
+  // Shown relative to the workspace, opened by the path the tool used.
+  const shown = relative(found.path, workspace) + (found.line ? `:${found.line}` : '');
   return (
-    <span class="activity-text">
+    <span class="activity-text" title={label}>
       {before}
-      <a href="#" class="file-link" data-file={found.path} data-line={found.line} title={`Open ${found.path}`}>{shownPath}</a>
+      <a href="#" class="file-link" data-file={found.path} data-line={found.line} title={`Open ${found.path}`}>{shown}</a>
       {after}
     </span>
   );
 }
 
-function ActivityRow({ activity }: { activity: Activity }): JSX.Element {
+function ActivityRow({ activity, workspace }: { activity: Activity; workspace?: string }): JSX.Element {
   const [open, setOpen] = useState(false);
   const status = activity.kind === 'tool-start' ? 'running' : activity.kind === 'tool-error' ? 'error' : 'done';
   const hasMore = Boolean(activity.output?.length || activity.diff);
@@ -67,7 +69,7 @@ function ActivityRow({ activity }: { activity: Activity }): JSX.Element {
         <span class="activity-status" aria-label={status}>
           {status === 'running' ? <Icon name="loading" spin /> : status === 'error' ? <Icon name="error" /> : <Icon name={activityIcon(activity)} />}
         </span>
-        <ActivityLabel label={activity.label} />
+        <ActivityLabel label={activity.label} workspace={workspace} />
         {hasMore ? (
           <button type="button" class="icon-button tiny" aria-expanded={open} aria-label={open ? 'Hide output' : 'Show output'} onClick={() => setOpen(!open)}>
             <Icon name={open ? 'chevron-up' : 'chevron-down'} />
@@ -86,7 +88,7 @@ function ActivityRow({ activity }: { activity: Activity }): JSX.Element {
 }
 
 /** A finished turn's steps, folded to one line above its answer. */
-function TraceRow({ trace }: { trace: TurnTrace }): JSX.Element {
+function TraceRow({ trace, workspace }: { trace: TurnTrace; workspace?: string }): JSX.Element {
   const [open, setOpen] = useState(false);
   const tools = trace.activities.filter((activity) => activity.kind !== 'thinking');
   const failed = tools.filter((activity) => activity.kind === 'tool-error').length;
@@ -97,7 +99,7 @@ function TraceRow({ trace }: { trace: TurnTrace }): JSX.Element {
         <span>{tools.length ? `${tools.length} step${tools.length === 1 ? '' : 's'}` : 'Thought'}</span>
         <span class="muted">· {duration(trace.endedAt - trace.startedAt)}{failed ? ` · ${failed} failed` : ''}</span>
       </button>
-      {open ? <div class="activities">{trace.activities.map((activity) => <ActivityRow key={activity.key} activity={activity} />)}</div> : null}
+      {open ? <div class="activities">{trace.activities.map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} />)}</div> : null}
     </div>
   );
 }
@@ -157,7 +159,7 @@ function LiveTurn({ model }: { model: ChatModel }): JSX.Element {
       {activities.length ? (
         <div class="activities">
           {hidden ? <button type="button" class="more-steps" onClick={() => setShowAll(true)}><Icon name="ellipsis" /> {hidden} earlier step{hidden === 1 ? '' : 's'}</button> : null}
-          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} />)}
+          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={model.workspace} />)}
         </div>
       ) : null}
       {live?.text ? <Markdown text={live.text} /> : null}
@@ -197,7 +199,7 @@ export function Transcript({ model }: { model: ChatModel }): JSX.Element {
     if (message.role === 'user') parts.push(<UserMessage key={`m${index}`} text={message.content} />);
     else {
       const trace = traces.get(index - 1);
-      if (trace) parts.push(<TraceRow key={`t${index}`} trace={trace} />);
+      if (trace) parts.push(<TraceRow key={`t${index}`} trace={trace} workspace={model.workspace} />);
       parts.push(<div key={`m${index}`} class="message assistant"><Markdown text={message.content} /></div>);
     }
     notesAt(index + 1);

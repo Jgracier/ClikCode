@@ -55,6 +55,9 @@ export function chatSuite(): void {
     });
 
     it('drives the provider menu from the keyboard', async () => {
+      // A panel left hidden by the turn before must not fail this test for the wrong reason.
+      await vscode.commands.executeCommand('clikcode.focus');
+      await waitFor(api, '#provider-button', 'the composer');
       await click(api, '#provider-button');
       await waitFor(api, '#provider-picker', 'the provider menu');
       if ((await query(api, '#picker-back')).count) await key(api, '#provider-picker input', 'ArrowLeft');

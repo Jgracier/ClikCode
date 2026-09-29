@@ -83,6 +83,10 @@ export function screensSuite(): void {
       await until(api, (state) => (state.live?.activities.length ?? 0) >= 1, 'tool activity', 240_000).catch(() => undefined);
       await screenshot('streaming', 600);
       await until(api, (state) => !state.running && state.messages.length >= 2, 'the answer', 300_000);
+      await screenshot('turn-folded');
+      // The steps it took, unfolded: each tool row, its file a link.
+      await waitFor(api, '.trace-toggle', 'the steps row');
+      await click(api, '.trace-toggle');
       await screenshot('turn');
     });
 
@@ -119,6 +123,10 @@ export function screensSuite(): void {
     });
 
     it('a narrow side bar', async () => {
+      // The sash is found by the plain editor's colours: no diff editor open.
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      const [folder] = vscode.workspace.workspaceFolders ?? [];
+      await vscode.window.showTextDocument(vscode.Uri.joinPath(folder!.uri, 'math.ts'));
       await vscode.commands.executeCommand('clikcode.showHistory');
       await click(api, '#history-button');
       await dragSidebarTo(1440 - 300);
