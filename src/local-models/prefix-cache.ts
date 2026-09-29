@@ -31,7 +31,7 @@
  * request that follows reads whatever the server does not already hold. */
 
 import { createHash } from 'node:crypto';
-import { readdir, rm, stat, utimes } from 'node:fs/promises';
+import { readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { httpJson } from './launch.js';
 
@@ -43,6 +43,8 @@ const BOUNDARY_SLACK = 4;
 /** Saved prefixes kept per server configuration, newest used first; one
  * is a few hundred MB. */
 const KEEP_FILES = 4;
+/** Beside each saved state: its tokens, for finding what a new prefix shares. */
+const TOKENS_SUFFIX = '.tokens.json';
 /** Reading a long prefix on a slow CPU takes minutes. */
 const PREFILL_TIMEOUT_MS = 30 * 60_000;
 
@@ -88,34 +90,76 @@ export class PrefixCache {
     if (this.unsupported || request.messages[0]?.role !== 'system') return;
     const prefix = await this.prefixTokens(request);
     if (!prefix) return;
-    const key = createHash('sha256').update(JSON.stringify(prefix)).digest('hex').slice(0, 32);
+    const key = keyOf(prefix);
     if (this.done.has(key)) return;
-    const file = `${key}.bin`;
-    const saved = await stat(join(this.dir, file)).then(() => true, () => false);
+    const saved = await this.savedPrefixes();
 
+    // Without an unused slot there is nothing to restore or save into
+    // safely: another session's conversation may be in it. The read below
+    // is then instant when a slot already holds the prefix.
     const slot = await this.unusedSlot();
-    if (saved && slot !== undefined) {
-      const restored = await httpJson(this.port, 'POST', `/slots/${slot}?action=restore`, { filename: file }, 60_000);
-      if (restored.status === 200) {
-        const now = new Date();
-        await utimes(join(this.dir, file), now, now).catch(() => {});
-        this.done.add(key);
-        return;
+    if (slot !== undefined) {
+      let held = 0;
+      // The longest saved state this prefix extends: itself, or a layer it
+      // shares with other folders' prefixes.
+      const base = saved.has(key) ? { key, length: prefix.length } : longestBase(prefix, saved);
+      if (base && await this.restore(slot, base.key)) {
+        if (base.key === key) { this.done.add(key); return; }
+        held = base.length;
+      }
+      // A miss that shares a long run with another saved prefix (the tools
+      // and fixed instructions, before a folder's own instructions) saves
+      // that run as its own layer, so the next folder reads only its tail.
+      const shared = sharedLength(prefix, saved) - BOUNDARY_SLACK;
+      if (shared > held && shared >= MIN_PREFIX_TOKENS && shared < prefix.length) {
+        const layer = prefix.slice(0, shared);
+        if (!await this.read(layer, slot, signal)) return;
+        await this.save(slot, keyOf(layer), layer);
       }
     }
-    // Read the prefix into a slot (instant when a slot already holds it) and
-    // save it when no file does. Without an unused slot there is nothing to
-    // save into safely: another session's conversation may be in it.
-    const read = await abortable(httpJson(this.port, 'POST', '/completion', {
-      prompt: prefix, n_predict: 0, cache_prompt: true, ...(slot !== undefined ? { id_slot: slot } : {}),
-    }, PREFILL_TIMEOUT_MS), signal);
-    if (read.status !== 200) return;
+    if (!await this.read(prefix, slot, signal)) return;
     this.done.add(key);
-    if (saved || slot === undefined) return;
-    const written = await httpJson(this.port, 'POST', `/slots/${slot}?action=save`, { filename: file }, 120_000);
+    if (slot !== undefined && !saved.has(key)) await this.save(slot, key, prefix);
+  }
+
+  private async restore(slot: number, key: string): Promise<boolean> {
+    const restored = await httpJson(this.port, 'POST', `/slots/${slot}?action=restore`, { filename: `${key}.bin` }, 60_000);
+    if (restored.status !== 200) return false;
+    const now = new Date();
+    await utimes(join(this.dir, `${key}.bin`), now, now).catch(() => {});
+    return true;
+  }
+
+  /** Reads tokens into the slot, reusing whatever prefix of them it holds. */
+  private async read(tokens: number[], slot: number | undefined, signal?: AbortSignal): Promise<boolean> {
+    const read = await abortable(httpJson(this.port, 'POST', '/completion', {
+      prompt: tokens, n_predict: 0, cache_prompt: true, ...(slot !== undefined ? { id_slot: slot } : {}),
+    }, PREFILL_TIMEOUT_MS), signal);
+    return read.status === 200;
+  }
+
+  private async save(slot: number, key: string, tokens: number[]): Promise<void> {
+    const written = await httpJson(this.port, 'POST', `/slots/${slot}?action=save`, { filename: `${key}.bin` }, 120_000);
     // 501/400: started without --slot-save-path (an older ClikCode's server).
     if (written.status !== 200) { this.unsupported = written.status === 501 || written.status === 400; return; }
+    // The tokens beside the state: what a later prefix shares with it.
+    await writeFile(join(this.dir, `${key}${TOKENS_SUFFIX}`), JSON.stringify(tokens)).catch(() => {});
     await this.prune();
+  }
+
+  /** Saved states by key, with their tokens when recorded (a file from an
+   * older ClikCode has none and can only be restored whole). */
+  private async savedPrefixes(): Promise<Map<string, number[] | undefined>> {
+    const names = await readdir(this.dir).catch(() => [] as string[]);
+    const saved = new Map<string, number[] | undefined>();
+    for (const name of names) {
+      if (!name.endsWith('.bin')) continue;
+      const key = name.slice(0, -'.bin'.length);
+      const tokens = await readFile(join(this.dir, `${key}${TOKENS_SUFFIX}`), 'utf8')
+        .then((raw) => JSON.parse(raw) as unknown, () => undefined);
+      saved.set(key, Array.isArray(tokens) && tokens.every((token) => typeof token === 'number') ? tokens as number[] : undefined);
+    }
+    return saved;
   }
 
   /** The longest token prefix two renders of this request share when only
@@ -148,10 +192,41 @@ export class PrefixCache {
   }
 
   private async prune(): Promise<void> {
-    const names = (await readdir(this.dir).catch(() => [] as string[])).filter((name) => name.endsWith('.bin'));
-    const dated = await Promise.all(names.map(async (name) => ({ name, at: (await stat(join(this.dir, name)).catch(() => undefined))?.mtimeMs ?? 0 })));
-    for (const old of dated.sort((left, right) => right.at - left.at).slice(KEEP_FILES)) await rm(join(this.dir, old.name), { force: true });
+    const names = await readdir(this.dir).catch(() => [] as string[]);
+    const states = names.filter((name) => name.endsWith('.bin'));
+    const dated = await Promise.all(states.map(async (name) => ({ name, at: (await stat(join(this.dir, name)).catch(() => undefined))?.mtimeMs ?? 0 })));
+    const kept = new Set(dated.sort((left, right) => right.at - left.at).slice(0, KEEP_FILES).map((state) => state.name.slice(0, -'.bin'.length)));
+    for (const name of names) {
+      const key = name.endsWith('.bin') ? name.slice(0, -'.bin'.length) : name.endsWith(TOKENS_SUFFIX) ? name.slice(0, -TOKENS_SUFFIX.length) : undefined;
+      if (key !== undefined && !kept.has(key)) await rm(join(this.dir, name), { force: true });
+    }
   }
+}
+
+function keyOf(tokens: readonly number[]): string {
+  return createHash('sha256').update(JSON.stringify(tokens)).digest('hex').slice(0, 32);
+}
+
+function commonLength(left: readonly number[], right: readonly number[]): number {
+  let shared = 0;
+  while (shared < left.length && shared < right.length && left[shared] === right[shared]) shared++;
+  return shared;
+}
+
+/** The longest saved state that is a prefix of these tokens. */
+function longestBase(prefix: readonly number[], saved: ReadonlyMap<string, number[] | undefined>): { key: string; length: number } | undefined {
+  let best: { key: string; length: number } | undefined;
+  for (const [key, tokens] of saved) {
+    if (tokens && tokens.length > (best?.length ?? 0) && commonLength(prefix, tokens) === tokens.length) best = { key, length: tokens.length };
+  }
+  return best;
+}
+
+/** The most tokens this prefix shares with any saved one. */
+function sharedLength(prefix: readonly number[], saved: ReadonlyMap<string, number[] | undefined>): number {
+  let most = 0;
+  for (const tokens of saved.values()) if (tokens) most = Math.max(most, commonLength(prefix, tokens));
+  return most;
 }
 
 function abortable<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
