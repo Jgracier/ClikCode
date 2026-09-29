@@ -122,11 +122,12 @@ describe('OpenAIModelClient', () => {
   });
 
   it('falls back to llama-server timings when no usage is sent', async () => {
-    const timings: unknown[] = [];
+    const timings: { value: unknown; elapsedMs: number }[] = [];
     reply = { chunks: [delta({ content: 'x' }, 'stop'), { choices: [], timings: { prompt_n: 20, cache_n: 80, predicted_n: 5, predicted_per_second: 12 } }, 'data: [DONE]\n\n'] };
-    const result = await new OpenAIModelClient({ baseUrl, model: 'm', onTimings: (value) => timings.push(value) }).step(request());
+    const result = await new OpenAIModelClient({ baseUrl, model: 'm', onTimings: (value, elapsedMs) => { timings.push({ value, elapsedMs }); } }).step(request());
     expect(result.usage).toEqual({ input: 100, output: 5, cached: 80 });
     expect(timings).toHaveLength(1);
+    expect(timings[0]!.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
   it('maps HTTP errors to the loop\'s kinds with the server\'s message', async () => {

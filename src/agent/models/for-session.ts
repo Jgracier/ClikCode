@@ -11,6 +11,7 @@ import { OpenAIModelClient } from './openai-client.js';
 import { STREAM_IDLE_TIMEOUT_MS } from './gateway-client.js';
 import { gatewayStepOptions } from '../../gateway/options.js';
 import { ensureLocalModel, prefixCacheFor, releaseLocalModelsOnExit, type LocalModelProgress } from '../../local-models/index.js';
+import { recordLocalTurnTiming } from '../../local-models/turn-timings.js';
 import { CLIKCODE_LOCAL_LABEL } from '../../session/route.js';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { harnessCommand } from '../../session/state/paths.js';
@@ -142,10 +143,14 @@ export async function modelClientForSession(session: HarnessSession, config: Con
       // The engine's URL ends in /v1 and the client appends /v1 itself.
       baseUrl: endpoint.baseUrl.replace(/\/v1\/?$/, ''), model: endpoint.model,
       contextWindow: endpoint.contextWindow, label: CLIKCODE_LOCAL_LABEL,
+      // The cache is part of the local-turn contract, not a server default:
+      // unchanged history should be read once, on every supported machine.
+      body: { cache_prompt: true },
       ...(endpoint.promptPerSecond ? { promptPerSecond: endpoint.promptPerSecond } : {}),
       // A cold server reads the system prompt and tools from a saved state
       // instead of from scratch (prefix-cache.ts).
       ...(prefixes ? { beforeRequest: (payload: Parameters<typeof prefixes.prepare>[0], signal?: AbortSignal) => prefixes.prepare(payload, signal) } : {}),
+      onTimings: (timings, elapsedMs) => { void recordLocalTurnTiming(endpoint.model, timings, elapsedMs); },
     });
   }
   throw new Error(`a ${session.route} session runs a vendor harness, not ClikCode's own agent`);
