@@ -137,6 +137,10 @@ export interface AiHarnessAccount {
    * verifies it (e.g. Google's "Verify your account"). A fact about the
    * account, cleared by a turn that succeeds or by the user saying it is done. */
   verification?: { url?: string; at: string };
+  /** When the vendor last signed this account in. A live vendor child holds
+   * the credentials it started with, so this is part of what makes a child
+   * reusable: a sign-out and sign-in starts a fresh one. */
+  signedInAt?: string;
   credentialRef: string;
   /** Last usage reading for this account, shared across every terminal.
    * The figure belongs to the account, not to one chat, so caching it per

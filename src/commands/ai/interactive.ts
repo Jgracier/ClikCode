@@ -738,7 +738,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             },
             logout: async () => {
               if (!commandSession.accountId) throw new Error('This conversation has no account to sign out.');
-              await closePersistentTransport(id);
               await withWaiting('signing out…', () => manageAccountAction(rl, commandSession.accountId!, 'disconnect'));
               return {};
             },

@@ -142,6 +142,7 @@ export async function syncAccountIdentityAfterLogin(
   // always mark ready and persist, so a caller never has to separately
   // remember to do either around this call.
   account.status = 'ready';
+  account.signedInAt = new Date().toISOString();
   if (harness.command === 'vibe' && account.nativeProfile?.path) {
     if (!await captureMistralVibeCredential(account.nativeProfile.path)) {
       throw new Error('Mistral Vibe login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not updated.');
@@ -157,6 +158,7 @@ export async function syncAccountIdentityAfterLogin(
   if (existingMatch) {
     const replacedProfile = existingMatch.nativeProfile;
     existingMatch.status = 'ready';
+    existingMatch.signedInAt = account.signedInAt;
     if (account.nativeProfile) existingMatch.nativeProfile = account.nativeProfile;
     state.accounts = state.accounts.filter((item) => item.id !== account.id);
     for (const session of state.sessions) if (session.accountId === account.id) session.accountId = existingMatch.id;
@@ -391,14 +393,23 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
 }
 
 export async function aiAccountLogout(labelOrId: string): Promise<void> {
+  const account = await signOutAccount(labelOrId);
+  emitResult({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
+}
+
+/** The one sign-out: the vendor's own logout in the account's profile, then
+ * the account marked as needing a login. Clearing signedInAt retires any
+ * live vendor child still holding the old credentials. */
+export async function signOutAccount(labelOrId: string): Promise<AiHarnessAccount> {
   const state = await readState();
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
-  if (!harnessCanLogout(harness)) throw new Error(`${harness.displayName} does not publish a non-interactive logout command`);
+  if (!harnessCanLogout(harness)) throw new Error(`${harness.displayName} has no way to sign out from outside its own session.`);
   if (harness.logoutArgv) await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
   else await logoutNativeHarness(harness, environment);
   account.status = 'needs_login';
+  delete account.signedInAt;
   await writeState(state);
-  emitResult({ account: accountView(account), loggedOut: true, credentialBoundary: 'local-only' });
+  return account;
 }
 
 /** A login can succeed while the vendor still refuses to serve the account

@@ -1,0 +1,48 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const vendorLogout = vi.fn(async () => undefined);
+vi.mock('../harness/transport/native/command.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../harness/transport/native/command.js')>(),
+  runNativeHarnessCommand: vendorLogout,
+}));
+vi.mock('../harness/accounts/auth-files.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../harness/accounts/auth-files.js')>(),
+  harnessCanLogout: () => true,
+  logoutNativeHarness: vendorLogout,
+}));
+
+vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../runtime/lazy-bridge.js')>(),
+  localHarnessForProvider: () => ({ command: 'codex', displayName: 'Codex', provider: 'openai', binary: 'codex', profileEnv: 'CODEX_HOME' }),
+  homeRedirectEnvironment: (_harness: unknown, base: Record<string, string>) => ({ ...base }),
+}));
+
+const { signOutAccount } = await import('./account.js');
+const { readState } = await import('../session/state/read.js');
+
+const previousHome = process.env.CLIKCODE_HOME;
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.CLIKCODE_HOME;
+  else process.env.CLIKCODE_HOME = previousHome;
+});
+
+describe('sign-out', () => {
+  it('runs the vendor logout and retires the sign-in a live vendor child holds', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-signout-'));
+    process.env.CLIKCODE_HOME = root;
+    await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
+      version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
+      accounts: [{ id: 'acct', provider: 'openai', label: 'Work', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:codex', signedInAt: '2026-09-01T00:00:00.000Z' }],
+      sessions: [], invocations: [],
+      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+    })}\n`);
+    await signOutAccount('acct');
+    expect(vendorLogout).toHaveBeenCalledOnce();
+    const account = (await readState()).accounts.find((item) => item.id === 'acct');
+    expect(account?.status).toBe('needs_login');
+    expect(account?.signedInAt).toBeUndefined();
+  });
+});

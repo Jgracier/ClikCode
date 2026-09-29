@@ -2,7 +2,7 @@
 import { harnessBinaryIdentity } from '../harness/transport/native/version-memo.js';
 import { createCodexSession } from '../harness/transport/codex-app-server.js';
 import { createAcpSession } from '../harness/transport/acp-client.js';
-import type { AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessAvailableCommand } from '../harness/events/turn-observer.js';
 import type { HarnessTurnTransport } from '../harness/transport/select.js';
 import type { CodexSession } from '../harness/transport/codex-app-server.js';
@@ -52,6 +52,15 @@ export function setVendorBackgroundTurnHandler(sessionId: string, handler: Vendo
  * when someone will show it (native/held-vendor.ts) asks first. */
 export function vendorBackgroundTurnHandlerFor(sessionId: string): VendorBackgroundTurnHandler | undefined {
   return vendorBackgroundTurnHandlers.get(sessionId);
+}
+
+/** Everything a vendor child was started with that a later turn must match
+ * to reuse it: its harness, the account and the sign-in it holds, the
+ * profile environment, and the working directory. */
+export function vendorChildKey(
+  harness: AiLocalHarnessDefinition, account: AiHarnessAccount, environment: Readonly<Record<string, string>>, workspace: string | undefined,
+): string {
+  return JSON.stringify([harness.command, account.id, account.signedInAt, environment, workspace]);
 }
 
 /** One live child per open ClikCode session, keyed by everything that makes a

@@ -271,7 +271,7 @@ export async function sendVendorTurn(input: {
         result = await runStructuredCliTurn();
       } else {
         result = await runVendorSessionAttempt({
-          harness, accountId: account.id, session, transport, turnText, model, environment, images, signal, run, checkpoint,
+          harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint,
           sharedObserver, effort: turnEffort(), onSessionId, runCli: runStructuredCliTurn,
         });
       }
