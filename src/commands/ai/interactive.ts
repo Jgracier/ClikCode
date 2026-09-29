@@ -283,6 +283,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   /** A message to send next, without asking: the one that ran out of usage,
    * after "Resume in" moved the chat to a harness that has some. */
   let resend: string | undefined;
+  /** Left was pressed during a turn: the board opens next, with the turn
+   * still running behind it (see startWaiting's onLeave). */
+  let openBoard = false;
   /** The message last re-sent because its own provider had an account back;
    * never twice, so a record that keeps flipping cannot loop. */
   let autoResent: string | undefined;
@@ -335,6 +338,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         refreshUsage(latest, latestState);
         notice = undefined;
         const queued = latest.queuedTurns?.[0];
+        if (openBoard) {
+          // Before anything that would follow the running turn straight back.
+          openBoard = false;
+          line = '/resume';
+        } else {
         // A turn is running (another window's, or one the worker started):
         // the queued message waits behind it, so that turn is followed to its
         // end rather than the message sent into it only to be queued again.
@@ -344,6 +352,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           rl.render({ ...latest, messages: sessionTranscriptMessages(latest), pendingTurn: undefined }, account);
           const followed = await followWorkerTurn(latest.id, rl);
           if (followed.notice) notice = followed.notice;
+          if (followed.left) openBoard = true;
           continue;
         }
         if (queued?.kind === 'command') {
@@ -377,11 +386,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               rl.render({ ...latest, messages: sessionTranscriptMessages(latest), pendingTurn: undefined }, account);
               const followed = await followWorkerTurn(latest.id, rl);
               if (followed.notice) notice = followed.notice;
+              if (followed.left) openBoard = true;
             }
             continue;
           }
           line = answer.line.trim();
         } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: '/resume' })).trim();
+        }
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.
@@ -440,6 +451,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             // correctly without this being threaded through it too.
             const outcome = await runTurnThroughWorker(targetId, rl, promptText, turn);
             if (outcome.notice) notice = outcome.notice;
+            if (outcome.left) openBoard = true;
             return;
           }
           const turnController = new AbortController();

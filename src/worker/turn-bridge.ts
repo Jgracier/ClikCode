@@ -149,7 +149,7 @@ export async function closeAllWorkerClients(): Promise<void> {
  * account, notice) signature). */
 export async function runTurnThroughWorker(
   sessionId: string, rl: TerminalHarnessPrompter, promptText: string, turn: WorkerTurnRequest,
-): Promise<{ notice?: string }> {
+): Promise<{ notice?: string; left?: true }> {
   const client = await clientFor(sessionId);
   return driveWorkerTurn(sessionId, client, rl, () => {
     client.send({ type: 'submit', text: promptText, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
@@ -204,7 +204,7 @@ export function workerRunningTurn(sessionId: string): { prompt?: string } | unde
 /** Follows the turn the worker is running to its end, exactly as if this
  * window had sent it: what has streamed so far, then every event, with
  * cancel and typed messages going to the worker. */
-export async function followWorkerTurn(sessionId: string, rl: TerminalHarnessPrompter): Promise<{ notice?: string }> {
+export async function followWorkerTurn(sessionId: string, rl: TerminalHarnessPrompter): Promise<{ notice?: string; left?: true }> {
   const client = clients.get(sessionId);
   const tracker = client ? trackers.get(client) : undefined;
   if (!client || !tracker?.running) return {};
@@ -215,8 +215,9 @@ export async function followWorkerTurn(sessionId: string, rl: TerminalHarnessPro
 
 async function driveWorkerTurn(
   sessionId: string, client: WorkerClient, rl: TerminalHarnessPrompter, begin: () => void, stillRunning?: () => boolean,
-): Promise<{ notice?: string }> {
+): Promise<{ notice?: string; left?: true }> {
   let notice: string | undefined;
+  let left = false;
   const tracker = trackers.get(client);
   if (tracker) tracker.driving = true;
   try {
@@ -371,6 +372,10 @@ async function driveWorkerTurn(
         // A slash line is never the worker's business: it is ClikCode's own
         // command, and it runs here when the turn ends.
         (text) => commandDuringTurn(sessionId, text),
+        // Stepping away ends this window's following, not the turn: the
+        // worker runs it to the end either way, and the connection stays
+        // open, so coming back (or another window) picks it up mid-stream.
+        () => { left = true; finish(() => resolveTurn()); },
       );
       begin();
       for (const event of tracker?.unanswered.splice(0) ?? []) onEvent(event);
@@ -385,5 +390,5 @@ async function driveWorkerTurn(
     await rl.flushWaitingSubmissions?.();
     rl.stopWaiting();
   }
-  return notice !== undefined ? { notice } : {};
+  return { ...(notice !== undefined ? { notice } : {}), ...(left ? { left: true as const } : {}) };
 }

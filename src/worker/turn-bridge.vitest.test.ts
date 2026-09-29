@@ -109,7 +109,7 @@ describe('runTurnThroughWorker (real spawned worker, fake terminal)', () => {
       .rejects.toThrow(/no account selected/);
     // Three callbacks: cancel, a message steered into the turn, and a slash
     // command typed during it (queued, then run when the turn ends).
-    expect(rl.calls).toContain('startWaiting("thinking",[fn],[fn],[fn])');
+    expect(rl.calls).toContain('startWaiting("thinking",[fn],[fn],[fn],[fn])');
     expect(rl.calls).toContain('stopWaiting()');
     // Rendered the optimistic pending state via the worker's own snapshot
     // on attach, before the submit was even sent -- proves the event
