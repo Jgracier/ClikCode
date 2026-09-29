@@ -43,6 +43,8 @@ import type {
 
 export const GATEWAY_ID = 'gateway';
 export const LOCAL_ID = 'clikcode-local';
+/** How long the editor's model menu waits for a harness to list its models. */
+const IDE_MODEL_DISCOVERY_WAIT_MS = 45_000;
 
 function harnessOf(session: HarnessSession | undefined): AiLocalHarnessDefinition | undefined {
   if (!session || isClikCodeAgent(session)) return undefined;
@@ -126,7 +128,9 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
   if (!harness) throw new Error(`unknown provider "${provider}"`);
   if (!choosesModel(harness)) return { provider, models: [], custom: false, error: `${harness.displayName} does not publish a model selector.` };
   const onIt = session?.route === 'local' && session.nativeHarness === harness.command ? session : undefined;
-  const catalog = await nativeModelCatalogForPicker(harness, accountFor(state, session, harness));
+  // The terminal's picker gives discovery 3 s and redraws when it lands; the
+  // editor's menu shows a spinner and draws once, so it waits for the list.
+  const catalog = await nativeModelCatalogForPicker(harness, accountFor(state, session, harness), IDE_MODEL_DISCOVERY_WAIT_MS);
   const effective = onIt?.model ?? catalog.configured ?? undefined;
   const models: IdeModel[] = [...catalog.models]
     .sort((left, right) => (left === effective ? -1 : right === effective ? 1 : left.localeCompare(right)))
