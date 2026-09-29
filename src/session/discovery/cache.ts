@@ -5,6 +5,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWriteFile } from '../store/files.js';
 import { stateDirectory } from '../store/paths.js';
+import type { DiscoveredNativeSession } from './discovered-session.js';
 
 /** What discovery learned about one vendor file. Everything here comes from
  * the head of an append-only transcript, so it stays true for as long as the
@@ -40,7 +41,14 @@ interface DiscoveryCacheFile {
   v: 1;
   directories: Record<string, CachedDirectory>;
   listings?: Record<string, CachedListing>;
+  /** The last list each vendor CLI gave, shown the moment the conversation
+   * list opens while the CLI is asked again. Never used to skip that spawn:
+   * it is what the list looked like, not what it is. */
+  seen?: Record<string, { at: number; sessions: DiscoveredNativeSession[] }>;
 }
+
+/** Enough recent lists for every CLI, account and folder in use. */
+const DISCOVERY_CACHE_MAX_SEEN = 60;
 
 /** How long "nothing here" is believed. Short enough that a session created
  * in another terminal shows up in the resume list within a few minutes,
@@ -94,6 +102,10 @@ export async function saveDiscoveryCache(): Promise<void> {
     for (const [key, entry] of Object.entries(listings)) {
       if (now - entry.at >= EMPTY_LISTING_TTL_MS) delete listings[key];
     }
+  }
+  const seen = discoveryCache.data.seen;
+  if (seen && Object.keys(seen).length > DISCOVERY_CACHE_MAX_SEEN) {
+    discoveryCache.data.seen = Object.fromEntries(Object.entries(seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN));
   }
   discoveryCache.dirty = false;
   await atomicWriteFile(path, JSON.stringify(discoveryCache.data)).catch(() => undefined);
@@ -158,4 +170,27 @@ export async function rememberListing(
   }
   cache.listings[key] = { at: now, empty: true, ...(build ? { build } : {}) };
   discoveryCache!.dirty = true;
+}
+
+/** Keep what a vendor CLI listed, for showing next time before it is asked. */
+export async function rememberSeenListing(
+  command: string, workspace: string | undefined, profile: string | undefined, sessions: readonly DiscoveredNativeSession[], now = Date.now(),
+): Promise<void> {
+  const cache = await loadDiscoveryCache();
+  cache.seen ??= {};
+  const key = listingKey(command, workspace, profile);
+  if (!sessions.length) {
+    if (cache.seen[key]) { delete cache.seen[key]; discoveryCache!.dirty = true; }
+    return;
+  }
+  cache.seen[key] = { at: now, sessions: [...sessions] };
+  discoveryCache!.dirty = true;
+}
+
+/** What a vendor CLI listed last time, or nothing when it never has. */
+export async function lastSeenListing(
+  command: string, workspace: string | undefined, profile: string | undefined,
+): Promise<DiscoveredNativeSession[]> {
+  const cache = await loadDiscoveryCache();
+  return cache.seen?.[listingKey(command, workspace, profile)]?.sessions ?? [];
 }

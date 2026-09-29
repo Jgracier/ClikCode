@@ -2253,7 +2253,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       onBack?: () => void;
       onEscape?: () => void;
       refreshedOptions?: () => readonly PickerOption<T>[];
-      refresh?: Promise<unknown>;
+      refresh?: Promise<unknown> | readonly Promise<unknown>[];
       /** Rows the list may use, when more than the default suits it. */
       rows?: number;
     },

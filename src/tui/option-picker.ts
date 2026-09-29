@@ -40,7 +40,7 @@ export interface OptionPickerSettings {
   onBack?: () => void;
   onEscape?: () => void;
   refreshedOptions?: () => readonly PickerOption<never>[];
-  refresh?: Promise<unknown>;
+  refresh?: Promise<unknown> | readonly Promise<unknown>[];
 }
 
 /** How the last picker closed. A menu that opened a sub-picker reopens
@@ -66,7 +66,7 @@ export function runOptionPicker<T>(
     onBack?: () => void;
     onEscape?: () => void;
     refreshedOptions?: () => readonly PickerOption<T>[];
-    refresh?: Promise<unknown>;
+    refresh?: Promise<unknown> | readonly Promise<unknown>[];
     /** Rows the list may use, when more than the default suits it. */
     rows?: number;
   },
@@ -278,6 +278,7 @@ export function runOptionPicker<T>(
     input.resume();
     stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
     draw();
-    void settings?.refresh?.then(() => { if (!finished) draw(); }, () => { if (!finished) draw(); });
+    // Rows can land in stages (known ones, then fresh ones): redraw at each.
+    for (const refresh of [settings?.refresh ?? []].flat()) void refresh.then(() => { if (!finished) draw(); }, () => { if (!finished) draw(); });
   });
 }

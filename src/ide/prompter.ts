@@ -69,7 +69,7 @@ export class IdePrompter implements HarnessPrompter {
       onBack?: () => void;
       onEscape?: () => void;
       refreshedOptions?: () => readonly PickerOption<T>[];
-      refresh?: Promise<unknown>;
+      refresh?: Promise<unknown> | readonly Promise<unknown>[];
     },
   ): Promise<T | undefined> {
     let current = options;
@@ -84,11 +84,14 @@ export class IdePrompter implements HarnessPrompter {
       if (refresh && settings?.refreshedOptions) {
         const pendingRefresh = refresh;
         refresh = undefined;
-        void pendingRefresh.then(() => {
-          if (!this.pending.has(id)) return;
-          current = settings.refreshedOptions!();
-          this.channel.send({ type: 'ui-update', id, items: pickItems(current) });
-        }, () => undefined);
+        // Rows can land in stages (known ones, then fresh ones): update at each.
+        for (const stage of [pendingRefresh].flat()) {
+          void stage.then(() => {
+            if (!this.pending.has(id)) return;
+            current = settings.refreshedOptions!();
+            this.channel.send({ type: 'ui-update', id, items: pickItems(current) });
+          }, () => undefined);
+        }
       }
       const result = await answer;
       if ('cancelled' in result) {
