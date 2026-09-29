@@ -216,6 +216,9 @@ export interface SlashExtras {
   native?: ReadonlyArray<{ name: string; description?: string; hint?: string }>;
   custom?: ReadonlyArray<{ name: string; description?: string; argumentHint?: string }>;
   harnesses?: ReadonlyArray<{ command: string; displayName: string }>;
+  /** Registry commands this surface does not offer: listed nowhere, and the
+   * surface answers them itself when typed. */
+  omit?: ReadonlySet<string>;
 }
 
 /** Every listable row. Unavailable commands stay listed with their reason so
@@ -227,7 +230,7 @@ function slashRows(
   session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined,
   extras: SlashExtras, vendor: boolean,
 ): SlashPaletteEntry[] {
-  const rows: SlashPaletteEntry[] = SLASH_COMMANDS.map((item) => {
+  const rows: SlashPaletteEntry[] = SLASH_COMMANDS.filter((item) => !extras.omit?.has(item.name)).map((item) => {
     const state = item.availability(session, harness);
     return {
       label: `/${item.name}`, value: `/${item.name}`, group: item.group,

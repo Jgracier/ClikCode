@@ -45,7 +45,7 @@ import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
 import { claimSession, releaseSession, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
 import { existsSync } from 'node:fs';
-import { routeSlashInput, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../../tui/slash/registry.js';
+import { routeSlashInput, slashControls, slashHelpText, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { LiveTurnInputBroker } from '../../turn/live-input.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
@@ -72,6 +72,15 @@ import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
 import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerRunningTurn } from '../../worker/turn-bridge.js';
+
+/** Commands the terminal replaced with the board. `/resume` is ← on an empty
+ * prompt; `/new` is ← and typing. They stay in the registry for the surfaces
+ * without a board (VS Code, headless `sessions send`). */
+const BOARD_REPLACES: ReadonlySet<string> = new Set(['resume', 'new']);
+const BOARD_REPLACES_NOTICE = 'Press ← on an empty prompt for your conversations -- pick one, or type to start a new one.';
+/** What Left on an empty prompt returns: not a slash line, so it cannot be
+ * typed, and it opens the board however the registry changes. */
+const BOARD_LINE = '\u0000board';
 
 /** What a `/` offers on the conversation board: the settings a new
  * conversation starts with. */
@@ -182,7 +191,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let paletteState: Pick<HarnessState, 'accounts' | 'sessions'> = state;
   const slashCommandsFor = (target: HarnessSession): PickerOption<string>[] => {
     const harness = sessionHarness(target);
-    return withArgValues(slashPalette(target, harness, slashExtrasFor(target, harness)), target, harness, paletteState);
+    return withArgValues(slashPalette(target, harness, { ...slashExtrasFor(target, harness), omit: BOARD_REPLACES }), target, harness, paletteState);
   };
   // Created before auto-select so a first-ever install/sign-in — the most
   // common time either is actually needed — has somewhere to show its
@@ -341,7 +350,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         if (openBoard) {
           // Before anything that would follow the running turn straight back.
           openBoard = false;
-          line = '/resume';
+          line = BOARD_LINE;
         } else {
         // A turn is running (another window's, or one the worker started):
         // the queued message waits behind it, so that turn is followed to its
@@ -377,7 +386,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // The worker may start a turn while this sits here (another
           // window's, or a follow-up for a finished background shell), or
           // queue something: either ends the prompt, keeping the draft.
-          const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: '/resume', ...(signal ? { signal } : {}) }), queueMark);
+          const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, ...(signal ? { signal } : {}) }), queueMark);
           if ('woke' in answer) {
             if (answer.woke === 'turn') {
               // Shown as this window shows its own turns: the prompt as the
@@ -391,7 +400,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             continue;
           }
           line = answer.line.trim();
-        } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: '/resume' })).trim();
+        } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: BOARD_LINE })).trim();
         }
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
@@ -400,6 +409,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         throw error;
       }
       if (!line) continue;
+      // Left on an empty prompt: the board, through the handler /resume has.
+      const viaBoard = line === BOARD_LINE;
+      if (viaBoard) line = '/resume';
       let interruptedSubmission: { text: string; restoreOnEscape: boolean } | undefined;
       /** One turn with the normal waiting / cancel / live-input UI. `echo`
        * paints the submitted text as the pending user message; synthetic
@@ -594,6 +606,14 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             try { await runNativeHarnessCommand(commandHarness, manager.manageArgv, turnEnvironment(commandHarness, selectedAccount)); }
             finally { rl.resume(); }
           } else throw new Error(`${commandHarness.displayName} requires an interactive terminal for ${manager.label}.`);
+        }
+        else if (BOARD_REPLACES.has(route.entry.name) && !viaBoard) {
+          notice = BOARD_REPLACES_NOTICE;
+        }
+        else if (route.entry.name === 'help') {
+          // The terminal's own list: without the commands the board replaced.
+          const extras = { ...slashExtrasFor(commandSession, commandHarness), omit: BOARD_REPLACES };
+          emitHarnessOutput({ panel: 'help', helpText: slashHelpText(commandSession, commandHarness, extras), controls: slashControls().filter((item) => !BOARD_REPLACES.has(item.command.slice(1))) });
         }
         else {
           // Availability is decided BEFORE any picker opens, so `/model` on a
