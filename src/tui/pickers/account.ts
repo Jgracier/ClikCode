@@ -5,7 +5,6 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import chalk from 'chalk';
-import { runNativeHarnessCommand } from '../../harness/transport/native/command.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
@@ -15,9 +14,8 @@ import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { accountUsageLabel, cachedAccountUsageLabel } from '../../harness/accounts/account-usage.js';
 import { NATIVE_USAGE_PROBES } from '../../harness/accounts/usage-probes.js';
-import { aiAccountAdd, aiAccountLogin, aiAccountRemove, syncAccountIdentityAfterLogin, withVendorTerminal } from '../../commands/account.js';
+import { aiAccountAdd, aiAccountLogin, aiAccountRemove, signOutAccount, syncAccountIdentityAfterLogin, withVendorTerminal } from '../../commands/account.js';
 import { refreshPlaceholderAccountLabels } from '../../harness/accounts/labels.js';
-import { harnessCanLogout, logoutNativeHarness } from '../../harness/accounts/auth-files.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { accountPickerOptions, type ProviderAccountChoice } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
@@ -275,12 +273,8 @@ export async function manageAccountAction(rl: HarnessPrompter, accountId: string
     return;
   }
   const environment = nativeProfileEnvironment(account.nativeProfile);
-  if (action === 'disconnect' && !harnessCanLogout(harness)) throw new Error(`${harness.displayName} has no way to sign out from outside its own session.`);
   if (action === 'disconnect') {
-    if (harness.logoutArgv) await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
-    else await logoutNativeHarness(harness, environment);
-    account.status = 'needs_login';
-    await writeState(state);
+    await signOutAccount(account.id);
   } else if (action === 'reauthenticate' && harness.loginArgv) {
     await withVendorTerminal(rl instanceof TerminalHarnessPrompter ? rl : undefined, harness, () => loginNativeHarness(harness, environment));
     await syncAccountIdentityAfterLogin(harness, account, state);

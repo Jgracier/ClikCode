@@ -1,6 +1,6 @@
 /** One ACP or app-server attempt, with a CLI fallback where the vendor permits it. */
 import chalk from 'chalk';
-import type { AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { HarnessTurnTransport } from '../harness/transport/select.js';
@@ -13,11 +13,11 @@ import { appServerThreadOverrides, declaredOptionArgv } from '../harness/transpo
 import { recordDerivedUsage } from '../harness/accounts/stream-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
-import { closePersistentTransport, persistentTransportFor } from './vendor-process.js';
+import { closePersistentTransport, persistentTransportFor, vendorChildKey } from './vendor-process.js';
 
 export async function runVendorSessionAttempt(input: {
   harness: AiLocalHarnessDefinition;
-  accountId: string;
+  account: AiHarnessAccount;
   session: HarnessSession;
   transport: Extract<HarnessTurnTransport, 'acp' | 'codex-app-server'>;
   turnText: string;
@@ -32,7 +32,7 @@ export async function runVendorSessionAttempt(input: {
   onSessionId: (id: string) => Promise<void>;
   runCli: () => Promise<NativeTurnResult>;
 }): Promise<NativeTurnResult> {
-  const { harness, accountId, session, transport, turnText, model, environment, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, runCli } = input;
+  const { harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, runCli } = input;
   const prompter = run.prompter;
   let result: NativeTurnResult;
   // ACP and the app-server own session identity: never hand them an id
@@ -43,7 +43,7 @@ export async function runVendorSessionAttempt(input: {
   }
   const declaredOptions = localHarnessCapabilityManifest(harness).options;
   const persistent = run.persistentTransports
-    ? persistentTransportFor(session.id, transport, JSON.stringify([harness.command, accountId, environment, session.workspace]))
+    ? persistentTransportFor(session.id, transport, vendorChildKey(harness, account, environment, session.workspace))
     : undefined;
   try {
     if (transport === 'codex-app-server') {
