@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { serverDir, sessionHeldElsewhere, writeLease } from './lifecycle';
+import { heldByLiveProcess, serverDir, sessionHeldElsewhere, writeLease } from './lifecycle';
 
 const previous = process.env.CLIKCODE_LOCAL_MODELS_HOME;
 beforeEach(() => { process.env.CLIKCODE_LOCAL_MODELS_HOME = mkdtempSync(join(tmpdir(), 'cc-leases-')); });
@@ -42,5 +42,16 @@ describe('measured footprints', () => {
     expect(footprintKey(run)).toBe('65536|f16|2|text');
     expect(await readFootprints('here', ['qwen3.5-4b', 'gpt-oss-20b'])).toEqual({ 'qwen3.5-4b': [run] });
     expect(await readFootprints('new-machine', ['qwen3.5-4b'])).toEqual({});
+  });
+});
+
+describe('whether anyone holds a model', () => {
+  it('counts only leases whose process is alive', async () => {
+    expect(await heldByLiveProcess('m')).toBe(false);
+    mkdirSync(join(serverDir('m'), 'leases'), { recursive: true });
+    writeFileSync(join(serverDir('m'), 'leases', '999999999-gone.json'), '{}');
+    expect(await heldByLiveProcess('m')).toBe(false);
+    await writeLease('m', 'mine');
+    expect(await heldByLiveProcess('m')).toBe(true);
   });
 });

@@ -68,6 +68,15 @@ export async function sessionHeldElsewhere(modelId: string, sessionId: string): 
   return false;
 }
 
+/** Whether any live process holds a lease on a model. A server nobody
+ * holds is only outliving its last lease (leaseGraceMs) and will stop. */
+export async function heldByLiveProcess(modelId: string): Promise<boolean> {
+  for (const name of await readdir(leasesDir(modelId)).catch(() => [] as string[])) {
+    if (processAlive(Number(name.slice(0, name.indexOf('-'))))) return true;
+  }
+  return false;
+}
+
 /** Drop this process's leases for a session, on every model, except the
  * one named in `keep` (a session that moved to another model keeps only
  * its new one). */
