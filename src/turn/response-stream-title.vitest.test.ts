@@ -26,7 +26,7 @@ import { describe, expect, it } from 'vitest';
  */
 describe('streamed answers go through the title filter', () => {
   const turnSources = async (): Promise<string> => (await Promise.all(
-    ['vendor-turn.ts', 'direct-turn.ts', 'agent-turn.ts', 'platform-assistant-turn.ts']
+    ['vendor-turn.ts', 'vendor-cli-attempt.ts', 'vendor-session-attempt.ts', 'direct-turn.ts', 'agent-turn.ts', 'platform-assistant-turn.ts']
       .map((file) => readFile(new URL(file, import.meta.url), 'utf8')),
   )).join('\n');
 
@@ -67,8 +67,8 @@ describe('streamed answers go through the title filter', () => {
   it('routes every transport through the one shared delta emitter', async () => {
     const source = await turnSources();
     // The real invariant after consolidation: ONE filter site per execution
-    // path, not one per transport. The three that remain are the vendor-CLI
-    // path (where three transports now share a single emitter), the api-key
+    // path, not one per transport. The three that remain are the vendor
+    // path (where three transports share a single emitter), the api-key
     // path and the gateway path -- each a separate function with its own
     // titleStream, which is irreducible without merging the paths themselves.
     // A fourth is the regression to catch: it would mean a transport grew its
@@ -76,10 +76,10 @@ describe('streamed answers go through the title filter', () => {
     const filterSites = [...source.matchAll(/titleStream \? titleStream\.push\(/g)];
     expect(filterSites.length, 'the title filter has been copied again').toBe(3);
     expect(source).toMatch(/const emitResponseDelta = /);
-    // Each of the three native transports hands its deltas to it, directly or
-    // by spreading the shared observer that names it.
+    // The two session protocols and CLI parser all use the shared observer.
     expect(source).toMatch(/onResponseDelta: emitResponseDelta/);
     const spreads = [...source.matchAll(/\.\.\.sharedObserver/g)];
     expect(spreads.length, 'a transport stopped using the shared observer').toBe(3);
+    expect(source).toMatch(/sharedObserver\.onResponseDelta\?\.\(text, mode \?\? 'append'\)/);
   });
 });

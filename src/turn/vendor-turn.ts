@@ -1,23 +1,14 @@
 /** Run a turn through a vendor's CLI or structured session protocol. */
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { createStreamState } from '../harness/events/adapters.js';
 import { randomUUID } from 'node:crypto';
 import { usageExhaustedMessage } from './usage-exhausted.js';
 import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice } from './failover.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
-import { mkdir } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { existsSync } from 'node:fs';
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
-import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
-import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
-import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
-import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
 import { initialAccountChoice, terminalFailoverError, turnBackendForAccount } from './account-routing.js';
@@ -31,46 +22,27 @@ import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
-import { nativeTurnResult, type NativeTurnResult } from '../harness/protocol/turn-result.js';
-import { nativeTurnUsage } from '../harness/protocol/turn-usage.js';
-import { harnessSupportsImages, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
-import { harnessStatePath } from '../session/state/paths.js';
+import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
+import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { writeState } from '../session/state/write.js';
-import { recordDerivedUsage, recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
-import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
-import { closePersistentTransport, completeTurnCheckpoint, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, persistentTransportFor, startTurnCheckpoint, synchronizeNativeTranscript, turnEnvironment, vendorBackgroundTurnHandlerFor, type TurnRunOptions } from './runtime.js';
+import { closePersistentTransport, completeTurnCheckpoint, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, startTurnCheckpoint, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
+import { runVendorCliAttempt } from './vendor-cli-attempt.js';
+import { runVendorSessionAttempt } from './vendor-session-attempt.js';
 import { emitHarnessOutput } from '../harness/output.js';
-import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
-import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
 import { harnessTurnTransport } from '../harness/transport/select.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
-import { harnessAcpLaunch, harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelProvider, maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
-import { reportStructuredLine } from '../harness/events/structured.js';
+import { harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelProvider } from '../runtime/lazy-bridge.js';
 import { prepareAttachments } from '../session/attachments.js';
-import { appServerThreadOverrides, declaredOptionArgv, normalizeTurnUsage, type NormalizedTurnUsage } from '../harness/transport/options.js';
+import { normalizeTurnUsage, type NormalizedTurnUsage } from '../harness/transport/options.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
-import { aiderHistoryNotice, aiderHistoryReply, aiderStdoutReply } from '../harness/events/aider.js';
-import { readFile } from 'node:fs/promises';
 
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
  * only in this process and record normalized, credential-free usage.
  */
-/** Whether `folder` is inside a git work tree (a `.git` here or above). */
-function insideGitRepository(folder: string): boolean {
-  for (let directory = resolve(folder); ; directory = dirname(directory)) {
-    if (existsSync(join(directory, '.git'))) return true;
-    if (dirname(directory) === directory) return false;
-  }
-}
-
 /** A vendor refusing the reasoning level itself, in the words the CLIs use. */
-/** With no session worker to show a background turn, how long a finished
- * answer waits on background tasks still running before letting them go. */
-const UNHELD_BACKGROUND_GRACE_MS = 60_000;
-
 const EFFORT_REJECTED = /\b(?:unknown|invalid|unsupported|not supported)\b[^\n]{0,40}\b(?:reasoning[ _-]?)?effort\b|\beffort\b[^\n]{0,40}\b(?:is not supported|not supported|unsupported|invalid)\b/i;
 
 /** Whether a failed turn is the vendor refusing the reasoning level: read
@@ -197,7 +169,6 @@ export async function sendVendorTurn(input: {
   let nativeThreadRetried = false;
   const effortKey = (): string => `${harness.command} ${model ?? ''} ${session.effort}`;
   const turnEffort = (): string | undefined => session.effort && session.effortRefused !== effortKey() ? session.effort : undefined;
-  const declaredOptions = localHarnessCapabilityManifest(harness).options;
   /** Shared by every transport: usage seen on the wire for this attempt. */
   let turnUsage: NormalizedTurnUsage | undefined;
   const noteUsage = (raw: unknown): void => {
@@ -278,7 +249,6 @@ export async function sendVendorTurn(input: {
     // A fresh native thread with prior ClikCode messages: see above. Also
     // covers an id ClikCode minted that the vendor never confirmed.
     let caughtTurnFailure: Error | undefined;
-    let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>> = { stdout: '', stderr: '', exitCode: 0 };
     let result: NativeTurnResult | undefined;
     let streamError: { message: string; statusCode?: number; kind?: string } | undefined;
     let cliOutputStarted = false;
@@ -290,281 +260,20 @@ export async function sendVendorTurn(input: {
     // it; deciding here, from the prompt itself, is what makes that true for
     // all five instead of the ones someone remembered.
     titleStream = titleStreamForAttempt(titleStream, turnText, session);
-    const runStructuredCliTurn = async (): Promise<NativeTurnResult> => {
-      // A previous turn's vendor may still be running for its background
-      // work (held-vendor.ts). This turn takes over: stdin closes, anything
-      // it was saying finishes into its own transcript, and it exits.
-      if (hasHeldVendorProcess(session.id)) {
-        prompter?.phase('closing background work');
-        await releaseHeldVendorProcess(session.id);
-      }
-      const cliHarness: AiLocalHarnessDefinition = harness.fallbackTurn && await usesFallbackTurn(harness)
-        ? { ...harness, turn: harness.fallbackTurn } : harness;
-      const turn = cliHarness.turn;
-      if (!turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
-      if (promptExceedsArgvLimit(cliHarness, turnText)) {
-        throw Object.assign(new Error(
-          `${harness.displayName} takes its prompt as a command-line argument, and this request is ${Math.ceil(Buffer.byteLength(turnText, 'utf8') / 1024)} KB (limit ${Math.floor(maxPromptArgvBytes() / 1024)} KB). Shorten it, or save the long content to a file in the workspace and ask the agent to read it.`,
-        ), { code: 'ERR_PROMPT_TOO_LARGE' });
-      }
-      // Only a structured-CLI harness gets an id minted here, and it stays
-      // marked "preallocated" until the vendor process is seen to own it:
-      // a first attempt that dies early must re-create, never `--resume` an
-      // id that was never created.
-      let createdHere = Boolean(session.nativeSessionId && session.nativeSessionPreallocated);
-      if (!session.nativeSessionId && cliHarness.session?.idKind === 'uuid' && turn.createIdPrefix) {
-        session.nativeSessionId = randomUUID();
-        session.nativeSessionPreallocated = true;
-        createdHere = true;
-      } else if (!session.nativeSessionId && cliHarness.session?.idKind === 'history-file' && turn.createIdPrefix) {
-        const nativeDirectory = join(harnessStatePath(), '..', 'native', cliHarness.command);
-        await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
-        session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
-        session.nativeSessionPreallocated = true;
-        createdHere = true;
-      } else if (!session.nativeSessionId && cliHarness.session?.createSessionArgv) {
-        session.nativeSessionId = await captureNativeHarness(cliHarness, cliHarness.session.createSessionArgv, environment);
-        createdHere = true;
-      }
-      const argv = nativeHarnessTurnArgv(cliHarness, {
-        prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
-        launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort: turnEffort(),
-        permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
-      });
-      if (turn.outsideRepoArgv && !insideGitRepository(session.workspace ?? process.cwd())) argv.unshift(...turn.outsideRepoArgv);
-      // Persist an allocated native identity before the provider starts so an
-      // interrupted turn cannot accidentally fork the centralized conversation.
-      if (createdHere) await checkpoint.persistNow();
-      const confirmNativeSession = (): void => {
-        if (!session.nativeSessionPreallocated) return;
-        delete session.nativeSessionPreallocated;
-        checkpoint.touch();
-      };
-      const idle = createTurnIdleController();
-      // One stream position per attempt: a retry is a new response, and
-      // a vendor's per-record session ids must not decide which records
-      // belong together (see adapters.ts StreamState).
-      const stream = createStreamState();
-      // A stream-json stdin stays open while the vendor has background work
-      // running, so the turn it starts when that work finishes reaches this
-      // conversation instead of being killed at exit (background-wait.ts).
-      // A message typed while this turn runs goes straight to the vendor.
-      const vendorBackground = new Set<string>();
-      const heldInput = turn.promptInput === 'stdin' && turn.stdinFormat === 'stream-json' ? createTurnInput() : undefined;
-      // A successful answer with background tasks still running ends this
-      // turn at once; the process is kept, and what it says when a task
-      // finishes becomes a background turn (held-vendor.ts). With nobody to
-      // show that (no session worker), the turn waits a bounded while
-      // instead, then lets the tasks go.
-      const backgroundHandler = heldInput ? vendorBackgroundTurnHandlerFor(session.id) : undefined;
-      const release = backgroundHandler ? createTurnRelease() : undefined;
-      let held: HeldVendor | undefined;
-      const heldStreams = new WeakMap<object, ReturnType<typeof createStreamState>>();
-      const background = heldInput ? createBackgroundWait({
-        onSettled: () => {
-          run.liveInput?.setSteerHandler(undefined);
-          heldInput.end();
-        },
-        onQuiet: () => held?.quiet(),
-        onTaskStarted: (id, description) => {
-          idle.toolStarted(`background:${id}`);
-          if (!held) prompter?.activity(chalk.dim(`background: ${description}`));
-        },
-        onTaskFinished: (id, status) => {
-          idle.toolFinished(`background:${id}`);
-          if (!held) prompter?.activity(chalk.dim(`background task ${status}`));
-        },
-        ...(backgroundHandler ? {} : { resultGraceMs: UNHELD_BACKGROUND_GRACE_MS }),
-      }) : undefined;
-      if (heldInput && background) {
-        run.liveInput?.setSteerHandler(async (steerText, submission) => {
-          if (background.settled || !heldInput.write(streamJsonUserMessage(steerText))) throw new Error('turn is finishing');
-          background.noteInput();
-          await checkpoint.steer(submission);
-        });
-      }
-      try {
-      turnOutput = await captureNativeHarnessTurn(cliHarness, argv, environment, {
-        cwd: session.workspace,
-        signal,
-        idleController: idle,
-        stdinText: turn.promptInput === 'stdin' ? (heldInput ? streamJsonUserMessage(turnText) : turnText) : undefined,
-        ...(heldInput ? { input: heldInput } : {}),
-        ...(release ? { release } : {}),
-        onStdoutLine: (lineText) => {
-          if (held) {
-            held.line(lineText);
-            void recordNativeStreamUsage(session, lineText).catch(() => undefined);
-            return;
-          }
-          if (background && lineText.trimStart().startsWith('{')) {
-            try { background.note(JSON.parse(lineText) as Record<string, unknown>); } catch { /* fail-open-ok: not a record; the parser below says the same */ }
-          } else if (/"task_notification"|"isBackground":true/.test(lineText)) {
-            // A vendor that waits for its own background work in-process
-            // (Cursor) is silent meanwhile: that silence gets the running-tool
-            // budget, not the ordinary one. See background-task.ts.
-            let event: ReturnType<typeof vendorBackgroundEvent>;
-            try { event = vendorBackgroundEvent(JSON.parse(lineText) as Record<string, unknown>); } catch { event = undefined; }
-            if (event?.kind === 'started' && !vendorBackground.has(event.id)) {
-              vendorBackground.add(event.id);
-              idle.toolStarted(`background:${event.id}`);
-            } else if (event?.kind === 'finished' && vendorBackground.delete(event.id)) idle.toolFinished(`background:${event.id}`);
-          }
-          // The same observer every other transport is handed. What is left
-          // here is the turn loop's own bookkeeping, which no line parser
-          // should be doing: confirming an optimistically minted session id,
-          // the quota probe, and persisting what the harness says about
-          // itself.
-          const outcome = reportStructuredLine(cliHarness, lineText, {
-            ...sharedObserver,
-            // Only the idle bookkeeping is this transport's own: a line on
-            // stdout is the sole proof a one-shot CLI is still working.
-            onResponseDelta: (text, mode) => {
-              cliOutputStarted = true;
-              idle.noteActivity();
-              emitResponseDelta(text, mode ?? 'append');
-            },
-            onActivity: (event) => {
-              cliOutputStarted = true;
-              noteTurnActivityEvent(idle, event);
-              onActivity(event);
-            },
-          }, stream);
-          if (outcome.live) confirmNativeSession();
-          if (outcome.error) streamError = outcome.error;
-          if (outcome.result) idle.noteResult(outcome.result);
-          // Answered, and only background tasks left: the turn is over.
-          if (outcome.result === 'success' && release && background && backgroundHandler
-            && background.pending > 0 && background.quiet && !background.settled) {
-            run.liveInput?.setSteerHandler(undefined);
-            held = holdVendorProcess({
-              sessionId: session.id, background, release, handler: backgroundHandler,
-              endInput: () => heldInput!.end(),
-              // One stream position per background turn, like per attempt.
-              report: (text, observer) => {
-                let position = heldStreams.get(observer);
-                if (!position) heldStreams.set(observer, position = createStreamState());
-                reportStructuredLine(cliHarness, text, observer, position);
-              },
-            });
-          }
-          // The harness reports its own quota on this stream. Reading it here
-          // costs nothing and refreshes on every turn, which is what keeps the
-          // shared OAuth usage endpoint -- a per-account budget several open
-          // chats used to exhaust between them -- down to a cold-start probe.
-          // (Self-gated on a substring, so it does not re-parse ordinary lines.)
-          void recordNativeStreamUsage(session, lineText).catch(() => undefined);
-          const reported = outcome.selfReport;
-          if (reported?.model || reported?.permissionMode) {
-            session.reported = {
-              at: new Date().toISOString(),
-              ...(reported.model ? { model: reported.model } : {}),
-              ...(reported.permissionMode ? { permissionMode: reported.permissionMode } : {}),
-            };
-            checkpoint.touch();
-            prompter?.render(session);
-          }
-        },
-      });
-      } finally {
-        // Whatever ended the process, input to it has nowhere to go now --
-        // unless it was handed on still running.
-        if (background && !held) {
-          background.dispose();
-          run.liveInput?.setSteerHandler(undefined);
-        }
-      }
-      if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-      let cliResult = nativeTurnResult(cliHarness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });
-      // Aider's stdout is its banner, the answer and a cost footer; its own
-      // chat history file holds the answer alone (see events/aider.ts).
-      // When that file exists it alone decides: a turn with no reply in it
-      // failed, and the notice Aider quoted there says why. Stdout is only
-      // read when there is no file, since there the error sits where an
-      // answer would.
-      if (cliHarness.parser === 'aider') {
-        const history = session.nativeSessionId ? await readFile(session.nativeSessionId, 'utf8').catch(() => '') : '';
-        const reply = history ? aiderHistoryReply(history) : aiderStdoutReply(turnOutput.stdout);
-        if (!reply) {
-          const notice = history ? aiderHistoryNotice(history) : undefined;
-          throw Object.assign(new Error(`${cliHarness.displayName}: ${notice ?? 'returned no reply'}`), {
-            stderrTail: [notice, turnOutput.stderr.trim()].filter(Boolean).join('\n').slice(-4000),
-            stdoutTail: turnOutput.stdout.trim().slice(-4000),
-          });
-        }
-        cliResult = { ...cliResult, text: reply };
-      }
-      if (!cliResult.isError) confirmNativeSession();
-      noteUsage(cliResult.usage ?? nativeTurnUsage(cliHarness, turnOutput.stdout));
-      return cliResult;
-    };
+    const runStructuredCliTurn = (): Promise<NativeTurnResult> => runVendorCliAttempt({
+      harness, session, turnText, model, environment, images, signal, run, checkpoint,
+      effort: turnEffort(), sharedObserver,
+      onOutputStart: () => { cliOutputStarted = true; },
+      onStreamError: (error) => { streamError = error; },
+    });
     try {
       if (transport === 'structured-cli' || transport === 'text-cli') {
         result = await runStructuredCliTurn();
       } else {
-        // ACP and the app-server own session identity: never hand them an id
-        // ClikCode minted for a CLI attempt that the vendor never confirmed.
-        if (session.nativeSessionPreallocated) {
-          session.nativeSessionId = undefined;
-          delete session.nativeSessionPreallocated;
-        }
-        const persistent = run.persistentTransports
-          ? persistentTransportFor(session.id, transport, JSON.stringify([harness.command, account.id, environment, session.workspace]))
-          : undefined;
-        try {
-          if (transport === 'codex-app-server') {
-            const overrides = appServerThreadOverrides(declaredOptions, session.harnessOptions);
-            if (overrides.unmapped.length) prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${overrides.unmapped.join(', ')}`));
-            const codexInput: CodexAppServerTurnInput = {
-              binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
-              cwd: session.workspace!, model, effort: turnEffort(), permissionMode: session.permissionMode ?? 'ask',
-              images, environment, signal, onSessionId,
-              ...(overrides.configOverrides ? { configOverrides: overrides.configOverrides } : {}),
-              ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
-              // Codex reports its own quota on this connection during the turn,
-              // which is the same figure codexUsageProbe otherwise spawns a whole
-              // second app-server to ask for.
-              onRateLimits: (rateLimits) => {
-                // The structured reading (not just its label) so the windows'
-                // resetsAt survives into account.usage for the reset-time line.
-                void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
-              },
-              ...sharedObserver,
-              // Steering is genuinely codex-only: it is the one transport
-              // that accepts input mid-turn.
-              onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
-                await handler(steerText);
-                // Recorded under the id the composer shows it by, so the
-                // durable steer matches its row by identity.
-                await checkpoint.steer(submission);
-              } : undefined),
-            };
-            result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
-          } else {
-            const launch = harnessAcpLaunch(harness, { model, effort: turnEffort(), permissionMode: session.permissionMode ?? 'ask' });
-            if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
-            const acpInput: AcpTurnInput = {
-              binary: launch.binary, command: harness.command, prompt: turnText,
-              argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
-              extraArgv: [...launch.optionArgv, ...declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId))],
-              ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
-              cwd: session.workspace!, model, effort: turnEffort(), permissionMode: session.permissionMode ?? 'ask',
-              environment, signal, images, onSessionId,
-              ...sharedObserver,
-            };
-            try {
-              result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
-            } catch (error) {
-              if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback || !harness.turn) throw error;
-              prompter?.phase('using structured CLI fallback');
-              result = await runStructuredCliTurn();
-            }
-          }
-        } catch (error) {
-          // After a failed turn the child's protocol state is unknown.
-          if (persistent) await closePersistentTransport(session.id);
-          throw error;
-        }
+        result = await runVendorSessionAttempt({
+          harness, accountId: account.id, session, transport, turnText, model, environment, images, signal, run, checkpoint,
+          sharedObserver, effort: turnEffort(), onSessionId, runCli: runStructuredCliTurn,
+        });
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError') throw error;
