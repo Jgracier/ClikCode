@@ -26,7 +26,7 @@ import { probeHardware, type HardwareProfile } from './hardware.js';
 import { learnGpuReach, withKnownReach } from './gpu-reach.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, usesMmap, waitForHealth } from './launch.js';
 import {
-  memoryStopFile, processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
+  heldByLiveProcess, memoryStopFile, processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
   sweepOrphan, withStartLock, writeLease, type MemoryEvent, type ServerRecord, type ShrinkStep,
 } from './lifecycle.js';
 import { footprintKey, latestMeasurement, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
@@ -258,6 +258,15 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
       progress({ stage: 'start', message: `waiting for the previous ${label} to finish stopping…` });
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
+  }
+  // Another model's server that nobody holds is only outliving its last
+  // lease and is about to stop; left to do so, its memory would count
+  // against this start and refuse a model that fits. Switching models right
+  // after a turn on another is what hits this. Stopped now, and waited for.
+  for (const leftover of await runningModels()) {
+    if (leftover.modelId === joinable?.modelId || await heldByLiveProcess(leftover.modelId)) continue;
+    progress({ stage: 'start', message: `stopping ${catalogModel(leftover.modelId)?.label ?? leftover.modelId}, which nothing is using…` });
+    await stopServer(leftover.modelId);
   }
   progress({ stage: 'probe', message: 'checking this machine…' });
   const view = await viewMachine(await learnGpuReach(await probeHardware(), (update) => progress({ stage: 'runtime', ...update })));
