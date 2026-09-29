@@ -32,6 +32,7 @@
 import { hostname } from 'node:os';
 import type { HarnessSession } from './model.js';
 import { sessionClaimIsLive } from './claim.js';
+import { readWorkerRecord } from '../worker/registry.js';
 
 /** Whether a worker process exists for a session id. Supplied by the caller so
  *  one filesystem pass answers for a whole list. */
@@ -52,4 +53,40 @@ export function sessionIsLive(
 ): boolean {
   if (session.status !== 'active') return false;
   return sessionClaimIsLive(session, now, host) || workerIsLive(session.id);
+}
+
+/** Which sessions still have a worker process behind them: one directory pass
+ *  for the whole list, so every session is judged against one snapshot. */
+export async function liveWorkerSessions(
+  sessions: readonly HarnessSession[],
+): Promise<(sessionId: string) => boolean> {
+  const live = new Set<string>();
+  await Promise.all(sessions.map(async (session) => {
+    const record = await readWorkerRecord(session.id).catch(() => undefined);
+    if (!record) return;
+    try {
+      process.kill(record.pid, 0);
+      live.add(session.id);
+    } catch (error) {
+      // EPERM means it exists and belongs to someone else, which still counts.
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') live.add(session.id);
+    }
+  }));
+  return (sessionId: string) => live.has(sessionId);
+}
+
+/** What a live session is doing: `working` while a turn is in flight, `idle`
+ *  when something holds it open between turns, undefined when nothing does.
+ *
+ *  A turn in flight is the turn journal, `pendingTurn` -- but only behind a
+ *  live process. A crash leaves the journal behind on purpose (it is how the
+ *  turn is recovered), so on its own it would show a dead chat as working. */
+export function sessionActivity(
+  session: HarnessSession,
+  workerIsLive: WorkerLiveness,
+  now = Date.now(),
+  host = hostname(),
+): 'working' | 'idle' | undefined {
+  if (!sessionIsLive(session, workerIsLive, now, host)) return undefined;
+  return session.pendingTurn ? 'working' : 'idle';
 }
