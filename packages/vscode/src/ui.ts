@@ -109,7 +109,10 @@ export class DiffDocuments implements vscode.TextDocumentContentProvider {
     const right = vscode.Uri.from({ scheme: DiffDocuments.scheme, path: `/${id}/after/${safeName}` });
     this.contents.set(left.toString(), before);
     this.contents.set(right.toString(), after);
-    await vscode.commands.executeCommand('vscode.diff', left, right, `${title} (ClikCode proposes)`, { preview: true, preserveFocus: true });
+    // Named after the file, as the editor names any diff; the request's own
+    // title ("Approve Edit x.ts") when no file is known.
+    const label = fileName !== 'change' ? `${fileName} (ClikCode's proposed change)` : `${title} (ClikCode's proposed change)`;
+    await vscode.commands.executeCommand('vscode.diff', left, right, label, { preview: true, preserveFocus: true });
   }
 
   /** The approval a diff editor's document belongs to. */

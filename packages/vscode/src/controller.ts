@@ -49,6 +49,7 @@ export class ClikCodeController implements vscode.Disposable {
   private refreshTimer: NodeJS.Timeout | undefined;
   private refreshedFor = '';
   private accountTimer: NodeJS.Timeout | undefined;
+  private lastAutoRestart = 0;
 
   constructor(
     private readonly host: ControllerHost,
@@ -131,8 +132,21 @@ export class ClikCodeController implements vscode.Disposable {
     if (this.postTimer) return;
     this.postTimer = setTimeout(() => {
       this.postTimer = undefined;
-      for (const surface of this.surfaces) surface.post({ type: 'model', model: this.model });
+      for (const surface of this.surfaces) this.postModel(surface);
     }, POST_INTERVAL_MS);
+  }
+
+  /** The model to one page. A streaming turn repaints every 40 ms, and a long
+   * conversation's transcript is most of the model: it is sent only when it
+   * changed, and the page keeps the copy it has. */
+  private postModel(surface: WebviewSurface): void {
+    const messages = this.model.messages;
+    if (surface.ready && surface.sentMessages === messages) {
+      surface.post({ type: 'model', model: { ...this.model, messages: [] }, sameMessages: true });
+      return;
+    }
+    surface.post({ type: 'model', model: this.model });
+    if (surface.ready) surface.sentMessages = messages;
   }
 
   /** A turn finished where nobody is looking: say so, as Claude Code does. */
@@ -219,6 +233,20 @@ export class ClikCodeController implements vscode.Disposable {
       log.appendLine(`[${this.label}] ClikCode exited (${signal ?? code})`);
       this.dropQuestions();
       if (this.disposed) return;
+      // A bridge that dies after it was ready (killed, crashed, the machine
+      // slept through it) comes back on its own, onto the same conversation;
+      // the worker kept the turn going meanwhile. Once a minute at most, so a
+      // bridge that cannot stay up ends at the banner instead of a loop.
+      const wasReady = this.model.connection === 'ready';
+      const now = Date.now();
+      if (wasReady && now - this.lastAutoRestart > 60_000) {
+        this.lastAutoRestart = now;
+        log.appendLine(`[${this.label}] reconnecting`);
+        this.bridge = undefined;
+        this.setModel({ ...this.model, connection: 'starting', running: false, live: undefined, approvals: [], connectionError: undefined });
+        setTimeout(() => { if (!this.disposed && !this.bridge) void this.ensureStarted(); }, 500);
+        return;
+      }
       this.setModel({
         ...this.model, connection: 'stopped', running: false, live: undefined, approvals: [],
         connectionError: code === 0 ? 'ClikCode stopped.' : `ClikCode stopped unexpectedly (${signal ?? `exit ${code}`}). See the log for details.`,
@@ -518,7 +546,9 @@ export class ClikCodeController implements vscode.Disposable {
   onWebviewMessage(surface: WebviewSurface, message: FromWebview): void {
     switch (message.type) {
       case 'ready':
-        surface.post({ type: 'model', model: this.model });
+        // A page (re)loaded: it has no transcript yet.
+        surface.sentMessages = undefined;
+        this.postModel(surface);
         void this.ensureStarted();
         return;
       case 'send':

@@ -171,14 +171,29 @@ function LiveTurn({ model }: { model: ChatModel }): JSX.Element {
   );
 }
 
+/** Messages drawn at first; a long conversation shows its latest and loads
+ * earlier ones on demand, so opening it stays instant. */
+const WINDOW = 120;
+
 export function Transcript({ model }: { model: ChatModel }): JSX.Element {
   const traces = useMemo(() => new Map(model.traces.map((trace) => [trace.userIndex, trace])), [model.traces]);
+  const [shown, setShown] = useState(WINDOW);
+  useEffect(() => { setShown(WINDOW); }, [model.sessionId]);
+  const start = Math.max(0, model.messages.length - shown);
   const parts: JSX.Element[] = [];
+  if (start > 0) {
+    parts.push(
+      <button key="earlier" type="button" class="more-steps earlier" onClick={() => setShown(shown + WINDOW)}>
+        <Icon name="fold-up" /> {start} earlier message{start === 1 ? '' : 's'}
+      </button>,
+    );
+  }
   const notesAt = (index: number): void => {
     model.notes.forEach((note, position) => { if (note.after === index) parts.push(<NoteView key={`n${position}`} note={note} />); });
   };
-  notesAt(0);
+  if (start === 0) notesAt(0);
   model.messages.forEach((message, index) => {
+    if (index < start) return;
     if (message.role === 'user') parts.push(<UserMessage key={`m${index}`} text={message.content} />);
     else {
       const trace = traces.get(index - 1);
@@ -191,7 +206,10 @@ export function Transcript({ model }: { model: ChatModel }): JSX.Element {
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
   if (model.plan.length) parts.push(<Plan key="plan" plan={model.plan} />);
   if (model.running) parts.push(<LiveTurn key="live" model={model} />);
+  const queuedTexts = new Set(model.queued.map((item) => item.text));
   for (const submission of model.submissions) {
+    // A queued message is drawn once, from the stored queue under the composer.
+    if (submission.disposition === 'queued' || (!submission.disposition && queuedTexts.has(submission.text))) continue;
     const said = submission.disposition === 'steered' ? 'Sent into this turn' : submission.disposition === 'queued' ? 'Queued for the next turn' : submission.disposition === 'error' ? 'Not sent' : 'Sending…';
     parts.push(<div key={`s${submission.id}`} class="submission"><Icon name="arrow-small-right" /><span class="muted">{said}:</span> <span>{submission.text}</span></div>);
   }
@@ -205,21 +223,32 @@ function relative(text: string, workspace: string | undefined): string {
   return text.split(`${root}/`).join('').split(`${root}\\`).join('');
 }
 
+/** A proposed change's text with its added and removed lines coloured. */
+function diffLines(text: string): JSX.Element[] {
+  return text.split('\n').map((line, index) => {
+    const kind = /^\+(?!\+\+)/.test(line) ? 'add' : /^-(?!--)/.test(line) ? 'del' : /^@@/.test(line) ? 'hunk' : '';
+    return <div key={index} class={kind}>{line || ' '}</div>;
+  });
+}
+
 export function ApprovalCard({ approval, workspace, onAnswer }: { approval: Approval; workspace?: string; onAnswer: (value: boolean | 'always') => void }): JSX.Element {
   const onKey = (event: KeyboardEvent): void => {
     if ((event.target as HTMLElement).tagName === 'TEXTAREA') return;
     if (event.key === '1') onAnswer(true);
     else if (event.key === '2' && approval.rule) onAnswer('always');
-    else if (event.key === '3' || (event.key === 'Escape' && false)) onAnswer(false);
+    else if (event.key === '3' || event.key === 'Escape') onAnswer(false);
+    else return;
+    event.preventDefault();
+    event.stopPropagation();
   };
   return (
     <div class="approval" role="alertdialog" aria-label={`Approval: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
       <div class="approval-head"><Icon name="shield" /><span class="approval-title">{relative(approval.title, workspace)}</span></div>
-      {approval.detail ? <pre class="approval-detail">{relative(approval.detail, workspace)}</pre> : null}
+      {approval.detail ? <pre class="approval-detail">{approval.hasDiff ? diffLines(relative(approval.detail, workspace)) : relative(approval.detail, workspace)}</pre> : null}
       <div class="approval-actions">
         <button type="button" class="primary" data-approve="yes" onClick={() => onAnswer(true)}>Allow <kbd>1</kbd></button>
         {approval.rule ? <button type="button" class="secondary" data-approve="always" title={`Always allow: ${approval.rule}`} onClick={() => onAnswer('always')}>Always allow <kbd>2</kbd></button> : null}
-        <button type="button" class="secondary" data-approve="no" onClick={() => onAnswer(false)}>Reject <kbd>3</kbd></button>
+        <button type="button" class="secondary" data-approve="no" title="Reject (3 or Esc)" onClick={() => onAnswer(false)}>Reject <kbd>3</kbd></button>
         {approval.hasDiff ? <button type="button" class="link" onClick={() => post({ type: 'viewDiff', id: approval.id })}><Icon name="diff" /> Open diff</button> : null}
       </div>
     </div>

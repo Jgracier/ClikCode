@@ -385,11 +385,6 @@
         "key": "ctrl+alt+q",
         "mac": "ctrl+cmd+q",
         "when": "editorTextFocus && editorHasSelection"
-      },
-      {
-        "command": "clikcode.cancel",
-        "key": "escape",
-        "when": "(focusedView == clikcode.chat || focusedView == clikcode.chatSecondary || activeWebviewPanelId == clikcode.chatEditor) && clikcode.turnRunning"
       }
     ],
     "configuration": {

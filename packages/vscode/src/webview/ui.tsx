@@ -84,12 +84,20 @@ export function KeyList(props: {
     }
   };
 
+  // The search field's keys go to the handler of the latest render (a ref
+  // set while rendering), never one an effect has not re-attached yet: typed
+  // fast, Enter would otherwise choose from the list before the filtering.
+  const latest = useRef(onKey);
+  latest.current = onKey;
   useEffect(() => {
     const input = props.inputRef?.current;
     if (!input) return undefined;
-    input.addEventListener('keydown', onKey);
-    input.setAttribute('aria-activedescendant', activeKey ? idFor(activeKey) : '');
-    return () => input.removeEventListener('keydown', onKey);
+    const handler = (event: KeyboardEvent): void => latest.current(event);
+    input.addEventListener('keydown', handler);
+    return () => input.removeEventListener('keydown', handler);
+  }, [props.inputRef?.current]);
+  useEffect(() => {
+    props.inputRef?.current?.setAttribute('aria-activedescendant', activeKey ? idFor(activeKey) : '');
   });
 
   return (

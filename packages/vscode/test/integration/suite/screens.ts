@@ -44,6 +44,9 @@ export function screensSuite(): void {
       const [folder] = vscode.workspace.workspaceFolders ?? [];
       await vscode.window.showTextDocument(vscode.Uri.joinPath(folder!.uri, 'math.ts'));
       await vscode.commands.executeCommand('workbench.action.closePanel');
+      // Where ClikCode is before it is opened: the button in the editor's title bar.
+      await vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
+      await screenshot('placement', 2_000);
       await vscode.commands.executeCommand('clikcode.open');
       await api.ready();
       await until(api, (state) => state.connection === 'ready' && Boolean(state.sessionId) && Boolean(state.provider), 'a chat', 90_000);
@@ -113,6 +116,19 @@ export function screensSuite(): void {
       await waitFor(api, '.account', 'accounts');
       await sleep(2_500);
       await screenshot('accounts');
+    });
+
+    it('a narrow side bar', async () => {
+      await vscode.commands.executeCommand('clikcode.showHistory');
+      await click(api, '#history-button');
+      await dragSidebarTo(1440 - 300);
+      await waitFor(api, '#composer-input', 'the chat');
+      await screenshot('narrow');
+      await click(api, '#provider-button');
+      await waitFor(api, '#provider-picker', 'the menu');
+      await screenshot('narrow-picker');
+      await api.probe('key', '#provider-picker input', 'Escape');
+      await dragSidebarTo(Number(process.env.CLIKCODE_IT_SIDEBAR_X ?? 960));
     });
 
     it('settings', async () => {

@@ -8,7 +8,7 @@
  * user's own chats are never touched.
  *
  * CLIKCODE_IT_SUITE=screens runs the screenshot tour instead (README and
- * walkthrough images), in CLIKCODE_IT_THEME (dark|light), with demo accounts
+ * walkthrough images), in CLIKCODE_IT_THEME (dark|light|hc|hc-light), with demo accounts
  * and conversations seeded into the temporary ClikCode home. */
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   writeFileSync(join(workspace, 'math.ts'), 'export function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport function mean(values: number[]): number {\n  return values.reduce(add, 0) / values.length;\n}\n');
   writeFileSync(join(workspace, 'README.md'), '# Demo\n\nA tiny TypeScript project for trying ClikCode.\n');
   const suite = process.env.CLIKCODE_IT_SUITE ?? 'turn';
-  const theme = process.env.CLIKCODE_IT_THEME === 'light' ? 'Default Light Modern' : 'Default Dark Modern';
+  const theme = ({ light: 'Default Light Modern', hc: 'Default High Contrast', 'hc-light': 'Default High Contrast Light' } as Record<string, string>)[process.env.CLIKCODE_IT_THEME ?? ''] ?? 'Default Dark Modern';
   const home = join(root, 'clikcode-home');
   if (suite === 'screens') seedDemoHome(home, workspace);
   writeFileSync(join(workspace, '.vscode', 'settings.json'), JSON.stringify({ 'clikcode.startWith': 'new' }, null, 2));

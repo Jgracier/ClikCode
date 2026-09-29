@@ -2,12 +2,13 @@
  * `clikcode ide-bridge` -> session worker -> a vendor harness (OpenCode's
  * free model) and back, driven through the page the way a user drives it. */
 import * as assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import type { ClikCodeApi } from '../../../src/extension';
-import { activate, click, openProviderList, pickProviderModel, screenshot, sleep, type, until, waitFor } from './helpers';
+import { activate, click, key, openProviderList, pickProviderModel, query, screenshot, sleep, type, until, waitFor } from './helpers';
 
 export function chatSuite(): void {
   describe('ClikCode in VS Code', () => {
@@ -51,6 +52,30 @@ export function chatSuite(): void {
       assert.strictEqual(done.messages[0]!.content, 'Reply with exactly the word PONG and nothing else.');
       await waitFor(api, '.message.assistant', 'the answer on the page', 10_000, (found) => found.texts.some((text) => /PONG/.test(text)));
       await screenshot('turn');
+    });
+
+    it('drives the provider menu from the keyboard', async () => {
+      await click(api, '#provider-button');
+      await waitFor(api, '#provider-picker', 'the provider menu');
+      if ((await query(api, '#picker-back')).count) await key(api, '#provider-picker input', 'ArrowLeft');
+      await waitFor(api, '#provider-picker [data-key="p:opencode"]', 'the provider list after ←');
+      await type(api, '#provider-picker input', 'opencode');
+      await waitFor(api, '#provider-picker [data-key="p:opencode"][data-active="true"]', 'OpenCode highlighted');
+      await key(api, '#provider-picker input', 'Enter');
+      await waitFor(api, '#provider-picker [data-key="m:opencode/big-pickle"]', 'its models after Enter', 60_000);
+      await key(api, '#provider-picker input', 'Escape');
+      await waitFor(api, '#provider-picker', 'the menu to close on Esc', 10_000, (found) => found.count === 0);
+      assert.strictEqual(api.state.running, false, 'Esc in a menu does not touch the turn');
+    });
+
+    it('stops a running turn with Esc and keeps the chat usable', async () => {
+      await type(api, '#composer-input', 'Count slowly from 1 to 400, one number per line.');
+      await click(api, '#send-button');
+      await until(api, (state) => state.running, 'the turn to start', 120_000);
+      await key(api, '#composer-input', 'Escape');
+      const stopped = await until(api, (state) => !state.running, 'the turn to stop', 120_000);
+      assert.ok(stopped.connection === 'ready');
+      await waitFor(api, '#composer-input', 'the composer', 10_000, (found) => !found.disabled);
     });
 
     it('shows a command result as a panel', async () => {
@@ -145,6 +170,21 @@ export function chatSuite(): void {
       assert.match(written, /hello from ClikCode/);
     });
 
+    it('reconnects on its own when ClikCode stops underneath it', async () => {
+      const session = api.state.sessionId;
+      const bridges = (): number[] => {
+        try { return execFileSync('pgrep', ['-P', String(process.pid), '-f', 'ide-bridge'], { encoding: 'utf8' }).split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
+      };
+      const [pid] = bridges();
+      assert.ok(pid, 'the side bar bridge is a child of the extension host');
+      process.kill(pid!, 'SIGKILL');
+      await until(api, (state) => state.connection !== 'ready', 'the chat to notice', 30_000);
+      const back = await until(api, (state) => state.connection === 'ready' && Boolean(state.sessionId), 'the chat to reconnect', 90_000);
+      assert.strictEqual(back.sessionId, session, 'it came back to the same conversation');
+      assert.notStrictEqual(bridges()[0], pid, 'on a new bridge');
+      await waitFor(api, '.banner', 'no error banner', 10_000, (found) => found.count === 0);
+    });
+
     it('offers an update when ClikCode is too old for the extension, or the extension for ClikCode', async () => {
       const settings = () => vscode.workspace.getConfiguration('clikcode');
       const original = settings().inspect<string>('path')?.globalValue;
@@ -155,11 +195,13 @@ export function chatSuite(): void {
       const newBridge = fake('new-bridge.js', `process.send({ type: 'ready', version: '9.0.0', protocol: 999, pid: process.pid }); process.on('message', (m) => { if (m.type === 'close') process.exit(0); });`);
       try {
         // Alternating, so each one's offer is a change the test sees.
-        for (const [entry, remedy] of [[noBridge, 'update-clikcode'], [newBridge, 'update-extension'], [oldBridge, 'update-clikcode']] as const) {
+        const missing = join(dir, 'not-installed', 'index.js');
+        for (const [entry, remedy] of [[missing, 'install'], [noBridge, 'update-clikcode'], [newBridge, 'update-extension'], [oldBridge, 'update-clikcode']] as const) {
           await settings().update('path', entry, vscode.ConfigurationTarget.Global);
           const model = await until(api, (state) => state.remedy === remedy, `the ${remedy} offer for ${entry}`);
           assert.strictEqual(model.connection, 'error');
-          if (remedy === 'update-clikcode') assert.match(model.connectionError ?? '', /npm install -g clikcode@latest/);
+          if (remedy === 'install') assert.match(model.connectionError ?? '', /not a ClikCode installation/);
+          else if (remedy === 'update-clikcode') assert.match(model.connectionError ?? '', /npm install -g clikcode@latest/);
           else assert.match(model.connectionError ?? '', /Update the ClikCode extension/);
         }
         await waitFor(api, '.banner', 'the banner on the page');

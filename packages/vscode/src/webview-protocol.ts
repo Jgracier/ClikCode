@@ -18,7 +18,8 @@ export interface Mention {
 export type WebviewScreen = 'chat' | 'history' | 'accounts' | 'settings';
 
 export type ToWebview =
-  | { type: 'model'; model: ChatModel }
+  /** `sameMessages`: the transcript is unchanged since the last one; `messages` is left empty. */
+  | { type: 'model'; model: ChatModel; sameMessages?: true }
   | { type: 'setDraft'; text: string }
   | { type: 'insert'; text: string }
   | { type: 'mention'; mention: Mention }
