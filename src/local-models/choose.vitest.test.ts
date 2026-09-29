@@ -519,6 +519,19 @@ describe('launch settings', () => {
     }
   });
 
+  it('speculates with the model\'s own draft heads, one token ahead, only whole on a GPU', () => {
+    const base = { modelPath: '/m.gguf', port: 1, alias: 'a', cacheRamMib: 0, threads: { threads: 8, threadsBatch: 12 } };
+    const on = ['--spec-type', 'draft-mtp', '--spec-draft-n-max', '1'];
+    const args = (placement: 'cpu' | 'gpu' | 'gpu-partial', draftLayers?: number): string =>
+      buildServerArgs({ ...base, ...(draftLayers ? { draftLayers } : {}), fit: { placement, context: 8192, cacheType: 'q8_0', parallel: 2 } }).join(' ');
+    expect(args('gpu', 1)).toContain(on.join(' '));
+    expect(args('gpu')).not.toContain('--spec-type');
+    expect(args('cpu', 1)).not.toContain('--spec-type');
+    expect(args('gpu-partial', 1)).not.toContain('--spec-type');
+    expect(model('ornith-1.5-35b-a3b').draftLayers).toBe(1);
+    expect(model('qwen3.5-4b').draftLayers).toBeUndefined();
+  });
+
   it('offloads all layers, or lets llama.cpp fit them with a margin', () => {
     const base = { modelPath: '/m.gguf', port: 1, alias: 'a', cacheRamMib: 0, threads: { threads: 8, threadsBatch: 12 }, fitTargetMib: 2458 };
     expect(buildServerArgs({ ...base, fit: { placement: 'gpu', context: 8192, cacheType: 'f16', parallel: 4 } })).toContain('all');
