@@ -72,7 +72,7 @@ class FakeGateway {
       let raw = '';
       req.on('data', (chunk) => { raw += chunk; });
       req.on('end', () => {
-        if (req.method !== 'POST' || req.url !== '/api/gateway/v1/chat/completions') { res.writeHead(404).end('{}'); return; }
+        if (req.method !== 'POST' || req.url !== '/v1/chat/completions') { res.writeHead(404).end('{}'); return; }
         const body = JSON.parse(raw) as { messages: Array<{ role: string; content?: string | null | Array<{ type: string; text?: string }> }> };
         const request: TurnRequest = {
           items: body.messages.map((message) => ({

@@ -20,12 +20,14 @@ export function capabilitiesText(session: HarnessSession): string {
   if (isGatewayService(session)) {
     return [
       'ClikDeploy Gateway capabilities',
-      'Inference routing: platform managed',
+      'Inference routing: one model per name, served by its cheapest provider (/fast: its fastest)',
       'Streaming: live SSE token deltas with bounded fallback chunking',
       'Tools: ClikDeploy Gateway capability registry and MCP bridge',
       'Permissions: authenticated server policy and confirmation gates',
       'Sessions: durable ClikCode transcript replay',
-      'Models and effort: selected by ClikDeploy Gateway routing policy',
+      'Models: chosen with /model from the Gateway\'s list, or automatic',
+      'Effort: /effort sets how hard a reasoning model thinks (none to xhigh)',
+      'Images: sent to models that take them',
     ].join('\n');
   }
   const harness = sessionHarness(session);

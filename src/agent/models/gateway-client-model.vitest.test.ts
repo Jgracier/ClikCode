@@ -15,11 +15,31 @@ describe('a Gateway step', () => {
     await gatewayModelClient({ baseUrl: 'https://g/', apiKey: 'k', sessionId: 's1', model: 'gpt-5.6-sol', fetchImpl: fetchImpl as never }).step(step);
     await gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', sessionId: 's1', fetchImpl: fetchImpl as never }).step(step);
     const first = sent(fetchImpl);
-    expect(first.url).toBe('https://g/api/gateway/v1/chat/completions');
+    expect(first.url).toBe('https://g/v1/chat/completions');
     expect(first.headers).toMatchObject({ authorization: 'Bearer k', 'x-session-id': 's1' });
     expect(first.headers['x-client']).toMatch(/^clikcode\//);
     expect(first.body).toMatchObject({ model: 'gpt-5.6-sol', stream: true, stream_options: { include_usage: true } });
     expect(sent(fetchImpl, 1).body.model).toBe('auto');
+  });
+
+  it('carries the session\'s effort and speed, and images for a model that takes them', async () => {
+    const { gatewayStepOptions } = await import('../../gateway/options.js');
+    const fetchImpl = vi.fn(async () => finished());
+    const image = { system: 's', items: [{ type: 'text', role: 'user', text: 'look', images: [{ mimeType: 'image/png', data: 'AAAA' }] }], tools: [], onTextDelta: () => undefined } as never;
+    await gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', vision: true, options: gatewayStepOptions({ effort: 'high', speed: 'fast' }), fetchImpl: fetchImpl as never }).step(image);
+    const body = sent(fetchImpl).body as { reasoning_effort?: string; speed?: string; messages: Array<{ content: unknown }> };
+    expect(body).toMatchObject({ reasoning_effort: 'high', speed: 'fast' });
+    expect(body.messages[1]!.content).toEqual([{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }]);
+    // No choice made: nothing sent, the model's own default applies.
+    expect(gatewayStepOptions({ effort: 'platform-managed' })).toEqual({});
+  });
+
+  it('names the request an error came from', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'bad', code: 'upstream_error' } }), { status: 502, headers: { 'x-request-id': 'chatcmpl-abc' } }));
+    await expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: fetchImpl as never }).step(step)).rejects.toMatchObject({
+      code: 'MODEL_ERROR',
+      message: expect.stringContaining('[request chatcmpl-abc]'),
+    });
   });
 
   it('reads the model that answered, the window it serves and what the step cost', async () => {

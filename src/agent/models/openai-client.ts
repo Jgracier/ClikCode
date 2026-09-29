@@ -213,6 +213,10 @@ export class OpenAIModelClient implements ModelClient {
       throw new ModelClientError(`Could not reach ${this.label} at ${options.baseUrl}: ${error instanceof Error ? error.message : String(error)}`, { kind: 'other' });
     }
     if (!response.ok) throw await this.httpError(response);
+    // A server that names each request (the Gateway, OpenAI) has that name
+    // put on every error, so a failure can be looked up where it happened.
+    const requestId = response.headers.get('x-request-id')?.trim() || undefined;
+    const withRequestId = (message: string) => (requestId ? `${message} [request ${requestId}]` : message);
     if (!response.body) throw new ModelClientError(`${this.label} returned an empty response`, { kind: 'other', statusCode: response.status });
 
     const parser = new SseParser();
@@ -239,7 +243,7 @@ export class OpenAIModelClient implements ModelClient {
         const loopCode = isContextOverflow(400, code, message) ? 'CONTEXT_TOO_LARGE' : code ? options.errorCodes?.[code] : undefined;
         const retryAfter = parseRetryAfter(error.retry_after);
         const kind = code && QUOTA_CODES.has(code) ? 'quota' : 'other';
-        throw new ModelClientError(`${this.label}: ${message}`, { kind, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
+        throw new ModelClientError(withRequestId(`${this.label}: ${message}`), { kind, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
       }
       if (typeof frame.model === 'string' && frame.model) servedModel = frame.model;
       // Not OpenAI's: a gateway saying how large the serving model's window is.
@@ -348,6 +352,8 @@ export class OpenAIModelClient implements ModelClient {
     // The server's own code is still in the message.
     if (code && !message.includes(code)) message = `${message} (${code})`;
     if (status === 402 && this.options.creditHint) message = `${message} ${this.options.creditHint}`;
+    const requestId = response.headers.get('x-request-id')?.trim();
+    if (requestId) message = `${message} [request ${requestId}]`;
     const loopCode = isContextOverflow(status, code, message) ? 'CONTEXT_TOO_LARGE' : code ? this.options.errorCodes?.[code] : undefined;
     return new ModelClientError(message, { kind, statusCode: status, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
   }

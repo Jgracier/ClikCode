@@ -28,6 +28,9 @@ export interface HarnessSession {
    * default until the effort, model or harness changes. */
   effortRefused?: string;
   permissionMode?: AiHarnessPermissionMode;
+  /** ClikDeploy Gateway only: `fast` asks to be served by the fastest
+   * measured provider of the model rather than the cheapest (/fast). */
+  speed?: 'fast';
   /** How much context ClikCode's own agent spends (agent/context-profile.ts):
    * absent, it is chosen from the model's window and speed. A per-session
    * pin for comparing profiles; CLIKCODE_CONTEXT_PROFILE overrides it. */
