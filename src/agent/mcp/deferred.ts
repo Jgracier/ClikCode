@@ -36,17 +36,37 @@ function schemaTokens(tools: readonly ToolDefinition[]): number {
 
 interface LoadArgs { server: string; tools?: string[] }
 
+/** The prefix every tool of a server shares, up to a separator
+ * (`brain_search`, `brain_list_tasks` -> `brain_`), or ''. Listed once, so a
+ * 74-tool server does not repeat it 74 times on every step. */
+export function sharedPrefix(names: readonly string[]): string {
+  if (names.length < 2) return '';
+  let common = names[0]!;
+  for (const name of names) while (!name.startsWith(common)) common = common.slice(0, -1);
+  const cut = Math.max(common.lastIndexOf('_'), common.lastIndexOf('-'), common.lastIndexOf('.'));
+  return cut > 0 ? common.slice(0, cut + 1) : '';
+}
+
+/** Whether a name the model gave means this tool: its MCP name, its full
+ * name, or its MCP name without the server's shared prefix as listed. */
+function named(tool: ToolDefinition, wanted: ReadonlySet<string>, prefix: string): boolean {
+  const own = tool.mcp!.tool;
+  return wanted.has(own) || wanted.has(tool.name) || (prefix !== '' && own.startsWith(prefix) && wanted.has(own.slice(prefix.length)));
+}
+
+function groupByServer(tools: readonly ToolDefinition[]): Map<string, { tools: ToolDefinition[]; prefix: string }> {
+  const servers = new Map<string, ToolDefinition[]>();
+  for (const tool of tools) servers.set(tool.mcp!.server, [...(servers.get(tool.mcp!.server) ?? []), tool]);
+  return new Map([...servers].map(([server, list]) => [server, { tools: list, prefix: sharedPrefix(list.map((tool) => tool.mcp!.tool)) }]));
+}
+
 /** The loader for `deferred`, grouped by server in first-seen order. */
 function loaderTool(deferred: readonly ToolDefinition[]): ToolDefinition {
-  const servers = new Map<string, ToolDefinition[]>();
-  for (const tool of deferred) {
-    const server = tool.mcp!.server;
-    servers.set(server, [...(servers.get(server) ?? []), tool]);
-  }
-  const listing = [...servers].map(([server, tools]) => {
-    const names = tools.slice(0, LISTED_NAMES_PER_SERVER).map((tool) => tool.mcp!.tool);
+  const servers = groupByServer(deferred);
+  const listing = [...servers].map(([server, { tools, prefix }]) => {
+    const names = tools.slice(0, LISTED_NAMES_PER_SERVER).map((tool) => tool.mcp!.tool.slice(prefix.length));
     const more = tools.length - names.length;
-    return `- ${server} (${tools.length}): ${names.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
+    return `- ${server} (${tools.length}${prefix ? `, each named ${prefix}…` : ''}): ${names.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
   });
   return defineTool<LoadArgs>({
     name: LOAD_MCP_TOOLS,
@@ -64,13 +84,13 @@ function loaderTool(deferred: readonly ToolDefinition[]): ToolDefinition {
     class: 'meta',
     label: (args) => `Load ${args.server} tools`,
     run: async (args) => {
-      const available = servers.get(args.server);
-      if (!available) return { output: `Unknown MCP server "${args.server}". Servers: ${[...servers.keys()].join(', ')}.`, isError: true };
+      const group = servers.get(args.server);
+      if (!group) return { output: `Unknown MCP server "${args.server}". Servers: ${[...servers.keys()].join(', ')}.`, isError: true };
+      const { tools: available, prefix } = group;
       const wanted = args.tools?.length ? new Set(args.tools) : undefined;
-      const loaded = wanted ? available.filter((tool) => wanted.has(tool.mcp!.tool) || wanted.has(tool.name)) : available;
+      const loaded = wanted ? available.filter((tool) => named(tool, wanted, prefix)) : available;
       if (!loaded.length) return { output: `None of those are tools of "${args.server}". Its tools: ${available.map((tool) => tool.mcp!.tool).join(', ')}.`, isError: true };
-      const found = new Set(loaded.flatMap((tool) => [tool.mcp!.tool, tool.name]));
-      const missing = (args.tools ?? []).filter((name) => !found.has(name));
+      const missing = (args.tools ?? []).filter((name) => !loaded.some((tool) => named(tool, new Set([name]), prefix)));
       return {
         output: `Loaded ${loaded.length} tool(s), callable from your next step: ${loaded.map((tool) => tool.name).join(', ')}.${missing.length ? ` Not tools of "${args.server}": ${missing.join(', ')}.` : ''}`,
       };
@@ -96,8 +116,7 @@ export function exposeTools(tools: readonly ToolDefinition[], eagerSchemaTokens 
   }
   const loader = loaderTool(mcp);
   const deferred = new Set(mcp);
-  const byServer = new Map<string, ToolDefinition[]>();
-  for (const tool of mcp) byServer.set(tool.mcp!.server, [...(byServer.get(tool.mcp!.server) ?? []), tool]);
+  const byServer = groupByServer(mcp);
   const all = [...tools.filter((tool) => !deferred.has(tool)), loader, ...mcp];
   return {
     all,
@@ -106,10 +125,10 @@ export function exposeTools(tools: readonly ToolDefinition[], eagerSchemaTokens 
       for (const item of items) {
         if (item.type !== 'tool_call') continue;
         if (item.name !== LOAD_MCP_TOOLS) { loaded.add(item.name); continue; }
-        const server = byServer.get(String(item.args.server));
-        if (!server) continue;
+        const group = byServer.get(String(item.args.server));
+        if (!group) continue;
         const wanted = Array.isArray(item.args.tools) && item.args.tools.length ? new Set(item.args.tools.map(String)) : undefined;
-        for (const tool of server) if (!wanted || wanted.has(tool.mcp!.tool) || wanted.has(tool.name)) loaded.add(tool.name);
+        for (const tool of group.tools) if (!wanted || named(tool, wanted, group.prefix)) loaded.add(tool.name);
       }
       // Loaded tools keep their place in `all`, so the list is a pure
       // function of what has been loaded, whatever order it happened in.
