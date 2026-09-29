@@ -9,6 +9,11 @@
  *    cores, hyperthreads contend (16 threads: 66).
  *  - Batch and micro-batch sizes (256-2048) made no difference, so
  *    llama.cpp's defaults stand.
+ *  - Speculation on the same CPU lost on Ornith 35B-A3B (b11194, 256 output
+ *    tokens, two prompts): no speculation 19.5/19.3 s; ngram-simple
+ *    22.4/20.3 s; embedded MTP with 2 drafts 22.5/24.1 s; Qwen3.5 0.8B
+ *    draft with 3 drafts 24.0/25.8 s. It stays off by default; acceptance
+ *    counts alone did not predict whole-reply speed.
  * Being polite to the rest of the machine: the server runs at below-normal
  * priority (the supervisor sets it), so an editor or a build that wants a
  * core gets it first. On a machine with four cores or fewer one core is

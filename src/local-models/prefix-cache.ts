@@ -20,6 +20,12 @@
  * it work but halved gpt-oss's generation speed at 15K tokens, which costs
  * more over a conversation than the start saves. llama.cpp PR #26004 may
  * lift this.
+ * In a b11194 CPU check, a restored 2,390-token hybrid-model state already
+ * reused all 2,390 tokens when the next prompt merely extended it. PR #26004
+ * helped a different case: when the next prompt branched before the saved
+ * end, b11194 reread 1,117 tokens while the patched server reused 990. The
+ * fork is not required for this shared prefix, which ends before the user's
+ * message and is extended by ordinary turns.
  *
  * Every failure here only costs the time it would have cost anyway: the
  * request that follows reads whatever the server does not already hold. */
