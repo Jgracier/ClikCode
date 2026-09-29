@@ -19,6 +19,12 @@
  *    165.1 s. MTP slowed both prompt reading and generation. These were
  *    single-run comparisons, so they rule out a large gain here, not every
  *    possible prompt or CPU.
+ *  - Load time (Ornith Q4_K_M, 21.7 GB): 16-22 s with the file in the page
+ *    cache, ~42 s once it was evicted. --no-repack loads in 7-8 s but
+ *    generates at 9.3 tokens/s against 20.1, so repacking stays on;
+ *    --no-warmup saved about 2 s and is not worth a special case. The
+ *    server still stops with the last ClikCode: the page cache is the linger
+ *    that gives its memory back on demand, which a resident server is not.
  * Being polite to the rest of the machine: the server runs at below-normal
  * priority (the supervisor sets it), so an editor or a build that wants a
  * core gets it first. On a machine with four cores or fewer one core is
