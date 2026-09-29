@@ -19,7 +19,7 @@ export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): 
     const current = gatewayEffort(session);
     const selected = await chooseOption(rl, 'Reasoning effort', [
       { label: 'Default', detail: `· the model decides${current ? '' : ' · current'}`, value: 'default' },
-      ...GATEWAY_EFFORTS.map((value) => ({ label: settingLabel(value), detail: value === current ? '· current' : value === 'none' ? '· no reasoning' : undefined, value })),
+      ...GATEWAY_EFFORTS.map((value) => ({ label: settingLabel(value), detail: value === current ? '· current' : value === 'none' ? '· least reasoning the model allows' : undefined, value })),
     ]);
     if (selected) await applyToChat(id, 'effort', selected);
     return;
