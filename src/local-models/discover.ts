@@ -127,8 +127,6 @@ export function remoteModelFromHeader(
     activeParamsB: activeParams / 1e9, activeWeightBytes: activeBytes, quantization,
     defaultContext: Math.min(context, 65_536), maxContext: context,
     license: license as CatalogModel['license'], kv,
-    ...((scalar(metadata[`${metadata['general.architecture']}.nextn_predict_layers`]) ?? 0) > 0
-      ? { draftLayers: scalar(metadata[`${metadata['general.architecture']}.nextn_predict_layers`]) } : {}),
     quality: 30, qualityNote: 'Hugging Face candidate; tool reliability is checked after first start', discovered: true,
   };
 }

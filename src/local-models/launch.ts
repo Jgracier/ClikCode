@@ -19,6 +19,13 @@
  *    165.1 s. MTP slowed both prompt reading and generation. These were
  *    single-run comparisons, so they rule out a large gain here, not every
  *    possible prompt or CPU.
+ *  - On the 780M GPU, Ornith's own draft head one token ahead (draft-mtp,
+ *    --spec-draft-n-max 1) looked like 11-13% on synthetic prompts, but
+ *    replaying 26 real agent steps from three eval sessions it wrote 25.7
+ *    against 24.8 tokens/s and read 206 against 217: about 2% at equal
+ *    output, and the outputs drifted (speculation is not bit-identical).
+ *    Two or three drafts were slower still; ngram-simple lost; ngram-mod
+ *    hung one request for 12+ minutes. Speculation stays off everywhere.
  *  - Load time (Ornith Q4_K_M, 21.7 GB): 16-22 s with the file in the page
  *    cache, ~42 s once it was evicted. --no-repack loads in 7-8 s but
  *    generates at 9.3 tokens/s against 20.1, so repacking stays on;
@@ -83,8 +90,6 @@ export interface ServerArgsInput {
   /** Where saved prompt prefixes live (prefix-cache.ts); omitted for
    * models that cannot use them. */
   slotSavePath?: string;
-  /** The model's own draft heads (CatalogModel.draftLayers). */
-  draftLayers?: number;
 }
 
 export function buildServerArgs(input: ServerArgsInput): string[] {
@@ -108,13 +113,6 @@ export function buildServerArgs(input: ServerArgsInput): string[] {
   if (input.projectorPath) args.push('--mmproj', input.projectorPath);
   if (input.slotSavePath) args.push('--slot-save-path', input.slotSavePath);
   if (!usesMmap(fit.placement)) args.push('--load-mode', 'none');
-  // Speculating with the model's own draft heads, one token ahead, whole on
-  // a GPU: Ornith 35B-A3B on the 780M wrote 31-34 tokens/s against 27.5,
-  // new code 12.7 vs 14.4 s and edits 17.8 vs 20.4 s, and a 7K-token prompt
-  // broke even (37.7-38.2 vs 38.6 s; reading loses 5%). Two or three drafts
-  // were slower than none. On the CPU reading is the bottleneck and it lost
-  // on a long prompt (130.8 vs 127.7 s), so it stays off there.
-  if (fit.placement === 'gpu' && (input.draftLayers ?? 0) > 0) args.push('--spec-type', 'draft-mtp', '--spec-draft-n-max', '1');
   if (fit.placement === 'gpu') args.push('-ngl', 'all');
   else if (fit.placement === 'gpu-partial') args.push('-ngl', 'auto', '--fit', 'on', '--fit-target', String(input.fitTargetMib ?? 1024));
   else args.push('-ngl', '0');

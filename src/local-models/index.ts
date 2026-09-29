@@ -321,7 +321,6 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
         modelPath, ...(projectorPath ? { projectorPath } : {}), port, alias: model.id, fit: { ...fit, context },
         threads: threadPlan(view.hardware), cacheRamMib: cacheRam, ...(prefixDir ? { slotSavePath: prefixDir } : {}),
         ...(view.budget.gpu ? { fitTargetMib: view.budget.gpu.fitTargetMib } : {}),
-        ...(model.draftLayers ? { draftLayers: model.draftLayers } : {}),
       });
       const args = argsFor(fit.context, cacheRamMib);
       // Watched only on the CPU: a model on a discrete card holds VRAM,
