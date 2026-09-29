@@ -193,6 +193,8 @@ export async function sendVendorTurn(input: {
   // login genuinely doesn't fix it (wrong account, network issue, etc.).
   let authRetried = false;
   let effortRetried = false;
+  /** A fresh native thread gets one recovery attempt per account. */
+  let nativeThreadRetried = false;
   const effortKey = (): string => `${harness.command} ${model ?? ''} ${session.effort}`;
   const turnEffort = (): string | undefined => session.effort && session.effortRefused !== effortKey() ? session.effort : undefined;
   const declaredOptions = localHarnessCapabilityManifest(harness).options;
@@ -665,7 +667,7 @@ export async function sendVendorTurn(input: {
           }
         }
       }
-      if (failureKind === 'native-thread-invalid') {
+      if (failureKind === 'native-thread-invalid' && !nativeThreadRetried) {
         // Confirmed live: switching this session to a different account of
         // the same provider used to leave a stale nativeSessionId in
         // place, and resuming it failed with exactly this vendor error.
@@ -676,6 +678,8 @@ export async function sendVendorTurn(input: {
         // regardless of provider or account": session.messages is the
         // durable, vendor-agnostic source of truth, and nativeSessionId is
         // a disposable optimization, never a requirement.
+        nativeThreadRetried = true;
+        await closePersistentTransport(session.id);
         session.nativeSessionId = undefined;
         session.nativeStartedAt = undefined;
         delete session.nativeSessionPreallocated;
@@ -763,6 +767,7 @@ export async function sendVendorTurn(input: {
       prompter?.phase(accountSwitchPhase(fallback.label));
       await closePersistentTransport(session.id);
       account = fallback;
+      nativeThreadRetried = false;
       session.accountId = fallback.id;
       if (carriedThread) {
         // The same thread, under a new account: it holds the conversation,
