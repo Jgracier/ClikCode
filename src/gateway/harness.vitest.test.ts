@@ -47,6 +47,23 @@ describe('a gateway turn runs the agent loop on this machine', () => {
   }, 20_000);
 });
 
+describe('a headless turn', () => {
+  it('tells the model a command could not be approved, not that the user declined it', async () => {
+    const cwd = workspace();
+    const client = new ScriptedModelClient([
+      { toolCalls: [{ name: 'bash', args: { command: 'python3 greet.py' } }] },
+      { text: 'done' },
+    ]);
+    await runGatewayHarnessSessionTurn({
+      session: { ...session(cwd), permissionMode: 'auto' } as HarnessSession, prompt: 'run it',
+      modelClient: client as never,
+    });
+    const seen = JSON.stringify(client.requests[1]?.items ?? []);
+    expect(seen).toMatch(/no approver is attached/);
+    expect(seen).not.toMatch(/user declined/);
+  }, 20_000);
+});
+
 describe('a gateway that cannot serve a harness turn', () => {
   it('streams a titled first reply without its title tag', async () => {
     // Production 2026-09-27: the tag the first turn asks for streamed to the
