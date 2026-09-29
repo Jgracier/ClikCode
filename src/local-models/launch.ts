@@ -14,6 +14,11 @@
  *    22.4/20.3 s; embedded MTP with 2 drafts 22.5/24.1 s; Qwen3.5 0.8B
  *    draft with 3 drafts 24.0/25.8 s. It stays off by default; acceptance
  *    counts alone did not predict whole-reply speed.
+ *  - A 7,290-token prompt plus 256 output tokens on Ornith confirmed this at
+ *    longer context: baseline 94.7 s, ngram-simple 98.5 s, MTP with 2 drafts
+ *    165.1 s. MTP slowed both prompt reading and generation. These were
+ *    single-run comparisons, so they rule out a large gain here, not every
+ *    possible prompt or CPU.
  * Being polite to the rest of the machine: the server runs at below-normal
  * priority (the supervisor sets it), so an editor or a build that wants a
  * core gets it first. On a machine with four cores or fewer one core is
