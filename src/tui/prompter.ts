@@ -99,6 +99,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingDraft = '';
   private waitingCursor = 0;
   private waitingSubmit?: (text: string) => Promise<LiveTurnInputResult>;
+  /** Stop showing the running turn without stopping it (Left, empty draft). */
+  private leaveWaiting?: () => void;
   /** `id` arrives with the answer to the submission, and is the same id its
    * durable copy (a queued turn, a recorded steer) is stored under. */
   private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command' }> = [];
@@ -236,6 +238,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           this.updateWaiting();
         }
       }
+      return;
+    }
+    // Left with nothing typed steps away from the turn -- to the conversation
+    // board -- and leaves it running: the worker owns it, not this window.
+    if (key === '\u001b[D' && !this.waitingDraft && this.leaveWaiting) {
+      this.leaveWaiting();
       return;
     }
     const action = waitingInputAction(key);
@@ -646,6 +654,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onCancel?: (restoreDraft: boolean) => void,
     onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
     onCommand?: (text: string) => Promise<LiveTurnInputResult>,
+    onLeave?: () => void,
   ): void {
     // stopWaiting is also how a finished turn drops its prompt. Calling it
     // here, a moment after Enter painted that prompt, used to drop the prompt
@@ -672,6 +681,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.cancelWaiting = onCancel;
     this.waitingSubmit = onSubmit;
     this.waitingCommand = onCommand;
+    this.leaveWaiting = onLeave;
     this.waitingDraft = '';
     this.waitingCursor = 0;
     this.waitingSubmissions = [];
@@ -730,6 +740,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.cancelWaiting = undefined;
     this.waitingSubmit = undefined;
     this.waitingCommand = undefined;
+    this.leaveWaiting = undefined;
     this.waitingCancelled = false;
     this.settleApprovals();
     this.waitingLabel = '';
@@ -871,6 +882,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const tokens = formatTurnUsage(this.turnUsage);
     const label = `${this.waitingLabel} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
       + `${this.cancelWaiting && !this.pendingApproval ? ' · esc to interrupt' : ''}`
+      + `${this.leaveWaiting && !this.pendingApproval && !this.waitingDraft ? ' · ← conversations' : ''}`
       + `${this.waitingSubmit ? ' · type and press Enter to send' : ''}`;
     // What the agent is doing is essential and stays at full contrast; only the
     // counters and key hints after it are dimmed.
