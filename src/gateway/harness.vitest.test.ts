@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,16 @@ import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarn
 import { ModelClientError } from '../agent/models/gateway-client';
 import { ScriptedModelClient } from '../agent/testing';
 import type { HarnessSession } from '../session/model';
+
+// A turn saves its conversation under the state directory; without its own,
+// every run appended to ~/.clikcode/sessions/gw-1 and the next run's model
+// was handed all of it.
+const previousHome = process.env.CLIKCODE_HOME;
+beforeEach(() => { process.env.CLIKCODE_HOME = mkdtempSync(join(tmpdir(), 'gw-home-')); });
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.CLIKCODE_HOME;
+  else process.env.CLIKCODE_HOME = previousHome;
+});
 
 const workspace = (): string => {
   const dir = mkdtempSync(join(tmpdir(), 'gw-'));
