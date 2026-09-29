@@ -1,80 +1,232 @@
-/** ClikCode for VS Code: a chat panel on the user's installed ClikCode. */
+/** ClikCode for VS Code: every coding agent ClikCode runs, in the editor. */
 import * as vscode from 'vscode';
-import { ChatViewProvider } from './chat-view';
-import { ClikCodeController } from './controller';
+import { appendFileSync } from 'node:fs';
+import { PANEL_TYPE, supportsSecondarySidebar, VIEW_IDS, WebviewSurface } from './chat-view';
+import { ClikCodeController, type ControllerHost } from './controller';
 import { questionWithSelection } from './editor-context';
-import type { ChatModel } from './model';
+import { providerDisplayName, type ChatModel } from './model';
 import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND } from './compat';
 import { DiffDocuments } from './ui';
+import { mentionFromEditor, mentionFromUri } from './mentions';
+import type { WebviewScreen } from './webview-protocol';
 
 /** What activate() returns: used by the integration tests, and a stable
- * surface for anything else that wants to drive the chat. */
+ * surface for anything else that wants to drive the chat. The top-level
+ * members are the side bar chat. */
 export interface ClikCodeApi {
   readonly state: ChatModel;
   onDidChange: vscode.Event<ChatModel>;
   send(text: string): Promise<void>;
   open(mode: 'new' | 'continue' | 'resume', sessionId?: string): Promise<void>;
   ready(): Promise<void>;
+  /** The chat commands act on: the one focused last. */
+  readonly active: { readonly state: ChatModel; onDidChange: vscode.Event<ChatModel> };
+  /** Chats open in editor tabs. */
+  readonly tabs: number;
+  /** Each tab chat's state, oldest first. */
+  tabStates(): ChatModel[];
+  /** Integration tests: read or drive the active chat's page. */
+  probe(action: 'query' | 'click' | 'type' | 'key', selector: string, text?: string): Promise<unknown>;
 }
 
 export function statusText(model: ChatModel): { text: string; tooltip: string } {
   if (model.connection === 'error' || model.connection === 'stopped') return { text: '$(warning) ClikCode', tooltip: model.connectionError ?? 'ClikCode is not running' };
   if (!model.sessionId) return { text: '$(comment-discussion) ClikCode', tooltip: 'Open the ClikCode chat' };
-  const where = [model.harness ?? 'no provider', model.model].filter(Boolean).join(' · ');
+  const name = providerDisplayName(model);
+  const where = [name ?? 'no provider', model.model].filter(Boolean).join(' · ');
+  const usage = model.currentAccount?.usage?.label ?? model.accountUsage;
   const tooltip = [
-    model.title ?? 'New chat', `Provider: ${model.harness ?? '—'}`, `Model: ${model.model ?? 'default'}`,
+    model.title ?? 'New chat', `Provider: ${name ?? '—'}`, `Model: ${model.model ?? 'default'}`,
     ...(model.account ? [`Account: ${model.account}`] : []), ...(model.effort ? [`Effort: ${model.effort}`] : []),
-    ...(model.permissions ? [`Permissions: ${model.permissions}`] : []), ...(model.accountUsage ? [`Usage: ${model.accountUsage}`] : []),
+    ...(model.permissions ? [`Permissions: ${model.permissions}`] : []), ...(usage ? [`Usage: ${usage}`] : []),
   ].join('\n');
   return { text: `${model.running ? '$(sync~spin)' : '$(comment-discussion)'} ${where}`, tooltip };
 }
 
 export function activate(context: vscode.ExtensionContext): ClikCodeApi {
   const log = vscode.window.createOutputChannel('ClikCode');
+  // Integration tests keep the log where the runner can read it.
+  const logFile = context.extensionMode === vscode.ExtensionMode.Test ? process.env.CLIKCODE_IT_LOG : undefined;
+  if (logFile) {
+    const append = log.appendLine.bind(log);
+    log.appendLine = (line: string) => { append(line); try { appendFileSync(logFile, `${new Date().toISOString()} ${line}\n`); } catch { /* best effort */ } };
+  }
   const diffs = new DiffDocuments();
-  let controller!: ClikCodeController;
-  const view = new ChatViewProvider(context.extensionUri, (message) => controller.onWebviewMessage(message));
-  controller = new ClikCodeController(view, diffs, log);
+  const secondary = supportsSecondarySidebar(vscode.version);
+  if (!secondary) void vscode.commands.executeCommand('setContext', 'clikcode.doesNotSupportSecondarySidebar', true);
+  const sidebarViewId = secondary ? VIEW_IDS.secondary : VIEW_IDS.activity;
+  const testing = context.extensionMode === vscode.ExtensionMode.Test;
+
+  const tabs = new Map<vscode.WebviewPanel, ClikCodeController>();
+  let tabCount = 0;
+  const host: ControllerHost = {
+    log, diffs,
+    openInTab: async (sessionId) => { openTab(sessionId ? { mode: 'resume', sessionId } : { mode: 'new' }); },
+    reveal: async (controller) => {
+      if (controller === sidebar) { await revealSidebar(); return; }
+      for (const [panel, owner] of tabs) if (owner === controller) panel.reveal(panel.viewColumn, false);
+    },
+  };
+  const sidebar = new ClikCodeController(host, undefined, 'side bar');
+
+  const all = (): ClikCodeController[] => [sidebar, ...tabs.values()];
+  /** The chat a command acts on: the one focused last, else the side bar. */
+  const active = (): ClikCodeController => {
+    if (sidebar.focused) return sidebar;
+    const focusedTab = [...tabs].find(([panel]) => panel.active)?.[1];
+    if (focusedTab) return focusedTab;
+    return all().sort((left, right) => right.lastFocusedAt - left.lastFocusedAt).find((item) => item.lastFocusedAt > 0) ?? sidebar;
+  };
+
+  async function revealSidebar(): Promise<void> {
+    await vscode.commands.executeCommand(`${sidebarViewId}.focus`);
+  }
+
+  const onChatFocus = (): void => {
+    void vscode.commands.executeCommand('setContext', 'clikcode.chatFocused', all().some((item) => item.focused));
+    paint();
+  };
+
+  function surfaceFor(controller: ClikCodeController, webview: vscode.Webview, kind: 'sidebar' | 'tab', visible: () => boolean): { surface: WebviewSurface; dispose(): void } {
+    const surface = new WebviewSurface(webview, kind, visible, context.extensionUri, (from, message) => {
+      if (message.type === 'focusChanged') onChatFocus();
+      controller.onWebviewMessage(from, message);
+    });
+    const attached = controller.attach(surface);
+    return { surface, dispose: () => { attached.dispose(); surface.dispose(); } };
+  }
+
+  const sidebarProvider: vscode.WebviewViewProvider = {
+    resolveWebviewView(view) {
+      const { dispose } = surfaceFor(sidebar, view.webview, 'sidebar', () => view.visible);
+      view.onDidDispose(dispose);
+    },
+  };
+
+  /** A chat in an editor tab of its own: its own connection and conversation. */
+  function restoreTab(panel: vscode.WebviewPanel, first: { mode: 'new' | 'continue' | 'resume'; sessionId?: string }): ClikCodeController {
+    tabCount += 1;
+    const controller = new ClikCodeController(host, first, `tab ${tabCount}`);
+    tabs.set(panel, controller);
+    panel.iconPath = { light: vscode.Uri.joinPath(context.extensionUri, 'media', 'editor-light.svg'), dark: vscode.Uri.joinPath(context.extensionUri, 'media', 'editor-dark.svg') };
+    const { dispose } = surfaceFor(controller, panel.webview, 'tab', () => panel.visible);
+    const retitle = controller.onDidChange((model) => { panel.title = model.title ? truncate(model.title, 32) : 'ClikCode'; });
+    panel.onDidChangeViewState(() => { paint(); });
+    panel.onDidDispose(() => {
+      tabs.delete(panel);
+      retitle.dispose();
+      dispose();
+      controller.dispose();
+      paint();
+    });
+    const watch = controller.onDidChange(paint);
+    context.subscriptions.push(watch);
+    return controller;
+  }
+
+  function openTab(first: { mode: 'new' | 'continue' | 'resume'; sessionId?: string }): ClikCodeController {
+    const panel = vscode.window.createWebviewPanel(PANEL_TYPE, 'ClikCode', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, { retainContextWhenHidden: true });
+    return restoreTab(panel, first);
+  }
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   status.command = 'clikcode.focus';
-  const paint = (model: ChatModel): void => {
-    const { text, tooltip } = statusText(model);
+  function paint(): void {
+    const { text, tooltip } = statusText(active().state);
     status.text = text;
     status.tooltip = tooltip;
-  };
-  paint(controller.state);
+  }
+  paint();
   status.show();
 
+  /** Shows the chat a command acts on, and returns it. */
+  const shown = async (): Promise<ClikCodeController> => {
+    const target = active();
+    await host.reveal(target);
+    return target;
+  };
   const slash = (line: string) => async () => {
-    await view.reveal();
-    await controller.send(line);
+    const target = await shown();
+    await target.send(line);
+  };
+  const screen = (name: WebviewScreen) => async () => {
+    const target = await shown();
+    target.post({ type: 'show', screen: name });
+  };
+  const addToChat = async (target: unknown): Promise<void> => {
+    const uri = target instanceof vscode.Uri ? target : undefined;
+    const editor = vscode.window.activeTextEditor;
+    const mention = uri && (!editor || editor.document.uri.toString() !== uri.toString())
+      ? mentionFromUri(uri)
+      : editor ? mentionFromEditor(editor) : undefined;
+    if (!mention || (uri && uri.scheme !== 'file') || (!uri && editor?.document.uri.scheme !== 'file' && editor?.document.uri.scheme !== 'untitled')) {
+      void vscode.window.showInformationMessage('Open a file to add it to the chat.');
+      return;
+    }
+    const chat = await shown();
+    chat.post({ type: 'mention', mention });
+    chat.post({ type: 'focus' });
+  };
+  /** Accept or reject the proposed change shown in the active diff editor. */
+  const decideDiff = (approved: boolean) => async (target?: unknown): Promise<void> => {
+    const uri = target instanceof vscode.Uri ? target : vscode.window.activeTextEditor?.document.uri;
+    const id = DiffDocuments.approvalOf(uri);
+    const owner = id ? all().find((item) => item.hasApproval(id)) : undefined;
+    if (!id || !owner) {
+      void vscode.window.showInformationMessage('This change is no longer waiting for an answer.');
+      return;
+    }
+    owner.approve(id, approved);
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    if (tab?.input instanceof vscode.TabInputTextDiff && DiffDocuments.approvalOf(tab.input.modified) === id) await vscode.window.tabGroups.close(tab);
   };
 
   context.subscriptions.push(
-    log, status, controller,
-    controller.onDidChange(paint),
-    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, view, { webviewOptions: { retainContextWhenHidden: true } }),
+    log, status, sidebar,
+    sidebar.onDidChange(paint),
+    new vscode.Disposable(() => { for (const controller of tabs.values()) controller.dispose(); }),
+    vscode.window.registerWebviewViewProvider(VIEW_IDS.secondary, sidebarProvider, { webviewOptions: { retainContextWhenHidden: true } }),
+    vscode.window.registerWebviewViewProvider(VIEW_IDS.activity, sidebarProvider, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.scheme, diffs),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('clikcode.path') || event.affectsConfiguration('clikcode.nodePath')) void controller.restart();
+      if (event.affectsConfiguration('clikcode.path') || event.affectsConfiguration('clikcode.nodePath')) for (const controller of all()) void controller.restart();
     }),
-    vscode.window.registerWebviewPanelSerializer(ChatViewProvider.panelType, {
-      deserializeWebviewPanel: async (panel) => { view.restorePanel(panel); },
+    vscode.window.registerWebviewPanelSerializer(PANEL_TYPE, {
+      deserializeWebviewPanel: async (panel, state: unknown) => {
+        const sessionId = typeof (state as { sessionId?: unknown } | undefined)?.sessionId === 'string' ? (state as { sessionId: string }).sessionId : undefined;
+        restoreTab(panel, sessionId ? { mode: 'resume', sessionId } : { mode: 'continue' });
+      },
     }),
-    vscode.commands.registerCommand('clikcode.openInEditor', () => view.openInEditor()),
-    vscode.commands.registerCommand('clikcode.focus', async () => { await view.reveal(); view.post({ type: 'focus' }); }),
-    vscode.commands.registerCommand('clikcode.newChat', async () => { await view.reveal(); await controller.open('new'); }),
-    vscode.commands.registerCommand('clikcode.resumeChat', slash('/resume')),
+    vscode.commands.registerCommand('clikcode.open', async () => { await revealSidebar(); sidebar.post({ type: 'focus' }); }),
+    vscode.commands.registerCommand('clikcode.openInSideBar', async () => { await revealSidebar(); sidebar.post({ type: 'focus' }); }),
+    vscode.commands.registerCommand('clikcode.openInNewTab', () => { openTab({ mode: 'new' }); }),
+    // Kept for keybindings and links that name it.
+    vscode.commands.registerCommand('clikcode.openInEditor', () => { openTab({ mode: 'new' }); }),
+    vscode.commands.registerCommand('clikcode.openInNewWindow', async () => {
+      openTab({ mode: 'new' });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
+    }),
+    vscode.commands.registerCommand('clikcode.focus', async () => { const target = await shown(); target.post({ type: 'focus' }); }),
+    vscode.commands.registerCommand('clikcode.blur', () => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')),
+    vscode.commands.registerCommand('clikcode.newChat', async () => { const target = await shown(); target.post({ type: 'show', screen: 'chat' }); await target.open('new'); target.post({ type: 'focus' }); }),
+    vscode.commands.registerCommand('clikcode.showHistory', screen('history')),
+    vscode.commands.registerCommand('clikcode.resumeChat', screen('history')),
+    vscode.commands.registerCommand('clikcode.showAccounts', screen('accounts')),
+    vscode.commands.registerCommand('clikcode.openSettings', screen('settings')),
     vscode.commands.registerCommand('clikcode.chooseProvider', slash('/provider')),
     vscode.commands.registerCommand('clikcode.chooseModel', slash('/model')),
     vscode.commands.registerCommand('clikcode.chooseAccount', slash('/account')),
     vscode.commands.registerCommand('clikcode.chooseEffort', slash('/effort')),
     vscode.commands.registerCommand('clikcode.choosePermissions', slash('/permissions')),
-    vscode.commands.registerCommand('clikcode.openSettings', slash('/settings')),
-    vscode.commands.registerCommand('clikcode.cancel', () => controller.cancel(true)),
-    vscode.commands.registerCommand('clikcode.restart', () => controller.restart()),
+    vscode.commands.registerCommand('clikcode.cancel', () => active().cancel(true)),
+    vscode.commands.registerCommand('clikcode.restart', () => active().restart()),
     vscode.commands.registerCommand('clikcode.showLog', () => log.show()),
+    vscode.commands.registerCommand('clikcode.addToChat', addToChat),
+    vscode.commands.registerCommand('clikcode.insertAtMention', () => addToChat(undefined)),
+    vscode.commands.registerCommand('clikcode.attachFile', addToChat),
+    vscode.commands.registerCommand('clikcode.acceptProposedDiff', decideDiff(true)),
+    vscode.commands.registerCommand('clikcode.rejectProposedDiff', decideDiff(false)),
     // Install and update are the same npm command; the fallback is for a machine that cannot reach the npm registry.
     ...(['install', 'update'] as const).map((verb) => vscode.commands.registerCommand(`clikcode.${verb}`, async () => {
       const terminal = vscode.window.createTerminal({ name: verb === 'install' ? 'Install ClikCode' : 'Update ClikCode' });
@@ -82,18 +234,20 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       terminal.sendText(INSTALL_COMMAND);
       log.appendLine(`Running: ${INSTALL_COMMAND}\nIf the npm registry is not reachable, run instead: ${INSTALL_FALLBACK_COMMAND}`);
       const choice = await vscode.window.showInformationMessage(`When \`${INSTALL_COMMAND}\` finishes, reconnect ClikCode.`, 'Reconnect', 'Install from GitHub instead');
+      const reconnect = async (): Promise<void> => { for (const controller of all()) await controller.restart(); };
       if (choice === 'Install from GitHub instead') {
         terminal.sendText(INSTALL_FALLBACK_COMMAND);
-        if (await vscode.window.showInformationMessage('When the install finishes, reconnect ClikCode.', 'Reconnect')) await controller.restart();
-      } else if (choice) await controller.restart();
+        if (await vscode.window.showInformationMessage('When the install finishes, reconnect ClikCode.', 'Reconnect')) await reconnect();
+      } else if (choice) await reconnect();
     })),
     vscode.commands.registerCommand('clikcode.updateExtension', async () => {
       await vscode.commands.executeCommand('workbench.extensions.search', `@id:${context.extension.id}`);
       await vscode.commands.executeCommand('workbench.extensions.action.checkForUpdates');
     }),
     vscode.commands.registerCommand('clikcode.runSlashCommand', async () => {
+      const target = active();
       let commands;
-      try { commands = await controller.slashCommands(); } catch (error) {
+      try { commands = await target.slashCommands(); } catch (error) {
         void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
         return;
       }
@@ -120,38 +274,34 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
         void vscode.window.showInformationMessage('Select some code first.');
         return;
       }
-      const { document, selection } = editor;
-      const selected = {
-        path: vscode.workspace.asRelativePath(document.uri, false),
-        languageId: document.languageId,
-        startLine: selection.start.line + 1,
-        endLine: selection.end.character === 0 && selection.end.line > selection.start.line ? selection.end.line : selection.end.line + 1,
-        text: document.getText(selection),
-      };
-      const question = typeof asked === 'string' ? asked : await vscode.window.showInputBox({ prompt: `Ask ClikCode about ${selected.path}`, placeHolder: 'What do you want to know or change? (Enter with nothing: put it in the chat box instead)' });
+      const mention = mentionFromEditor(editor);
+      const selected = { path: mention.label, languageId: mention.languageId ?? '', startLine: mention.startLine ?? 1, endLine: mention.endLine ?? 1, text: mention.text ?? '' };
+      const question = typeof asked === 'string' ? asked : await vscode.window.showInputBox({ prompt: `Ask ClikCode about ${selected.path}`, placeHolder: 'What do you want to know or change? (Enter with nothing: add it to the chat instead)' });
       if (question === undefined) return;
-      await view.reveal();
-      if (question.trim()) await controller.send(questionWithSelection(question, selected));
-      else view.post({ type: 'insert', text: questionWithSelection('', selected).trim() });
-    }),
-    vscode.commands.registerCommand('clikcode.attachFile', async (uri?: vscode.Uri) => {
-      const target = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
-      if (!target || target.scheme !== 'file') {
-        void vscode.window.showInformationMessage('Open a file to attach it.');
-        return;
-      }
-      await view.reveal();
-      await controller.send(`/mention ${target.fsPath}`);
+      const target = await shown();
+      if (question.trim()) await target.send(questionWithSelection(question, selected));
+      else { target.post({ type: 'mention', mention }); target.post({ type: 'focus' }); }
     }),
   );
 
   return {
-    get state() { return controller.state; },
-    onDidChange: controller.onDidChange,
-    send: (text) => controller.send(text),
-    open: (mode, sessionId) => controller.open(mode, sessionId),
-    ready: () => controller.ensureStarted(),
+    get state() { return sidebar.state; },
+    onDidChange: sidebar.onDidChange,
+    send: (text) => sidebar.send(text),
+    open: (mode, sessionId) => sidebar.open(mode, sessionId),
+    ready: () => sidebar.ensureStarted(),
+    get active() { const target = active(); return { state: target.state, onDidChange: target.onDidChange }; },
+    get tabs() { return tabs.size; },
+    tabStates: () => [...tabs.values()].map((controller) => controller.state),
+    probe: (action, selector, text) => {
+      if (!testing) return Promise.reject(new Error('probes run only under the extension test host'));
+      return active().probe(action, selector, text);
+    },
   };
+}
+
+function truncate(text: string, length: number): string {
+  return text.length > length ? `${text.slice(0, length - 1)}…` : text;
 }
 
 export function deactivate(): void {

@@ -1,18 +1,36 @@
-/** The extension's one ClikCode connection: starts the bridge, keeps the
- * ChatModel, and carries out what the bridge asks of the editor. */
+/** One chat: a ClikCode connection (`clikcode ide-bridge`), the ChatModel it
+ * feeds, and the webviews showing it. The side bar is one chat; every editor
+ * tab is another, each with its own bridge, so each shows its own
+ * conversation -- the bridge is one conversation at a time, like a terminal. */
 import * as vscode from 'vscode';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { BridgeClient } from './bridge-client';
-import { ChatViewProvider } from './chat-view';
+import type { WebviewSurface } from './chat-view';
 import { answeredApproval, applyEvent, emptyModel, localNote, typedDuringTurn, type ChatModel } from './model';
-import type { IdeEvent, IdeSlashCommand, WorkerEvent } from './protocol';
+import type { IdeAccounts, IdeChatSettings, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
-import { diffSides } from './text';
+import { applyHunks, diffInDetail, diffSides } from './text';
+import { readFile } from 'node:fs/promises';
 import { BridgeQuestion, DiffDocuments, fileNameIn, runInTerminal } from './ui';
-import type { FromWebview } from './webview-protocol';
+import type { FromWebview, ToWebview, WebviewRequest } from './webview-protocol';
+import { searchWorkspaceFiles } from './mentions';
 
 type ApprovalPreview = Extract<WorkerEvent, { type: 'approval-request' }>;
+
+const POST_INTERVAL_MS = 40;
+const STRUCTURED_REVISION = 2;
+
+export interface ControllerHost {
+  log: vscode.OutputChannel;
+  diffs: DiffDocuments;
+  /** Opens a conversation (or a new one) in an editor tab of its own. */
+  openInTab(sessionId?: string): Promise<void>;
+  /** Where the surface was, for notifications ("Show"). */
+  reveal(controller: ClikCodeController): Promise<void>;
+}
 
 export class ClikCodeController implements vscode.Disposable {
   private bridge: BridgeClient | undefined;
@@ -20,28 +38,141 @@ export class ClikCodeController implements vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<ChatModel>();
   readonly onDidChange = this.changed.event;
   private readonly questions = new Map<string, BridgeQuestion>();
+  /** Pickers drawn in a webview, and which one. */
+  private readonly panelQuestions = new Map<string, WebviewSurface>();
   private readonly previews = new Map<string, ApprovalPreview>();
+  private readonly surfaces = new Set<WebviewSurface>();
   private starting: Promise<void> | undefined;
   private restartingForBuild = false;
   private disposed = false;
+  private postTimer: NodeJS.Timeout | undefined;
+  private refreshTimer: NodeJS.Timeout | undefined;
+  private refreshedFor = '';
+  private accountTimer: NodeJS.Timeout | undefined;
 
   constructor(
-    private readonly view: ChatViewProvider,
-    private readonly diffs: DiffDocuments,
-    private readonly log: vscode.OutputChannel,
-  ) {}
+    private readonly host: ControllerHost,
+    /** What opens first: the setting's choice, or a conversation asked for. */
+    private readonly first: { mode: 'new' | 'continue' | 'resume'; sessionId?: string } | undefined,
+    readonly label: string,
+  ) {
+    this.accountTimer = setInterval(() => { if (this.visible) this.refreshStructured(true); }, 60_000);
+  }
 
   get state(): ChatModel {
     return this.model;
   }
 
+  get visible(): boolean {
+    return [...this.surfaces].some((surface) => surface.visible);
+  }
+
+  get lastFocusedAt(): number {
+    return Math.max(0, ...[...this.surfaces].map((surface) => surface.lastFocusedAt));
+  }
+
+  get focused(): boolean {
+    return [...this.surfaces].some((surface) => surface.focused);
+  }
+
+  // ---- surfaces --------------------------------------------------------------
+
+  attach(surface: WebviewSurface): vscode.Disposable {
+    this.surfaces.add(surface);
+    return new vscode.Disposable(() => {
+      this.surfaces.delete(surface);
+      for (const [id, owner] of [...this.panelQuestions]) {
+        if (owner !== surface) continue;
+        this.panelQuestions.delete(id);
+        this.bridge?.send({ type: 'ui-response', id, result: { cancelled: true } });
+      }
+    });
+  }
+
+  /** The surface one-off messages go to: the focused one, else the most
+   * recently focused visible one, else any. */
+  private front(): WebviewSurface | undefined {
+    const all = [...this.surfaces];
+    return all.find((surface) => surface.focused)
+      ?? all.filter((surface) => surface.visible).sort((left, right) => right.lastFocusedAt - left.lastFocusedAt)[0]
+      ?? all[0];
+  }
+
+  post(message: ToWebview): void {
+    this.front()?.post(message);
+  }
+
+  /** Test hook: the front surface's DOM. */
+  probe(action: 'query' | 'click' | 'type' | 'key', selector: string, text?: string): Promise<unknown> {
+    const surface = this.front();
+    if (!surface) return Promise.reject(new Error('no chat surface is open'));
+    return surface.probe(action, selector, text);
+  }
+
   private setModel(next: ChatModel): void {
     if (next === this.model) return;
-    const wasRunning = this.model.running;
+    const previous = this.model;
     this.model = next;
-    this.view.update(next);
     this.changed.fire(next);
-    if (wasRunning !== next.running) void vscode.commands.executeCommand('setContext', 'clikcode.turnRunning', next.running);
+    this.schedulePost();
+    if (previous.running !== next.running) void vscode.commands.executeCommand('setContext', 'clikcode.turnRunning', next.running);
+    if (previous.running && !next.running) this.turnEnded(previous);
+    if (next.connection === 'ready' && (next.revision ?? 1) >= STRUCTURED_REVISION && next.sessionId) {
+      const key = [next.sessionId, next.providerId, next.model, next.account, next.effort, next.permissions].join('|');
+      if (key !== this.refreshedFor) {
+        this.refreshedFor = key;
+        this.refreshStructured(false);
+      }
+    }
+  }
+
+  /** Coalesced: a stream of deltas repaints at most every 40 ms. */
+  private schedulePost(): void {
+    if (this.postTimer) return;
+    this.postTimer = setTimeout(() => {
+      this.postTimer = undefined;
+      for (const surface of this.surfaces) surface.post({ type: 'model', model: this.model });
+    }, POST_INTERVAL_MS);
+  }
+
+  /** A turn finished where nobody is looking: say so, as Claude Code does. */
+  private turnEnded(previous: ChatModel): void {
+    if (this.visible && vscode.window.state.focused) return;
+    const title = previous.title ?? 'your chat';
+    void vscode.window.showInformationMessage(`ClikCode finished: ${title}`, 'Show').then((choice) => {
+      if (choice) void this.host.reveal(this);
+    });
+  }
+
+  /** The composer footer's facts: this chat's setting choices, its provider,
+   * its account and usage. Read after every change of conversation or
+   * setting; `withAccounts` alone (the minute timer) re-reads usage. */
+  private refreshStructured(onlyAccount: boolean): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      void this.readStructured(onlyAccount);
+    }, 120);
+  }
+
+  private async readStructured(onlyAccount: boolean): Promise<void> {
+    const bridge = this.bridge;
+    if (!bridge?.running || (this.model.revision ?? 1) < STRUCTURED_REVISION) return;
+    const sessionId = this.model.sessionId;
+    const [settings, providers, accounts] = await Promise.all([
+      onlyAccount ? Promise.resolve(this.model.chatSettings) : bridge.call<IdeChatSettings>({ type: 'query', query: 'chat-settings' }, 30_000).catch(() => undefined),
+      onlyAccount ? Promise.resolve(undefined) : bridge.call<IdeProvider[]>({ type: 'query', query: 'providers' }, 30_000).catch(() => undefined),
+      bridge.call<IdeAccounts>({ type: 'query', query: 'accounts' }, 30_000).catch(() => undefined),
+    ]);
+    if (this.model.sessionId !== sessionId) return;
+    const provider = providers?.find((item) => item.current) ?? (onlyAccount ? this.model.provider : undefined);
+    const currentAccount = accounts?.accounts.find((account) => account.current);
+    this.setModel({
+      ...this.model,
+      ...(settings ? { chatSettings: settings } : {}),
+      ...(provider ? { provider } : {}),
+      currentAccount,
+    });
   }
 
   private note(text: string, level: 'info' | 'warning' | 'error' = 'info'): void {
@@ -54,6 +185,8 @@ export class ClikCodeController implements vscode.Disposable {
     return folder?.uri.fsPath ?? homedir();
   }
 
+  // ---- the connection ----------------------------------------------------------
+
   /** Started on first use and restarted on demand; concurrent callers share
    * one start. */
   ensureStarted(): Promise<void> {
@@ -64,6 +197,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   private async start(sessionToResume?: string): Promise<void> {
     if (this.disposed) return;
+    const log = this.host.log;
     this.setModel({ ...this.model, connection: 'starting', connectionError: undefined, remedy: undefined });
     const settings = vscode.workspace.getConfiguration('clikcode');
     let runtime;
@@ -71,20 +205,19 @@ export class ClikCodeController implements vscode.Disposable {
       runtime = await resolveRuntime({ path: settings.get<string>('path'), nodePath: settings.get<string>('nodePath') });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.log.appendLine(message);
+      log.appendLine(message);
       this.setModel({ ...this.model, connection: 'error', connectionError: message, remedy: error instanceof RuntimeError && error.kind === 'clikcode-missing' ? 'install' : undefined });
       return;
     }
-    this.log.appendLine(`Starting ${runtime.entry} with ${runtime.node} (${runtime.nodeSource})`);
+    log.appendLine(`[${this.label}] Starting ${runtime.entry} with ${runtime.node} (${runtime.nodeSource})`);
     const bridge = BridgeClient.start(runtime, this.workspaceFolder());
     this.bridge = bridge;
     const startLog: string[] = [];
-    bridge.on('log', (line) => { this.log.appendLine(line); if (startLog.length < 200) startLog.push(line); });
+    bridge.on('log', (line) => { log.appendLine(`[${this.label}] ${line}`); if (startLog.length < 200) startLog.push(line); });
     bridge.on('exit', ({ code, signal }) => {
       if (this.bridge !== bridge) return;
-      this.log.appendLine(`ClikCode exited (${signal ?? code})`);
-      for (const question of this.questions.values()) question.dispose();
-      this.questions.clear();
+      log.appendLine(`[${this.label}] ClikCode exited (${signal ?? code})`);
+      this.dropQuestions();
       if (this.disposed) return;
       this.setModel({
         ...this.model, connection: 'stopped', running: false, live: undefined, approvals: [],
@@ -92,7 +225,7 @@ export class ClikCodeController implements vscode.Disposable {
       });
     });
     const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('ClikCode did not start within 30 seconds. See the log for details.')), 30_000);
+      const timer = setTimeout(() => reject(new Error('ClikCode did not start within 60 seconds. See the log for details.')), 60_000);
       bridge.on('event', (event) => {
         if (event.type === 'ready') {
           clearTimeout(timer);
@@ -123,13 +256,13 @@ export class ClikCodeController implements vscode.Disposable {
     try {
       await ready;
       if (this.bridge !== bridge) return;
-      const resume = sessionToResume ?? this.model.sessionId;
-      const mode = resume ? 'resume' : settings.get<'continue' | 'new'>('startWith') ?? 'continue';
+      const resume = sessionToResume ?? this.model.sessionId ?? (this.first?.mode === 'resume' ? this.first.sessionId : undefined);
+      const mode = resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue';
       await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}) });
     } catch (error) {
       if (this.bridge !== bridge) return; // replaced, or refused as incompatible (already reported)
       const message = error instanceof Error ? error.message : String(error);
-      this.log.appendLine(message);
+      log.appendLine(message);
       this.setModel({ ...this.model, connection: bridge.running ? 'ready' : 'error', connectionError: message });
       if (bridge.running) this.note(message, 'error');
     }
@@ -141,7 +274,7 @@ export class ClikCodeController implements vscode.Disposable {
     if (this.bridge !== bridge) return;
     this.bridge = undefined;
     bridge.dispose();
-    this.log.appendLine(message);
+    this.host.log.appendLine(message);
     this.setModel({ ...this.model, connection: 'error', running: false, connectionError: message, remedy });
     const action = remedy === 'update-clikcode' ? 'Update ClikCode' : 'Update Extension';
     void vscode.window.showErrorMessage(message, action).then((choice) => {
@@ -167,25 +300,27 @@ export class ClikCodeController implements vscode.Disposable {
     if (!now || !bridge.build || now === bridge.build) return;
     this.restartingForBuild = true;
     try {
-      this.log.appendLine('ClikCode was updated; reconnecting on the new build.');
+      this.host.log.appendLine('ClikCode was updated; reconnecting on the new build.');
       await this.restart();
     } finally { this.restartingForBuild = false; }
+  }
+
+  private dropQuestions(): void {
+    for (const question of this.questions.values()) question.dispose();
+    this.questions.clear();
+    for (const [id, surface] of this.panelQuestions) surface.post({ type: 'ui-cancel', id });
+    this.panelQuestions.clear();
   }
 
   private onBridgeEvent(event: IdeEvent): void {
     this.setModel(applyEvent(this.model, event));
     switch (event.type) {
-      case 'ui-request': {
-        const question = new BridgeQuestion(event.request, (result) => {
-          this.questions.delete(event.id);
-          this.bridge?.send({ type: 'ui-response', id: event.id, result });
-        });
-        this.questions.set(event.id, question);
-        question.show();
+      case 'ui-request':
+        this.ask(event.id, event.request);
         return;
-      }
       case 'ui-update':
         this.questions.get(event.id)?.update(event.items);
+        this.panelQuestions.get(event.id)?.post({ type: 'ui-update', id: event.id, items: event.items });
         return;
       case 'sign-in': {
         const bridge = this.bridge;
@@ -204,7 +339,10 @@ export class ClikCodeController implements vscode.Disposable {
         void vscode.window.showTextDocument(vscode.Uri.file(event.path), { preview: false });
         return;
       case 'restore-draft':
-        this.view.post({ type: 'setDraft', text: event.text });
+        this.post({ type: 'setDraft', text: event.text });
+        return;
+      case 'usage':
+        this.refreshStructured(true);
         return;
       case 'worker':
         this.onWorkerEvent(event.event);
@@ -214,33 +352,70 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
+  /** A terminal picker: drawn in the chat when the chat is on screen, as a
+   * quick pick otherwise. */
+  private ask(id: string, request: IdeUiRequest): void {
+    const surface = this.front();
+    if (surface?.visible && surface.ready) {
+      this.panelQuestions.set(id, surface);
+      surface.post({ type: 'ui-request', id, request });
+      return;
+    }
+    const question = new BridgeQuestion(request, (result) => {
+      this.questions.delete(id);
+      this.bridge?.send({ type: 'ui-response', id, result });
+    });
+    this.questions.set(id, question);
+    question.show();
+  }
+
   private onWorkerEvent(event: WorkerEvent): void {
     if (event.type === 'approval-request') {
-      if (event.preview?.diff) {
+      if (event.preview?.diff || diffInDetail(event.detail)) {
         this.previews.set(event.id, event);
         if (vscode.workspace.getConfiguration('clikcode').get<boolean>('openDiffOnApproval', true)) void this.viewDiff(event.id);
       }
-      if (!this.view.visible) {
-        void vscode.window.showInformationMessage(`ClikCode asks: ${event.title}`, 'Show').then((choice) => { if (choice) void this.view.reveal(); });
+      if (!this.visible || !vscode.window.state.focused) {
+        void vscode.window.showInformationMessage(`ClikCode asks: ${event.title}`, 'Allow', 'Show').then((choice) => {
+          if (choice === 'Allow') this.approve(event.id, true);
+          else if (choice) void this.host.reveal(this);
+        });
       }
       return;
     }
-    if (event.type === 'restore-draft') this.view.post({ type: 'setDraft', text: event.text });
+    if (event.type === 'restore-draft') this.post({ type: 'setDraft', text: event.text });
     if (event.type === 'waiting-stop') {
-      for (const id of this.previews.keys()) this.diffs.forget(id);
+      for (const id of this.previews.keys()) this.host.diffs.forget(id);
       this.previews.clear();
     }
   }
 
-  async viewDiff(id: string): Promise<void> {
-    const request = this.previews.get(id);
-    const diff = request?.preview?.diff;
-    if (!request || !diff) return;
-    const { before, after } = diffSides(diff);
-    await this.diffs.show(id, request.title, before, after, fileNameIn(request.title, request.detail));
+  hasApproval(id: string): boolean {
+    return this.model.approvals.some((approval) => approval.id === id);
   }
 
-  // ---- what the user does --------------------------------------------------
+  async viewDiff(id: string): Promise<void> {
+    const request = this.previews.get(id);
+    if (!request) return;
+    const diff = request.preview?.diff;
+    if (diff) {
+      const { before, after } = diffSides(diff);
+      await this.host.diffs.show(id, request.title, before, after, fileNameIn(request.title, request.detail));
+      return;
+    }
+    // ClikCode's own agent says what it will change in the approval's text:
+    // applied to the file as it is on disk, that is the whole file before and
+    // after; when a hunk does not apply cleanly, the hunks themselves.
+    const described = diffInDetail(request.detail);
+    if (!described) return;
+    const current = described.path ? await readFile(described.path, 'utf8').catch(() => undefined) : undefined;
+    const whole = current !== undefined && !described.truncated ? applyHunks(current, described.hunks) : undefined;
+    const before = whole !== undefined ? current! : described.hunks.map((hunk) => hunk.before.join('\n')).join('\n⋮\n');
+    const after = whole ?? described.hunks.map((hunk) => hunk.after.join('\n')).join('\n⋮\n');
+    await this.host.diffs.show(id, request.title, before, after, described.path?.split(/[\\/]/).pop() ?? fileNameIn(request.title, request.detail));
+  }
+
+  // ---- what the user does --------------------------------------------------------
 
   async send(text: string, id = `${Date.now()}`): Promise<void> {
     await this.ensureStarted();
@@ -261,7 +436,7 @@ export class ClikCodeController implements vscode.Disposable {
   approve(id: string, approved: boolean | 'always'): void {
     this.bridge?.send({ type: 'approval-response', id, approved });
     this.setModel(answeredApproval(this.model, id));
-    this.diffs.forget(id);
+    this.host.diffs.forget(id);
     this.previews.delete(id);
   }
 
@@ -282,9 +457,68 @@ export class ClikCodeController implements vscode.Disposable {
     return (await this.bridge?.call<IdeSlashCommand[]>({ type: 'query', query: 'slash-commands' })) ?? [];
   }
 
-  onWebviewMessage(message: FromWebview): void {
+  /** A webview's request, answered with a `response`. */
+  private async answer(surface: WebviewSurface, id: string, request: WebviewRequest): Promise<void> {
+    const reply = (ok: boolean, data?: unknown, error?: string): void => surface.post({ type: 'response', id, ok, ...(data === undefined ? {} : { data }), ...(error ? { error } : {}) });
+    try {
+      reply(true, await this.handle(request));
+    } catch (error) {
+      reply(false, undefined, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async handle(request: WebviewRequest): Promise<unknown> {
+    switch (request.method) {
+      case 'files':
+        return searchWorkspaceFiles(request.text);
+      case 'openInTab':
+        await this.host.openInTab(request.sessionId);
+        return undefined;
+      case 'openInTerminal': {
+        const bridge = this.bridge;
+        if (!bridge) throw new Error('ClikCode is not connected.');
+        const terminal = vscode.window.createTerminal({
+          name: 'ClikCode', shellPath: bridge.runtime.node,
+          shellArgs: [bridge.runtime.entry, 'sessions', 'resume', request.sessionId],
+          env: bridge.runtime.env, cwd: this.model.workspace ?? this.workspaceFolder(),
+          iconPath: new vscode.ThemeIcon('comment-discussion'),
+        });
+        terminal.show();
+        return undefined;
+      }
+      case 'saveImage': {
+        const dir = join(tmpdir(), 'clikcode-vscode-images');
+        await mkdir(dir, { recursive: true });
+        const safe = request.name.replace(/[^\w.-]+/g, '_').slice(-60) || 'image.png';
+        const path = join(dir, `${Date.now().toString(36)}-${safe}`);
+        await writeFile(path, Buffer.from(request.dataBase64, 'base64'));
+        return path;
+      }
+      default:
+        break;
+    }
+    await this.ensureStarted();
+    const bridge = this.bridge;
+    if (!bridge?.running) throw new Error('ClikCode is not connected.');
+    if (request.method === 'open') {
+      await this.open(request.mode, request.sessionId);
+      return undefined;
+    }
+    if ((this.model.revision ?? 1) < STRUCTURED_REVISION) throw new Error('Update ClikCode to use this (npm install -g clikcode@latest).');
+    if (request.method === 'query') {
+      return bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, 120_000);
+    }
+    // A choice can take a sign-in or an install: no short deadline.
+    const result = await bridge.call({ type: 'choose', choice: request.choice }, 30 * 60_000);
+    this.refreshedFor = '';
+    this.refreshStructured(false);
+    return result;
+  }
+
+  onWebviewMessage(surface: WebviewSurface, message: FromWebview): void {
     switch (message.type) {
       case 'ready':
+        surface.post({ type: 'model', model: this.model });
         void this.ensureStarted();
         return;
       case 'send':
@@ -299,12 +533,27 @@ export class ClikCodeController implements vscode.Disposable {
       case 'viewDiff':
         void this.viewDiff(message.id);
         return;
+      case 'request':
+        void this.answer(surface, message.id, message.request);
+        return;
+      case 'ui-response':
+        this.panelQuestions.delete(message.id);
+        this.bridge?.send({ type: 'ui-response', id: message.id, result: message.result });
+        return;
       case 'command':
-        if (message.command === 'clikcode.configure') void vscode.commands.executeCommand('workbench.action.openSettings', 'clikcode');
-        else if (message.command.startsWith('clikcode.')) void vscode.commands.executeCommand(message.command);
+        if (message.command === 'clikcode.configure') void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:clikcode.clikcode');
+        else if (message.command.startsWith('clikcode.') || message.command === 'workbench.action.openWalkthrough') {
+          void vscode.commands.executeCommand(message.command, ...(message.args ?? []));
+        }
         return;
       case 'openLink':
         if (/^(https?:|mailto:)/i.test(message.href)) void vscode.env.openExternal(vscode.Uri.parse(message.href));
+        return;
+      case 'log':
+        this.host.log.appendLine(`[${this.label} page] ${message.text}`);
+        return;
+      case 'openFile':
+        void openWorkspaceFile(message.path, message.line, this.model.workspace ?? this.workspaceFolder());
         return;
       default:
         return;
@@ -313,9 +562,26 @@ export class ClikCodeController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
-    for (const question of this.questions.values()) question.dispose();
+    if (this.accountTimer) clearInterval(this.accountTimer);
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    if (this.postTimer) clearTimeout(this.postTimer);
+    this.dropQuestions();
     this.bridge?.dispose();
     this.bridge = undefined;
     this.changed.dispose();
+  }
+}
+
+/** A path a tool row or a message named: relative to the conversation's
+ * workspace unless absolute. */
+async function openWorkspaceFile(path: string, line: number | undefined, workspace: string): Promise<void> {
+  const clean = path.replace(/^file:\/\//, '').replace(/^~(?=\/)/, homedir());
+  const uri = /^([a-zA-Z]:[\\/]|\/)/.test(clean) ? vscode.Uri.file(clean) : vscode.Uri.joinPath(vscode.Uri.file(workspace), clean);
+  try {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const position = line && line > 0 ? new vscode.Position(line - 1, 0) : undefined;
+    await vscode.window.showTextDocument(document, { preview: true, ...(position ? { selection: new vscode.Range(position, position) } : {}) });
+  } catch {
+    void vscode.window.showWarningMessage(`ClikCode: cannot open ${path}`);
   }
 }
