@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  isIntegratedAmd, parseAmdSmi, parseCpuinfoPhysicalCores, parseLinuxMeminfo, parseNvidiaSmi, parseRocmSmi, parseVmStat, parseWindowsProbe,
+  amdAddressableBytes, isIntegratedAmd, parseAmdSmi, parseCpuinfoPhysicalCores, parseLinuxMeminfo, parseNvidiaSmi, parseRocmSmi, parseVmStat, parseWindowsProbe,
 } from './hardware';
 
 const GIB = 1024 ** 3;
@@ -86,6 +86,12 @@ describe('GPU tools', () => {
     expect(isIntegratedAmd('AMD Ryzen 7 8745HS w/ Radeon 780M Graphics', 4 * GIB)).toBe(true);
     expect(isIntegratedAmd('AMD Ryzen 9 7950X 16-Core Processor', 16 * GIB)).toBe(false);
     expect(isIntegratedAmd('Intel(R) Core(TM) i7-13700K', 4 * GIB)).toBe(false);
+  });
+
+  it('reads an APU\'s reach as carve-out plus GTT, the heap Vulkan reports', () => {
+    // Radeon 780M: 4 GiB carve-out, 30,942,846,976 B GTT; Vulkan says 33,605 MiB.
+    expect(Math.floor(amdAddressableBytes(4 * GIB, 30_942_846_976)! / 1024 ** 2)).toBe(33_605);
+    expect(amdAddressableBytes(4 * GIB, Number.NaN)).toBeUndefined();
   });
 });
 
