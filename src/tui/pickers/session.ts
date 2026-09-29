@@ -64,7 +64,14 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
   };
   const discoverable = allLocalHarnesses().filter((harness) => harness.session?.discoverArgv);
   const shell = (async () => (await Promise.all(discoverable.map(async (harness) => {
-    return (await Promise.all(discoveryProfiles(harness).map(async (account) => {
+    // Only a vendor the user has signed in to through ClikCode. The listing
+    // is a real run of the vendor's CLI, and a signed-out one does not just
+    // fail: Kiro CLI's `chat --list-sessions` starts its own login, so every
+    // /resume popped a Kiro sign-in for someone who never used Kiro. The
+    // file-based discovery below only reads, so it keeps its default profile.
+    const profiles = discoveryProfiles(harness);
+    if (profiles[0] === undefined) return [];
+    return (await Promise.all(profiles.map(async (account) => {
       const environment = nativeProfileEnvironment(account?.nativeProfile);
       const found = await discoverNativeSessions(harness, environment, workspace, account?.nativeProfile?.path);
       return found.map((item) => ({ harness, item, accountId: account?.id }));
