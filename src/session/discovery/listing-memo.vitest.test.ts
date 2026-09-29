@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  EMPTY_LISTING_TTL_MS, listingKnownEmpty, rememberListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
+  EMPTY_LISTING_TTL_MS, lastSeenListing, listingKnownEmpty, rememberListing, rememberSeenListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
 } from './cache.js';
 
 /**
@@ -70,5 +70,47 @@ describe('the empty-listing memo', () => {
     await saveDiscoveryCache();
     resetNativeSessionDiscoveryCache();
     expect(await listingKnownEmpty('kilo', '/work', undefined)).toBe(true);
+  });
+});
+
+describe('the last list each CLI gave', () => {
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'clikcode-seen-'));
+    process.env.CLIKCODE_HOME = home;
+    resetNativeSessionDiscoveryCache();
+  });
+
+  afterEach(async () => {
+    delete process.env.CLIKCODE_HOME;
+    resetNativeSessionDiscoveryCache();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('is kept across processes, so the next list shows it before asking again', async () => {
+    await rememberSeenListing('kilo', '/work', undefined, [{ nativeId: 'k1', title: 'Refactor' }]);
+    await saveDiscoveryCache();
+    resetNativeSessionDiscoveryCache();
+    expect(await lastSeenListing('kilo', '/work', undefined)).toEqual([{ nativeId: 'k1', title: 'Refactor' }]);
+  });
+
+  it('is per folder and per account, like the listing itself', async () => {
+    await rememberSeenListing('hermes', '/work', '/profiles/a', [{ nativeId: 'h1' }]);
+    expect(await lastSeenListing('hermes', '/work', '/profiles/b')).toEqual([]);
+    expect(await lastSeenListing('hermes', '/other', '/profiles/a')).toEqual([]);
+  });
+
+  it('is replaced by the next answer, and cleared when that answer is empty', async () => {
+    await rememberSeenListing('opencode', '/work', undefined, [{ nativeId: 'o1' }]);
+    await rememberSeenListing('opencode', '/work', undefined, [{ nativeId: 'o2' }]);
+    expect(await lastSeenListing('opencode', '/work', undefined)).toEqual([{ nativeId: 'o2' }]);
+    await rememberSeenListing('opencode', '/work', undefined, []);
+    expect(await lastSeenListing('opencode', '/work', undefined)).toEqual([]);
+  });
+
+  it('never skips asking the CLI: a remembered list is not an empty memo', async () => {
+    await rememberSeenListing('kilo', '/work', undefined, [{ nativeId: 'k1' }]);
+    expect(await listingKnownEmpty('kilo', '/work', undefined)).toBe(false);
   });
 });

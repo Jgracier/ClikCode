@@ -5,7 +5,7 @@ import { compactPath } from '../../harness/protocol/labels.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
-import { discoverNativeSessions } from '../../session/discovery/cli-listing.js';
+import { discoverNativeSessions, lastSeenNativeSessions } from '../../session/discovery/cli-listing.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../../session/discovery/registry.js';
 import { saveDiscoveryCache } from '../../session/discovery/cache.js';
 import { type DiscoveredNativeSession } from '../../session/discovery/discovered-session.js';
@@ -55,7 +55,13 @@ type AdoptableNativeSession = {
  * per account profile) or walks a vendor's on-disk store, so this is slower
  * than the rest of /resume by orders of magnitude and must never be awaited
  * before the picker is on screen. */
-async function discoverAdoptableSessions(state: HarnessState, workspace: string): Promise<AdoptableNativeSession[]> {
+async function discoverAdoptableSessions(
+  state: HarnessState, workspace: string,
+  /** Called once, early, with the vendor files plus what each CLI listed LAST
+   * time -- so the list shows them at once instead of after the slowest CLI
+   * (kilo takes 1.5-1.8s here). The real listings then replace them. */
+  early?: (found: AdoptableNativeSession[]) => void,
+): Promise<AdoptableNativeSession[]> {
   const discoveryProfiles = (harness: AiLocalHarnessDefinition): Array<AiHarnessAccount | undefined> => {
     const accounts = state.accounts.filter((item) => item.provider === harness.provider && item.status === 'ready');
     if (!accounts.length) return [undefined];
@@ -64,6 +70,15 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
     return [...unique.values()];
   };
   const discoverable = allLocalHarnesses().filter((harness) => harness.session?.discoverArgv);
+  const notAdopted = (found: AdoptableNativeSession[]): AdoptableNativeSession[] => found
+    .filter(({ harness, item, accountId }) => !state.sessions.some((session) => session.nativeHarness === harness.command
+      && session.nativeSessionId === item.nativeId && (!accountId || session.accountId === accountId)));
+  const seen = (async () => (await Promise.all(discoverable.map(async (harness) => {
+    const profiles = discoveryProfiles(harness);
+    if (profiles[0] === undefined) return [];
+    return (await Promise.all(profiles.map(async (account) => (await lastSeenNativeSessions(harness, workspace, account?.nativeProfile?.path))
+      .map((item) => ({ harness, item, accountId: account?.id }))))).flat();
+  }))).flat())().catch(() => [] as AdoptableNativeSession[]);
   const shell = (async () => (await Promise.all(discoverable.map(async (harness) => {
     // Only a vendor the user has signed in to through ClikCode. The listing
     // is a real run of the vendor's CLI, and a signed-out one does not just
@@ -96,11 +111,10 @@ async function discoverAdoptableSessions(state: HarnessState, workspace: string)
   // with it. They run together now, and the cache is flushed once when both
   // are done rather than relying on whichever vendor discoverer happened to
   // save it on the way past.
+  if (early) void Promise.all([seen, files]).then(([seenShell, fsDiscovered]) => early(notAdopted([...seenShell, ...fsDiscovered])), () => undefined);
   const [shellDiscovered, fsDiscovered] = await Promise.all([shell, files]);
   await saveDiscoveryCache().catch(() => undefined);
-  return [...shellDiscovered, ...fsDiscovered]
-    .filter(({ harness, item, accountId }) => !state.sessions.some((session) => session.nativeHarness === harness.command
-      && session.nativeSessionId === item.nativeId && (!accountId || session.accountId === accountId)));
+  return notAdopted([...shellDiscovered, ...fsDiscovered]);
 }
 
 /** Indirection so tests can hold discovery open and observe the picker while
@@ -122,11 +136,13 @@ function resetNativeDiscoveryCache(): void {
  * a non-empty listing never), and it overrode them: a session started in
  * another terminal was invisible to /resume for up to sixty seconds even
  * though its directory's mtime had already said so. */
-function cachedAdoptableSessions(state: HarnessState, workspace: string): Promise<AdoptableNativeSession[]> {
+function cachedAdoptableSessions(
+  state: HarnessState, workspace: string, early?: (found: AdoptableNativeSession[]) => void,
+): Promise<AdoptableNativeSession[]> {
   const key = [workspace, ...state.accounts.map((item) => `${item.id}:${item.nativeProfile?.path ?? ''}`).sort()].join('\u0000');
   const cached = nativeDiscoveryCache;
   if (cached && cached.key === key) return cached.result;
-  const result = NATIVE_SESSION_DISCOVERY.run(state, workspace).catch(() => {
+  const result = NATIVE_SESSION_DISCOVERY.run(state, workspace, early).catch(() => {
     // fail-open-ok: discovery is passive enrichment of a list that is already
     // complete for ClikCode's own conversations. A vendor CLI that fails must
     // not take /resume down with it, and must not be cached as an answer.
@@ -136,6 +152,10 @@ function cachedAdoptableSessions(state: HarnessState, workspace: string): Promis
   });
   nativeDiscoveryCache = { key, result };
   return result;
+}
+
+function nativeValue(command: string, nativeId: string, accountId: string | undefined): string {
+  return `native:${command}\u0000${nativeId}\u0000${accountId ?? ''}`;
 }
 
 /** Selected while discovery is still running: wait for it, then reopen. */
@@ -222,9 +242,17 @@ export async function interactiveSessionPicker(
   // and the screen blank for as long as the slowest vendor CLI took to answer.
   let discovered: AdoptableNativeSession[] = [];
   let discovering = true;
-  const discovery = cachedAdoptableSessions(state, workspace)
+  // Two moments the rows change: what is already known (vendor files, and each
+  // CLI's last list) within milliseconds, then the CLIs' fresh answers.
+  let earlyLanded!: () => void;
+  const early = new Promise<void>((resolveEarly) => { earlyLanded = resolveEarly; });
+  const discovery = cachedAdoptableSessions(state, workspace, (found) => {
+    if (discovering) discovered = found;
+    earlyLanded();
+  })
     .then((found) => { discovered = found; })
-    .finally(() => { discovering = false; });
+    .finally(() => { discovering = false; earlyLanded(); });
+  const refreshes = [early, discovery];
 
   const histories = new Map<string, PickerOption<string>[]>();
   const buildFresh = (): PickerOption<string>[] => {
@@ -263,12 +291,14 @@ export async function interactiveSessionPicker(
     }
     const optionBlocks: OptionBlock[] = [
       ...trackedBlocks.values(),
-      ...discovered.map(({ harness, item, accountId }, index) => ({
+      ...discovered.map(({ harness, item, accountId }) => ({
         sortKey: item.updatedAtMs ?? -Infinity,
         options: [{
           label: `  ${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
           detail: `· not yet in ClikCode${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
-          value: `native:${index}`,
+          // By identity, not position: the list is replaced when the CLIs
+          // answer, and a row chosen from the earlier one must still resolve.
+          value: nativeValue(harness.command, item.nativeId, accountId),
         }],
       })),
     ];
@@ -295,8 +325,8 @@ export async function interactiveSessionPicker(
     if (!onBoard) options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
     if (discovering) {
       options.push({
-        label: '  Looking for chats from other CLIs…',
-        detail: '· your ClikCode conversations are listed above',
+        label: discovered.length ? '  Refreshing chats from other CLIs…' : '  Looking for chats from other CLIs…',
+        detail: discovered.length ? '· showing what they listed last time' : '· your ClikCode conversations are listed above',
         value: PENDING_DISCOVERY_VALUE,
         group: `${PAST_GROUP} ${sizes.get(PAST_GROUP) ?? 0}`,
       });
@@ -349,14 +379,14 @@ export async function interactiveSessionPicker(
       const listed = sessions.find((session) => session.id === option.value);
       return listed !== undefined && conversationIdFor(listed) === currentRoot;
     })?.value;
-    const result = await rl.board!({ conversations: buildOptions, commands: boardCommands!, refresh: discovery, onAction: manage, ...(initial ? { initial } : {}) });
+    const result = await rl.board!({ conversations: buildOptions, commands: boardCommands!, refresh: refreshes, onAction: manage, ...(initial ? { initial } : {}) });
     if (result && 'compose' in result) return { compose: result.compose };
     if (result && 'command' in result) return { command: result.command };
     selected = result?.open;
   } else {
     selected = await chooseOption(rl, 'Conversations', buildOptions(),
       (value, action) => manage(value, action),
-      { refreshedOptions: buildOptions, refresh: discovery,
+      { refreshedOptions: buildOptions, refresh: refreshes,
         // Taller than a settings list -- it is the place to look over
         // everything running -- but never more than a small terminal can hold.
         rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)) });
@@ -372,7 +402,7 @@ export async function interactiveSessionPicker(
     return interactiveSessionPicker(rl, currentId, boardCommands);
   }
   if (!selected.startsWith('native:')) return { id: selected };
-  const match = discovered[Number.parseInt(selected.slice('native:'.length), 10)];
+  const match = discovered.find(({ harness, item, accountId }) => nativeValue(harness.command, item.nativeId, accountId) === selected);
   if (!match) return undefined;
   const nativeId = match.item.nativeId;
   const account = match.accountId

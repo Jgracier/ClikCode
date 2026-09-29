@@ -2,7 +2,7 @@
  * prints -- a table for some, structured output for others. */
 
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
-import { listingKnownEmpty, rememberListing } from './cache.js';
+import { lastSeenListing, listingKnownEmpty, rememberListing, rememberSeenListing } from './cache.js';
 import { harnessBinaryIdentity } from '../../harness/transport/native/version-memo.js';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -144,6 +144,7 @@ export async function discoverNativeSessions(
     const format = harness.session.discoverFormat ?? 'json';
     const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
     await rememberListing(harness.command, workspace, profile, found.length, Date.now(), build);
+    await rememberSeenListing(harness.command, workspace, profile, found);
     return found;
   } catch {
     // fail-open-ok: passive discovery must not break the picker when an
@@ -152,4 +153,14 @@ export async function discoverNativeSessions(
     // a harness dark long after whatever broke was fixed.
     return [];
   }
+}
+
+/** What this harness's listing returned last time, without running it: the
+ * conversation list shows these at once and replaces them when the real
+ * listing lands. Nothing when it is not installed or never listed anything. */
+export async function lastSeenNativeSessions(
+  harness: AiLocalHarnessDefinition, workspace: string | undefined, profile?: string,
+): Promise<DiscoveredNativeSession[]> {
+  if (!harness.session?.discoverArgv) return [];
+  return lastSeenListing(harness.command, workspace, profile);
 }

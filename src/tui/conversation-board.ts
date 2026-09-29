@@ -130,7 +130,7 @@ export interface ConversationBoardSettings {
   /** Rebuilt on every draw, so rows that land later (vendor discovery) appear. */
   conversations: () => readonly PickerOption<string>[];
   commands: readonly PickerOption<string>[];
-  refresh?: Promise<unknown>;
+  refresh?: Promise<unknown> | readonly Promise<unknown>[];
   onAction?: (value: string, action: string) => Promise<void>;
   /** The row the cursor starts on: the conversation this window is in, so
    * Right or Enter goes straight back to it. Absent or not listed (a new,
@@ -224,6 +224,6 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       }
     };
     listen();
-    void settings.refresh?.then(() => { if (!finished) draw(); }, () => { if (!finished) draw(); });
+    for (const refresh of [settings.refresh ?? []].flat()) void refresh.then(() => { if (!finished) draw(); }, () => { if (!finished) draw(); });
   });
 }
