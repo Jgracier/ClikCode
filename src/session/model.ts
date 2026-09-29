@@ -86,6 +86,9 @@ export interface HarnessSession {
     startedAt: string;
     updatedAt: string;
     outputStarted: boolean;
+    /** Sub-agents this turn has running, so another terminal's conversation
+     * list can show them. Part of the journal, so it ends with the turn. */
+    subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string }>;
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */

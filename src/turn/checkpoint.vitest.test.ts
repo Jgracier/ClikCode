@@ -189,3 +189,35 @@ describe('a live submission is queued or it is not', () => {
     }
   });
 });
+
+describe('running sub-agents in the turn journal', () => {
+  const at = (second: number) => `2026-01-02T00:00:${String(second).padStart(2, '0')}.000Z`;
+
+  it('adds an agent call, follows its step, and drops it when it completes', () => {
+    const target = session();
+    beginPendingTurn(target, 'Work', at(0));
+    recordPendingActivity(target, { kind: 'tool-start', label: 'Agent(Explore the repo)', id: 'a1' }, at(1));
+    recordPendingActivity(target, { kind: 'tool-start', label: 'Read(src/index.ts)', id: 'c1', parentId: 'a1' }, at(2));
+    expect(target.pendingTurn?.subagents).toEqual([
+      { id: 'a1', label: 'Agent(Explore the repo)', startedAt: at(1), step: 'Read(src/index.ts)', stepAt: at(2) },
+    ]);
+    recordPendingActivity(target, { kind: 'tool-done', label: 'Agent(Explore the repo)', id: 'a1' }, at(3));
+    expect(target.pendingTurn?.subagents).toBeUndefined();
+  });
+
+  it('counts a call the envelope marks as an agent, and never a shell command', () => {
+    const target = session();
+    beginPendingTurn(target, 'Work', at(0));
+    recordPendingActivity(target, { kind: 'tool-start', label: 'researcher', agent: true, id: 'x' }, at(1));
+    recordPendingActivity(target, { kind: 'tool-start', label: 'task build', category: 'run', id: 'y' }, at(1));
+    expect(target.pendingTurn?.subagents?.map((agent) => agent.id)).toEqual(['x']);
+  });
+
+  it('still records a sub-agent edit as a change to the workspace', () => {
+    const target = session();
+    beginPendingTurn(target, 'Work', at(0));
+    recordPendingActivity(target, { kind: 'tool-start', label: 'Task(Fix it)', id: 'a1' }, at(1));
+    recordPendingActivity(target, { kind: 'tool-start', label: 'Edit(src/a.ts)', category: 'edit', id: 'e', parentId: 'a1' }, at(2));
+    expect(target.pendingTurn?.activities).toContain('started Edit(src/a.ts)');
+  });
+});
