@@ -8,6 +8,7 @@ import { isBlankConversation } from '../../session/options.js';
 import { gatewayModels, isAutomaticModelWord } from '../../gateway/models.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
+import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS, gatewayEffort } from '../../gateway/options.js';
 import { randomUUID } from 'node:crypto';
 import { emitResult } from '../../cli/structured-output.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -75,7 +76,8 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
   session.accountId = null;
   session.provider = 'gateway';
   if (!keepModel) session.model = null;
-  session.effort = 'platform-managed';
+  // A level chosen on the Gateway stays; one from a vendor harness means nothing here.
+  if (!keepModel || !gatewayEffort(session)) session.effort = GATEWAY_DEFAULT_EFFORT;
   session.accountFailover = 'never';
   session.gatewayConfirmed = true;
   // The approval setting stays: the Gateway route's agent runs here and honours it.
@@ -156,8 +158,11 @@ function findAccount(
 
 export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
   if (!isAiHarnessRoute(options.route)) throw new Error(ROUTE_CHOICES_TEXT);
-  if (options.route === 'gateway' && (options.account || options.provider || options.effort || options.accountFailover)) {
-    throw new Error('ClikDeploy Gateway account, provider, effort, and failover are selected by platform routing and cannot be overridden per session.');
+  if (options.route === 'gateway' && (options.account || options.provider || options.accountFailover)) {
+    throw new Error('ClikDeploy Gateway account, provider, and failover are selected by platform routing and cannot be overridden per session.');
+  }
+  if (options.route === 'gateway' && options.effort && !(GATEWAY_EFFORTS as readonly string[]).includes(options.effort)) {
+    throw new Error(`ClikDeploy Gateway effort must be one of ${GATEWAY_EFFORTS.join(', ')}`);
   }
   if (options.route === 'clikcode-local' && (options.account || options.provider || options.effort || options.accountFailover)) {
     throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
@@ -202,7 +207,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     model: options.route === 'gateway'
       ? (options.model !== undefined ? await chooseGatewayModel(options.model) : null)
       : model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
-    effort: options.route === 'gateway' ? 'platform-managed' : options.effort ?? defaults.effort,
+    effort: options.route === 'gateway' ? options.effort ?? GATEWAY_DEFAULT_EFFORT : options.effort ?? defaults.effort,
     // Every route: on the agent routes the agent is ClikCode's own, running
     // here, and it honours the same approval setting.
     permissionMode: defaults.permissionMode,
@@ -369,8 +374,11 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (index < 0) throw new Error(`AI session "${id}" was not found`);
   const current = state.sessions[index];
   const effectiveRoute = options.route ?? current.route;
-  if (effectiveRoute === 'gateway' && (options.account || options.provider || options.effort || options.accountFailover || options.nativeSession)) {
-    throw new Error('ClikDeploy Gateway account, provider, effort, failover, and native sessions are selected by platform routing and cannot be overridden per session.');
+  if (effectiveRoute === 'gateway' && (options.account || options.provider || options.accountFailover || options.nativeSession)) {
+    throw new Error('ClikDeploy Gateway account, provider, failover, and native sessions are selected by platform routing and cannot be overridden per session.');
+  }
+  if (effectiveRoute === 'gateway' && options.effort && options.effort !== 'default' && !(GATEWAY_EFFORTS as readonly string[]).includes(options.effort)) {
+    throw new Error(`ClikDeploy Gateway effort must be one of default, ${GATEWAY_EFFORTS.join(', ')}`);
   }
   // The Gateway's model is the user's to choose, from the Gateway's own list.
   const gatewayModel = effectiveRoute === 'gateway' && options.model !== undefined
@@ -432,7 +440,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(account ? { accountId: account.id, provider: options.provider ?? account.provider } : {}),
     ...(options.provider ? { provider: options.provider } : {}),
     ...(options.model !== undefined ? { model } : {}),
-    ...(options.effort ? { effort: options.effort } : {}),
+    ...(options.effort ? { effort: effectiveRoute === 'gateway' && options.effort === 'default' ? GATEWAY_DEFAULT_EFFORT : options.effort } : {}),
     ...(options.permissions ? { permissionMode: options.permissions } : {}),
     ...(options.accountFailover ? { accountFailover: options.accountFailover } : {}),
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),

@@ -15,6 +15,7 @@ import { localModelLabel } from '../local-models/catalog.js';
 import type { HarnessSession } from '../session/model.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitResult } from '../cli/structured-output.js';
+import { gatewayEffort } from '../gateway/options.js';
 
 export function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
@@ -32,8 +33,10 @@ function renderSessionCard(session: HarnessSession, account?: string): string {
     // this card is also the JSON contract, and a fabricated model id there
     // would be consumed as if it were real.
     ...(modelLabel ? [line('model', modelLabel)] : []),
-    line('effort', session.route === 'gateway' ? 'platform managed' : session.effort),
-    line('permissions', session.route === 'gateway' ? 'platform policy' : session.permissionMode ?? 'ask'),
+    line('effort', session.route === 'gateway' ? gatewayEffort(session) ?? 'model default' : session.effort),
+    ...(session.route === 'gateway' ? [line('speed', session.speed === 'fast' ? 'fast (fastest provider)' : 'default (cheapest provider)')] : []),
+    // The Gateway route's agent runs on this machine and honours the approval setting.
+    line('permissions', session.permissionMode ?? 'ask'),
     line('session', session.id.slice(0, 8)),
   ].join('\n');
 }

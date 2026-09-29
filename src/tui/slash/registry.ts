@@ -38,7 +38,7 @@ export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'undo',
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
-  'model', 'effort', 'permissions', 'options', 'capabilities', 'settings',
+  'model', 'effort', 'fast', 'permissions', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'rename', 'fork', 'archive', 'delete',
   'usage', 'doctor',
 ] as const;
@@ -161,7 +161,15 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
     argHint: '[level]', duringTurn: 'apply',
     availability: (session, harness) => (session?.route === 'clikcode-local'
       ? { available: false, reason: CLIKCODE_LOCAL_NO_EFFORT }
-      : needsHarness('setting effort')(session, harness)),
+      // The Gateway takes a reasoning level with every step.
+      : isGatewayService(session) ? { available: true }
+        : needsHarness('setting effort')(session, harness)),
+  }),
+  entry('fast', 'Settings', 'serve from the fastest provider instead of the cheapest', {
+    argHint: '[on|off]', duringTurn: 'apply',
+    availability: (session) => (isGatewayService(session)
+      ? { available: true }
+      : { available: false, reason: 'Speed is a ClikDeploy Gateway choice: it picks among the providers of one model.' }),
   }),
   entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),

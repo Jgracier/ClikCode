@@ -54,22 +54,34 @@ export async function aiGatewayStatus(config: Conf): Promise<void> {
 /** The signed-in account's AI use as ClikDeploy Gateway records it: every
  * surface, not only ClikCode, with the credit that gates the next call (or
  * `unlimited`). The Gateway owns the ledger; this only reads it. */
+/** The reason in a Gateway error body: OpenAI's `{ error: { message } }`, or
+ * the platform's `{ error: "..." }`; else the status, or `missing` for a 404
+ * from a Gateway older than the endpoint. */
+function gatewayErrorReason(body: { error?: unknown } | undefined, status: number, missing: string): string {
+  const error = body?.error;
+  if (typeof error === 'string' && error) return error;
+  if (error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string') return (error as { message: string }).message;
+  return status === 404 ? missing : `HTTP ${status}`;
+}
+
+/** What the signed-in account used through the Gateway, per model, and the
+ * credit it is paid from (`GET /v1/usage` and `GET /v1/credits`). */
 export async function aiGatewayUsage(config: Conf, options: { days?: string } = {}, fetchImpl: typeof fetch = fetch): Promise<void> {
   const apiUrl = getApiUrl(config);
   const apiKey = getApiKeyForUrl(config, apiUrl);
   if (!apiKey) throw new Error(`Not signed in to ClikDeploy Gateway. Run \`${harnessCommand()} gateway login\`.`);
   const days = options.days === undefined ? undefined : Number(options.days);
   if (days !== undefined && (!Number.isInteger(days) || days < 1 || days > 90)) throw new Error('--days must be a whole number from 1 to 90');
-  const url = new URL('/api/clikcode/v1/usage', apiUrl);
+  const url = new URL('/v1/usage', apiUrl);
   if (days !== undefined) url.searchParams.set('days', String(days));
-  const response = await fetchImpl(url, { headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT } });
-  const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown; code?: unknown } | undefined;
+  const headers = { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT };
+  const [response, creditResponse] = await Promise.all([fetchImpl(url, { headers }), fetchImpl(new URL('/v1/credits', apiUrl), { headers })]);
+  const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown } | undefined;
   if (!response.ok || !body?.data) {
-    // A Gateway that predates the endpoint answers 404.
-    const reason = typeof body?.error === 'string' ? body.error : response.status === 404 ? 'this Gateway does not report usage yet' : `HTTP ${response.status}`;
-    throw Object.assign(new Error(`ClikDeploy Gateway usage: ${reason}`), { statusCode: response.status });
+    throw Object.assign(new Error(`ClikDeploy Gateway usage: ${gatewayErrorReason(body, response.status, 'this Gateway does not report usage yet')}`), { statusCode: response.status });
   }
-  emitResult({ apiUrl, ...(body.data as Record<string, unknown>) });
+  const credit = await creditResponse.json().catch(() => undefined) as { data?: unknown } | undefined;
+  emitResult({ apiUrl, ...(body.data as Record<string, unknown>), ...(creditResponse.ok && credit?.data ? { credit: credit.data } : {}) });
 }
 
 /** Buy AI credit for the signed-in account: the Gateway returns a Stripe
@@ -91,7 +103,7 @@ export async function aiGatewayCredit(
   if (amountUsd !== undefined && (!Number.isInteger(amountUsd) || amountUsd < 5 || amountUsd > 500)) {
     throw new Error('--amount must be a whole number of dollars from 5 to 500');
   }
-  const response = await (deps.fetchImpl ?? fetch)(new URL('/api/clikcode/v1/credit/checkout', apiUrl), {
+  const response = await (deps.fetchImpl ?? fetch)(new URL('/v1/credits/checkout', apiUrl), {
     method: 'POST',
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
     body: JSON.stringify(amountUsd === undefined ? {} : { amountUsd }),
@@ -99,8 +111,7 @@ export async function aiGatewayCredit(
   const body = await response.json().catch(() => undefined) as { data?: { url?: unknown; amountCents?: unknown }; error?: unknown } | undefined;
   const url = typeof body?.data?.url === 'string' ? body.data.url : undefined;
   if (!response.ok || !url) {
-    const reason = typeof body?.error === 'string' ? body.error : response.status === 404 ? 'this Gateway does not sell credit yet' : `HTTP ${response.status}`;
-    throw Object.assign(new Error(`ClikDeploy Gateway credit: ${reason}`), { statusCode: response.status });
+    throw Object.assign(new Error(`ClikDeploy Gateway credit: ${gatewayErrorReason(body, response.status, 'this Gateway does not sell credit yet')}`), { statusCode: response.status });
   }
   const { hasLocalDisplay, openLoginUrl } = await import('../../gateway/login/url.js');
   const opened = hasLocalDisplay(deps.environment ?? process.env);
@@ -113,15 +124,14 @@ export async function aiGatewayCredit(
 async function setAutoTopUp(apiUrl: string, apiKey: string, value: string, fetchImpl: typeof fetch): Promise<void> {
   const word = value.trim().toLowerCase();
   if (word !== 'on' && word !== 'off') throw new Error('--auto-topup must be on or off');
-  const response = await fetchImpl(new URL('/api/billing/credit', apiUrl), {
+  const response = await fetchImpl(new URL('/v1/credits', apiUrl), {
     method: 'PATCH',
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
     body: JSON.stringify({ autoTopUpEnabled: word === 'on' }),
   });
   const body = await response.json().catch(() => undefined) as { data?: { autoTopUpEnabled?: unknown }; error?: unknown } | undefined;
   if (!response.ok || typeof body?.data?.autoTopUpEnabled !== 'boolean') {
-    const reason = typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`;
-    throw Object.assign(new Error(`ClikDeploy Gateway auto top-up: ${reason}`), { statusCode: response.status });
+    throw Object.assign(new Error(`ClikDeploy Gateway auto top-up: ${gatewayErrorReason(body, response.status, 'this Gateway does not offer automatic top-up yet')}`), { statusCode: response.status });
   }
   emitResult({ apiUrl, autoTopUpEnabled: body.data.autoTopUpEnabled });
 }
@@ -129,14 +139,19 @@ async function setAutoTopUp(apiUrl: string, apiKey: string, value: string, fetch
 /** The models ClikDeploy Gateway offers the signed-in account, cheapest access
  * first -- what `/model` and `sessions set --model` choose from. */
 export async function aiGatewayModels(config: Conf): Promise<void> {
-  const { gatewayModels, gatewayModelDetail } = await import('../../gateway/models.js');
+  const { gatewayModels, gatewayPriceLabel } = await import('../../gateway/models.js');
   const { automatic, models } = await gatewayModels({ config, fresh: true });
   emitResult({
     automatic,
-    // The model and its price: which provider serves it is the Gateway's decision.
+    // The model, its price and what it can do: which provider serves it is the Gateway's decision.
     models: models.map((model) => ({
       id: model.id,
-      ...(model.price ? { price: gatewayModelDetail(model), priceUsdPerMTok: model.price } : {}),
+      ...(model.price ? { price: gatewayPriceLabel(model.price), priceUsdPerMTok: model.price } : {}),
+      ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+      ...(model.maxOutput ? { maxOutput: model.maxOutput } : {}),
+      ...(model.vision ? { vision: true } : {}),
+      ...(model.reasoning ? { reasoning: true } : {}),
+      ...(model.tokensPerSecond ? { tokensPerSecond: model.tokensPerSecond } : {}),
     })),
   });
 }

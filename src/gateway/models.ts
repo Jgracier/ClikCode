@@ -1,7 +1,6 @@
 /** The models ClikDeploy Gateway offers this account, for choosing one.
  *
- * The Gateway owns the list (`GET /api/gateway/v1/models`, OpenAI's model
- * list): one entry per model, whichever of its providers serves it. Choosing
+ * The Gateway owns the list (`GET /v1/models`, OpenAI's model list): one entry per model, whichever of its providers serves it. Choosing
  * one stores its id on the session and sends it as `model` with every step;
  * the Gateway serves that model from its cheapest provider and never swaps in
  * a different one. No choice (`null`) sends `auto`: the Gateway picks. */
@@ -16,6 +15,14 @@ import { CLIKCODE_USER_AGENT } from '../version.js';
 export interface GatewayModel {
   id: string;
   contextWindow?: number;
+  /** Takes images beside text: ClikCode sends a message's images to it. */
+  vision?: boolean;
+  /** A reasoning model: /effort changes how hard it thinks. */
+  reasoning?: boolean;
+  /** The most it writes in one answer. */
+  maxOutput?: number;
+  /** Its fastest provider's measured generation rate. */
+  tokensPerSecond?: number;
   /** What a call costs this account, $ per 1M tokens: the full price, the
    * discount in force, and the price charged. Absent when the account is not
    * charged (unlimited) or the Gateway predates prices. */
@@ -34,11 +41,17 @@ export interface GatewayModelList {
   models: GatewayModel[];
 }
 
-/** One row's detail: the model's token price, and nothing else. Which of the
- * Gateway's providers serves it, and on what terms, is the Gateway's own
- * decision (the cheapest available) and not the user's concern. */
+/** One row's detail: the model's token price, then what it can do beyond
+ * text (images, reasoning) and how fast it answers. Which of the Gateway's
+ * providers serves it, and on what terms, is the Gateway's own decision (the
+ * cheapest available) and not the user's concern. */
 export function gatewayModelDetail(model: GatewayModel): string {
-  return model.price ? gatewayPriceLabel(model.price) : '';
+  return [
+    model.price ? gatewayPriceLabel(model.price) : '',
+    model.vision ? 'images' : '',
+    model.reasoning ? 'reasoning' : '',
+    model.tokensPerSecond ? `${Math.round(model.tokensPerSecond)} tok/s` : '',
+  ].filter(Boolean).join(' · ');
 }
 
 /** `$4/$20 per 1M`, or with a discount `$4/$20 → $3/$15 per 1M (25% off)`: input/output. */
@@ -88,7 +101,7 @@ export async function gatewayModels(
 ): Promise<GatewayModelList> {
   const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
   if (!options.fresh && cached && cached.baseUrl === baseUrl && Date.now() - cached.at < TTL_MS) return cached.list;
-  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/api/gateway/v1/models`, {
+  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/v1/models`, {
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
   });
   const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown } | undefined;
@@ -116,8 +129,13 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
   const models: GatewayModel[] = [];
   for (const raw of data) {
     if (!raw || typeof raw !== 'object') continue;
-    const entry = raw as { id?: unknown; root?: unknown; context_length?: unknown; pricing?: Record<string, unknown> };
+    const entry = raw as {
+      id?: unknown; root?: unknown; type?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
+      capabilities?: { vision?: unknown; reasoning?: unknown }; pricing?: Record<string, unknown>;
+    };
     if (typeof entry.id !== 'string' || !entry.id) continue;
+    // Embedding models share the list; a conversation cannot run on one.
+    if (entry.type === 'embedding') continue;
     if (entry.id === GATEWAY_AUTO_MODEL) {
       if (typeof entry.root === 'string' && entry.root) automatic = entry.root;
       continue;
@@ -128,6 +146,10 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     models.push({
       id: entry.id,
       ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
+      ...(entry.capabilities?.vision === true ? { vision: true } : {}),
+      ...(entry.capabilities?.reasoning === true ? { reasoning: true } : {}),
+      ...(typeof entry.max_output_tokens === 'number' && entry.max_output_tokens > 0 ? { maxOutput: entry.max_output_tokens } : {}),
+      ...(typeof entry.tokens_per_second === 'number' && entry.tokens_per_second > 0 ? { tokensPerSecond: entry.tokens_per_second } : {}),
       ...(charged.inMTok !== undefined && charged.outMTok !== undefined
         ? {
             price: {

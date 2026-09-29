@@ -67,14 +67,14 @@ describe('slash registry', () => {
   });
 
   it('keeps deciding on this machine what the agent may do to it', () => {
-    // The gateway picks the effort, and the model when the user leaves it to
-    // it; the user may choose a model from the Gateway's own list. It does
-    // not get to pick how much of the user's filesystem an agent may touch
-    // without asking.
+    // The user may choose the Gateway's model, effort and speed; left alone,
+    // the Gateway picks. It does not get to pick how much of the user's
+    // filesystem an agent may touch without asking.
     const onGateway = session({ route: 'gateway', nativeHarness: undefined });
     expect(resolveSlashCommand('permissions')!.availability(onGateway, undefined).available).toBe(true);
     expect(resolveSlashCommand('model')!.availability(onGateway, undefined).available).toBe(true);
-    expect(resolveSlashCommand('effort')!.availability(onGateway, undefined).available).toBe(false);
+    expect(resolveSlashCommand('effort')!.availability(onGateway, undefined).available).toBe(true);
+    expect(resolveSlashCommand('fast')!.availability(onGateway, undefined).available).toBe(true);
   });
 
   const VENDOR_EXTRAS = {

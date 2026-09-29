@@ -9,6 +9,7 @@ import type Conf from 'conf';
 import type { ModelClient } from '../model-client.js';
 import { OpenAIModelClient } from './openai-client.js';
 import { STREAM_IDLE_TIMEOUT_MS } from './gateway-client.js';
+import { gatewayStepOptions } from '../../gateway/options.js';
 import { ensureLocalModel, prefixCacheFor, releaseLocalModelsOnExit, type LocalModelProgress } from '../../local-models/index.js';
 import { CLIKCODE_LOCAL_LABEL } from '../../session/route.js';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
@@ -49,13 +50,18 @@ export const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
   insufficient_credits: 'AI_CREDIT_EXHAUSTED',
 };
 
-/** ClikDeploy Gateway's OpenAI-compatible API (`{baseUrl}/api/gateway/v1`),
- * the same one any OpenAI client uses. `model` is a name from its list;
- * none sends `auto` and the Gateway picks. The session id keeps a
- * conversation on one provider, so its prompt stays cached. */
-export function gatewayModelClient(input: { baseUrl: string; apiKey: string; sessionId?: string; model?: string; contextWindow?: number; fetchImpl?: typeof fetch }): OpenAIModelClient {
+/** ClikDeploy Gateway's OpenAI-compatible API (`{baseUrl}/v1`), the same one
+ * any OpenAI client uses. `model` is a name from its list; none sends `auto`
+ * and the Gateway picks. The session id keeps a conversation on one
+ * provider, so its prompt stays cached. `options` are the session's own
+ * choices (effort, speed: gateway/options.ts); `vision` sends images to a
+ * model that takes them. */
+export function gatewayModelClient(input: {
+  baseUrl: string; apiKey: string; sessionId?: string; model?: string; contextWindow?: number;
+  vision?: boolean; options?: Readonly<Record<string, unknown>>; fetchImpl?: typeof fetch;
+}): OpenAIModelClient {
   return new OpenAIModelClient({
-    baseUrl: `${input.baseUrl.replace(/\/+$/, '')}/api/gateway`,
+    baseUrl: input.baseUrl.replace(/\/+$/, ''),
     apiKey: input.apiKey,
     model: input.model ?? 'auto',
     label: 'ClikDeploy Gateway',
@@ -67,6 +73,8 @@ export function gatewayModelClient(input: { baseUrl: string; apiKey: string; ses
     firstChunkTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
     creditHint: `Run \`${harnessCommand()} gateway credit\` to add credit.`,
     ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
+    ...(input.vision ? { vision: true } : {}),
+    ...(input.options && Object.keys(input.options).length ? { body: input.options } : {}),
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
   });
 }
@@ -77,9 +85,9 @@ export function gatewayModelClient(input: { baseUrl: string; apiKey: string; ses
  * client still says it is hosted (context-profile.ts). */
 const MODEL_LIST_WAIT_MS = 2_000;
 
-/** The context window the Gateway lists for the model this session will run
- * (its pick, or the Gateway's automatic one), when it lists one. */
-async function gatewayModelWindow(session: HarnessSession, config: Conf): Promise<number | undefined> {
+/** What the Gateway lists for the model this session will run (its pick, or
+ * the Gateway's automatic one): its window and whether it takes images. */
+async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ contextWindow?: number; vision?: boolean }> {
   let timer: NodeJS.Timeout | undefined;
   try {
     // Imported here: gateway/models.ts imports this module for gatewayConnection.
@@ -89,10 +97,12 @@ async function gatewayModelWindow(session: HarnessSession, config: Conf): Promis
       new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), MODEL_LIST_WAIT_MS); timer.unref(); }),
     ]);
     const id = session.model ?? list?.automatic;
-    return list?.models.find((model) => model.id === id)?.contextWindow;
+    const model = list?.models.find((entry) => entry.id === id);
+    return { ...(model?.contextWindow ? { contextWindow: model.contextWindow } : {}), ...(model?.vision ? { vision: true } : {}) };
   } catch {
-    // fail-open-ok: the window only tunes the context profile; the turn runs without it
-    return undefined;
+    // fail-open-ok: the window only tunes the context profile, and without a
+    // known vision model images stay described in text; the turn runs either way
+    return {};
   } finally { clearTimeout(timer); }
 }
 
@@ -103,8 +113,11 @@ async function gatewayModelWindow(session: HarnessSession, config: Conf): Promis
 export async function modelClientForSession(session: HarnessSession, config: Conf, local: LocalModelHooks = {}): Promise<ModelClient> {
   if (session.route === 'gateway') {
     const { baseUrl, apiKey } = gatewayConnection(config);
-    const contextWindow = await gatewayModelWindow(session, config);
-    return gatewayModelClient({ baseUrl, apiKey, sessionId: session.id, ...(session.model ? { model: session.model } : {}), ...(contextWindow ? { contextWindow } : {}) });
+    const facts = await gatewayModelFacts(session, config);
+    return gatewayModelClient({
+      baseUrl, apiKey, sessionId: session.id, ...(session.model ? { model: session.model } : {}), ...facts,
+      options: gatewayStepOptions(session),
+    });
   }
   if (session.route === 'clikcode-local') {
     // Every process that may take a lease lets go of it on exit, so a

@@ -60,6 +60,7 @@ import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
 import { addSessionDirectory, changeSessionWorkspace, workspaceDiff } from './workspace.js';
 import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from '../../commands/ai/shell-run.js';
 import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
+import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
 
 function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
@@ -341,6 +342,15 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   effort: async ({ state, session, words }) => {
     const value = words.join(' ').trim().toLowerCase();
+    if (isGatewayService(session)) {
+      if (value !== 'default' && !(GATEWAY_EFFORTS as readonly string[]).includes(value)) {
+        throw new Error(`usage: /effort <${['default', ...GATEWAY_EFFORTS].join('|')}>`);
+      }
+      session.effort = value === 'default' ? GATEWAY_DEFAULT_EFFORT : value;
+      session.updatedAt = new Date().toISOString();
+      await writeState(state);
+      return emitHarnessOutput({ panel: 'settings', session });
+    }
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness) throw new Error('Choose a provider before setting effort.');
     const account = state.accounts.find((item) => item.id === session.accountId);
@@ -351,6 +361,17 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+  },
+  fast: async ({ state, session, words }) => {
+    if (!isGatewayService(session)) throw new Error('Speed is a ClikDeploy Gateway choice: it picks among the providers of one model.');
+    const value = words.join(' ').trim().toLowerCase();
+    const on = value === '' ? session.speed !== 'fast' : value === 'on' ? true : value === 'off' ? false : undefined;
+    if (on === undefined) throw new Error('usage: /fast [on|off]');
+    if (on) session.speed = 'fast';
+    else delete session.speed;
+    session.updatedAt = new Date().toISOString();
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'settings', session });
   },
   sessions: async ({ id, state, session, words }) => {
     const action = words.shift()?.toLowerCase();

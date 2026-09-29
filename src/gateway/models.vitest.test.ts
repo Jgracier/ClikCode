@@ -10,7 +10,7 @@ vi.mock('../agent/models/for-session.js', () => ({
 const { gatewayModelDetail, gatewayModels, gatewayPriceLabel, isAutomaticModelWord, resetGatewayModelCache } = await import('./models.js');
 const { chooseGatewayModel } = await import('../commands/ai/sessions.js');
 
-/** What the Gateway sends (GET /api/gateway/v1/models, OpenAI's list)... */
+/** What the Gateway sends (GET /v1/models, OpenAI's list)... */
 const WIRE = {
   object: 'list',
   data: [
@@ -20,7 +20,11 @@ const WIRE = {
       pricing: { prompt: '0.000003', completion: '0.000015', input_per_mtok: 3, output_per_mtok: 15, full_input_per_mtok: 4, full_output_per_mtok: 20, discount_percent: 25 },
     },
     { id: 'qwen/qwen3.8-27b', object: 'model', created: 0, owned_by: 'qwen', context_length: 131_072 },
-    { id: 'claude-opus-5', object: 'model', created: 0, owned_by: 'anthropic' },
+    {
+      id: 'claude-opus-5', object: 'model', created: 0, owned_by: 'anthropic', type: 'chat',
+      capabilities: { tools: true, vision: true, reasoning: true, json_output: true }, max_output_tokens: 64000, tokens_per_second: 71.3,
+    },
+    { id: 'text-embedding-3-small', object: 'model', created: 0, owned_by: 'openai', type: 'embedding', dimensions: 1536 },
   ],
 };
 /** ...and the list ClikCode makes of it. */
@@ -29,7 +33,7 @@ const LIST = {
   models: [
     { id: 'gpt-5.6-sol', contextWindow: 400_000, price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 25, charged: { inMTok: 3, outMTok: 15 } } },
     { id: 'qwen/qwen3.8-27b', contextWindow: 131_072 },
-    { id: 'claude-opus-5' },
+    { id: 'claude-opus-5', vision: true, reasoning: true, maxOutput: 64000, tokensPerSecond: 71.3 },
   ],
 };
 
@@ -47,7 +51,7 @@ describe('the Gateway\'s model list', () => {
     await gatewayModels({ fetchImpl: fetchImpl as never });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://clikdeploy.com/api/gateway/v1/models');
+    expect(url).toBe('https://clikdeploy.com/v1/models');
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer cd_live_key');
     await gatewayModels({ fetchImpl: fetchImpl as never, fresh: true });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
