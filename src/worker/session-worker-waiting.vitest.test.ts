@@ -291,6 +291,33 @@ describe('a session worker waits for what it should', () => {
     expect(gateway!.requests).toHaveLength(2);
   }, 60_000);
 
+  it('shows every window, at once, a message another window typed into the running turn', async () => {
+    // The computer started the turn; the phone opened the conversation and
+    // typed into it. The computer used to learn of it only when the turn ended.
+    const session = await gatewaySession();
+    const computer = await attach(session.id);
+    const turn = eventsUntil(computer, 'waiting-stop');
+    computer.send({ type: 'submit', text: 'long job', echo: true });
+    const held = await gateway!.next();
+    const phone = await attach(session.id);
+    await phone.initialSnapshot;
+    const shown = new Promise<WorkerEvent>((resolve) => {
+      const onEvent = (event: WorkerEvent): void => {
+        const holds = (texts?: readonly { text: string }[]): boolean => Boolean(texts?.some((item) => item.text === 'from the phone'));
+        if (event.type === 'snapshot' && (holds(event.session.pendingTurn?.steers) || holds(event.session.queuedTurns))) {
+          computer.off('event', onEvent);
+          resolve(event);
+        }
+      };
+      computer.on('event', onEvent);
+    });
+    phone.send({ type: 'steer', text: 'from the phone', id: 'p1' });
+    expect(await shown).toMatchObject({ type: 'snapshot', live: { prompt: 'long job' } });
+    gateway!.autoAnswer = text('done');
+    held.respond(text('done'));
+    await turn;
+  }, 60_000);
+
   it('lets a window on a newer build open a conversation mid-turn without stopping the turn', async () => {
     // Two shells: one started the turn, the other runs a newer build of
     // ClikCode and opens the same conversation. The newer one used to decide
