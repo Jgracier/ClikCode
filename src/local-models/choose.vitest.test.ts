@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { memoryBudget, memoryBuffer, startMargin, vramReserve } from './budget';
 import { LOCAL_MODEL_CATALOG, catalogModel, type CatalogModel } from './catalog';
 import {
-  chooseCacheType, chooseModel, contextsToTry, estimateSpeed, firstReplySeconds, fitModel, kvCacheBytes, measuredNeed, meetsBar, rankModels, MIN_CONTEXT,
+  chooseCacheType, chooseModel, contextsToTry, estimateSpeed, speedAtContext, firstReplySeconds, fitModel, kvCacheBytes, measuredNeed, meetsBar, rankModels, MIN_CONTEXT,
   PROMPT_CACHE_ALLOWANCE, type Footprint,
 } from './choose';
 import type { HardwareProfile } from './hardware';
@@ -130,6 +130,33 @@ describe('budget', () => {
 
   it('does not use an APU\'s graphics when its reach is unknown', () => {
     expect(memoryBudget(ZEN4).gpu).toBeUndefined();
+  });
+
+  it('splits a model past an APU\'s reach between its GPU and CPU when RAM holds it', () => {
+    const bigRam: HardwareProfile = {
+      ...ZEN4, totalRamBytes: 96 * GIB, availableRamBytes: 90 * GIB,
+      gpus: [{ ...ZEN4.gpus[0]!, addressableBytes: 16 * GIB }],
+    };
+    const budget = memoryBudget(bigRam);
+    expect(budget.gpu).toMatchObject({ unified: true, bytes: 16 * GIB });
+    const fit = fitModel(model('ornith-1.5-35b-a3b'), budget);
+    expect(fit).toMatchObject({ fits: true, placement: 'gpu-partial', gpuBytes: 16 * GIB });
+    // Within reach it is still whole on the GPU.
+    expect(fitModel(model('qwen3.5-4b'), budget).placement).toBe('gpu');
+  });
+
+  it('slows an integrated GPU\'s speed with conversation depth as measured on the 780M', () => {
+    const apu: HardwareProfile = { ...ZEN4, gpus: [{ ...ZEN4.gpus[0]!, addressableBytes: 33_605 * 1024 ** 2 }] };
+    const budget = memoryBudget(apu);
+    const small = model('qwen3.5-4b');
+    const fit = { ...fitModel(small, budget), context: 40_960 }; // compaction starts at 80%: 32,768 deep
+    const measured = { promptPerSecond: 526.8, generatePerSecond: 23.5, toolCalls: true, at: '' };
+    const deep = speedAtContext(small, apu, fit, measured, budget.gpu!.devices[0]);
+    // Measured at 32K deep: 254.8 reading, 18.6 writing.
+    expect(deep.promptPerSecond).toBeGreaterThan(254.8 * 0.85);
+    expect(deep.promptPerSecond).toBeLessThan(254.8 * 1.15);
+    expect(deep.generatePerSecond).toBeGreaterThan(18.6 * 0.85);
+    expect(deep.generatePerSecond).toBeLessThan(18.6 * 1.15);
   });
 
   it('runs on an APU\'s graphics when its reach is known, within that reach', () => {

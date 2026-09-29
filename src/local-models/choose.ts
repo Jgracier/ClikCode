@@ -194,6 +194,14 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
       const needBytes = weightBytes + kvCacheBytes(model.kv, context, cacheType, parallel) + overhead;
       const fit: Fit = { fits: needBytes + allowance(context) <= gpu.bytes, placement: 'gpu', context, cacheType, weightBytes, needBytes, gpuBytes: needBytes, parallel };
       if (fit.fits) return fit;
+      // Past the GPU's reach but within RAM (an APU whose GTT is smaller than
+      // RAM): split, the GPU taking the layers it can reach. On the 780M a
+      // quarter of Qwen3.5-9B's layers on the GPU tripled prompt reading over
+      // the CPU (156 vs 49 tokens/s); three quarters beat it at both (275 and
+      // 11.2 vs 10.0). A context beyond the default is taken only whole.
+      if (!extra(context) && gpu.bytes >= needBytes * 0.25 && needBytes <= budget.ramBytes) {
+        return { fits: true, placement: 'gpu-partial', context, cacheType, weightBytes, needBytes, gpuBytes: gpu.bytes, parallel };
+      }
       smallest = fit;
       continue;
     }
@@ -287,8 +295,15 @@ export function speedAtContext(
   const shallow = estimateSpeed(model, hardware, fit, gpu);
   const base = measured?.promptPerSecond && measured.generatePerSecond
     ? { promptPerSecond: measured.promptPerSecond, generatePerSecond: measured.generatePerSecond } : shallow;
-  if (fit.placement !== 'cpu') return base; // GPU depth coefficients await GPU measurements.
   const depth = Math.floor(fit.context * 0.8);
+  if (fit.placement !== 'cpu') {
+    // Integrated graphics, measured on the 780M: speed falls as 1/(1 + k*depth)
+    // with k = 2.9e-5 for reading and 6.7e-6 for writing, per token of
+    // context, within about 15% across Qwen3.5-4B, Qwen3.5-9B and Ornith
+    // 35B-A3B (4B read 527 -> 255 at 32K). Discrete cards await measurements.
+    if (!gpu?.integrated || gpu.backend === 'metal') return base;
+    return { promptPerSecond: base.promptPerSecond / (1 + 2.9e-5 * depth), generatePerSecond: base.generatePerSecond / (1 + 6.7e-6 * depth) };
+  }
   const fullKvWork = model.kv.layers * model.kv.kvHeads * model.kv.keyLength;
   const headRatio = model.architecture === 'gemma4' || model.architecture === 'gpt-oss' ? 8 : 4;
   const fullQWork = fullKvWork * headRatio;
