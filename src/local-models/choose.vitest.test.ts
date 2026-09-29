@@ -128,8 +128,26 @@ describe('budget', () => {
     expect(memoryBudget({ ...ZEN4, availableRamBytes: 1 * GIB }).ramBytes).toBe(0);
   });
 
-  it('does not use an APU\'s graphics', () => {
+  it('does not use an APU\'s graphics when its reach is unknown', () => {
     expect(memoryBudget(ZEN4).gpu).toBeUndefined();
+  });
+
+  it('runs on an APU\'s graphics when its reach is known, within that reach', () => {
+    const reach = 33_605 * 1024 ** 2;
+    const apu: HardwareProfile = { ...ZEN4, gpus: [{ ...ZEN4.gpus[0]!, addressableBytes: reach }] };
+    const budget = memoryBudget(apu);
+    expect(budget.gpu).toMatchObject({ backend: 'vulkan', bytes: budget.ramBytes, unified: true });
+    expect(memoryBudget({ ...apu, availableRamBytes: 56 * GIB }).gpu!.bytes).toBe(reach);
+    expect(selectRuntimeBuild(apu, budget.gpu)?.key).toBe('linux-x64-vulkan');
+    const ornith = model('ornith-1.5-35b-a3b');
+    const fit = fitModel(ornith, budget);
+    expect(fit).toMatchObject({ fits: true, placement: 'gpu' });
+    // Measured on this machine: 431 tokens/s reading, 27.5 generating.
+    const estimate = estimateSpeed(ornith, apu, fit, budget.gpu!.devices[0]);
+    expect(estimate.promptPerSecond).toBeGreaterThan(380);
+    expect(estimate.promptPerSecond).toBeLessThan(480);
+    expect(estimate.generatePerSecond).toBeGreaterThan(24);
+    expect(estimate.generatePerSecond).toBeLessThan(30);
   });
 
   it('gives a discrete card its free memory less max(512 MiB, 10%)', () => {

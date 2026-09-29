@@ -8,7 +8,7 @@
 
 import type { MemoryBudget } from './budget.js';
 import type { CatalogModel, KvGeometry } from './catalog.js';
-import type { HardwareProfile } from './hardware.js';
+import type { GpuInfo, HardwareProfile } from './hardware.js';
 
 const GIB = 1024 ** 3;
 
@@ -188,7 +188,8 @@ export function fitModel(model: CatalogModel, budget: MemoryBudget, options: Fit
   for (const cpuCacheType of cpuCacheTypes) for (const context of contextsToTry(model, options.context)) {
     const gpu = budget.gpu;
     if (gpu?.unified) {
-      // Apple Silicon: the GPU works from RAM, so its budget is the only one.
+      // Apple Silicon or integrated graphics: the GPU works from RAM, so its
+      // budget is the only one.
       const cacheType = chooseCacheType(gpu.bytes, weightBytes);
       const needBytes = weightBytes + kvCacheBytes(model.kv, context, cacheType, parallel) + overhead;
       const fit: Fit = { fits: needBytes + allowance(context) <= gpu.bytes, placement: 'gpu', context, cacheType, weightBytes, needBytes, gpuBytes: needBytes, parallel };
@@ -281,9 +282,9 @@ function bytesPerToken(model: CatalogModel): number {
  * shallow part on the actual machine; the depth term remains an estimate. */
 export function speedAtContext(
   model: CatalogModel, hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>,
-  fit: Fit, measured?: Measurement, gpuBackend?: string,
+  fit: Fit, measured?: Measurement, gpu?: Pick<GpuInfo, 'backend' | 'integrated'>,
 ): SpeedEstimate {
-  const shallow = estimateSpeed(model, hardware, fit, gpuBackend);
+  const shallow = estimateSpeed(model, hardware, fit, gpu);
   const base = measured?.promptPerSecond && measured.generatePerSecond
     ? { promptPerSecond: measured.promptPerSecond, generatePerSecond: measured.generatePerSecond } : shallow;
   if (fit.placement !== 'cpu') return base; // GPU depth coefficients await GPU measurements.
@@ -352,14 +353,14 @@ function fitForConversation(
     if (context > model.defaultContext && room < PROMPT_CACHE_ALLOWANCE) continue;
     smallest = fit;
     if (context >= workingMinimum) workingWindow = fit;
-    const speed = speedAtContext(model, hardware, fit, measured, budget.gpu?.backend);
+    const speed = speedAtContext(model, hardware, fit, measured, budget.gpu?.devices[0]);
     if (estimatedTurnSeconds(speed) * DEEP_TIME_MARGIN <= MAX_DEEP_TURN_SECONDS
       && (context >= workingMinimum || !workingWindow)) return fit;
   }
   return workingWindow ?? smallest;
 }
 
-export function estimateSpeed(model: CatalogModel, hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>, fit: Pick<Fit, 'placement' | 'gpuBytes' | 'needBytes'>, gpuBackend?: string): SpeedEstimate {
+export function estimateSpeed(model: CatalogModel, hardware: Pick<HardwareProfile, 'physicalCores' | 'cpuModel'>, fit: Pick<Fit, 'placement' | 'gpuBytes' | 'needBytes'>, gpuDevice?: Pick<GpuInfo, 'backend' | 'integrated'>): SpeedEstimate {
   const active = Math.max(0.1, model.activeParamsB);
   const cpu: SpeedEstimate = {
     promptPerSecond: (cpuPromptRate(model.quantization) * hardware.physicalCores / 8) / active,
@@ -368,10 +369,16 @@ export function estimateSpeed(model: CatalogModel, hardware: Pick<HardwareProfil
   if (fit.placement === 'cpu') return cpu;
   // GPU figures are rough orders of magnitude -- a mid-range card, or the
   // Apple tier -- and exist to rank a GPU run above a CPU one; the
-  // measurement after the first start is what gets shown.
-  const bandwidth = gpuBackend === 'metal' ? appleBandwidth(hardware.cpuModel) : 300e9;
+  // measurement after the first start is what gets shown. Integrated x86
+  // graphics are measured: a Radeon 780M on b11194 Vulkan generated at an
+  // effective 55-61 GB/s (Ornith 35B-A3B 27.5 tokens/s, Qwen3.5-4B 22) and
+  // read 1,300-1,940 tokens/s per billion active parameters; the lower of
+  // each, so a big dense model is not ranked above what the chip delivers.
+  const gpuBackend = gpuDevice?.backend;
+  const integratedX86 = Boolean(gpuDevice?.integrated) && gpuBackend !== 'metal';
+  const bandwidth = gpuBackend === 'metal' ? appleBandwidth(hardware.cpuModel) : integratedX86 ? 55e9 : 300e9;
   const gpu: SpeedEstimate = {
-    promptPerSecond: (gpuBackend === 'metal' ? bandwidth / 75e9 * 1600 : 20_000) / active,
+    promptPerSecond: (gpuBackend === 'metal' ? bandwidth / 75e9 * 1600 : integratedX86 ? 1_300 : 20_000) / active,
     generatePerSecond: bandwidth / Math.max(1, bytesPerToken(model)),
   };
   if (fit.placement === 'gpu') return gpu;
@@ -421,11 +428,11 @@ export function rankModels(
   const ranked = catalog.map((model): RankedModel => {
     const measured = measurements[model.id];
     const fit = fitForConversation(model, hardware, budget, measured, footprints[model.id] ?? []);
-    const estimate = speedAtContext(model, hardware, fit, undefined, budget.gpu?.backend);
-    const speed = speedAtContext(model, hardware, fit, measured, budget.gpu?.backend);
+    const estimate = speedAtContext(model, hardware, fit, undefined, budget.gpu?.devices[0]);
+    const speed = speedAtContext(model, hardware, fit, measured, budget.gpu?.devices[0]);
     const shallow = measured?.promptPerSecond && measured.generatePerSecond
       ? { promptPerSecond: measured.promptPerSecond, generatePerSecond: measured.generatePerSecond }
-      : estimateSpeed(model, hardware, fit, budget.gpu?.backend);
+      : estimateSpeed(model, hardware, fit, budget.gpu?.devices[0]);
     const firstReply = firstReplySeconds(shallow);
     return {
       model, fit, estimate, speed, firstReply,

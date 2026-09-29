@@ -26,10 +26,16 @@ export interface GpuInfo {
   /** Shares system RAM (Apple Silicon, APUs). Its "VRAM" is the RAM the
    * budget already counts, so it is never added on top. */
   unified: boolean;
-  /** Built into the CPU package. Its memory bandwidth is the system RAM's,
-   * which is what limits generation on a CPU too, so offloading to it buys
-   * little and costs driver risk; ClikCode runs such machines on the CPU. */
+  /** Built into the CPU package. It shares the system RAM's bandwidth, but
+   * reading a prompt is bound by compute, not bandwidth, so it still wins:
+   * a Radeon 780M (b11194 Vulkan) against its own 8-core Zen 4 read prompts
+   * 4x faster on Ornith 35B-A3B (431 vs 104 tokens/s, 368 vs 93 at 4K deep)
+   * and 7-10x on Qwen3.5-4B, and generated 30-40% faster (27.5 vs 20). */
   integrated: boolean;
+  /** An integrated GPU's reach: what the driver lets it address, its
+   * carve-out plus the system RAM it may map (amdgpu's GTT). Only a known
+   * reach makes one usable -- a unified budget has no CPU to fall back on. */
+  addressableBytes?: number;
   driverVersion?: string;
 }
 
@@ -222,6 +228,24 @@ function readText(path: string): string | undefined {
   try { return readFileSync(path, 'utf8'); } catch { return undefined; }
 }
 
+/** What an amdgpu APU can address: its carve-out plus GTT, the system RAM
+ * the driver lets it map. Exactly the heap Vulkan reports for it. */
+export function amdAddressableBytes(vramTotal: number, gttTotal: number): number | undefined {
+  return Number.isFinite(vramTotal) && Number.isFinite(gttTotal) && gttTotal > 0 ? vramTotal + gttTotal : undefined;
+}
+
+function linuxAmdAddressableBytes(): number | undefined {
+  let cards: string[] = [];
+  try { cards = readdirSync('/sys/class/drm').filter((name) => /^card\d+$/.test(name)); } catch { return undefined; }
+  for (const card of cards) {
+    const device = join('/sys/class/drm', card, 'device');
+    if (readText(join(device, 'vendor'))?.trim() !== '0x1002') continue;
+    const reach = amdAddressableBytes(Number(readText(join(device, 'mem_info_vram_total'))), Number(readText(join(device, 'mem_info_gtt_total'))));
+    if (reach) return reach;
+  }
+  return undefined;
+}
+
 /** The GPUs amdgpu and i915 expose in sysfs, for machines with no vendor
  * tool installed -- which is most machines with an AMD or Intel GPU. */
 function linuxSysfsGpus(cpuModel: string): GpuInfo[] {
@@ -237,11 +261,12 @@ function linuxSysfsGpus(cpuModel: string): GpuInfo[] {
       const used = Number(readText(join(device, 'mem_info_vram_used')));
       if (!Number.isFinite(total) || total <= 0) continue;
       const integrated = isIntegratedAmd(cpuModel, total);
+      const reach = integrated ? amdAddressableBytes(total, Number(readText(join(device, 'mem_info_gtt_total')))) : undefined;
       gpus.push({
         name: integrated ? `${cpuModel.replace(/.*w\/\s*/i, '') || 'AMD integrated graphics'}` : `AMD GPU (${card})`,
         vendor: 'amd', backend: 'vulkan', vramBytes: total,
         ...(Number.isFinite(used) ? { freeVramBytes: Math.max(0, total - used) } : {}),
-        unified: integrated, integrated,
+        unified: integrated, integrated, ...(reach ? { addressableBytes: reach } : {}),
       });
     } else if (vendor === '0x8086') {
       // Intel's discrete Arc cards are the exception; llama.cpp's Vulkan
@@ -280,7 +305,9 @@ async function probeLinux(): Promise<Partial<HardwareProfile>> {
   // A vendor tool's figures beat sysfs's; sysfs fills in where there is none.
   const amdTool = await amdToolGpus();
   const sysfs = linuxSysfsGpus(cpuModel).filter((gpu) => gpu.vendor !== 'amd' || !amdTool.length);
-  const amd = amdTool.map((gpu) => (isIntegratedAmd(cpuModel, gpu.vramBytes) ? { ...gpu, integrated: true, unified: true } : gpu));
+  const reach = amdTool.length ? linuxAmdAddressableBytes() : undefined;
+  const amd = amdTool.map((gpu) => (isIntegratedAmd(cpuModel, gpu.vramBytes)
+    ? { ...gpu, integrated: true, unified: true, ...(reach ? { addressableBytes: reach } : {}) } : gpu));
   return {
     cpuModel,
     physicalCores: parseCpuinfoPhysicalCores(cpuinfo),

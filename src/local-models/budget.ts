@@ -67,15 +67,15 @@ export function vramReserve(vramBytes: number): number {
   return Math.max(512 * MIB, vramBytes * 0.1);
 }
 
-/** The GPUs worth using: discrete cards, or Apple Silicon. Integrated
- * x86 graphics are skipped (see GpuInfo.integrated). Of several backends,
+/** The GPUs worth using: discrete cards, Apple Silicon, and integrated
+ * graphics whose reach is known (see GpuInfo.integrated). Of several backends,
  * CUDA is preferred, then ROCm, then Vulkan: the order of llama.cpp's
  * maturity on each. A Vulkan GPU needs a Vulkan loader to be driven at all;
  * ROCm is only reported where rocm-smi or amd-smi exist, so its userspace
  * is installed. */
 export function usableGpus(hardware: HardwareProfile): GpuInfo[] {
   const candidates = hardware.gpus.filter((gpu) => gpu.backend === 'metal'
-    || (!gpu.integrated && gpu.vramBytes > 0 && (gpu.backend !== 'vulkan' || hardware.vulkanLoader)));
+    || ((gpu.integrated ? (gpu.addressableBytes ?? 0) > 0 : gpu.vramBytes > 0) && (gpu.backend !== 'vulkan' || hardware.vulkanLoader)));
   for (const backend of ['metal', 'cuda', 'rocm', 'vulkan'] as const) {
     const matching = candidates.filter((gpu) => gpu.backend === backend);
     if (matching.length) return matching;
@@ -93,7 +93,7 @@ export function memoryBudget(hardware: HardwareProfile): MemoryBudget {
   if (devices[0]!.unified) {
     return {
       ramBytes, bufferBytes: buffer, ramReserveBytes: reserve,
-      gpu: { backend, bytes: Math.min(ramBytes, hardware.totalRamBytes * 0.7), devices, unified: true, fitTargetMib: Math.round(buffer / MIB) },
+      gpu: { backend, bytes: Math.min(ramBytes, hardware.totalRamBytes * 0.7, devices[0]!.addressableBytes ?? Infinity), devices, unified: true, fitTargetMib: Math.round(buffer / MIB) },
     };
   }
   const bytes = devices.reduce((sum, gpu) => sum + Math.max(0, (gpu.freeVramBytes ?? gpu.vramBytes) - vramReserve(gpu.vramBytes)), 0);
