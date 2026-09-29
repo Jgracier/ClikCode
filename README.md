@@ -1,6 +1,6 @@
 # ClikCode
 
-**The terminal harness that logs in all your favorite AI coding providers.** Chats you can resume in any of them, and automatic account switching when you hit a usage limit.
+**The harness that logs in all your favorite AI coding providers — in the terminal and in VS Code.** Chats you can resume in any of them, and automatic account switching when you hit a usage limit.
 
 Claude Code for one thing, Codex for another, Copilot because it came with the
 editor, something you tried once and kept. Each has its own commands, its own
@@ -47,8 +47,9 @@ For VS Code (and VSCodium, Cursor, Windsurf), the **ClikCode** extension
 same chats in a panel beside your code; it runs the ClikCode you installed.
 
 Requires **Node.js 22.12 or newer**. Nothing to configure. You do not need any
-of the coding tools installed first — where a vendor ships an installable CLI,
-ClikCode installs it for you on first sign-in.
+of the coding tools installed first: choose one — to sign in, or as the tool for
+a conversation — and ClikCode installs it for you, with the vendor's own npm
+package or installer.
 
 ## Your first five minutes
 
@@ -330,7 +331,6 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/status` | current configuration |
 | `/context` | how much of the model's context this conversation is using |
 | `/usage` | quota, tokens, and cost for the provider you are in (`/cost` is the same command) |
-| `/usage` | token usage for this account |
 | `/doctor` | check your installed tools and accounts |
 | `/help` (also `/?`) | all commands |
 
@@ -425,11 +425,13 @@ pnpm build:strict   # + fail on a missing or extra runtime dependency
 pnpm type-check     # tsc over src/ and over packages/clikrouter
 pnpm test           # the ClikCode suite
 pnpm test:router    # the router package's suite
+pnpm test:all       # both suites
 pnpm test:smoke     # build, then --help and doctor against the built binary
 pnpm test:pack      # assert tarball contents, npm install -g it into a temp prefix, run it
+pnpm test:display   # the terminal UI driven in a real pty: nothing flashes, vanishes or doubles
 ```
 
-Two packages, one lockfile:
+Three packages, one lockfile:
 
 - `src/` — the CLI, one folder per layer: `cli/` (argv, output modes, errors),
   `commands/` (the verbs), `session/` and `turn/` (state and the turn loop),
@@ -439,6 +441,10 @@ Two packages, one lockfile:
 - `packages/clikrouter` (`@clikcode/router`) — provider-agnostic request
   normalization and router selection across dozens of providers, consumed as source
   and bundled into `dist/*.cjs`.
+- `packages/vscode` — the VS Code extension (`clikcode.clikcode`). It runs the
+  installed ClikCode through `clikcode ide-bridge` (`src/ide/`); its own checks are
+  `pnpm --dir packages/vscode type-check`, `test`, `run package` and, in a real
+  VS Code, `test:integration`.
 
 `dist/index.js` inlines the small pure-JS dependencies (chalk, commander, conf,
 cross-spawn, marked) so startup is a single file read, which is why the
