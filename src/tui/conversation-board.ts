@@ -132,6 +132,17 @@ export interface ConversationBoardSettings {
   commands: readonly PickerOption<string>[];
   refresh?: Promise<unknown>;
   onAction?: (value: string, action: string) => Promise<void>;
+  /** The row the cursor starts on: the conversation this window is in, so
+   * Right or Enter goes straight back to it. Absent or not listed (a new,
+   * empty chat is not) and it starts on the top row. */
+  initial?: string;
+}
+
+/** Where the cursor starts: on `initial` when it is listed, else the top row,
+ * else the composer (nothing listed at all). */
+export function boardStartRow(rows: readonly PickerOption<string>[], initial?: string): number {
+  const at = initial === undefined ? -1 : rows.findIndex((row) => row.value === initial);
+  return at >= 0 ? at : rows.length ? 0 : -1;
 }
 
 /** Everything but the list: the rule and hint around it, and the composer
@@ -145,6 +156,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     let finished = false;
     let stopInput: () => void = () => {};
     const rows = (): readonly PickerOption<string>[] => boardRows(state, settings.conversations(), settings.commands);
+    state.selected = boardStartRow(rows(), settings.initial);
     const draw = (): void => {
       const showing = rows();
       if (state.selected >= showing.length) state.selected = showing.length - 1;
