@@ -21,7 +21,9 @@ import { vendorBackgroundEvent } from '../harness/transport/native/background-ta
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
 import { initialAccountChoice, terminalFailoverError, turnBackendForAccount } from './account-routing.js';
-import { classifyAccountFailure, failoverPrompt, INTERRUPTED_TURN_REQUEST, interruptedTurnFailoverPrompt, type AccountFailureKind } from './failover.js';
+import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
+import { failoverPrompt, INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
+import { interruptedTurnFailoverPrompt } from './interrupted-turn-prompt.js';
 import { carryNativeSession } from '../session/carry.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';

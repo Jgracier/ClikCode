@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, failoverPrompt, usageLabelIsExhausted, usageLabelRemainingPercent, quotaRetryHint } from './failover';
+import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, usageLabelIsExhausted, usageLabelRemainingPercent, quotaRetryHint } from './failover';
+import { failoverPrompt } from './failover-prompt.js';
 
 describe('ClikCode account failover', () => {
   it('does not confuse temporary throttling with exhausted quota', () => {
