@@ -1,0 +1,103 @@
+/** One ACP or app-server attempt, with a CLI fallback where the vendor permits it. */
+import chalk from 'chalk';
+import type { AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { HarnessSession } from '../session/model.js';
+import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
+import type { HarnessTurnTransport } from '../harness/transport/select.js';
+import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
+import type { DurableTurnCheckpoint } from './turn-journal.js';
+import type { TurnRunOptions } from './turn-options.js';
+import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
+import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
+import { appServerThreadOverrides, declaredOptionArgv } from '../harness/transport/options.js';
+import { recordDerivedUsage } from '../harness/accounts/stream-usage.js';
+import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
+import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
+import { closePersistentTransport, persistentTransportFor } from './vendor-process.js';
+
+export async function runVendorSessionAttempt(input: {
+  harness: AiLocalHarnessDefinition;
+  accountId: string;
+  session: HarnessSession;
+  transport: Extract<HarnessTurnTransport, 'acp' | 'codex-app-server'>;
+  turnText: string;
+  model: string | null;
+  environment: Record<string, string>;
+  images: string[];
+  signal?: AbortSignal;
+  run: TurnRunOptions;
+  checkpoint: DurableTurnCheckpoint;
+  sharedObserver: HarnessTurnObserver;
+  effort?: string;
+  onSessionId: (id: string) => Promise<void>;
+  runCli: () => Promise<NativeTurnResult>;
+}): Promise<NativeTurnResult> {
+  const { harness, accountId, session, transport, turnText, model, environment, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, runCli } = input;
+  const prompter = run.prompter;
+  let result: NativeTurnResult;
+  // ACP and the app-server own session identity: never hand them an id
+  // ClikCode minted for a CLI attempt that the vendor never confirmed.
+  if (session.nativeSessionPreallocated) {
+    session.nativeSessionId = undefined;
+    delete session.nativeSessionPreallocated;
+  }
+  const declaredOptions = localHarnessCapabilityManifest(harness).options;
+  const persistent = run.persistentTransports
+    ? persistentTransportFor(session.id, transport, JSON.stringify([harness.command, accountId, environment, session.workspace]))
+    : undefined;
+  try {
+    if (transport === 'codex-app-server') {
+      const overrides = appServerThreadOverrides(declaredOptions, session.harnessOptions);
+      if (overrides.unmapped.length) prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${overrides.unmapped.join(', ')}`));
+      const codexInput: CodexAppServerTurnInput = {
+        binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
+        cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
+        images, environment, signal, onSessionId,
+        ...(overrides.configOverrides ? { configOverrides: overrides.configOverrides } : {}),
+        ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
+        // Codex reports its own quota on this connection during the turn,
+        // which is the same figure codexUsageProbe otherwise spawns a whole
+        // second app-server to ask for.
+        onRateLimits: (rateLimits) => {
+          // The structured reading (not just its label) so the windows'
+          // resetsAt survives into account.usage for the reset-time line.
+          void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
+        },
+        ...sharedObserver,
+        // Steering is genuinely codex-only: it is the one transport
+        // that accepts input mid-turn.
+        onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
+          await handler(steerText);
+          // Recorded under the id the composer shows it by, so the
+          // durable steer matches its row by identity.
+          await checkpoint.steer(submission);
+        } : undefined),
+      };
+      result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
+    } else {
+      const launch = harnessAcpLaunch(harness, { model, effort, permissionMode: session.permissionMode ?? 'ask' });
+      if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
+      const acpInput: AcpTurnInput = {
+        binary: launch.binary, command: harness.command, prompt: turnText,
+        argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
+        extraArgv: [...launch.optionArgv, ...declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId))],
+        ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
+        cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
+        environment, signal, images, onSessionId,
+        ...sharedObserver,
+      };
+      try {
+        result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
+      } catch (error) {
+        if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback || !harness.turn) throw error;
+        prompter?.phase('using structured CLI fallback');
+        result = await runCli();
+      }
+    }
+  } catch (error) {
+    // After a failed turn the child's protocol state is unknown.
+    if (persistent) await closePersistentTransport(session.id);
+    throw error;
+  }
+  return result;
+}
