@@ -359,7 +359,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // The worker may start a turn while this sits here (another
           // window's, or a follow-up for a finished background shell), or
           // queue something: either ends the prompt, keeping the draft.
-          const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, ...(signal ? { signal } : {}) }), queueMark);
+          const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: '/resume', ...(signal ? { signal } : {}) }), queueMark);
           if ('woke' in answer) {
             if (answer.woke === 'turn') {
               // Shown as this window shows its own turns: the prompt as the
@@ -372,7 +372,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             continue;
           }
           line = answer.line.trim();
-        } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true })).trim();
+        } else line = (await rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: '/resume' })).trim();
       } catch (error) {
         // A non-interactive caller may close stdin after its final command.
         // Treat that exactly like leaving the foreground harness, not a crash.

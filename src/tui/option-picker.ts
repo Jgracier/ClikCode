@@ -96,7 +96,7 @@ export function runOptionPicker<T>(
       const visible = visibleOptions();
       if (selected >= visible.length) selected = Math.max(0, visible.length - 1);
       const renderOptions = visible.map((option) => ({
-        label: option.label, detail: option.inline ? inlineDetail(option) : option.detail, value: '',
+        label: option.label, detail: option.inline ? inlineDetail(option) : option.detail, value: '', group: option.group,
       }));
       const confirmation = '\u2192/Enter';
       const selectedOption = visible[selected];

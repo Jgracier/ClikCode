@@ -45,7 +45,7 @@ export interface HarnessPrompter {
   question(
     prompt: string,
     commands?: readonly PickerOption<string>[],
-    settings?: { cancellable?: boolean; rightArrowPalette?: boolean },
+    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string },
   ): Promise<string>;
   select?<T>(
     title: string,
