@@ -100,8 +100,10 @@ async function turnInFlight(sessionId: string): Promise<boolean> {
 }
 
 /** How long a worker has to answer `retire` before it is taken to be one
- * from before the command existed. A worker answers at once. */
-const RETIRE_ANSWER_MS = 1_500;
+ * from before the command existed. A worker answers within milliseconds even
+ * mid-turn; this is only ever waited out in full by an old one, and a message
+ * sent right after switching waits on it. */
+const RETIRE_ANSWER_MS = 500;
 
 /** Asks a worker on another build to step down. It knows whether it is in
  * the middle of something and the asking window does not -- so it decides:
