@@ -1946,7 +1946,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   async question(
     prompt: string,
     commands: readonly PaletteEntry[] = [],
-    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; signal?: AbortSignal },
+    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string; signal?: AbortSignal },
   ): Promise<string> {
     // Kept for the turn this prompt's answer starts: a turn in flight offers
     // the same commands, and this is where they are known.
@@ -2156,6 +2156,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\u0010' && !options.length) { historyStep(-1); return draw(); }
         if (key === '\u000e' && !options.length) { historyStep(1); return draw(); }
         if (key === '\u001b[D') {
+          // With nothing typed there is nothing for the arrow to move through,
+          // so the chat composer spends it on its conversations: what is
+          // running now, and below it what can be resumed.
+          if (!value && settings?.leftArrowCommand) return finish(settings.leftArrowCommand);
           // Backing out of the command list clears it; inside an argument the
           // arrow edits, as it does in any line.
           if (options.length && !completing) { value = ''; cursor = 0; selected = 0; }
