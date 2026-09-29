@@ -1295,7 +1295,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const windowed = paletteDisplayRows(options as readonly PaletteEntry[], selected, visibleRows);
       for (const row of windowed) {
         if ('header' in row) {
-          footer.push(`  ${chalk.dim(visibleSlice(`── ${row.header}`, Math.max(1, width - 4)))}`);
+          // A picker's sections read as headings with their size beside them,
+          // the way Claude Code's session list does; the command palette keeps
+          // its quieter rule.
+          const counted = palette?.hideCursor ? /^(.*?)(?: (\d+))?$/.exec(row.header) : null;
+          footer.push(counted
+            ? `  ${chalk.bold(visibleSlice(counted[1] ?? '', Math.max(1, width - 10)))}${counted[2] ? ` ${chalk.dim(counted[2])}` : ''}`
+            : `  ${chalk.dim(visibleSlice(`── ${row.header}`, Math.max(1, width - 4)))}`);
           continue;
         }
         const selectedOption = row.index === selected;
@@ -2235,6 +2241,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       onEscape?: () => void;
       refreshedOptions?: () => readonly PickerOption<T>[];
       refresh?: Promise<unknown>;
+      /** Rows the list may use, when more than the default suits it. */
+      rows?: number;
     },
   ): Promise<T | undefined> {
     return runOptionPicker<T>({

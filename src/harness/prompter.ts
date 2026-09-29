@@ -56,6 +56,8 @@ export interface HarnessPrompter {
       onEscape?: () => void;
       refreshedOptions?: () => readonly PickerOption<T>[];
       refresh?: Promise<unknown>;
+      /** Rows the list may use, when more than the default suits it. */
+      rows?: number;
     },
   ): Promise<T | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
@@ -103,4 +105,7 @@ export interface PickerOption<T> {
     current: string;
     apply(value: string): Promise<void>;
   };
+  /** A list inside this row, opened with Left Arrow -- a conversation's
+   * running sub-agents. Left from inside it comes back out. */
+  inner?: { title: string; options: readonly PickerOption<T>[] };
 }
