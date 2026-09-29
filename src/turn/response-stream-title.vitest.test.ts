@@ -57,6 +57,9 @@ describe('streamed answers go through the title filter', () => {
     expect(painted.length, 'nothing paints an answer at all').toBeGreaterThan(0);
     for (const name of new Set(painted)) {
       if (name === 'answer') continue;
+      // A constant table of the two literal edits a retry makes (clear, new
+      // paragraph): typed so nothing else can be passed, and never a delta.
+      if (name === 'RETRY_EDITS') { expect(source).toMatch(/const RETRY_EDITS = \{ clear: \['', 'replace'\], 'new-paragraph': \['\\n\\n', 'append'\] \} as const;/); continue; }
       // A delta through push(), or what push() was still holding when the
       // stream ended, released by flush(): both are the filter's own output.
       expect(source, `${name} must come from the title filter`)

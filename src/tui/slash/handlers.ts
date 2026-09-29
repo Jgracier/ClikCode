@@ -61,6 +61,7 @@ import { addSessionDirectory, changeSessionWorkspace, workspaceDiff } from './wo
 import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from '../../commands/ai/shell-run.js';
 import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
+import { forgetNativeThread } from '../../session/native-thread.js';
 
 function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
@@ -521,8 +522,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       const accountHarness = localHarnessForProvider(account.provider);
       if (accountHarness && harnessCanRunTurns(accountHarness) && session.nativeHarness !== accountHarness.command) {
         session.nativeHarness = accountHarness.command;
-        session.nativeSessionId = undefined;
-        session.nativeStartedAt = undefined;
+        forgetNativeThread(session);
       } else if (session.accountId !== account.id) {
         // A native thread id is only valid within the specific account's
         // own isolated profile it was created under -- switching to a
@@ -534,8 +534,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         // existing failoverPrompt rehydration path (which already handles
         // "no native thread yet, but real prior messages exist") takes
         // over on the next turn instead of failing outright.
-        session.nativeSessionId = undefined;
-        session.nativeStartedAt = undefined;
+        forgetNativeThread(session);
       }
       session.accountId = account.id;
       // Explicit selection is the user's retry signal for an account previously

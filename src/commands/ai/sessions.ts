@@ -30,6 +30,7 @@ import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { turnBackendForAccount } from '../../turn/account-routing.js';
 import { newConversationSession } from './conversations.js';
 import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';
+import { forgetNativeThread } from '../../session/native-thread.js';
 
 const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, effort, failover, and native sessions cannot be set per session (a model can, from ClikCode Local\'s catalog).';
 
@@ -450,8 +451,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   else if (account) {
     if (turnBackendForAccount(account) === 'vendor' && selectedHarness && harnessCanRunTurns(selectedHarness)) {
       if (next.nativeHarness !== selectedHarness.command || current.accountId !== account.id) {
-        next.nativeSessionId = undefined;
-        next.nativeStartedAt = undefined;
+        forgetNativeThread(next);
       }
       next.nativeHarness = selectedHarness.command;
     } else {
