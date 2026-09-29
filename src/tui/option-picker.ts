@@ -77,7 +77,9 @@ export function runOptionPicker<T>(
     let query = '';
     let selected = 0;
     let stopInput: () => void = () => {};
-    const capacity = Math.min(options.length, settings?.rows ?? 8) + 2;
+    // Section headings take a row each, so a short list counts them too.
+    const headings = options.filter((option, index) => option.group && option.group !== options[index - 1]?.group).length;
+    const capacity = Math.min(options.length + headings, settings?.rows ?? 8) + 2;
     const currentOptions = (): readonly PickerOption<T>[] => settings?.refreshedOptions?.() ?? options;
     const visibleOptions = (): readonly PickerOption<T>[] => {
       const current = currentOptions();
