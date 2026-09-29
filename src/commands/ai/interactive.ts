@@ -632,15 +632,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             for (;;) {
               const picked = await interactiveSessionPicker(rl, fresh ?? id, BOARD_COMMANDS);
               if (picked && 'command' in picked) {
-                fresh ??= await newConversation(id);
+                fresh ??= await newConversation(id, { sameModel: true });
                 if (picked.command === '/provider') fresh = await interactiveEnginePicker(config, rl, fresh) ?? fresh;
                 else if (picked.command === '/model') await interactiveModelPicker(rl, fresh);
                 else if (picked.command === '/effort') await interactiveEffortPicker(rl, fresh);
                 await showSession(fresh);
                 continue;
               }
-              if (picked && 'compose' in picked) return { id: fresh ?? await newConversation(id), prompt: picked.compose, echo: true };
-              if (picked && 'new' in picked) return { id: fresh ?? await newConversation(id) };
+              if (picked && 'compose' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }), prompt: picked.compose, echo: true };
+              if (picked && 'new' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }) };
               if (picked) return { id: picked.id };
               // Closed: back where it was, including the line that names the
               // provider, which showed the fresh chat's while it was set up.

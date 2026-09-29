@@ -136,7 +136,7 @@ export interface ConversationBoardSettings {
 
 /** Everything but the list: the rule and hint around it, and the composer
  * block beneath (usage rule, input, title rule, provider line, spacing). */
-const BOARD_CHROME_ROWS = 7;
+const BOARD_CHROME_ROWS = 5;
 
 export function runConversationBoard(host: OptionPickerHost, settings: ConversationBoardSettings): Promise<BoardResult | undefined> {
   return new Promise((resolve) => {
@@ -151,7 +151,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       // The whole page: the list takes every row the composer does not.
       const capacity = Math.max(6, (output.rows ?? 24) - BOARD_CHROME_ROWS);
       host.paint(state.draft, showing.map((row) => ({ label: row.label, detail: row.detail, value: '', group: row.group })),
-        state.selected, '› ', state.draft.length, { capacity, hint: boardHint(state, showing) });
+        state.selected, '› ', state.draft.length, { capacity, headings: true, hint: boardHint(state, showing) });
     };
     const finish = (result: BoardResult | undefined): void => {
       if (finished) return;
