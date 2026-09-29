@@ -17,6 +17,8 @@ export async function chooseOption<T>(
     onEscape?: () => void;
     refreshedOptions?: () => readonly PickerOption<T>[];
     refresh?: Promise<unknown>;
+    /** Rows the list may use, when more than the default suits it. */
+    rows?: number;
   },
 ): Promise<T | undefined> {
   if (options.length === 0) return undefined;

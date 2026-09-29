@@ -20,6 +20,7 @@ import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
 import { sessionClaimIsLive } from '../../session/claim.js';
 import { liveWorkerSessions, sessionActivity } from '../../session/liveness.js';
+import { activityGlyph, subagentOptions, turnPace, workingDetail } from './conversation-activity.js';
 import { conversationIdFor, sessionPickerOptions } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { aiSessionCommand } from '../slash/handlers.js';
@@ -139,8 +140,8 @@ function cachedAdoptableSessions(state: HarnessState, workspace: string): Promis
 
 /** Selected while discovery is still running: wait for it, then reopen. */
 const PENDING_DISCOVERY_VALUE = '__discovering__';
-const ACTIVE_GROUP = 'Active';
-const RESUME_GROUP = 'Resume';
+const PAST_GROUP = 'Past';
+const SECTION_NAMES = { working: 'Working', idle: 'Open' } as const;
 const NEW_CONVERSATION_VALUE = '__new__';
 const MANAGE_ACTIONS = [
   { label: 'Rename', value: 'rename' },
@@ -151,15 +152,6 @@ const MANAGE_ACTIONS = [
 /** Working before open-between-turns before everything else. */
 function activityRank(block: { activity?: 'working' | 'idle' }): number {
   return block.activity === 'working' ? 0 : block.activity === 'idle' ? 1 : 2;
-}
-
-/** How long the running turn has been going, when it is long enough to say. */
-function turnAge(startedAt: string | undefined, now: number): string {
-  if (!startedAt) return '';
-  const seconds = Math.floor((now - Date.parse(startedAt)) / 1000);
-  if (!(seconds >= 60)) return '';
-  const minutes = Math.floor(seconds / 60);
-  return minutes < 60 ? ` ${minutes}m` : ` ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 /** One list for finding a conversation and managing it.
@@ -202,14 +194,14 @@ export async function interactiveSessionPicker(
   // Per conversation, not per chat: a provider handoff leaves the older
   // chat's worker running for a while, and it is still this conversation.
   const openedAt = Date.now();
-  const activityByRoot = new Map<string, { activity: 'working' | 'idle'; turnStartedAt?: string }>();
+  const activityByRoot = new Map<string, { activity: 'working' | 'idle'; pending?: NonNullable<HarnessSession['pendingTurn']> }>();
   for (const session of sessions) {
     const root = conversationIdFor(session);
     // The chat open here is active by definition; a claim only says whether
     // someone ELSE holds it, so it would not show up by liveness alone.
     const activity = sessionActivity(session, workerIsLive, openedAt) ?? (session.id === currentId ? 'idle' : undefined);
     if (!activity || activityByRoot.get(root)?.activity === 'working') continue;
-    activityByRoot.set(root, activity === 'working' ? { activity, turnStartedAt: session.pendingTurn?.startedAt } : { activity });
+    activityByRoot.set(root, activity === 'working' ? { activity, pending: session.pendingTurn } : { activity });
   }
 
   // ClikCode's own conversations are already in hand and are what /resume is
@@ -242,7 +234,12 @@ export async function interactiveSessionPicker(
       const session = sessionsById.get(option.value)!;
       const root = conversationIdFor(session);
       const activity = activityByRoot.get(root);
-      if (activity?.activity === 'working') option.detail = `· working${turnAge(activity.turnStartedAt, openedAt)} ${option.detail ?? ''}`;
+      const pending = activity?.pending;
+      option.label = `${activityGlyph(activity?.activity, pending && turnPace(pending.updatedAt, openedAt))} ${option.label}`;
+      if (pending) {
+        option.detail = `${workingDetail(pending, openedAt)} ${option.detail ?? ''}`;
+        if (pending.subagents?.length) option.inner = { title: 'Subagents', options: subagentOptions(pending, option.value, openedAt) };
+      }
       if (session.id !== currentId && sessionClaimIsLive(session)) {
         option.detail = `${option.detail ?? ''} · active in another terminal`;
       }
@@ -258,7 +255,7 @@ export async function interactiveSessionPicker(
       ...discovered.map(({ harness, item, accountId }, index) => ({
         sortKey: item.updatedAtMs ?? -Infinity,
         options: [{
-          label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
+          label: `  ${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
           detail: `· not yet in ClikCode${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
           value: `native:${index}`,
         }],
@@ -268,8 +265,12 @@ export async function interactiveSessionPicker(
     // What is running comes first -- working, then open between turns -- and
     // everything else is below it to resume, in one recency order whichever
     // source found it. Provider hops stay behind each root row's history action.
+    // Each section is headed with its size, as Claude Code's session list is.
+    const sectionOf = (block: OptionBlock): string => block.activity ? SECTION_NAMES[block.activity] : PAST_GROUP;
+    const sizes = new Map<string, number>();
+    for (const block of optionBlocks) sizes.set(sectionOf(block), (sizes.get(sectionOf(block)) ?? 0) + block.options.length);
     const options: PickerOption<string>[] = optionBlocks.flatMap((block) => block.options.map((option) => ({
-      ...option, group: block.activity ? ACTIVE_GROUP : RESUME_GROUP,
+      ...option, group: `${sectionOf(block)} ${sizes.get(sectionOf(block))}`,
     })));
     for (const option of options) {
       if (option.value.startsWith('native:')) continue;
@@ -279,13 +280,13 @@ export async function interactiveSessionPicker(
       option.actions = [...historyAction, ...MANAGE_ACTIONS];
       option.deleteAction = { label: 'Delete', value: 'delete' };
     }
-    options.unshift({ label: 'New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
+    options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
     if (discovering) {
       options.push({
-        label: 'Looking for chats from other CLIs…',
+        label: '  Looking for chats from other CLIs…',
         detail: '· your ClikCode conversations are listed above',
         value: PENDING_DISCOVERY_VALUE,
-        group: RESUME_GROUP,
+        group: `${PAST_GROUP} ${sizes.get(PAST_GROUP) ?? 0}`,
       });
     }
     return options;
@@ -319,7 +320,10 @@ export async function interactiveSessionPicker(
   };
   const selected = await chooseOption(rl, 'Conversations', buildOptions(),
     (value, action) => manage(value, action),
-    { refreshedOptions: buildOptions, refresh: discovery });
+    { refreshedOptions: buildOptions, refresh: discovery,
+      // Taller than a settings list -- it is the place to look over everything
+      // running -- but never more than a small terminal can hold.
+      rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)) });
   if (replacement) return { id: replacement };
   // Any other action closes the list on purpose (the picker rebuilds from
   // state rather than show a stale row), so it opens again on what changed.

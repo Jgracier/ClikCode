@@ -67,6 +67,8 @@ export function runOptionPicker<T>(
     onEscape?: () => void;
     refreshedOptions?: () => readonly PickerOption<T>[];
     refresh?: Promise<unknown>;
+    /** Rows the list may use, when more than the default suits it. */
+    rows?: number;
   },
 ): Promise<T | undefined> {
   if (!options.length) return Promise.resolve(undefined);
@@ -75,7 +77,7 @@ export function runOptionPicker<T>(
     let query = '';
     let selected = 0;
     let stopInput: () => void = () => {};
-    const capacity = Math.min(options.length, 8) + 2;
+    const capacity = Math.min(options.length, settings?.rows ?? 8) + 2;
     const currentOptions = (): readonly PickerOption<T>[] => settings?.refreshedOptions?.() ?? options;
     const visibleOptions = (): readonly PickerOption<T>[] => {
       const current = currentOptions();
@@ -110,9 +112,10 @@ export function runOptionPicker<T>(
       const secondary = selectedOption?.alternates?.length ? ' · Tab history'
         : selectedOption?.actions?.length ? ' · Tab options' : '';
       const destructive = selectedOption?.deleteAction ? ` · Del ${selectedOption.deleteAction.label.toLowerCase()}` : '';
+      const back = selectedOption?.inner?.options.length ? `\u2190 ${selectedOption.inner.title.toLowerCase()}` : '\u2190 back';
       const hint = query
-        ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · \u2190 back · Esc exit`
-        : `${currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · \u2190 back · Esc exit · type to filter`;
+        ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit`
+        : `${currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit · type to filter`;
       host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, hint });
     };
     let finished = false;
@@ -162,6 +165,17 @@ export function runOptionPicker<T>(
       if (!option.alternates?.length) return;
       stopInput();
       const value = await host.select(option.label, option.alternates);
+      if (value !== undefined) return finish(value);
+      if (finished) return;
+      setTerminalRawMode(true);
+      input.resume();
+      stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
+      draw();
+    };
+    const openInner = async (option: PickerOption<T>): Promise<void> => {
+      if (!option.inner?.options.length) return;
+      stopInput();
+      const value = await host.select(option.inner.title, option.inner.options);
       if (value !== undefined) return finish(value);
       if (finished) return;
       setTerminalRawMode(true);
@@ -236,7 +250,10 @@ export function runOptionPicker<T>(
       if (key === '\u001b[A' || key === '\u001b[B') void commit(current);
       if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
       else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
-      else if (key === '\u001b[D') { settings?.onBack?.(); finish(undefined, 'back'); return; }
+      else if (key === '\u001b[D') {
+        if (current?.inner?.options.length) { void openInner(current); return; }
+        settings?.onBack?.(); finish(undefined, 'back'); return;
+      }
       else if (pickerConfirmsSelection(key)) {
         if (current) finish(current.value);
         return;
