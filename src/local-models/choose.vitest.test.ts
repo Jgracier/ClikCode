@@ -159,6 +159,19 @@ describe('budget', () => {
     expect(deep.generatePerSecond).toBeLessThan(18.6 * 1.15);
   });
 
+  it('chooses an integrated GPU\'s context by speed at depth, not by the largest that fits', () => {
+    const apu: HardwareProfile = { ...ZEN4, availableRamBytes: 50 * GIB, gpus: [{ ...ZEN4.gpus[0]!, addressableBytes: 33_605 * 1024 ** 2 }] };
+    const budget = memoryBudget(apu);
+    const ranked = rankModels([model('qwen3.5-9b'), model('ornith-1.5-35b-a3b')], apu, budget, {});
+    const nine = ranked.find((row) => row.model.id === 'qwen3.5-9b')!;
+    expect(fitModel(model('qwen3.5-9b'), budget).context).toBe(262_144); // what memory alone allows
+    expect(nine.fit).toMatchObject({ fits: true, placement: 'gpu' });
+    expect(nine.fit.context).toBeLessThan(262_144);
+    expect(nine.fit.context).toBeGreaterThanOrEqual(32_768);
+    // Ornith has only 10 attention layers: a long window still meets the speed bar.
+    expect(ranked.find((row) => row.model.id === 'ornith-1.5-35b-a3b')!.fit.context).toBeGreaterThanOrEqual(65_536);
+  });
+
   it('runs on an APU\'s graphics when its reach is known, within that reach', () => {
     const reach = 33_605 * 1024 ** 2;
     const apu: HardwareProfile = { ...ZEN4, gpus: [{ ...ZEN4.gpus[0]!, addressableBytes: reach }] };

@@ -349,7 +349,13 @@ function fitForConversation(
   budget: MemoryBudget, measured: Measurement | undefined, footprints: readonly Footprint[],
 ): Fit {
   const memoryFit = fitModel(model, budget, { footprints });
-  if (!memoryFit.fits || memoryFit.placement !== 'cpu') return memoryFit;
+  // Tuned where speed at depth is modelled: the CPU, and integrated graphics
+  // (39f3862). Taking the largest window that fits memory instead gave
+  // Qwen3.5-9B 256K on the 780M: pinned GPU memory no turn needs, at a
+  // compaction depth where it would write under 6 tokens/s. Discrete cards
+  // keep the memory fit until their depth slowdown is measured.
+  const tuned = memoryFit.placement === 'cpu' || (memoryFit.placement === 'gpu' && Boolean(budget.gpu?.unified));
+  if (!memoryFit.fits || !tuned) return memoryFit;
   let smallest = memoryFit;
   let workingWindow: Fit | undefined;
   // A 16K window compacts a coding task after ~13K tokens. On Ornith the
@@ -359,7 +365,7 @@ function fitForConversation(
   const workingMinimum = Math.min(32_768, model.maxContext);
   for (const context of contextsToTry(model)) {
     const fit = fitModel(model, budget, { context, footprints });
-    if (!fit.fits || fit.placement !== 'cpu') continue;
+    if (!fit.fits || fit.placement !== memoryFit.placement) continue;
     // fitModel prefers f16 across *all* contexts before considering q8_0.
     // Its explicit-context call can fall back to q8_0 at a larger window;
     // never undo that global choice while tuning context for speed.
