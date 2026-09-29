@@ -2,6 +2,7 @@
  * has not reached a successful provider completion yet. */
 
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import { isAgentToolName } from '../harness/protocol/tools.js';
 import type { HarnessSession } from '../session/model.js';
 import { normalizeImportedTranscript } from './failover-prompt.js';
 import type { LiveTurnSubmission } from './live-input.js';
@@ -153,9 +154,34 @@ export function updatePendingResponse(
   session.updatedAt = now;
 }
 
+/** Which sub-agents are running, kept by call id: a start adds one, its own
+ * completion removes it, and a call made INSIDE one (parentId) becomes the
+ * step it is on. */
+function trackSubagent(pending: NonNullable<HarnessSession['pendingTurn']>, event: HarnessActivityEvent, now: string): void {
+  const running = pending.subagents ?? [];
+  if (event.parentId) {
+    const parent = running.find((agent) => agent.id === event.parentId);
+    if (parent && event.kind === 'tool-start') { parent.step = event.label; parent.stepAt = now; }
+    return;
+  }
+  if (!event.id) return;
+  // The same test the live row uses (tui/render/waiting.ts liveWaitKind): a
+  // shell command is never an agent, whatever its text starts with.
+  const isAgent = event.agent || (event.category !== 'run' && isAgentToolName(event.label));
+  if (event.kind === 'tool-start' && isAgent && !running.some((agent) => agent.id === event.id)) {
+    pending.subagents = [...running, { id: event.id, label: event.label, startedAt: now }];
+  } else if ((event.kind === 'tool-done' || event.kind === 'tool-error') && running.some((agent) => agent.id === event.id)) {
+    const left = running.filter((agent) => agent.id !== event.id);
+    if (left.length) pending.subagents = left;
+    else delete pending.subagents;
+  }
+}
+
 export function recordPendingActivity(session: HarnessSession, event: HarnessActivityEvent, now: string): void {
   const pending = session.pendingTurn;
   if (!pending || event.kind === 'thinking') return;
+  // Before the de-duplication below, which would skip a repeated step.
+  trackSubagent(pending, event, now);
   const hints = pending as PendingTurnWithHints;
   // Hints first: the de-duplication below must not skip them, and they must
   // outlive the 20-entry activity window.
