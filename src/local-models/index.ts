@@ -23,6 +23,7 @@ import { chooseModel, fitModel, kvCacheBytes, meetsBar, rankModels, MIN_CONTEXT,
 import { formatBytes } from './download.js';
 import { discoverHuggingFaceModels } from './discover.js';
 import { probeHardware, type HardwareProfile } from './hardware.js';
+import { learnGpuReach, withKnownReach } from './gpu-reach.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, usesMmap, waitForHealth } from './launch.js';
 import {
   memoryStopFile, processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
@@ -108,8 +109,8 @@ interface MachineView {
   footprints: Record<string, Footprint[]>;
 }
 
-async function viewMachine(): Promise<MachineView> {
-  const hardware = await probeHardware();
+async function viewMachine(probed?: HardwareProfile): Promise<MachineView> {
+  const hardware = probed ?? await withKnownReach(await probeHardware());
   const budget = memoryBudget(hardware);
   const build = selectRuntimeBuild(hardware, budget.gpu);
   if (!build) throw new Error(`llama.cpp publishes no build for ${hardware.platform} ${hardware.arch}.`);
@@ -259,7 +260,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     }
   }
   progress({ stage: 'probe', message: 'checking this machine…' });
-  const view = await viewMachine();
+  const view = await viewMachine(await learnGpuReach(await probeHardware(), (update) => progress({ stage: 'runtime', ...update })));
   const stops = await takeMemoryStops();
   const ranked = rankModels(allLocalModels(), view.hardware, view.budget, view.measurements, view.footprints);
   const eligible = pick ? ranked : (await Promise.all(ranked.map(async (row) => ({ row, bytes: await missingBytes([row.model.weights]) }))))
