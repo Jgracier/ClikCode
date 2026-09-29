@@ -72,6 +72,14 @@ import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
 import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerRunningTurn } from '../../worker/turn-bridge.js';
 
+/** What a `/` offers on the conversation board: the settings a new
+ * conversation starts with. */
+const BOARD_COMMANDS: readonly PickerOption<string>[] = [
+  { label: '/provider', detail: '· the harness the new conversation runs in', value: '/provider' },
+  { label: '/model', detail: '· its model', value: '/model' },
+  { label: '/effort', detail: '· its reasoning effort', value: '/effort' },
+];
+
 // The CLIKCODE_USE_WORKER escape hatch is gone: an ANSI terminal always runs
 // its turns through a session worker now. What remains below is not a
 // fallback for the worker -- it is the path for a terminal that has no
@@ -610,10 +618,35 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
           const text = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
           const { args } = route;
+          const showSession = async (target: string): Promise<void> => {
+            const shown = await readState();
+            const session = shown.sessions.find((item) => item.id === target);
+            if (session) rl.render?.(session, session.accountId ? shown.accounts.find((item) => item.id === session.accountId)?.label : undefined);
+          };
           const openConversationPicker = async (): Promise<InteractiveSlashOutcome> => {
-            const picked = await interactiveSessionPicker(rl, id);
-            if (picked && 'new' in picked) return { id: await newConversation(id) };
-            return { id: picked?.id ?? id };
+            // The board's `/` sets up the NEXT conversation. A fresh one is
+            // made the first time it is used, so choosing its provider never
+            // hands off the chat that was open; if nothing is sent it stays
+            // blank, and blank chats are not listed or kept.
+            let fresh: string | undefined;
+            for (;;) {
+              const picked = await interactiveSessionPicker(rl, fresh ?? id, BOARD_COMMANDS);
+              if (picked && 'command' in picked) {
+                fresh ??= await newConversation(id);
+                if (picked.command === '/provider') fresh = await interactiveEnginePicker(config, rl, fresh) ?? fresh;
+                else if (picked.command === '/model') await interactiveModelPicker(rl, fresh);
+                else if (picked.command === '/effort') await interactiveEffortPicker(rl, fresh);
+                await showSession(fresh);
+                continue;
+              }
+              if (picked && 'compose' in picked) return { id: fresh ?? await newConversation(id), prompt: picked.compose, echo: true };
+              if (picked && 'new' in picked) return { id: fresh ?? await newConversation(id) };
+              if (picked) return { id: picked.id };
+              // Closed: back where it was, including the line that names the
+              // provider, which showed the fresh chat's while it was set up.
+              if (fresh) await showSession(id);
+              return { id };
+            }
           };
           const interactive: Record<InteractiveSlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>> = {
             exit: async () => { await aiSessionLeave(id); return { exit: true }; },

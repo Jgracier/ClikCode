@@ -158,9 +158,17 @@ function activityRank(block: { activity?: 'working' | 'idle' }): number {
  *
  * One list opens, creates, and manages conversations. Row actions also expose
  * provider history, so finding a branch and managing a chat share one screen. */
+export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string } | { new: true } | undefined>;
+export async function interactiveSessionPicker(
+  rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
+): Promise<{ id: string } | { new: true } | { compose: string } | { command: string } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string,
-): Promise<{ id: string } | { new: true } | undefined> {
+  /** The commands a board's `/` offers. Given, and the terminal can draw it,
+   * the list is the full-page board (tui/conversation-board.ts) instead. */
+  boardCommands?: readonly PickerOption<string>[],
+): Promise<{ id: string } | { new: true } | { compose: string } | { command: string } | undefined> {
+  const onBoard = Boolean(boardCommands && rl.board);
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
   // A session with no turns yet has nothing to resume into — showing it here is
@@ -280,7 +288,8 @@ export async function interactiveSessionPicker(
       option.actions = [...historyAction, ...MANAGE_ACTIONS];
       option.deleteAction = { label: 'Delete', value: 'delete' };
     }
-    options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
+    // On the board its composer is how a conversation starts.
+    if (!onBoard) options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
     if (discovering) {
       options.push({
         label: '  Looking for chats from other CLIs…',
@@ -318,21 +327,29 @@ export async function interactiveSessionPicker(
     else if (action === 'archive') await aiSessionCommand(targetId, '/archive');
     else if (action === 'delete') await aiSessionCommand(targetId, '/delete confirm');
   };
-  const selected = await chooseOption(rl, 'Conversations', buildOptions(),
-    (value, action) => manage(value, action),
-    { refreshedOptions: buildOptions, refresh: discovery,
-      // Taller than a settings list -- it is the place to look over everything
-      // running -- but never more than a small terminal can hold.
-      rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)) });
+  let selected: string | undefined;
+  if (onBoard) {
+    const result = await rl.board!({ conversations: buildOptions, commands: boardCommands!, refresh: discovery, onAction: manage });
+    if (result && 'compose' in result) return { compose: result.compose };
+    if (result && 'command' in result) return { command: result.command };
+    selected = result?.open;
+  } else {
+    selected = await chooseOption(rl, 'Conversations', buildOptions(),
+      (value, action) => manage(value, action),
+      { refreshedOptions: buildOptions, refresh: discovery,
+        // Taller than a settings list -- it is the place to look over
+        // everything running -- but never more than a small terminal can hold.
+        rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)) });
+  }
   if (replacement) return { id: replacement };
   // Any other action closes the list on purpose (the picker rebuilds from
   // state rather than show a stale row), so it opens again on what changed.
-  if (!selected && actedOn) return interactiveSessionPicker(rl, currentId);
+  if (!selected && actedOn) return interactiveSessionPicker(rl, currentId, boardCommands);
   if (!selected) return undefined;
   if (selected === NEW_CONVERSATION_VALUE) return { new: true };
   if (selected === PENDING_DISCOVERY_VALUE) {
     await discovery;
-    return interactiveSessionPicker(rl, currentId);
+    return interactiveSessionPicker(rl, currentId, boardCommands);
   }
   if (!selected.startsWith('native:')) return { id: selected };
   const match = discovered[Number.parseInt(selected.slice('native:'.length), 10)];
