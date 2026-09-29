@@ -13,8 +13,11 @@ pnpm test
 pnpm build:strict
 ```
 
-All three checks must pass before a change is merged. `pnpm test:smoke` and
-`pnpm test:pack` exercise the built binary and the published tarball.
+All four must pass before a change is merged. `pnpm test:smoke` and
+`pnpm test:pack` exercise the built binary and the published tarball, and
+`pnpm test:display` drives the terminal UI in a real pty. A change to the VS Code
+extension (`packages/vscode`) also needs `pnpm --dir packages/vscode type-check`,
+`pnpm --dir packages/vscode test` and `pnpm --dir packages/vscode run package`.
 
 ## Making a change
 
