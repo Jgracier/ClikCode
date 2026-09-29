@@ -83,6 +83,8 @@ export interface ServerArgsInput {
   /** Where saved prompt prefixes live (prefix-cache.ts); omitted for
    * models that cannot use them. */
   slotSavePath?: string;
+  /** The model's own draft heads (CatalogModel.draftLayers). */
+  draftLayers?: number;
 }
 
 export function buildServerArgs(input: ServerArgsInput): string[] {
@@ -106,6 +108,13 @@ export function buildServerArgs(input: ServerArgsInput): string[] {
   if (input.projectorPath) args.push('--mmproj', input.projectorPath);
   if (input.slotSavePath) args.push('--slot-save-path', input.slotSavePath);
   if (!usesMmap(fit.placement)) args.push('--load-mode', 'none');
+  // Speculating with the model's own draft heads, one token ahead, whole on
+  // a GPU: Ornith 35B-A3B on the 780M wrote 31-34 tokens/s against 27.5,
+  // new code 12.7 vs 14.4 s and edits 17.8 vs 20.4 s, and a 7K-token prompt
+  // broke even (37.7-38.2 vs 38.6 s; reading loses 5%). Two or three drafts
+  // were slower than none. On the CPU reading is the bottleneck and it lost
+  // on a long prompt (130.8 vs 127.7 s), so it stays off there.
+  if (fit.placement === 'gpu' && (input.draftLayers ?? 0) > 0) args.push('--spec-type', 'draft-mtp', '--spec-draft-n-max', '1');
   if (fit.placement === 'gpu') args.push('-ngl', 'all');
   else if (fit.placement === 'gpu-partial') args.push('-ngl', 'auto', '--fit', 'on', '--fit-target', String(input.fitTargetMib ?? 1024));
   else args.push('-ngl', '0');
