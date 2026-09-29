@@ -61,6 +61,7 @@ import { interactiveModelPicker } from '../tui/pickers/model.js';
 import { interactiveEffortPicker } from '../tui/pickers/effort.js';
 import { interactivePermissionPicker } from '../tui/pickers/permissions.js';
 import { interactiveHarnessOptionPicker } from '../tui/pickers/options.js';
+import { interactiveToolsPicker } from '../tui/pickers/tools.js';
 import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { interactiveResumeInPicker, sameProviderCanTakeTurn } from '../tui/pickers/resume-in.js';
@@ -681,7 +682,15 @@ export class IdeBridge {
         const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');
         rl.panel(title, rest.join('\n'));
       },
-      settings: async () => args ? viaHeadless(text) : { id: await interactiveSettingsPicker(this.config, rl, id) ?? id },
+      settings: async () => {
+        // `/settings tools`: straight to Tools & integrations (MCP servers, skills, agents).
+        if (args.trim().toLowerCase() === 'tools') {
+          if (!harness) throw new Error('Choose a provider first: tools and MCP servers belong to a harness.');
+          await interactiveToolsPicker(rl, id, harness);
+          return {};
+        }
+        return args ? viaHeadless(text) : { id: await interactiveSettingsPicker(this.config, rl, id) ?? id };
+      },
       sessions: async () => (args ? viaHeadless(text) : openConversationPicker()),
       resume: async () => {
         const named = args ? chatNamed(commandState.sessions, args, id) : undefined;

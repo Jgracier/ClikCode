@@ -67,6 +67,7 @@ import { interactiveHarnessOptionPicker } from '../../tui/pickers/options.js';
 import { interactiveModelPicker } from '../../tui/pickers/model.js';
 import { interactivePermissionPicker } from '../../tui/pickers/permissions.js';
 import { interactiveSessionPicker } from '../../tui/pickers/session.js';
+import { interactiveToolsPicker } from '../../tui/pickers/tools.js';
 import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
@@ -676,7 +677,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               rl.panel?.(title, rest.join('\n'));
               if (!rl.panel) emitHarnessOutput({ panel: 'capabilities', text: [title, ...rest].join('\n') });
             },
-            settings: async () => args ? viaHeadless(text) : { id: await interactiveSettingsPicker(config, rl, id) ?? id },
+            settings: async () => {
+              // `/settings tools`: straight to Tools & integrations (MCP servers, skills, agents).
+              if (args.trim().toLowerCase() === 'tools') {
+                if (!commandHarness) throw new Error('Choose a provider first: tools and MCP servers belong to a harness.');
+                await interactiveToolsPicker(rl, id, commandHarness);
+                return {};
+              }
+              return args ? viaHeadless(text) : { id: await interactiveSettingsPicker(config, rl, id) ?? id };
+            },
             sessions: async () => {
               if (args) return viaHeadless(text);
               return openConversationPicker();
