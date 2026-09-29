@@ -152,7 +152,7 @@ function PickSheet(props: { title: string; items: readonly IdePickItem[]; canGoB
   }, [props.items, query, confirming]);
 
   return (
-    <div class={`pick-sheet${long ? ' tall' : ''}`}>
+    <div class={`pick-sheet${props.items.length > 10 ? ' tall' : ''}`}>
       <div class="sheet-head">
         {props.canGoBack
           ? <button type="button" class="icon-button" aria-label="Back" title="Back" onClick={() => props.answer({ cancelled: true, back: true })}><Icon name="arrow-left" /></button>

@@ -64,7 +64,11 @@ export function ProviderModelPicker(props: { model: ChatModel; onClose: () => vo
     return () => { live = false; };
   }, [drill]);
 
-  useEffect(() => { input.current?.focus(); setSearch(''); }, [drill]);
+  // Moving between the providers and one provider's models starts a fresh
+  // search, in the same update: reset from an effect, it could land after the
+  // first keys typed on the new list and wipe them.
+  const drillTo = (next: string | undefined): void => { setSearch(''); setDrill(next); };
+  useEffect(() => { input.current?.focus(); }, [drill]);
 
   const apply = (providerId: string, modelId?: string): void => {
     props.onClose();
@@ -122,7 +126,7 @@ export function ProviderModelPicker(props: { model: ChatModel; onClose: () => vo
         result.push({
           key: `p:${item.id}`,
           disabled: item.install === 'manual',
-          onSelect: () => (item.choosesModel ? setDrill(item.id) : apply(item.id)),
+          onSelect: () => (item.choosesModel ? drillTo(item.id) : apply(item.id)),
           render: () => (
             <div class="row" title={item.integration ? `${item.name} · ${item.integration}${item.version ? ` · ${item.version}` : ''}` : item.name}>
               <span class="row-check">{item.current ? <Icon name="check" /> : <Icon name={providerIcon(item)} />}</span>
@@ -151,7 +155,7 @@ export function ProviderModelPicker(props: { model: ChatModel; onClose: () => vo
   return (
     <Popover label="Choose provider and model" onClose={props.onClose} class="picker" id="provider-picker">
       <div class="picker-head">
-        {drill ? <button type="button" id="picker-back" class="icon-button" aria-label="All providers" title="All providers" onClick={() => setDrill(undefined)}><Icon name="arrow-left" /></button> : <Icon name="server-environment" />}
+        {drill ? <button type="button" id="picker-back" class="icon-button" aria-label="All providers" title="All providers" onClick={() => drillTo(undefined)}><Icon name="arrow-left" /></button> : <Icon name="server-environment" />}
         <span class="picker-title">{drill ? provider?.name ?? drill : 'Provider and model'}</span>
         {drill && loading ? <Icon name="loading" spin label="Loading models" /> : null}
       </div>
@@ -164,8 +168,8 @@ export function ProviderModelPicker(props: { model: ChatModel; onClose: () => vo
       {drill && models?.error ? <div class="picker-error">{models.error}</div> : null}
       {!providers && !error ? <div class="picker-loading"><Icon name="loading" spin /> Loading providers…</div> : null}
       <KeyList id="picker-list" rows={rows} label={drill ? 'Models' : 'Providers'} inputRef={input} onEscape={props.onClose}
-        onBack={drill ? () => setDrill(undefined) : undefined}
-        onForward={drill ? undefined : (key) => { const id = key.startsWith('p:') ? key.slice(2) : undefined; if (id && providers?.find((item) => item.id === id)?.choosesModel) setDrill(id); }}
+        onBack={drill ? () => drillTo(undefined) : undefined}
+        onForward={drill ? undefined : (key) => { const id = key.startsWith('p:') ? key.slice(2) : undefined; if (id && providers?.find((item) => item.id === id)?.choosesModel) drillTo(id); }}
         emptyText={drill ? (loading ? 'Finding models…' : 'No models match.') : providers ? 'No providers match.' : undefined} />
       <div class="picker-foot muted">
         {drill ? <><kbd>←</kbd> providers · <kbd>Enter</kbd> choose</> : <><kbd>→</kbd> models · <kbd>Enter</kbd> choose</>}

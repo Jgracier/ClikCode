@@ -100,7 +100,7 @@ function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (t
   );
 }
 
-function MoreMenu({ onClose, onScreen }: { onClose: () => void; onScreen: (screen: WebviewScreen) => void }): JSX.Element {
+function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () => void; onScreen: (screen: WebviewScreen) => void }): JSX.Element {
   const item = (key: string, icon: string, label: string, run: () => void, hint?: string): ListRow => ({
     key, onSelect: () => { onClose(); run(); },
     render: () => <div class="row"><span class="row-check"><Icon name={icon} /></span><span class="row-main"><span class="row-label">{label}</span></span>{hint ? <span class="row-end muted">{hint}</span> : null}</div>,
@@ -108,6 +108,8 @@ function MoreMenu({ onClose, onScreen }: { onClose: () => void; onScreen: (scree
   const rows: ListRow[] = [
     item('accounts', 'account', 'Accounts & usage', () => onScreen('accounts')),
     item('settings', 'settings-gear', 'Chat settings', () => onScreen('settings')),
+    ...(model.route === 'local' && model.harness
+      ? [item('tools', 'plug', 'MCP servers & tools', () => post({ type: 'send', text: '/settings tools', id: uid() }))] : []),
     item('tab', 'link-external', 'Open in new tab', () => command('clikcode.openInNewTab')),
     item('window', 'empty-window', 'Open in new window', () => command('clikcode.openInNewWindow')),
     item('commands', 'symbol-namespace', 'All commands', () => post({ type: 'send', text: '/help', id: uid() })),
@@ -136,7 +138,7 @@ function Header({ model, screen, onScreen }: { model: ChatModel; screen: Webview
       <IconButton id="new-chat" icon="add" label="New chat (Ctrl+N)" onClick={() => { onScreen('chat'); void request({ method: 'open', mode: 'new' }); }} />
       <IconButton id="history-button" icon="history" label="Conversations" active={screen === 'history'} onClick={() => onScreen(screen === 'history' ? 'chat' : 'history')} />
       <span data-popover-anchor><IconButton id="more-button" icon="ellipsis" label="More" active={more} onClick={() => setMore(!more)} /></span>
-      {more ? <MoreMenu onClose={() => setMore(false)} onScreen={onScreen} /> : null}
+      {more ? <MoreMenu model={model} onClose={() => setMore(false)} onScreen={onScreen} /> : null}
     </header>
   );
 }
@@ -181,6 +183,8 @@ function App(): JSX.Element {
   const log = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const inlineTarget = useRef<InlineTarget>();
+  const runningRef = useRef(false);
+  runningRef.current = Boolean(model?.running);
 
   const answer = (id: string, result: IdeUiResult): void => {
     setQuestions((items) => items.filter((item) => item.id !== id));
@@ -199,7 +203,9 @@ function App(): JSX.Element {
 
   useEffect(() => listen((message) => {
     switch (message.type) {
-      case 'model': setModel(message.model); save({ ...(message.model.sessionId ? { sessionId: message.model.sessionId } : {}) }); return;
+      case 'model':
+        setModel((previous) => (message.sameMessages && previous ? { ...message.model, messages: previous.messages } : message.model));
+        save({ ...(message.model.sessionId ? { sessionId: message.model.sessionId } : {}) }); return;
       case 'setDraft': composer.current?.setDraft(message.text); return;
       case 'insert': setScreen('chat'); composer.current?.insert(message.text); return;
       case 'mention': setScreen('chat'); requestAnimationFrame(() => composer.current?.mention(message.mention)); return;
@@ -255,6 +261,13 @@ function App(): JSX.Element {
       if ((event.key === 'Enter' || event.key === ' ') && target.matches('code.file-link')) {
         event.preventDefault();
         post({ type: 'openFile', path: target.dataset.file!, ...(target.dataset.line ? { line: Number(target.dataset.line) } : {}) });
+        return;
+      }
+      // Esc stops the running turn from anywhere in the panel -- unless a
+      // menu, a sheet or the composer already took it (they preventDefault).
+      if (event.key === 'Escape' && !event.defaultPrevented && runningRef.current) {
+        event.preventDefault();
+        post({ type: 'cancel', restoreDraft: !composer.current?.hasText() });
       }
     };
     document.addEventListener('click', onClick);
@@ -267,6 +280,25 @@ function App(): JSX.Element {
       document.removeEventListener('keydown', onKey);
     };
   }, []);
+
+  // An approval takes the keyboard (1 allow, 2 always, 3 or Esc reject) when
+  // nothing is being typed, as a terminal prompt would.
+  const firstApproval = model?.approvals[0]?.id;
+  useEffect(() => {
+    if (!firstApproval) return;
+    const active = document.activeElement as HTMLElement | null;
+    const typing = active?.id === 'composer-input' && composer.current?.hasText();
+    if (!typing && (!active || active === document.body || active.id === 'composer-input')) {
+      document.querySelector<HTMLElement>(`[data-approval="${firstApproval}"]`)?.focus();
+    }
+  }, [firstApproval]);
+
+  // A sheet closing hands the keyboard back to the composer.
+  const hadQuestion = useRef(false);
+  useEffect(() => {
+    if (hadQuestion.current && !questions.length && screen === 'chat') requestAnimationFrame(() => composer.current?.focus());
+    hadQuestion.current = questions.length > 0;
+  }, [questions.length]);
 
   // Follow the conversation while the reader is at the bottom of it.
   useLayoutEffect(() => {

@@ -20,6 +20,8 @@ export class WebviewSurface implements vscode.Disposable {
   ready = false;
   focused = false;
   lastFocusedAt = 0;
+  /** The transcript this page was last sent (see ClikCodeController.postModel). */
+  sentMessages: unknown;
   private readonly outbox: ToWebview[] = [];
   private readonly disposables: vscode.Disposable[] = [];
   private readonly probes = new Map<string, (result: unknown) => void>();

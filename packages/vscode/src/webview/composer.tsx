@@ -17,6 +17,7 @@ type Menu = 'provider' | 'effort' | 'mode' | undefined;
 
 export interface ComposerHandle {
   focus(): void;
+  hasText(): boolean;
   insert(text: string): void;
   setDraft(text: string): void;
   mention(mention: Mention): void;
@@ -86,6 +87,7 @@ export function Composer(props: {
 
   props.handle.current = {
     focus: () => textarea.current?.focus(),
+    hasText: () => Boolean(text.trim()) || attachments.length > 0,
     insert: (value) => update(text ? `${text.replace(/\s*$/, '')}\n\n${value}` : value),
     setDraft: (value) => update(value),
     mention: (mention) => {
