@@ -11,9 +11,11 @@ import { PrefixCache } from './prefix-cache.js';
 
 interface FakeSlot { id: number; tokens?: number[]; used: boolean }
 
-/** Renders "<sys>system|tools</sys><user>text</user>" and tokenizes one token
- * per character, so a shared prefix is exactly the shared text. */
-function fakeServer(options: { saveStatus?: number } = {}) {
+/** Renders "<sys>system|tools</sys><user>text</user>..." and tokenizes one
+ * token per character, so a shared prefix is exactly the shared text. Like
+ * Qwen's template, an assistant message after the last user message renders
+ * differently ("~") from one that a later user message follows. */
+function fakeServer(options: { saveStatus?: number; savedCount?: (tokens: number) => number } = {}) {
   const slots: FakeSlot[] = [{ id: 0, used: false }, { id: 1, used: false }];
   const files = new Map<string, number[]>();
   const calls: string[] = [];
@@ -28,8 +30,10 @@ function fakeServer(options: { saveStatus?: number } = {}) {
       calls.push(`${req.method} ${url.pathname}${url.search}`);
       const send = (status: number, json: unknown): void => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(json)); };
       if (url.pathname === '/apply-template') {
-        const [system, user] = body.messages;
-        return send(200, { prompt: `<sys>${system.content}|${JSON.stringify(body.tools ?? [])}</sys><user>${user.content}</user>` });
+        const [system, ...rest] = body.messages as { role: string; content: string }[];
+        const lastUser = rest.map((message) => message.role).lastIndexOf('user');
+        const turns = rest.map((message, index) => `<${message.role}>${message.role === 'assistant' && index > lastUser ? '~' : ''}${message.content}</${message.role}>`);
+        return send(200, { prompt: `<sys>${system!.content}|${JSON.stringify(body.tools ?? [])}</sys>${turns.join('')}` });
       }
       if (url.pathname === '/tokenize') return send(200, { tokens: [...(body.content as string)].map((char) => char.charCodeAt(0)) });
       if (url.pathname === '/slots' && req.method === 'GET') return send(200, slots.map((slot) => ({ id: slot.id, is_processing: false, ...(slot.used ? { id_task: 7 } : {}) })));
@@ -40,7 +44,8 @@ function fakeServer(options: { saveStatus?: number } = {}) {
           if (options.saveStatus) return send(options.saveStatus, { error: 'no slot-save-path' });
           files.set(body.filename, slot.tokens ?? []);
           writeFileSync(path.join(dir, body.filename), 'state');
-          return send(200, { n_saved: slot.tokens?.length ?? 0 });
+          const count = slot.tokens?.length ?? 0;
+          return send(200, { n_saved: options.savedCount ? options.savedCount(count) : count });
         }
         if (url.searchParams.get('action') === 'restore') {
           const saved = files.get(body.filename);
@@ -70,7 +75,7 @@ let port: number;
 const system = `You are ClikCode. ${'Rules. '.repeat(300)}`;
 const request = (user: string, folder = '') => ({ messages: [{ role: 'system', content: `${system}${folder}` }, { role: 'user', content: user }], tools: [{ type: 'function', function: { name: 'read_file' } }] });
 
-async function listen(options?: { saveStatus?: number }): Promise<void> {
+async function listen(options?: Parameters<typeof fakeServer>[0]): Promise<void> {
   fake = fakeServer(options);
   await new Promise<void>((resolve) => fake.server.listen(0, '127.0.0.1', resolve));
   port = (fake.server.address() as AddressInfo).port;
@@ -182,6 +187,75 @@ describe('prefix cache', () => {
     await new PrefixCache(port, dir).prepare(request('go', '\nWorking directory: /a'));
     expect(fake.reads).toEqual([]);
   });
+
+  describe('conversations', () => {
+    const tools = [{ type: 'function', function: { name: 'read_file' } }];
+    const chat = (...turns: { role: string; content: string }[]) => ({ messages: [{ role: 'system', content: system }, ...turns], tools });
+    const user1 = { role: 'user', content: 'Q'.repeat(1500) };
+    // Reads above 1,024 new tokens are checkpointed (15 s at 10 tokens/s is less).
+    const options = { promptPerSecond: 10 };
+    const conversationStates = async (): Promise<string[]> => {
+      const out: string[] = [];
+      for (const name of await fs.readdir(dir)) {
+        if (!name.endsWith('.tokens.json')) continue;
+        const body = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as { kind: string; tokens: number[] };
+        if (body.kind === 'conversation') out.push(String.fromCharCode(...body.tokens));
+      }
+      return out;
+    };
+
+    it('saves a long chat and a fresh server resumes from it instead of rereading', async () => {
+      await listen();
+      await new PrefixCache(port, dir, options).prepare(chat(user1));
+      const [state] = await conversationStates();
+      expect(state).toContain('Q'.repeat(1500));
+      fake.server.close();
+
+      await listen();
+      await writeSaved();
+      await new PrefixCache(port, dir, options).prepare(chat(user1, { role: 'assistant', content: 'Done.' }, { role: 'user', content: 'Next?' }));
+      expect(fake.calls.filter((call) => call.includes('action=restore'))).toHaveLength(1);
+      expect(fake.reads).toEqual([]);
+      expect(String.fromCharCode(...fake.slots[0]!.tokens!)).toBe(state);
+    });
+
+    it('stops before a finished turn the template will render differently', async () => {
+      await listen();
+      await new PrefixCache(port, dir, options).prepare(chat(user1, { role: 'assistant', content: 'A'.repeat(1500) }));
+      const [state] = await conversationStates();
+      expect(state).toContain('Q'.repeat(100));
+      expect(state).not.toContain('AAAA');
+    });
+
+    it('keeps only the latest point of a chat', async () => {
+      await listen();
+      const cache = new PrefixCache(port, dir, options);
+      await cache.prepare(chat(user1));
+      await cache.prepare(chat(user1, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'R'.repeat(1500) }));
+      const states = await conversationStates();
+      expect(states).toHaveLength(1);
+      expect(states[0]).toContain('R'.repeat(100));
+    });
+
+    it('drops a save when the slot no longer held exactly this chat', async () => {
+      await listen({ savedCount: (count) => count + 1 });
+      await new PrefixCache(port, dir, options).prepare(chat(user1));
+      expect((await fs.readdir(dir)).filter((name) => name.endsWith('.bin'))).toEqual([]);
+    });
+
+    it('bounds conversation states by bytes but keeps prefixes', async () => {
+      await listen();
+      await new PrefixCache(port, dir, { ...options, conversationBytes: 0 }).prepare(chat(user1));
+      expect(await conversationStates()).toEqual([]);
+      expect((await fs.readdir(dir)).filter((name) => name.endsWith('.bin'))).toHaveLength(1);
+    });
+
+    it('does not checkpoint a short chat', async () => {
+      await listen();
+      await new PrefixCache(port, dir, options).prepare(chat({ role: 'user', content: 'Fix the bug' }));
+      expect(await conversationStates()).toEqual([]);
+    });
+  });
 });
 
 /** A fresh fake server knows nothing; the files on disk are the saved states. */
@@ -189,7 +263,7 @@ let savedTokens = new Map<string, number[]>();
 async function writeSaved(): Promise<void> {
   for (const name of await fs.readdir(dir)) {
     if (!name.endsWith('.tokens.json')) continue;
-    savedTokens.set(`${name.slice(0, -'.tokens.json'.length)}.bin`, JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')));
+    savedTokens.set(`${name.slice(0, -'.tokens.json'.length)}.bin`, (JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as { tokens: number[] }).tokens);
   }
   for (const [file, tokens] of savedTokens) fake.files.set(file, tokens);
 }
