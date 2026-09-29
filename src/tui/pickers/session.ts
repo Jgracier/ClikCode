@@ -342,7 +342,14 @@ export async function interactiveSessionPicker(
   };
   let selected: string | undefined;
   if (onBoard) {
-    const result = await rl.board!({ conversations: buildOptions, commands: boardCommands!, refresh: discovery, onAction: manage });
+    // The row for the conversation this window is in: its root, since the row
+    // stands for the whole conversation and names its latest chat.
+    const currentRoot = current ? conversationIdFor(current) : undefined;
+    const initial = buildOptions().find((option) => {
+      const listed = sessions.find((session) => session.id === option.value);
+      return listed !== undefined && conversationIdFor(listed) === currentRoot;
+    })?.value;
+    const result = await rl.board!({ conversations: buildOptions, commands: boardCommands!, refresh: discovery, onAction: manage, ...(initial ? { initial } : {}) });
     if (result && 'compose' in result) return { compose: result.compose };
     if (result && 'command' in result) return { command: result.command };
     selected = result?.open;

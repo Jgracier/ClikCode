@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PickerOption } from '../harness/prompter';
-import { boardKey, boardRows, type BoardState } from './conversation-board';
+import { boardKey, boardRows, boardStartRow, type BoardState } from './conversation-board';
 
 const UP = '\u001b[A';
 const DOWN = '\u001b[B';
@@ -83,5 +83,25 @@ describe('the conversation board', () => {
     expect(press(state, DOWN, '\t')).toEqual({ kind: 'actions', option: conversations[0] });
     expect(press(state, '\u001b[3~')).toEqual({ kind: 'none' });
     expect(press(state, DOWN, '\u001b[3~')).toEqual({ kind: 'delete', option: conversations[1] });
+  });
+});
+
+describe('where the board opens', () => {
+  it('on the conversation this window is in, wherever it is listed', () => {
+    expect(boardStartRow(conversations, 'old')).toBe(1);
+  });
+
+  it('on the top row from a new chat, which is not listed', () => {
+    expect(boardStartRow(conversations, 'brand-new')).toBe(0);
+    expect(boardStartRow(conversations)).toBe(0);
+  });
+
+  it('on the composer when there is nothing to list', () => {
+    expect(boardStartRow([], 'anything')).toBe(-1);
+  });
+
+  it('goes straight back to the conversation it opened on', () => {
+    const state: BoardState = { draft: '', selected: boardStartRow(conversations, 'old') };
+    expect(boardKey(state, '\r', conversations)).toEqual({ kind: 'finish', result: { open: 'old' } });
   });
 });
