@@ -169,6 +169,16 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
 
   const broadcastQueueChanged = (): void => {
     for (const connection of connections.values()) if (connection.attached) connection.socket.write(encodeFrame({ type: 'queue-changed' }));
+    showEveryWindow();
+  };
+
+  /** Mid-turn, every window is showing the turn, and a message typed in one
+   * of them -- steered into it or queued behind it -- belongs on all of them
+   * now, not when the turn ends. The snapshot carries both (the journal's
+   * steers, the queue); each window already draws them from there. */
+  const showEveryWindow = (): void => {
+    if (!turnRunning) return;
+    void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(() => undefined);
   };
 
   /** Shell notifications become a queued turn: durable in the conversation's
@@ -453,6 +463,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
           answer(result.disposition === 'steered' ? 'steered' : 'queued');
           // Every window shows the queue, not only the one that typed it.
           if (result.disposition !== 'steered') broadcastQueueChanged();
+          else showEveryWindow();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           answer('error', message);

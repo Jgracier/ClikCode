@@ -193,7 +193,10 @@ export async function interactiveSessionPicker(
   // annotated instead below; selecting it takes it over the same way opening
   // any session already does (claimSession is unconditional).
   const sessions = state.sessions
-    .filter((session) => session.id === currentId || sessionTranscriptMessages(session).length > 0 || Boolean(session.nativeSessionId))
+    // On the board the composer is how a chat starts, so the empty one this
+    // window just opened is not listed: on a phone that has just connected it
+    // sat above the conversation being switched to, under the same name.
+    .filter((session) => (session.id === currentId && !onBoard) || sessionTranscriptMessages(session).length > 0 || Boolean(session.nativeSessionId))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const workspace = current?.workspace ?? process.cwd();
   // Read once, as the list opens: whether a worker is behind each chat is one
