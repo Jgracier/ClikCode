@@ -330,6 +330,7 @@ async function driveWorkerTurn(
             finish(() => resolveTurn());
             return;
           case 'queue-changed':
+          case 'retire-declined':
             return;
           case 'waiting-start':
             // Already reflected: the caller calls rl.startWaiting() itself,

@@ -43,7 +43,10 @@ export type ClientCommand =
   | { type: 'prepare' }
   /** Stop everything local this worker started for the conversation. */
   | { type: 'release' }
-  | { type: 'detach' };
+  | { type: 'detach' }
+  /** Sent by a client on a different build. The worker exits if it is idle
+   * and otherwise answers `retire-declined` and exits once it is. */
+  | { type: 'retire' };
 
 /** What the worker tells an attached client. `snapshot` is always the first
  * event after `attach` answers -- the full session to paint, and, when a
@@ -52,6 +55,7 @@ export type ClientCommand =
  * persisted history the way reseedTranscript used to; it is simply told. */
 export type WorkerEvent =
   | { type: 'attach-rejected'; reason: string }
+  | { type: 'retire-declined'; reason: string }
   /** `live.prompt` is what the running turn was started with, so a client
    * that did not start it can show it as the pending message. */
   | { type: 'snapshot'; session: HarnessSession; account?: string; live?: { text: string; waitingLabel: string; prompt?: string } }

@@ -140,7 +140,7 @@ describe('session worker (real spawned process, real socket)', () => {
     expect(after?.build).toBe(before?.build);
   });
 
-  it('keeps a stale-build worker that is in the middle of a turn', async () => {
+  it('retires an idle stale-build worker whatever the journal says', async () => {
     const session = await isolatedSession();
     const first = await WorkerClient.attach(session.id);
     spawnedClients.push(first);
@@ -158,9 +158,10 @@ describe('session worker (real spawned process, real socket)', () => {
     spawnedClients.push(second);
     await second.initialSnapshot;
 
-    // The user is mid-answer. Finishing that beats this client's freshness;
-    // the next attach, once the turn is done, retires it.
-    expect((await readWorkerRecord(session.id))?.pid).toBe(before?.pid);
+    // A journal left by an interrupted turn is not a running turn: the
+    // worker knows it is idle, and steps down. (A worker really mid-turn is
+    // kept: session-worker-waiting.vitest.test.ts.)
+    expect((await readWorkerRecord(session.id))?.pid).not.toBe(before?.pid);
   });
 
   it('keeps a message typed as the turn ended, instead of dropping it', async () => {
