@@ -37,6 +37,7 @@ import { harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelP
 import { prepareAttachments } from '../session/attachments.js';
 import { normalizeTurnUsage, type NormalizedTurnUsage } from '../harness/transport/options.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
+import { forgetNativeThread } from '../session/native-thread.js';
 
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
@@ -51,6 +52,8 @@ export function isEffortRefusal(failure: Error): boolean {
   const stderr = (failure as { stderrTail?: unknown }).stderrTail;
   return EFFORT_REJECTED.test([failure.message, typeof stderr === 'string' ? stderr : ''].join('\n'));
 }
+
+const RETRY_EDITS = { clear: ['', 'replace'], 'new-paragraph': ['\n\n', 'append'] } as const;
 
 export async function sendVendorTurn(input: {
   state: HarnessState;
@@ -128,20 +131,32 @@ export async function sendVendorTurn(input: {
    * not the whole story. */
   let lastOtherFailure: unknown;
   const attemptedAccounts = new Set<string>();
+  /** The two edits a retry makes to the answer, in the saved turn and on
+   * screen alike: clear it, or start a new paragraph after it. Only these --
+   * the model's own words reach the screen through emitResponseDelta alone. */
+  const editAnswer = (edit: keyof typeof RETRY_EDITS): void => {
+    checkpoint.response(RETRY_EDITS[edit][0], RETRY_EDITS[edit][1]);
+    prompter?.response(RETRY_EDITS[edit][0], RETRY_EDITS[edit][1]);
+  };
+  /** Moving the turn to another account: said before the retry, not after it
+   * returns (it happens inside one await chain and would otherwise look
+   * instantaneous), and with the reason, so a crash is not called a spent plan. */
+  const switchAccount = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
+    prompter?.activity(chalk.yellow(accountSwitchNotice(why, to.label)));
+    prompter?.phase(accountSwitchPhase(to.label));
+    await closePersistentTransport(session.id);
+    switchedFrom = account.label;
+    account = to;
+    session.accountId = to.id;
+  };
   try {
   const initial = initialAccountChoice(
     state, account, session.accountFailover, (item) => turnBackendForAccount(item) === 'vendor', attemptedAccounts,
   );
   if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
   if (initial.kind === 'switch') {
-    const fallback = initial.account;
-    switchedFrom = account.label;
-    prompter?.activity(chalk.yellow(accountSwitchNotice('quota-exhausted', fallback.label)));
-    prompter?.phase(accountSwitchPhase(fallback.label));
-    account = fallback;
-    session.accountId = fallback.id;
-    session.nativeSessionId = undefined;
-    session.nativeStartedAt = undefined;
+    await switchAccount(initial.account, 'quota-exhausted');
+    forgetNativeThread(session);
     await checkpoint.persistNow();
   }
   // A fresh native thread (no nativeSessionId yet) with prior ClikCode
@@ -292,10 +307,7 @@ export async function sendVendorTurn(input: {
     // opens a fresh one and carries ClikCode's own transcript (the fresh-
     // thread replay above) instead of resuming into an empty memory.
     const statelessProvider = Boolean(model && harness.turn?.statelessProviders?.includes(modelProvider(harness, model) ?? ''));
-    if (!result.isError && (result.nativeSessionStateless || statelessProvider)) {
-      session.nativeSessionId = undefined;
-      delete session.nativeSessionPreallocated;
-    }
+    if (!result.isError && (result.nativeSessionStateless || statelessProvider)) forgetNativeThread(session);
     // A non-zero exit code alone is not treated as failure here: by this
     // point nativeTurnResult has already thrown if it found neither assistant
     // text nor tool work, so a result means a real, complete turn. A harness
@@ -370,8 +382,7 @@ export async function sendVendorTurn(input: {
             account = await syncAccountIdentityAfterLogin(harness, account, state);
             session.accountId = account.id;
             // The failed reply may already be on screen; the retry replaces it.
-            checkpoint.response('', 'replace');
-            prompter.response('', 'replace');
+            editAnswer('clear');
             continue;
           }
         }
@@ -389,12 +400,9 @@ export async function sendVendorTurn(input: {
         // a disposable optimization, never a requirement.
         nativeThreadRetried = true;
         await closePersistentTransport(session.id);
-        session.nativeSessionId = undefined;
-        session.nativeStartedAt = undefined;
-        delete session.nativeSessionPreallocated;
+        forgetNativeThread(session);
         turnText = interruptedTurnFailoverPrompt(session);
-        checkpoint.response('', 'replace');
-        prompter?.response('', 'replace');
+        editAnswer('clear');
         continue;
       }
       // A rejected REQUEST is not an account problem, and trying the next
@@ -457,27 +465,15 @@ export async function sendVendorTurn(input: {
         from: turnEnvironment(harness, account),
         to: turnEnvironment(harness, fallback),
       });
-      switchedFrom = account.label;
       switchReason = failureKind;
-      // Announced before the retry, not after it returns: switching accounts
-      // happens inside one continuous await chain, so without this the whole
-      // thing looks instantaneous and the reply just silently comes from a
-      // different account with nothing to explain the (brief) extra wait.
-      // Say why it moved. Switching happens for any failure now, so calling
-      // every one of them "quota reached" would misreport a crash as a
-      // spent plan.
       const verification = failureKind === 'account-ineligible' ? accountVerification(failure) : undefined;
       if (verification) {
         account.verification = { ...verification, at: new Date().toISOString() };
         await checkpoint.persistNow();
         prompter?.activity(chalk.yellow(verificationNotice(verification)));
       }
-      prompter?.activity(chalk.yellow(accountSwitchNotice(failureKind, fallback.label)));
-      prompter?.phase(accountSwitchPhase(fallback.label));
-      await closePersistentTransport(session.id);
-      account = fallback;
+      await switchAccount(fallback, failureKind);
       nativeThreadRetried = false;
-      session.accountId = fallback.id;
       if (carriedThread) {
         // The same thread, under a new account: it holds the conversation,
         // the interrupted request and every tool call it had already made.
@@ -494,21 +490,17 @@ export async function sendVendorTurn(input: {
         // continuation starts a new paragraph instead of running into it.
         const partial = session.pendingTurn?.response ?? '';
         if (partial.trim() && !/\n\s*\n\s*$/.test(partial)) {
-          checkpoint.response('\n\n', 'append');
-          prompter?.response('\n\n', 'append');
+          editAnswer('new-paragraph');
         }
       } else {
-        session.nativeSessionId = undefined;
-        session.nativeStartedAt = undefined;
-        delete session.nativeSessionPreallocated;
+        forgetNativeThread(session);
         // Built while the interrupted attempt's touched-file hints are still
         // on the checkpoint; only then is the partial response cleared,
         // because a fresh thread answers the whole request again and keeping
         // the old half would show it twice (the direct-API path does the
         // same).
         turnText = interruptedTurnFailoverPrompt(session);
-        checkpoint.response('', 'replace');
-        prompter?.response('', 'replace');
+        editAnswer('clear');
       }
       continue;
     }

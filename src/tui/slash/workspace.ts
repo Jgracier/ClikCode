@@ -10,6 +10,7 @@ import { closePersistentTransport } from '../../turn/runtime.js';
 import { decodeAttachmentPath, expandHomePath } from '../../session/attachments.js';
 import { optionForControl } from '../../session/options.js';
 import { sessionHarness } from './context.js';
+import { forgetNativeThread } from '../../session/native-thread.js';
 
 function captureProcess(command: string, args: readonly string[], cwd?: string, stdinText?: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -62,9 +63,7 @@ export async function changeSessionWorkspace(state: HarnessState, session: Harne
   if (path === (session.workspace ?? process.cwd())) return `Already working in ${compactPath(path)}.`;
   const droppedNative = Boolean(session.nativeSessionId);
   session.workspace = path;
-  session.nativeSessionId = undefined;
-  session.nativeStartedAt = undefined;
-  delete session.nativeSessionPreallocated;
+  forgetNativeThread(session);
   session.updatedAt = new Date().toISOString();
   await writeState(state);
   await closePersistentTransport(session.id);

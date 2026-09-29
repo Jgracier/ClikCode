@@ -25,6 +25,7 @@ import { signedInAccountId } from './preferred-account.js';
 import { hasAuthEvidence } from '../../harness/accounts/auth-files.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 import { turnBackendForAccount } from '../../turn/account-routing.js';
+import { forgetNativeThread } from '../../session/native-thread.js';
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
  * it first if needed, and — only inside the interactive terminal session,
@@ -49,8 +50,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     if (requiresProviderHandoff(session, harness.command)) {
       throw new Error(`Use /${harness.command} to hand off this ${sessionProviderLabel(session)} conversation. Native provider changes always create a new branch.`);
     }
-    session.nativeSessionId = undefined;
-    session.nativeStartedAt = undefined;
+    forgetNativeThread(session);
     session.model = null;
   }
   session.nativeHarness = harness.command;

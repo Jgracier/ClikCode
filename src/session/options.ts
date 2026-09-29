@@ -23,6 +23,7 @@ import type { HarnessDefaultSettings, HarnessSession } from './model.js';
 import { harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
+import { forgetNativeThread } from './native-thread.js';
 
 /** Effort words every harness understands, narrowed per harness by
  * harnessSupportsEffort. */
@@ -230,8 +231,7 @@ export function setSessionHarnessOption(
   else if (option.id === 'permissions') session.permissionMode = String(parsed) as AiHarnessPermissionMode;
   else session.harnessOptions = { ...(session.harnessOptions ?? {}), [option.id]: parsed };
   if (option.requiresNewSession) {
-    session.nativeSessionId = undefined;
-    session.nativeStartedAt = undefined;
+    forgetNativeThread(session);
   }
 }
 
