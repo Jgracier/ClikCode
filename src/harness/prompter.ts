@@ -60,6 +60,9 @@ export interface HarnessPrompter {
       rows?: number;
     },
   ): Promise<T | undefined>;
+  /** The full-page conversation board (tui/conversation-board.ts), where a
+   * terminal can draw one. */
+  board?(settings: import('../tui/conversation-board.js').ConversationBoardSettings): Promise<import('../tui/conversation-board.js').BoardResult | undefined>;
   render?(session: HarnessSession, account?: string, notice?: string): void;
   /** The prompt this client has just submitted, or undefined for a synthetic
    * turn that shows none. Held until the turn ends: see

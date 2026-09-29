@@ -28,7 +28,8 @@ import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivity
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
-import { runOptionPicker } from './option-picker.js';
+import { runOptionPicker, type OptionPickerHost } from './option-picker.js';
+import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
@@ -2245,13 +2246,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       rows?: number;
     },
   ): Promise<T | undefined> {
-    return runOptionPicker<T>({
+    return runOptionPicker<T>(this.pickerHost(), title, options, onAction, settings);
+  }
+
+  board(settings: ConversationBoardSettings): Promise<BoardResult | undefined> {
+    return runConversationBoard(this.pickerHost(), settings);
+  }
+
+  private pickerHost(): OptionPickerHost {
+    return {
       paint: (composer, pickerOptions, selected, prompt, cursor, palette) =>
         this.paint(composer, pickerOptions, selected, prompt, cursor, palette),
       clearFrame: () => this.clearInteractiveFrame(),
       setSelecting: (selecting) => { this.selecting = selecting; },
       select: (subTitle, subOptions, subAction, subSettings) => this.select(subTitle, subOptions, subAction, subSettings),
-    }, title, options, onAction, settings);
+    };
   }
 
   close(): void {
