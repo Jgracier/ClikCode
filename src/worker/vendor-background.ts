@@ -124,8 +124,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       // finished) while that was saved -- and the waiting-stop belongs to
       // whatever turn is showing now, not to this one.
       if (observer.turnGeneration !== generation) return;
-      if (session) observer.render(session);
-      observer.stopWaiting();
+      observer.endTurn(session);
     } finally {
       active = undefined;
       deps.changed();

@@ -244,14 +244,20 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // The worker attaches `live` to every snapshot while a turn runs, so
       // one without it says nothing is running there.
       if (!event.live) return model.live ? endTurn({ ...next, pendingPrompt: undefined }) : next;
+      // The running turn's tool rows and plan come with it (from ClikCode
+      // builds that send them), so a panel opened mid-turn shows them too.
+      const activities = event.live.activities
+        ? event.live.activities.reduce<Activity[]>((list, item) => upsertActivity(list, item.event), [])
+        : next.live?.activities ?? [];
       return {
         ...next,
         running: true,
         turnUserIndex: next.turnUserIndex ?? next.messages.length,
         live: {
-          ...(next.live ?? freshLive('')), text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel),
+          ...(next.live ?? freshLive('')), activities, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel),
           ...(next.live?.text === event.live.text ? {} : { lastEventAt: Date.now() }),
         },
+        ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) } : {}),
       };
     }
     case 'waiting-start':

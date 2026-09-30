@@ -19,9 +19,9 @@ import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { closePersistentTransport, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
-import { BroadcastObserver } from './broadcast-observer.js';
+import { BroadcastObserver, sendEvent } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
-import { encodeFrame, FrameDecoder, type ClientCommand } from './protocol.js';
+import { FrameDecoder, type ClientCommand } from './protocol.js';
 import { disposeSessionState, formatShellNotifications, runningShellCount, sessionState, takeShellNotifications, type ShellNotification } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -51,6 +51,10 @@ interface ConnectionState {
   socket: Socket;
   frames: FrameDecoder;
   attached: boolean;
+  /** The attach being answered. A command sent right behind `attach` (a
+   * `retire`, a `submit`) waits for it rather than being dropped as sent by
+   * a window that never attached. */
+  attaching?: Promise<void>;
 }
 
 /** This conversation for this worker, or undefined when another worker has
@@ -183,12 +187,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (isGatewayService(current)) void gatewayModels({ config }).catch(() => undefined);
   };
 
-  const broadcastNotice = (message: string): void => {
-    for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'notice', message }));
-  };
+  const broadcastNotice = (message: string): void => observer.broadcast({ type: 'notice', message });
 
   const broadcastQueueChanged = (): void => {
-    for (const connection of connections.values()) if (connection.attached) connection.socket.write(encodeFrame({ type: 'queue-changed' }));
+    observer.broadcast({ type: 'queue-changed' });
     showEveryWindow();
   };
 
@@ -269,19 +271,19 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   const handleSubmit = async (socket: Socket, command: Extract<ClientCommand, { type: 'submit' }>): Promise<void> => {
     // The client already shows the prompt; the snapshot brings it up to date
     // with what has streamed, and the turn's own events carry it from there.
+    // `live` is read when the snapshot is sent, not before the state read:
+    // what streamed during that read reached this window as events already,
+    // and a snapshot older than them took them back off its screen.
     const follow = (): void => {
-      const live = observer.liveSnapshot();
-      void currentSessionAndAccount().then(({ session: current, account }) => {
-        socket.write(encodeFrame({ type: 'snapshot', session: current, ...(account ? { account } : {}), ...(live ? { live } : {}) }));
-      }, () => undefined);
+      void currentSessionAndAccount().then(({ session: current, account }) => observer.snapshotFor(socket, current, account), () => undefined);
     };
     if (command.queuedTurnId) {
       if (turnRunning && activeQueuedTurnId === command.queuedTurnId) { follow(); return; }
       const { session: current, account } = await currentSessionAndAccount();
       if (turnRunning && activeQueuedTurnId === command.queuedTurnId) { follow(); return; }
       if (!current.queuedTurns?.some((item) => item.id === command.queuedTurnId)) {
-        socket.write(encodeFrame({ type: 'snapshot', session: current, ...(account ? { account } : {}) }));
-        socket.write(encodeFrame({ type: 'waiting-stop' }));
+        sendEvent(socket, { type: 'snapshot', session: current, ...(account ? { account } : {}) });
+        sendEvent(socket, { type: 'waiting-stop' });
         return;
       }
     }
@@ -296,7 +298,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       enqueueSessionTurn(found, { id: queuedTurnId, text: command.text.trim(), submittedAt }, submittedAt);
       await writeState(latest);
     }
-    socket.write(encodeFrame({ type: 'submit-queued', queuedTurnId }));
+    sendEvent(socket, { type: 'submit-queued', queuedTurnId });
     broadcastQueueChanged();
     // The window follows the running turn until it ends; this brings it up
     // to date with what has streamed.
@@ -343,14 +345,12 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         if (outputStarted) await preserveInterruptedTurn(sessionId, command.text, observer.liveResponseText, true);
         else {
           await discardInterruptedTurn(sessionId, command.text);
-          if (activeRestoreDraft) {
-            for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'restore-draft', text: command.text }));
-          }
+          if (activeRestoreDraft) observer.broadcast({ type: 'restore-draft', text: command.text });
         }
         broadcastNotice(outputStarted ? 'Stopped' : activeRestoreDraft ? 'Stopped · draft restored' : 'Stopped');
       } else {
         const message = error instanceof Error ? error.message : String(error);
-        for (const connection of connections.keys()) connection.write(encodeFrame({ type: 'turn-error', message }));
+        observer.broadcast({ type: 'turn-error', message });
         // A queued turn is consumed once its checkpoint starts; one that
         // failed before that is still at the head, and would be run again
         // straight after this -- and fail the same way, for ever.
@@ -376,13 +376,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // What background work this turn superseded did, now that the turn's own
       // save (which rewrites the transcript) is done.
       await vendorBackground.saveSuperseded();
-      // Render before stopWaiting, deliberately: a client (see
-      // worker/turn-bridge.ts) treats waiting-stop as "the turn is over,
-      // stop listening" and detaches its event handler the instant it
-      // arrives -- this final snapshot must already have been sent, or it
-      // is broadcast to a socket nothing is reading from anymore.
-      observer.render((await currentSessionAndAccount()).session);
-      observer.stopWaiting();
+      const ended = await currentSessionAndAccount();
+      observer.endTurn(ended.session, ended.account);
       turnRunning = false;
       activeQueuedTurnId = undefined;
       // Vendor work that arrived while this turn was finishing.
@@ -400,26 +395,34 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   const handleCommand = async (socket: Socket, command: ClientCommand, connection: ConnectionState): Promise<void> => {
     if (command.type === 'attach') {
       if (command.token !== token) {
-        socket.write(encodeFrame({ type: 'attach-rejected', reason: 'stale or invalid token' }));
+        sendEvent(socket, { type: 'attach-rejected', reason: 'stale or invalid token' });
         socket.end();
         return;
       }
-      connection.attached = true;
-      observer.attach(socket);
+      // Read first, then join the broadcast and send the snapshot in the same
+      // tick. Joined before the read, the window was sent every delta that
+      // streamed during it AND a snapshot whose text already held them, and
+      // drew that text twice.
       if (idleTimer) clearTimeout(idleTimer);
-      const { session: current, account } = await currentSessionAndAccount();
-      const live = observer.liveSnapshot();
-      socket.write(encodeFrame({ type: 'snapshot', session: current, ...(account ? { account } : {}), ...(live ? { live } : {}) }));
-      // A turn waiting on an answer is asked again here: whoever it asked
-      // may be gone, and this window may be the only one left to answer.
-      observer.reofferPending(socket);
+      idleTimer = undefined;
+      connection.attaching = currentSessionAndAccount().then(({ session: current, account }) => {
+        if (socket.destroyed) return;
+        connection.attached = true;
+        observer.attach(socket);
+        observer.snapshotFor(socket, current, account);
+        // A turn waiting on an answer is asked again here: whoever it asked
+        // may be gone, and this window may be the only one left to answer.
+        observer.reofferPending(socket);
+      });
+      await connection.attaching;
       return;
     }
+    if (connection.attaching) await connection.attaching.catch(() => undefined);
     if (!connection.attached) return;
     if (command.type === 'submit') {
       try { await handleSubmit(socket, command); } catch (error) {
-        socket.write(encodeFrame({ type: 'turn-error', message: error instanceof Error ? error.message : String(error) }));
-        socket.write(encodeFrame({ type: 'waiting-stop' }));
+        sendEvent(socket, { type: 'turn-error', message: error instanceof Error ? error.message : String(error) });
+        sendEvent(socket, { type: 'waiting-stop' });
       }
       return;
     }
@@ -438,7 +441,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       const blocker = retireBlocker();
       if (blocker) {
         retireWhenIdle = true;
-        socket.write(encodeFrame({ type: 'retire-declined', reason: blocker }));
+        sendEvent(socket, { type: 'retire-declined', reason: blocker });
         return;
       }
       void shutdown('replaced by a newer ClikCode build');
@@ -455,7 +458,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     }
     if (command.type === 'steer') {
       const answer = (disposition: 'steered' | 'queued' | 'error', message?: string): void => {
-        if (command.id) socket.write(encodeFrame({ type: 'submission', id: command.id, disposition, ...(message ? { message } : {}) }));
+        if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition, ...(message ? { message } : {}) });
       };
       // The turn ended between the client's Enter and this arriving. This used
       // to `return` -- and the message was simply gone. Nothing is running to
@@ -536,7 +539,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // orphaned the same way.
     await closePersistentTransport().catch(() => undefined);
     for (const connection of connections.keys()) {
-      connection.write(encodeFrame({ type: 'shutdown', reason }));
+      sendEvent(connection, { type: 'shutdown', reason });
       connection.end();
     }
     server.close();

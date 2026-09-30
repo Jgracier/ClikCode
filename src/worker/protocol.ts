@@ -51,6 +51,26 @@ export type ClientCommand =
    * and otherwise answers `retire-declined` and exits once it is. */
   | { type: 'retire' };
 
+/** One tool row of the running turn, and how much of its answer had streamed
+ * when it happened -- where it sits between the answer's paragraphs. */
+export type LiveActivity = { event: HarnessActivityEvent; responseOffset: number };
+
+/** A thought is never a transcript row (the prompter shows only the latest
+ * one, live), so a running turn keeps every activity but those. Both ends
+ * count a turn's activities by this one rule. */
+export function isTranscriptActivity(event: HarnessActivityEvent): boolean {
+  return event.kind !== 'thinking';
+}
+
+/** The turn in flight, as far as it has got: what a window joining it needs
+ * to draw it whole. `prompt` is what it was started with, so a client that
+ * did not start it can show it as the pending message. `activities` and
+ * `plan` are additive: a worker older than them sends text only. */
+export type LiveTurn = {
+  text: string; waitingLabel: string; prompt?: string;
+  activities?: LiveActivity[]; plan?: PlanEntry[];
+};
+
 /** What the worker tells an attached client. `snapshot` is always the first
  * event after `attach` answers -- the full session to paint, and, when a
  * turn is already running, what has streamed of it so far -- so a client is
@@ -59,9 +79,9 @@ export type ClientCommand =
 export type WorkerEvent =
   | { type: 'attach-rejected'; reason: string }
   | { type: 'retire-declined'; reason: string }
-  /** `live.prompt` is what the running turn was started with, so a client
-   * that did not start it can show it as the pending message. */
-  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: { text: string; waitingLabel: string; prompt?: string } }
+  /** `live` is present exactly while a turn runs: a snapshot without it says
+   * nothing is running, including the one that closes a turn. */
+  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: LiveTurn }
   | { type: 'delta'; text: string; mode: 'append' | 'replace' }
   | { type: 'activity'; event: HarnessActivityEvent }
   /** A line of the turn's own transcript that is not a tool call: an account

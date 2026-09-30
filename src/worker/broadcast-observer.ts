@@ -19,7 +19,21 @@ import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInRequest, TurnObserver } from '../turn/observer.js';
-import { encodeFrame, type WorkerEvent } from './protocol.js';
+import { encodeFrame, isTranscriptActivity, type LiveActivity, type LiveTurn, type WorkerEvent } from './protocol.js';
+
+/** How far a window may fall behind before it is let go. A window that stops
+ * reading -- a suspended terminal, a hung process -- would otherwise have
+ * every event of every turn held for it in this worker's memory, without
+ * bound. Closed, it attaches again when it next reads, and the snapshot it
+ * gets then is whole: nothing is lost by dropping what it did not read. */
+const MAX_UNREAD_BYTES = 16 * 1024 * 1024;
+
+/** Writes one event to one window, unless that window is too far behind. */
+export function sendEvent(socket: Socket, event: WorkerEvent): void {
+  if (socket.destroyed) return;
+  if (socket.writableLength > MAX_UNREAD_BYTES) { socket.destroy(); return; }
+  socket.write(encodeFrame(event));
+}
 
 export class BroadcastObserver implements TurnObserver {
   private readonly clients = new Set<Socket>();
@@ -36,6 +50,10 @@ export class BroadcastObserver implements TurnObserver {
   private outputStarted = false;
   /** What the running turn was started with (see WorkerEvent's waiting-start). */
   private livePrompt: string | undefined;
+  /** The running turn's tool rows and plan, so a window joining it mid-way
+   * draws those too, not only its text. */
+  private liveActivities: LiveActivity[] = [];
+  private livePlan: readonly PlanEntry[] = [];
   /** Each open request is kept WITH the event that asked it, so a client
    * attaching later is asked too (reofferPending). They used to go only to
    * whoever was attached at that moment: a turn waiting on an approval with
@@ -49,7 +67,7 @@ export class BroadcastObserver implements TurnObserver {
 
   /** Sent to a client that just attached, after its snapshot. */
   reofferPending(socket: Socket): void {
-    for (const pending of [...this.pendingApprovals.values(), ...this.pendingSignIns.values()]) socket.write(encodeFrame(pending.event));
+    for (const pending of [...this.pendingApprovals.values(), ...this.pendingSignIns.values()]) sendEvent(socket, pending.event);
   }
 
   get pendingRequestCount(): number {
@@ -66,8 +84,20 @@ export class BroadcastObserver implements TurnObserver {
 
   /** What a freshly-attached client needs painted immediately: the turn in
    * flight, if any, exactly as far along as it has actually gotten. */
-  liveSnapshot(): { text: string; waitingLabel: string; prompt?: string } | undefined {
-    return this.waitingLabel ? { text: this.liveText, waitingLabel: this.waitingLabel, ...(this.livePrompt !== undefined ? { prompt: this.livePrompt } : {}) } : undefined;
+  liveSnapshot(): LiveTurn | undefined {
+    if (!this.waitingLabel) return undefined;
+    return {
+      text: this.liveText, waitingLabel: this.waitingLabel, ...(this.livePrompt !== undefined ? { prompt: this.livePrompt } : {}),
+      activities: [...this.liveActivities], plan: [...this.livePlan],
+    };
+  }
+
+  /** The whole conversation, and the turn in flight if there is one, for one
+   * window -- read synchronously, so no event can fall between what the
+   * snapshot holds and what the window is sent after it. */
+  snapshotFor(socket: Socket, session: HarnessSession, account?: string): void {
+    const live = this.liveSnapshot();
+    sendEvent(socket, { type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}) });
   }
 
   resolveApproval(id: string, approved: boolean | 'always'): void {
@@ -85,13 +115,13 @@ export class BroadcastObserver implements TurnObserver {
     this.pendingSignIns.clear();
   }
 
-  private broadcast(event: WorkerEvent): void {
-    const frame = encodeFrame(event);
-    for (const client of this.clients) client.write(frame);
+  broadcast(event: WorkerEvent): void {
+    for (const client of this.clients) sendEvent(client, event);
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {
-    this.broadcast({ type: 'snapshot', session, ...(account ? { account } : {}), ...(this.liveSnapshot() ? { live: this.liveSnapshot() } : {}) });
+    const live = this.liveSnapshot();
+    this.broadcast({ type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}) });
     if (notice) this.broadcast({ type: 'notice', message: notice });
   }
 
@@ -108,6 +138,7 @@ export class BroadcastObserver implements TurnObserver {
 
   activityEvent(event: HarnessActivityEvent): void {
     this.outputStarted = true;
+    if (this.waitingLabel && isTranscriptActivity(event)) this.liveActivities.push({ event, responseOffset: this.liveText.length });
     this.broadcast({ type: 'activity', event });
   }
 
@@ -116,6 +147,7 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   setPlan(entries: readonly PlanEntry[]): void {
+    if (this.waitingLabel) this.livePlan = entries;
     this.broadcast({ type: 'plan', entries });
   }
 
@@ -158,6 +190,8 @@ export class BroadcastObserver implements TurnObserver {
     this.liveText = '';
     this.waitingLabel = message;
     this.livePrompt = prompt;
+    this.liveActivities = [];
+    this.livePlan = [];
     this.outputStarted = false;
     this.broadcast({ type: 'waiting-start', message, ...(prompt !== undefined ? { prompt } : {}) });
   }
@@ -165,8 +199,19 @@ export class BroadcastObserver implements TurnObserver {
   stopWaiting(): void {
     this.waitingLabel = '';
     this.livePrompt = undefined;
+    this.liveActivities = [];
+    this.livePlan = [];
     this.dropPending();
     this.broadcast({ type: 'waiting-stop' });
+  }
+
+  /** The turn is over: the conversation as it now stands, then waiting-stop.
+   * The snapshot goes first because a window stops listening at waiting-stop;
+   * it carries no `live`, because nothing is running any more -- a journal it
+   * still holds is an interrupted turn, and a window draws it as one. */
+  endTurn(session?: HarnessSession, account?: string): void {
+    if (session) this.broadcast({ type: 'snapshot', session, ...(account ? { account } : {}) });
+    this.stopWaiting();
   }
 
   get turnOutputStarted(): boolean {
@@ -177,16 +222,6 @@ export class BroadcastObserver implements TurnObserver {
     return this.liveText;
   }
 
-  /** A worker has no terminal to hand over -- it was spawned detached, with
-   * no TTY of its own to suspend. This is the one real gap the client/worker
-   * split does not resolve on its own (flagged when the split was planned):
-   * a vendor CLI's interactive login, mid-turn, genuinely needs a real
-   * terminal. Broadcasting the event lets an attached client show that a
-   * turn is blocked on something it cannot do remotely, rather than hanging
-   * with no explanation; actually completing the login is out of scope
-   * here and is expected to surface as the turn failing with an
-   * authentication error the client's own (local, client-side) /login flow
-   * then handles the normal way. */
   /** The sign-in runs on the client's terminal (see SignInRequest). With no
    * client attached there is nowhere to run it, so the turn fails with its
    * authentication error and the user signs in on reattaching. */
@@ -208,6 +243,8 @@ export class BroadcastObserver implements TurnObserver {
     else pending.resolve();
   }
 
+  /** A worker has no terminal of its own to hand over; the windows show that
+   * the turn is waiting on theirs. */
   async suspend(): Promise<void> {
     this.broadcast({ type: 'suspend' });
   }

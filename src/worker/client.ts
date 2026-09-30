@@ -214,6 +214,11 @@ export class WorkerClient extends EventEmitter {
           resolveInitial(event);
           continue;
         }
+        // Anything before the snapshot is already in it. A worker from before
+        // attach was atomic joined a window to its broadcast and then read
+        // the conversation, so what streamed during that read came first AND
+        // inside the snapshot's text; replayed, it was drawn twice.
+        if (!sawInitial) continue;
         // Events that arrive in the same chunk as the snapshot -- an approval
         // re-offered on attach, a turn's first delta -- come before attach()
         // has even returned, so before anyone could listen. Held until the
