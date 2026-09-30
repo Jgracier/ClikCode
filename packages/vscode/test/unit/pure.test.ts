@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyEvent, emptyModel, type ChatModel } from '../../src/model';
+import { applyEvent, chatModelLabel, emptyModel, type ChatModel } from '../../src/model';
 import { formatOutput } from '../../src/format';
 import { diffSides, stripAnsi } from '../../src/text';
 import { renderMarkdown } from '../../src/webview/markdown';
@@ -70,6 +70,29 @@ describe('chat model', () => {
     expect(attached.running).toBe(true);
     expect(attached.pendingPrompt).toBe('p');
     expect(attached.live?.text).toBe('part');
+  });
+});
+
+describe('model labels', () => {
+  it('names the chat model without its provider prefix, from the bridge or the shared rule', () => {
+    const labelled = run([{ type: 'session', session: session(), modelLabel: { model: 'opencode/big-pickle', label: 'big-pickle' } }]);
+    expect(labelled.model).toBe('opencode/big-pickle');
+    expect(chatModelLabel(labelled)).toBe('big-pickle');
+    // No label from an older bridge: the same rule, applied here.
+    expect(chatModelLabel(run([{ type: 'session', session: session() }]))).toBe('big-pickle');
+    // A model the worker reported since the label was sent.
+    const reported = run([worker({ type: 'snapshot', session: session({ model: 'opencode/claude-opus-4-5' }) })], labelled);
+    expect(chatModelLabel(reported)).toBe('claude-opus-4-5');
+    // A lab stays: OpenCode's anthropic model, and a Gateway model.
+    expect(chatModelLabel(run([{ type: 'session', session: session({ model: 'anthropic/claude-sonnet-4' }) }]))).toBe('anthropic/claude-sonnet-4');
+    const gateway = session({ route: 'gateway', nativeHarness: undefined, provider: 'gateway', model: 'openai/gpt-5.5' });
+    expect(chatModelLabel(run([{ type: 'session', session: gateway }]), 'ClikDeploy Gateway')).toBe('openai/gpt-5.5');
+    expect(chatModelLabel(run([{ type: 'session', session: session({ model: null }) }]))).toBeUndefined();
+  });
+
+  it('lists a models panel by label', () => {
+    expect(formatOutput({ panel: 'models', models: [{ model: 'opencode/big-pickle', provider: 'opencode' }, { model: 'kilo/openai/gpt-5.1', provider: 'kilo', label: 'openai/gpt-5.1' }], selected: 'opencode/big-pickle' }))
+      .toEqual({ kind: 'panel', title: 'Models', body: '● big-pickle  (opencode)\n  openai/gpt-5.1  (kilo)' });
   });
 });
 

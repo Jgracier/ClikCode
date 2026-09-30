@@ -38,6 +38,9 @@ export function chatSuite(): void {
       await pickProviderModel(api, 'opencode', 'opencode/big-pickle');
       await until(api, (state) => state.harness === 'opencode' && state.model === 'opencode/big-pickle', 'OpenCode big-pickle', 180_000);
       await waitFor(api, '#provider-button', 'the provider button showing OpenCode', 30_000, (found) => /OpenCode/.test(found.text));
+      // The provider is on the button beside it, so the model reads without it.
+      await waitFor(api, '#model-button', 'the Model button showing big-pickle', 30_000, (found) => found.text.trim() === 'big-pickle');
+      await waitFor(api, '.welcome', 'the welcome line naming big-pickle', 30_000, (found) => /OpenCode · big-pickle/.test(found.text) && !/opencode\//.test(found.text));
     });
 
     it('runs a real turn typed in the composer and streams the answer', async () => {
@@ -67,6 +70,9 @@ export function chatSuite(): void {
       await waitFor(api, '#provider-picker', 'the menu to close on Enter', 10_000, (found) => found.count === 0);
       await click(api, '#model-button');
       await waitFor(api, '#model-picker [data-key="m:opencode/big-pickle"]', "OpenCode's models in the Model menu", 60_000);
+      const labels = await query(api, '#model-picker .row-label');
+      assert.ok(labels.texts.includes('big-pickle'), `big-pickle listed by its label: ${labels.texts.slice(0, 5).join(', ')}`);
+      assert.ok(!labels.texts.some((text) => /^opencode[/:]/.test(text)), 'no row repeats the provider');
       await key(api, '#model-picker input', 'Escape');
       await waitFor(api, '#model-picker', 'the menu to close on Esc', 10_000, (found) => found.count === 0);
       assert.strictEqual(api.state.running, false, 'Esc in a menu does not touch the turn');

@@ -2,6 +2,15 @@
  * show in the chat: a panel, a one-line notice, or nothing when the result is
  * already visible elsewhere (a settings change shows in the header). */
 import { stripAnsi } from './text';
+import { modelLabel } from './webview/format';
+
+/** A `models` panel row's model as the terminal prints it: the bridge's
+ * label, else the id without its provider's own prefix. A ClikCode Local
+ * row's label is already in its provider text, so it shows the id. */
+function shownModel(row: Record<string, unknown>): string {
+  if (typeof row.label === 'string' && !('fits' in row)) return row.label;
+  return modelLabel(String(row.model), typeof row.provider === 'string' ? row.provider : undefined);
+}
 
 export type Shown =
   | { kind: 'panel'; title: string; body: string }
@@ -46,7 +55,7 @@ export function formatOutput(payload: Record<string, unknown>): Shown {
     const selected = payload.selected;
     return {
       kind: 'panel', title: 'Models',
-      body: list(payload.models, (model) => `${model.model === selected ? '● ' : '  '}${String(model.model)}${model.provider ?? model.account ? `  (${String(model.provider ?? model.account)})` : ''}`),
+      body: list(payload.models, (model) => `${model.model === selected ? '● ' : '  '}${shownModel(model)}${model.provider ?? model.account ? `  (${String(model.provider ?? model.account)})` : ''}`),
     };
   }
   if (panel === 'accounts' && Array.isArray(payload.accounts)) {

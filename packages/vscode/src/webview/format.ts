@@ -62,14 +62,6 @@ export function titleCase(value: string): string {
   return value ? value[0]!.toUpperCase() + value.slice(1) : value;
 }
 
-/** A model id as people read it: `opencode:big-pickle` or `opencode/big-pickle`
- * under OpenCode is `big-pickle`. A prefix naming someone else (a Gateway
- * model's lab, `openai/gpt-5.5`) is kept: there it says whose model it is. */
-export function modelLabel(model: string | undefined, ...owners: Array<string | undefined>): string | undefined {
-  if (!model) return model;
-  const match = /^([\w.-]+)[:/](.+)$/.exec(model);
-  if (!match) return model;
-  const norm = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const prefix = norm(match[1]!);
-  return owners.some((owner) => owner && norm(owner) === prefix) ? match[2]! : model;
-}
+/** A model id as people read it beside its provider: ClikCode's own rule,
+ * bundled from its source so the panel and the terminal cannot disagree. */
+export { modelLabel } from '../../../../src/harness/model-label.js';

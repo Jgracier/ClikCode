@@ -9,8 +9,9 @@
  * copy is the prompt this client just submitted, shown until the worker's
  * own snapshot carries it.
  */
-import type { HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeProvider, WorkerEvent } from './protocol';
+import type { HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
+import { modelLabel } from './webview/format';
 import { diffInDetail, stripAnsi } from './text';
 import type { Remedy } from './compat';
 
@@ -67,7 +68,10 @@ export interface ChatModel {
   /** The provider id `choose provider` takes: a harness command, `gateway`,
    * or `clikcode-local`. */
   providerId?: string;
+  /** The model id, as the session has it (sent back unchanged). */
   model?: string;
+  /** The bridge's label for a model, from the last `session` event. */
+  modelLabel?: IdeModelLabel;
   account?: string;
   effort?: string;
   permissions?: string;
@@ -122,6 +126,15 @@ export function providerDisplayName(model: ChatModel, known?: ReadonlyArray<{ id
   return harness ? harness.replace(/(^|[-_ ])(\w)/g, (_match, space: string, letter: string) => `${space ? ' ' : ''}${letter.toUpperCase()}`) : undefined;
 }
 
+/** The chat's model as it reads beside its provider (`big-pickle` under
+ * OpenCode): the bridge's label while it names this model, else ClikCode's
+ * own rule applied here (a model a worker reported since). */
+export function chatModelLabel(model: ChatModel, providerName?: string): string | undefined {
+  if (!model.model) return undefined;
+  if (model.modelLabel?.model === model.model) return model.modelLabel.label;
+  return modelLabel(model.model, model.providerId, model.harness, providerName);
+}
+
 /** What `choose provider` calls the provider a session runs on. */
 export function providerIdOf(session: HarnessSession): string | undefined {
   if (session.route === 'gateway') return 'gateway';
@@ -140,11 +153,12 @@ function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel {
   return { ...model, notes: [...model.notes, { ...note, after: model.messages.length }].slice(-MAX_NOTES) };
 }
 
-export function applySession(model: ChatModel, session: HarnessSession, account?: string): ChatModel {
+export function applySession(model: ChatModel, session: HarnessSession, account?: string, label?: IdeModelLabel): ChatModel {
   if (model.sessionId && model.sessionId !== session.id) model = freshFor(model);
   const pending = session.pendingTurn;
   return {
     ...model,
+    ...(label ? { modelLabel: label } : {}),
     sessionId: session.id,
     title: session.name,
     harness: session.route === 'gateway' ? 'ClikDeploy Gateway' : session.route === 'clikcode-local' ? 'ClikCode Local' : session.nativeHarness,
@@ -262,7 +276,7 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
         revision: typeof event.revision === 'number' ? event.revision : 1,
       };
     case 'session':
-      return applySession(model, event.session, event.account);
+      return applySession(model, event.session, event.account, event.modelLabel);
     case 'worker':
       return applyWorkerEvent(model, event.sessionId, event.event);
     case 'turn-start':
