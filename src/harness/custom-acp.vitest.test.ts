@@ -40,6 +40,8 @@ describe('custom ACP harness file', () => {
     await addCustomAcpHarness({ command: 'my-agent', binary: 'other', argv: [] });
     expect(await readCustomAcpConfig()).toHaveLength(1);
     expect((await readCustomAcpConfig())[0]?.binary).toBe('other');
+    await expect(addCustomAcpHarness({ command: 'another', binary: 'other', argv: [], provider: 'acp:my-agent' }))
+      .rejects.toThrow(/already used/);
     expect(customAcpConfigPath()).toBe(join(home, 'custom-acp.json'));
     expect(await removeCustomAcpHarness('my-agent')).toBe(true);
     expect(await readCustomAcpConfig()).toEqual([]);

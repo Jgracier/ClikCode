@@ -5,6 +5,7 @@
 import { spawn } from 'node:child_process';
 import * as vscode from 'vscode';
 import { resolveRuntime } from './runtime';
+import { parseAcpArguments } from './acp-arguments';
 
 async function clikcode(args: readonly string[]): Promise<string> {
   const settings = vscode.workspace.getConfiguration('clikcode');
@@ -34,11 +35,13 @@ export function registerCustomAcpCommands(context: vscode.ExtensionContext): voi
       if (!command) return;
       const binary = await vscode.window.showInputBox({ title: 'Add ACP harness', prompt: 'Executable', placeHolder: 'my-agent', ignoreFocusOut: true });
       if (!binary) return;
-      const flags = await vscode.window.showInputBox({ title: 'Add ACP harness', prompt: 'Arguments, separated by spaces', placeHolder: '--stdio', ignoreFocusOut: true });
+      const flags = await vscode.window.showInputBox({ title: 'Add ACP harness', prompt: 'ACP launch arguments as a JSON array', placeHolder: '["--stdio"]', ignoreFocusOut: true });
+      if (flags === undefined) return;
       const name = await vscode.window.showInputBox({ title: 'Add ACP harness', prompt: 'Name in the provider list', placeHolder: command, ignoreFocusOut: true });
-      const argv = ['acp', 'add', command.trim(), binary.trim(), ...(flags?.trim() ? flags.trim().split(/\s+/) : [])];
-      if (name?.trim()) argv.push('--name', name.trim());
       try {
+        const argv = ['acp', 'add'];
+        if (name?.trim()) argv.push('--name', name.trim());
+        argv.push(command.trim(), binary.trim(), '--', ...parseAcpArguments(flags));
         await clikcode(argv);
         void vscode.window.showInformationMessage(`${name?.trim() || command.trim()} is in the provider list.`);
       } catch (error) {

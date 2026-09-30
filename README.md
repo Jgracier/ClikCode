@@ -20,6 +20,13 @@ reasoning choice over ACP, ClikCode uses that harness's CLI path where safe.
 Any other ACP agent can be added with `clikcode acp add`, and it then appears
 in the same provider list.
 
+For example, `clikcode acp add my-agent /path/to/agent -- --stdio` registers
+an installed ACP executable without changing ClikCode. In VS Code, use
+**Add ACP Harness…** and enter launch arguments as a JSON array, such as
+`["--stdio", "--config", "two words"]`. The agent still needs its own usable
+credentials; a completed turn and resume should be checked before relying on
+it for work.
+
 
 **Every tool, one way of working.** Stop memorizing flags. ClikCode asks each
 tool what it supports and offers you that — models, reasoning level, approval

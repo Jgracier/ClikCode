@@ -90,6 +90,14 @@ export async function readCustomAcpConfig(): Promise<AiCustomAcpHarnessInput[]> 
 export async function addCustomAcpHarness(definition: AiCustomAcpHarnessInput): Promise<AiLocalHarnessDefinition> {
   const built = assertCustomAcpAvailable(definition);
   const records = await readCustomAcpConfig();
+  for (const item of records) {
+    let existing: AiLocalHarnessDefinition;
+    try { existing = catalogBundle().customAcpHarness(item) as AiLocalHarnessDefinition; }
+    catch { continue; }
+    if (existing.command !== built.command && existing.provider === built.provider) {
+      throw new Error(`provider "${built.provider}" is already used by custom ACP harness "${existing.command}"`);
+    }
+  }
   const next = records.filter((item) => {
     try { return (catalogBundle().customAcpHarness(item) as AiLocalHarnessDefinition).command !== built.command; } catch { return true; }
   });
