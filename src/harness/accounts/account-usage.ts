@@ -11,6 +11,10 @@ import { learnedUsageReading } from './usage-learning.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, quotaMarkExpiresAt, quotaMarkedAt, settleQuotaMark, usageCacheKey, usageReadingIsCurrent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 
+/** How long a windowless balance reading is reused before its harness is
+ * asked again (a turn on the account asks sooner). */
+export const BALANCE_READING_TTL_MS = 5 * 60_000;
+
 /** The structured reading behind nativeUsageLabel: same caching, same sharing. */
 export async function nativeUsageReading(
   session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
@@ -74,7 +78,13 @@ export async function nativeUsageReading(
   const turnSinceReading = entry !== undefined && !reportsOnStream && account !== undefined
     && state.invocations.some((invocation) => invocation.accountId === account.id
       && Date.parse(invocation.at) - invocation.latencyMs > entry.at);
-  const reusable = entry && !entry.failed && (entry.windows?.length ?? 0) > 0 && usageReadingIsCurrent(entry) && !turnSinceReading
+  // A credit balance (Auggie, Amp, Kilo) has no window to say how long it
+  // holds, and its source is a server no file shows -- so a short TTL, and
+  // only that. Without it the status line's 15s tick re-ran the vendor's
+  // balance command in every open terminal.
+  const heldBalance = entry !== undefined && !(entry.windows?.length) && entry.label !== undefined
+    && Number.isFinite(entry.at) && Date.now() - entry.at < BALANCE_READING_TTL_MS;
+  const reusable = entry && !entry.failed && ((entry.windows?.length ?? 0) > 0 ? usageReadingIsCurrent(entry) : heldBalance) && !turnSinceReading
     ? entry
     : undefined;
   if (reusable && !options.network) {
@@ -88,6 +98,12 @@ export async function nativeUsageReading(
   // probes (Codex, Auggie, Grok) still run here, held off by the failure
   // backoff above and by a current reading.
   if (!options.network && BILLED_USAGE_PROBES.has(session.nativeHarness ?? '')) return undefined;
+  // A probe spawns the vendor CLI, and a CLI run while signed out can start a
+  // login or onboarding (Kiro's session list did). Only an account that is
+  // signed in is asked; anything else keeps what it last had.
+  if (!account || account.status !== 'ready') {
+    return entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
+  }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const structured = session.nativeHarness ? NATIVE_USAGE_READING_PROBES[session.nativeHarness] : undefined;
   const reading: UsageReading | undefined = !probe
