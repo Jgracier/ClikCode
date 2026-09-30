@@ -117,6 +117,19 @@ SCENARIOS = {
         ],
         'watch': [], 'final_contains': ['My Mobile Chat', 'The final commit is live.'],
     },
+    'narrow-mid-transcript': {
+        # A row written at 100 columns is wider than the screen at 60. It
+        # must be wrapped again, not clipped (its tail lost) and not left to
+        # the terminal's autowrap (every row below it one out).
+        'turns': [{'blocks': ['Checking the workspace first, reading each file that the commit touched NARROWTAIL.',
+                              'The final commit is live.']}],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 3),
+            ('resize', 50, 60), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['please check the commit', 'NARROWTAIL.', 'The final commit is live.'],
+        'final_once': ['NARROWTAIL.', 'The final commit is live.'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -205,6 +218,10 @@ def run(name, spec, entry, keep):
             mouse_reset = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'
             resets = raw[before:].count(mouse_reset)
             if resets != 1: problems.append(f'resize burst sent {resets} mouse resets, expected one')
+        elif step[0] == 'resize':
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', step[1], step[2], 0, 0))
+            screen.resize(lines=step[1], columns=step[2])
+            pump(0.5)
         elif step[0] == 'select':
             # Press on the phrase's first cell, drag across it, release on its
             # last -- the mouse reports a terminal sends with SGR reporting on.
@@ -236,6 +253,8 @@ def run(name, spec, entry, keep):
             if left + right.split()[0] in final: problems.append(f'jammed with no paragraph break: {left!r} / {right!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
+    for phrase in spec.get('final_once', []):
+        if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
     if 'clipboard' in spec:
         import base64, re as regex
         copies = [base64.b64decode(m).decode('utf-8', 'replace') for m in regex.findall(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', bytes(raw))]
