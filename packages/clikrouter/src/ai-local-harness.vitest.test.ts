@@ -470,7 +470,7 @@ describe('local harness catalog', () => {
     }
     expect(harnessAcpLaunch(localHarnessForCommand('kiro')!, { model: 'chosen-model', effort: 'high', permissionMode: 'bypass' })?.argv)
       .toEqual(['acp', '--model', 'chosen-model', '--effort', 'high', '--trust-all-tools']);
-    expect(harnessAcpLaunch(localHarnessForCommand('claude')!)).toBeUndefined();
+    expect(harnessAcpLaunch(localHarnessForCommand('claude')!)).toMatchObject({ binary: 'claude-agent-acp', argv: [] });
   });
 
   it('prefers ACP and selects CLI only for image turns that cannot forward images', () => {

@@ -118,8 +118,12 @@ async function installOnce(spec: InstallSpec, route: Exclude<HarnessInstallRoute
       // Another process may have installed it while this one waited.
       if (!(await missingBinaries(spec)).length) return false;
       show(label);
+      const missingBefore = await missingBinaries(spec);
       try {
-        await runRoute(spec, route);
+        if (missingBefore.includes(spec.binary) || !spec.acp?.npmPackage) await runRoute(spec, route);
+        if (spec.acp?.binary && spec.acp.npmPackage && missingBefore.includes(spec.acp.binary)) {
+          await installNpmPackage(spec.acp.npmPackage);
+        }
       } catch (error) {
         // Some official installers launch an optional sign-in immediately
         // after putting the binary in place. Cancelling that sign-in exits the

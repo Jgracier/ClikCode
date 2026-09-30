@@ -157,6 +157,9 @@ describe('shared ACP adapter contract', () => {
     expect(acpModelChoice(models, 'nemotron-3-ultra-free'), 'a bare id one provider offers').toBe('opencode-free:nemotron-3-ultra-free');
     expect(acpModelChoice(models, 'gpt-5.5'), 'ambiguous: two providers offer it').toBeUndefined();
     expect(acpModelChoice(models, 'unknown')).toBeUndefined();
+    expect(acpModelChoice({ availableModels: [{ modelId: 'gpt-5.5[reasoning=high]', name: 'gpt-5.5' }] }, 'gpt-5.5')).toBe('gpt-5.5[reasoning=high]');
+    expect(acpModelChoice({ availableModels: [{ modelId: 'default[]', name: 'Auto' }] }, 'auto')).toBe('default[]');
+    expect(acpModelChoice({ availableModels: [{ modelId: 'gpt-5.5[reasoning=high]', name: 'gpt-5.5' }, { modelId: 'gpt-5.5[reasoning=low]', name: 'gpt-5.5' }] }, 'gpt-5.5')).toBeUndefined();
     expect(acpModelChoice(models, 'anthropic:claude-sonnet-5'), 'a provider:model id the list leaves out').toBe('anthropic:claude-sonnet-5');
     expect(acpModelChoice({ availableModels: [{ modelId: 'sonnet' }] }, 'x:y'), 'an agent that does not name providers').toBeUndefined();
     expect(acpModelChoice(undefined, 'anything'), 'an agent with no model list').toBeUndefined();

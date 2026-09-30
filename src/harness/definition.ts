@@ -28,6 +28,7 @@ type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWEN.md' |
 interface AiHarnessAcpDefinition {
   argv: readonly string[];
   binary?: string;
+  npmPackage?: string;
   optionPlacement?: 'before' | 'after';
   inheritCliOptions?: boolean;
   legacyCliSessions?: boolean;

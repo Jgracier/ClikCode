@@ -310,6 +310,12 @@ export function acpModelChoice(models: Json | undefined, model: string): string 
     }
   }
   if (ids.includes(model)) return model;
+  // Some agents expose decorated protocol ids while their CLI and picker
+  // show the plain name (Cursor: `gpt-5.5[...]` versus `gpt-5.5`). Resolve
+  // only an unambiguous advertised name; never guess between variants.
+  const named = available.filter((entry) =>
+    typeof (entry as Json | null)?.name === 'string' && (entry as Json).name.toLowerCase() === model.toLowerCase());
+  if (named.length === 1 && typeof (named[0] as Json).modelId === 'string') return (named[0] as Json).modelId;
   const suffixed = ids.filter((id) => id.endsWith(`:${model}`));
   if (suffixed.length === 1) return suffixed[0];
   // An agent whose ids are `provider:model` parses any such id, including a
@@ -594,7 +600,7 @@ class AcpSessionImpl implements AcpSession {
       live.authMethods = Array.isArray(initialized.authMethods) ? initialized.authMethods : [];
       stillRunning();
     }
-    const requestWithAuth = async (method: string, params: Json, options = setup): Promise<Json> => {
+    const requestWithAuth = async (method: string, params: Json, options: { timeoutMs?: number; idleReset?: boolean } = setup): Promise<Json> => {
       try { return await peer.request(method, params, options); }
       catch (error) {
         const choices = (live.authMethods ?? []).filter((candidate) =>
@@ -713,7 +719,9 @@ class AcpSessionImpl implements AcpSession {
     // The turn ends with the agent's answer to session/prompt. This is only
     // the ceiling for an agent that has stopped talking without answering.
     turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError(input.command, afterMs)));
-    turn.prompt = requestWithAuth('session/prompt', { sessionId: turn.sessionId, prompt: blocks });
+    // No wall-clock timeout: a prompt legitimately runs for hours, and the
+    // idle watchdog above is its only ceiling.
+    turn.prompt = requestWithAuth('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
     const completed = await turn.prompt as Json;
     if (completed.stopReason === 'cancelled') throw cancelledError();
     // `end_turn`, or the reason the agent stopped short (max_tokens,
