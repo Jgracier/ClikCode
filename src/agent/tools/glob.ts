@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { matchGlob } from '../glob-match.js';
 import { defineTool } from '../tool-contract.js';
 import { displayPath, resolveForRead, walkFiles } from './fs-helpers.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface GlobArgs { pattern: string; path?: string }
 
@@ -18,7 +19,7 @@ export const globTool = defineTool<GlobArgs>({
       path: { type: 'string', description: 'Directory to search. Defaults to the working directory.' },
     },
   },
-  label: (args) => `Glob ${args.pattern}`,
+  label: (args) => formatToolRow('glob', args.pattern, 'search'),
   paths: (args) => [args.path ?? '.'],
   async run(args, ctx) {
     const root = resolveForRead(args.path ?? '.', ctx);

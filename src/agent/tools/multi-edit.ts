@@ -1,6 +1,7 @@
 import { eventDiff, renderDiffPreview } from '../line-diff.js';
 import { defineTool } from '../tool-contract.js';
 import { commitEdit, prepareEdits, type EditOperation } from './edit-file.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface MultiEditArgs { path: string; edits: EditOperation[] }
 
@@ -21,7 +22,7 @@ export const multiEditTool = defineTool<MultiEditArgs>({
       },
     },
   },
-  label: (args) => `Edit ${args.path} (${args.edits.length} changes)`,
+  label: (args) => formatToolRow('multi_edit', `${args.path} (${args.edits.length} changes)`, 'edit'),
   paths: (args) => [args.path],
   async preview(args, ctx) {
     const prepared = await prepareEdits(args.path, args.edits, ctx, false);

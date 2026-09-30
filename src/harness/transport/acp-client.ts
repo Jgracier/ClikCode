@@ -8,7 +8,9 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
-import { categoryOf, isAgentToolName } from '../protocol/tools.js';
+import { eventDiff } from '../../agent/line-diff.js';
+import { commandOutcome } from '../protocol/activity-events.js';
+import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
@@ -121,22 +123,40 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   const diffEntry = content.find((entry) => entry?.type === 'diff');
   // A new file has no old text. Rendering `removed: ['']` would show a phantom
   // deleted blank line, so an absent side is an empty list.
-  const diff = diffEntry
-    ? { removed: cappedLines(String(diffEntry.oldText ?? ''), DIFF_LINE_CAP), added: cappedLines(String(diffEntry.newText ?? ''), DIFF_LINE_CAP) }
-    : undefined;
+  // The changed lines, through the same line diff ClikCode's own agent
+  // uses -- not both texts whole.
+  const diff = diffEntry ? eventDiff(String(diffEntry.oldText ?? ''), String(diffEntry.newText ?? ''), DIFF_LINE_CAP) : undefined;
   const outputText = content
     .flatMap((entry) => entry?.type === 'content' && entry.content?.type === 'text' && typeof entry.content.text === 'string' ? [entry.content.text as string] : [])
     .join('\n');
   const output = outputText.trim() ? outputText.replace(/\r?\n$/, '').split(/\r?\n/).slice(-OUTPUT_LINE_CAP) : undefined;
   const classified = acpToolClass(update);
+  const rawOutput = update.rawOutput && typeof update.rawOutput === 'object' ? update.rawOutput as Record<string, unknown> : undefined;
   return {
     kind: status === 'failed' ? 'tool-error' : completed ? 'tool-done' : 'tool-start',
-    label: String(update.title ?? update.name ?? 'tool'),
+    label: acpToolLabel(update, classified),
     ...classified,
     ...(typeof update.toolCallId === 'string' ? { id: update.toolCallId } : {}),
     ...(output ? { output } : {}),
     ...(diff ? { diff } : {}),
+    ...(completed ? commandOutcome(rawOutput) : {}),
   };
+}
+
+/** The row an ACP call gets. Its title is the agent's own sentence ("Read
+ * config", "`npm test`"), so where the input or the locations name the
+ * target the row is built from those, the same as every other harness's;
+ * the title is kept only when nothing better is known. */
+function acpToolLabel(update: Json, classified: { category?: ToolCategory; agent?: true }): string {
+  const raw = update.rawInput && typeof update.rawInput === 'object' ? update.rawInput as Record<string, unknown> : undefined;
+  const title = typeof (update.title ?? update.name) === 'string' ? String(update.title ?? update.name).trim() : '';
+  if (classified.agent) return formatToolRow('agent', typeof raw?.description === 'string' ? raw.description : title);
+  const head = title.split(/[\s:(]/, 1)[0] || 'tool';
+  const fromInput = raw ? toolLabel(classified.category === 'run' ? 'shell' : head, raw, classified.category) : undefined;
+  if (fromInput && fromInput !== formatToolRow(classified.category === 'run' ? 'shell' : head, undefined, classified.category)) return fromInput;
+  const location = Array.isArray(update.locations) ? update.locations.find((entry: Json) => typeof entry?.path === 'string')?.path as string | undefined : undefined;
+  if (location && classified.category && classified.category !== 'run') return formatToolRow(head, location, classified.category);
+  return title || 'tool';
 }
 
 /** ACP publishes a tool kind (`execute`, `read`, …) and, when the agent

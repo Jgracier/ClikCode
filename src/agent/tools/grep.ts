@@ -7,6 +7,7 @@ import { matchGlob } from '../glob-match.js';
 import { capHeadTail } from '../security.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, looksBinary, resolveForRead, throwIfAborted, walkFiles } from './fs-helpers.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface GrepArgs {
   pattern: string;
@@ -138,7 +139,7 @@ export const grepTool = defineTool<GrepArgs>({
       head_limit: { type: 'integer', minimum: 1, maximum: 2000, description: 'Maximum output lines (default 200).' },
     },
   },
-  label: (args) => `Grep ${args.pattern}${args.glob ? ` in ${args.glob}` : ''}`,
+  label: (args) => formatToolRow('grep', `${args.pattern}${args.glob ? ` in ${args.glob}` : ''}`, 'search'),
   paths: (args) => [args.path ?? '.'],
   async run(args, ctx) {
     const root = resolveForRead(args.path ?? '.', ctx);

@@ -264,11 +264,14 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     if (tool) { try { label = tool.label(call.args); } catch { /* invalid args: fall back to the name */ } }
     const category = categoryForTool(tool);
     input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category });
+    let startedAt: number | undefined;
     const finish = (result: ToolRunResult): ToolRunResult => {
       const output = eventOutputPreview(result.output);
       input.onActivity?.({
         kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
         ...(output ? { output } : {}), ...(result.diff ? { diff: result.diff } : {}),
+        ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
+        ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
       });
       return { ...result, output: capHeadTail(result.output, toolOutputCap(contextWindow, profile.toolOutputBytes), 'narrow the request to see the middle').text };
     };
@@ -327,6 +330,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     const wasPlanning = session.plan.active;
     input.onPhase?.('running tools');
     let result: ToolRunResult;
+    startedAt = Date.now();
     try {
       result = await abortable(tool.run(call.args, ctx), signal);
     } catch (error) {

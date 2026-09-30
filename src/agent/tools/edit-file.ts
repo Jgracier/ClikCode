@@ -2,6 +2,7 @@ import { eventDiff, renderDiffPreview } from '../line-diff.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, resolveForWrite, ToolInputError } from './fs-helpers.js';
 import { readExisting, rememberWritten, writeTextAtomic } from './write-file.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 export interface EditOperation { old_string: string; new_string: string; replace_all?: boolean }
 interface EditFileArgs extends EditOperation { path: string }
@@ -66,7 +67,7 @@ export const editFileTool = defineTool<EditFileArgs>({
       replace_all: { type: 'boolean', description: 'Replace every occurrence instead of requiring a unique match.' },
     },
   },
-  label: (args) => `Edit ${args.path}`,
+  label: (args) => formatToolRow('edit_file', args.path, 'edit'),
   paths: (args) => [args.path],
   async preview(args, ctx) {
     const prepared = await prepareEdits(args.path, [args], ctx, false);

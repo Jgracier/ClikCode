@@ -25,9 +25,10 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   const style = event.category ? TOOL_CATEGORY_STYLE[event.category] : undefined;
   const mark = style ? `${style.paint(style.glyph)} ` : '';
   const plainMark = style ? `${style.glyph} ` : '';
+  const outcome = outcomeSuffix(event);
   const summary = `  ${event.kind === 'tool-error'
     ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
-    : `${mark}${chalk.dim(event.label)}`}`;
+    : `${mark}${chalk.dim(event.label)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
   if (!event.diff) {
     const output = event.output ?? [];
     // Budgeted by kind: a read's row already names the file, so repeating its
@@ -58,6 +59,24 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
     ...added.slice(0, addedShown).map((line) => `    ${chalk.green(`+ ${line}`)}`),
     ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : []),
   ];
+}
+
+/** `(exit 2, 3.4s)` after a finished call, from what the harness reported.
+ * An exit of 0 and a sub-second run are what every call looks like, so only
+ * the exceptions are spelled out. */
+function outcomeSuffix(event: HarnessActivityEvent): string | undefined {
+  if (event.kind !== 'tool-done' && event.kind !== 'tool-error') return undefined;
+  const parts = [
+    ...(event.exitCode !== undefined && event.exitCode !== 0 ? [`exit ${event.exitCode}`] : []),
+    ...(event.durationMs !== undefined && event.durationMs >= 1000 ? [formatDuration(event.durationMs)] : []),
+  ];
+  return parts.length ? `(${parts.join(', ')})` : undefined;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  return `${minutes}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, '0')}s`;
 }
 
 export function nativeActivityPhaseFromValue(harness: AiLocalHarnessDefinition, parsed: unknown): 'generating response' | undefined {

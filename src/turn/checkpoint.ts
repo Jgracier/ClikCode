@@ -25,32 +25,50 @@ const MAX_TOUCHED_FILES = 40;
 
 const READ_ONLY_TOOL = /^(?:read|view|open|cat|ls|list(?:_?(?:dir|directory|files))?|glob|grep|search|find|fetch|web_?(?:fetch|search)|(?:notebook|file)_?read|read_?(?:file|many_files|notebook)|codebase_?search|semantic_?search|todo_?(?:read|write)|update_?(?:todos?|plan)|think|toolsearch|get_\w+|describe_\w+|lsp\w*)$/i;
 const CODE_CHANGE_TOOL = /^(?:edit|multi_?edit|write|create|patch|apply_?patch|str_?replace\w*|replace|notebook_?edit|(?:edit|write|create|delete|update|replace_in)_?file|delete|remove|rename|move)$/i;
+/** A tool row as formatToolRow writes it (harness/protocol/tools.ts): a verb
+ * and its target, `$ command`, or `server › tool args`. */
+const TOOL_ROW = /^(Read|List|Grep|Glob|Search|Fetch|Web search|Edit|Write|Agent) ([\s\S]+)$/;
+const MUTATING_ROW = /^(?:Edit|Write|Agent)$/;
+const MCP_ROW = /^\S+ › ([\w.-]+)/;
+
 /** Whether an activity label describes something that cannot have changed the
  * workspace. Deliberately conservative: anything unrecognised is NOT read-only,
  * because the cost of a wrong "safe" is silently re-running edits. */
 export function activityLabelIsReadOnly(label: string): boolean {
   const text = label.trim();
   if (!text) return true;
+  if (text.startsWith('$ ')) return commandIsReadOnly(text.slice(2));
+  const row = TOOL_ROW.exec(text);
+  if (row) return !MUTATING_ROW.test(row[1]!);
+  const mcp = MCP_ROW.exec(text);
+  if (mcp) return READ_ONLY_TOOL.test(mcp[1]!) && !CODE_CHANGE_TOOL.test(mcp[1]!);
+  // Rows recorded before the shared format: `name(detail)`.
   const call = /^([\w.:-]+)\(([\s\S]*)\)$/.exec(text);
   const name = (call?.[1] ?? text).replace(/^mcp__\w+?__|^\w+__/, '');
   if (/^(?:bash|shell|sh|exec|execute|run|terminal|command|run_?(?:shell_?)?command|run_?terminal_?cmd|execute_?command|developer__shell)$/i.test(call?.[1] ?? '') || /shell$/i.test(call?.[1] ?? '')) {
     return commandIsReadOnly(call?.[2] ?? '');
   }
   if (call || /^[\w.:-]+$/.test(text)) return READ_ONLY_TOOL.test(name) && !CODE_CHANGE_TOOL.test(name);
-  // A bare command line (Codex labels a command_execution with the command).
+  // A bare command line (older Codex rows were the command itself).
   return commandIsReadOnly(text);
 }
 
-/** File an activity is changing, when its label or diff says so. */
-function touchedFileFromActivity(event: HarnessActivityEvent): string | undefined {
-  const call = /^([\w.:-]+)\(([\s\S]*)\)$/.exec(event.label.trim());
-  if (!call) return undefined;
+/** Files an activity is changing, when its label or diff says so. */
+function touchedFilesFromActivity(event: HarnessActivityEvent): string[] {
+  const text = event.label.trim();
+  const row = TOOL_ROW.exec(text);
+  if (row && /^(?:Edit|Write)$/.test(row[1]!)) {
+    // `Edit a.ts (3 changes)`, `Edit a.ts, b.ts +2 more`: the paths only.
+    return row[2]!.replace(/ \([^)]*\)$/, '').replace(/ \+\d+ more$/, '').split(', ').map((file) => file.trim()).filter(Boolean);
+  }
+  const call = /^([\w.:-]+)\(([\s\S]*)\)$/.exec(text);
+  if (!call) return [];
   const name = call[1]!.replace(/^mcp__\w+?__|^\w+__/, '');
   const target = call[2]!.trim();
-  if (!target || (!event.diff && !CODE_CHANGE_TOOL.test(name))) return undefined;
-  // toolLabel() also puts commands/patterns/urls in this slot.
-  if (/\s/.test(target) && !/[\\/]/.test(target)) return undefined;
-  return target;
+  if (!target || (!event.diff && !CODE_CHANGE_TOOL.test(name))) return [];
+  // toolLabel() also put commands/patterns/urls in this slot.
+  if (/\s/.test(target) && !/[\\/]/.test(target)) return [];
+  return [target];
 }
 
 function activitySummary(activities: readonly string[], touchedFiles: readonly string[] = []): string {
@@ -185,8 +203,9 @@ export function recordPendingActivity(session: HarnessSession, event: HarnessAct
   const hints = pending as PendingTurnWithHints;
   // Hints first: the de-duplication below must not skip them, and they must
   // outlive the 20-entry activity window.
-  const touched = touchedFileFromActivity(event);
-  if (touched && !hints.touchedFiles?.includes(touched)) hints.touchedFiles = [...(hints.touchedFiles ?? []), touched].slice(-MAX_TOUCHED_FILES);
+  for (const touched of touchedFilesFromActivity(event)) {
+    if (!hints.touchedFiles?.includes(touched)) hints.touchedFiles = [...(hints.touchedFiles ?? []), touched].slice(-MAX_TOUCHED_FILES);
+  }
   // A completion is reported under a generic label by some vendors ("tool");
   // its start already carried the real identity.
   if (Boolean(event.diff) || (!(event.kind !== 'tool-start' && event.label === 'tool') && !activityLabelIsReadOnly(event.label))) hints.mutatingActivity = true;

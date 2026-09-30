@@ -23,7 +23,7 @@ describe('antigravity tool rows carry their parameters', () => {
         tool_info: { name: 'run_command', parameters: { CommandLine: 'cat sample.txt' } },
       },
     });
-    expect(event?.label).toBe('run_command(cat sample.txt)');
+    expect(event?.label).toBe('$ cat sample.txt');
     expect(event?.kind).toBe('tool-start');
     expect(event?.category).toBe('run');
   });
@@ -36,7 +36,7 @@ describe('antigravity tool rows carry their parameters', () => {
         tool_info: { name: 'view_file', parameters: { AbsolutePath: '/tmp/agtool/sample.txt' } },
       },
     });
-    expect(event?.label).toBe('view_file(/tmp/agtool/sample.txt)');
+    expect(event?.label).toBe('Read /tmp/agtool/sample.txt');
     expect(event?.kind).toBe('tool-done');
     expect(event?.category).toBe('read');
   });

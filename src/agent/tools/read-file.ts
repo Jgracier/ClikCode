@@ -4,6 +4,7 @@ import { OUTPUT_CAPS } from '../security.js';
 import { defineTool } from '../tool-contract.js';
 import { displayPath, IMAGE_EXTENSIONS, looksBinary, resolveForRead } from './fs-helpers.js';
 import { isNotebookPath, parseNotebook, renderNotebook } from './notebook.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface ReadFileArgs { path: string; offset?: number; limit?: number }
 
@@ -21,7 +22,7 @@ export const readFileTool = defineTool<ReadFileArgs>({
       limit: { type: 'integer', minimum: 1, description: 'Maximum number of lines to return.' },
     },
   },
-  label: (args) => `Read ${args.path}`,
+  label: (args) => formatToolRow('read_file', args.path, 'read'),
   paths: (args) => [args.path],
   async run(args, ctx) {
     const resolved = resolveForRead(args.path, ctx);

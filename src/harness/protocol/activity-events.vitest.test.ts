@@ -9,7 +9,7 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'call-1', type: 'command_execution', command: 'git status', aggregated_output: 'one\ntwo\nthree\nfour' },
     }));
-    expect(event).toEqual({ kind: 'tool-done', label: 'git status', category: 'run', id: 'call-1', output: ['one', 'two', 'three', '… 1 more line'] });
+    expect(event).toEqual({ kind: 'tool-done', label: '$ git status', category: 'run', id: 'call-1', output: ['one', 'two', 'three', '… 1 more line'] });
     // Summary plus the captured output: a row shows enough of the command's
     // result to recognise it without opening anything.
     expect(renderActivityLine(event!)).toHaveLength(5);
@@ -20,7 +20,7 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'call-failed', type: 'command_execution', command: 'pnpm test', exit_code: 1 },
     }));
-    expect(event).toEqual({ kind: 'tool-error', label: 'pnpm test', category: 'run', id: 'call-failed' });
+    expect(event).toEqual({ kind: 'tool-error', label: '$ pnpm test', category: 'run', id: 'call-failed', exitCode: 1 });
     expect(renderActivityLine(event!)[0]!.replace(/\u001b\[[0-9;]*m/g, '')).toContain('failed');
   });
 
@@ -33,7 +33,7 @@ describe('incremental native tool activity', () => {
     }));
     // The target belongs in the label: a bare `Bash` says nothing about what
     // ran, and the command is right there in the call's input.
-    expect(start).toMatchObject({ kind: 'tool-start', label: 'Bash(git status)', id: 'tool-1' });
+    expect(start).toMatchObject({ kind: 'tool-start', label: '$ git status', id: 'tool-1' });
     expect(done).toEqual({ kind: 'tool-done', label: 'tool', id: 'tool-1', output: ['clean'] });
   });
 
@@ -44,8 +44,8 @@ describe('incremental native tool activity', () => {
     const done = parseNativeActivityEvent(codex, JSON.stringify({
       type: 'item.completed', item: { id: 'call-2', type: 'mcp_tool_call', name: 'search' },
     }));
-    expect(start).toEqual({ kind: 'tool-start', label: 'search', category: 'search', id: 'call-2' });
-    expect(done).toEqual({ kind: 'tool-done', label: 'search', category: 'search', id: 'call-2' });
+    expect(start).toEqual({ kind: 'tool-start', label: 'Search', category: 'search', id: 'call-2' });
+    expect(done).toEqual({ kind: 'tool-done', label: 'Search', category: 'search', id: 'call-2' });
   });
 
   it('pairs generic file changes instead of creating a detached completion row', () => {
@@ -55,8 +55,8 @@ describe('incremental native tool activity', () => {
     const done = parseNativeActivityEvent(codex, JSON.stringify({
       type: 'item.completed', item: { id: 'edit-1', type: 'file_change' },
     }));
-    expect(start).toEqual({ kind: 'tool-start', label: 'files updated', id: 'edit-1' });
-    expect(done).toEqual({ kind: 'tool-done', label: 'files updated', id: 'edit-1' });
+    expect(start).toEqual({ kind: 'tool-start', label: 'Edit files', category: 'edit', id: 'edit-1' });
+    expect(done).toEqual({ kind: 'tool-done', label: 'Edit files', category: 'edit', id: 'edit-1' });
   });
 
   it('does not put raw structured command output into the human activity feed', () => {
@@ -64,7 +64,7 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'call-3', type: 'command_execution', command: 'inspect', aggregated_output: '{"ok":true}' },
     }));
-    expect(event).toEqual({ kind: 'tool-done', label: 'inspect', category: 'run', id: 'call-3' });
+    expect(event).toEqual({ kind: 'tool-done', label: '$ inspect', category: 'run', id: 'call-3' });
   });
 
   it('treats a Codex collab call as a sub-agent rather than an unnamed tool', () => {
@@ -72,6 +72,21 @@ describe('incremental native tool activity', () => {
       type: 'item.started',
       item: { id: 'agent-1', type: 'collab_agent_tool_call', tool: 'followup_task', prompt: 'check the build' },
     }));
-    expect(event).toEqual({ kind: 'tool-start', label: 'followup_task(check the build)', agent: true, id: 'agent-1' });
+    expect(event).toEqual({ kind: 'tool-start', label: 'Agent check the build', agent: true, id: 'agent-1' });
+  });
+
+  it('shows the paths and the diff of a file change', () => {
+    const event = parseNativeActivityEvent(codex, JSON.stringify({
+      type: 'item.completed',
+      item: { id: 'edit-2', type: 'file_change', changes: [{ path: 'src/a.ts', diff: '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old line\n+new line\n' }, { path: 'src/b.ts' }] },
+    }));
+    expect(event).toEqual({ kind: 'tool-done', label: 'Edit src/a.ts, src/b.ts', category: 'edit', id: 'edit-2', diff: { removed: ['old line'], added: ['new line'] } });
+  });
+
+  it('renders a Claude edit as the lines that changed, not both texts whole', () => {
+    const event = parseNativeActivityEvent({ ...codex, command: 'claude' }, JSON.stringify({
+      type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Edit', input: { file_path: 'a.ts', old_string: 'one\ntwo\nthree', new_string: 'one\n2\nthree' } }] },
+    }));
+    expect(event).toMatchObject({ label: 'Edit a.ts', diff: { removed: ['two'], added: ['2'] } });
   });
 });

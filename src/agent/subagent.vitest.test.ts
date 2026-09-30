@@ -97,7 +97,7 @@ describe('task sub-agents', () => {
 
     const taskRow = events.filter((event) => event.id === 't1');
     expect(taskRow.map((event) => event.kind)).toEqual(['tool-start', 'tool-done']);
-    expect(taskRow[0]).toMatchObject({ label: 'Read a.txt', agent: true });
+    expect(taskRow[0]).toMatchObject({ label: 'Agent Read a.txt', agent: true });
     const nested = events.filter((event) => event.parentId === 't1');
     expect(nested.map((event) => [event.kind, event.id])).toEqual([['tool-start', 't1/c1'], ['tool-done', 't1/c1']]);
 

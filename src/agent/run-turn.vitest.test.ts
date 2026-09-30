@@ -157,6 +157,14 @@ describe('runGatewayHarnessTurn', () => {
     expect(results.map((item) => item.type === 'tool_result' && item.output.includes('B'))).toEqual([false, true]);
   });
 
+  it('reports a command\'s exit code and how long each call ran', async () => {
+    const h = harness([{ toolCalls: [{ id: 'x', name: 'bash', args: { command: 'exit 3' } }] }, { text: 'ok' }]);
+    await runGatewayHarnessTurn(h.input);
+    const done = h.events.find((event) => event.kind === 'tool-error' && event.id === 'x');
+    expect(done).toMatchObject({ label: '$ exit 3', category: 'run', exitCode: 3 });
+    expect(done?.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
   it('stops at maxSteps', async () => {
     const h = harness([], { maxSteps: 3 }, (_request, index) => ({ toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `loop${index}` }] }));
     const result = await runGatewayHarnessTurn(h.input);

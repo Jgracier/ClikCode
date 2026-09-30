@@ -13,6 +13,7 @@ import { eventDiff } from '../line-diff.js';
 import { defineTool } from '../tool-contract.js';
 import { displayPath, resolveForWrite } from './fs-helpers.js';
 import { rememberWritten, writeTextAtomic } from './write-file.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 type Json = Record<string, unknown>;
 interface NotebookCell { cell_type: 'code' | 'markdown' | 'raw'; id?: string; source: string | string[]; metadata?: Json; outputs?: Json[]; execution_count?: number | null }
@@ -121,7 +122,7 @@ export const notebookEditTool = defineTool<NotebookEditArgs>({
       edit_mode: { type: 'string', enum: ['replace', 'insert', 'delete'], description: 'Default replace.' },
     },
   },
-  label: (args) => `Edit notebook ${args.path}${args.cell_id ? ` (${args.cell_id})` : ''}`,
+  label: (args) => formatToolRow('notebook_edit', `${args.path}${args.cell_id ? ` (${args.cell_id})` : ''}`, 'edit'),
   paths: (args) => [args.path],
   async run(args, ctx) {
     if (!isNotebookPath(args.path)) return { output: `${args.path} is not a .ipynb notebook. Use edit_file for other files.`, isError: true };
