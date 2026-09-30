@@ -428,7 +428,7 @@ describe('local harness catalog', () => {
     // kimi's ACP is a SUBCOMMAND, not a flag -- corrected in the catalog
     // against the real Kimi Code 2.0.2 and never reflected here.
     expect(acp.kimi).toMatchObject({ argv: ['acp'] });
-    expect(acp.vibe).toEqual({ binary: 'vibe-acp', argv: [], listsModels: true });
+    expect(acp.vibe).toEqual({ binary: 'vibe-acp', argv: [], listsModels: true, usageTotals: 'session' });
     expect(acp.openhands).toMatchObject({ argv: ['acp'] });
     for (const harness of AI_LOCAL_HARNESSES) {
       if (harness.transport === 'acp') expect(harness.acp, harness.command).toBeDefined();
