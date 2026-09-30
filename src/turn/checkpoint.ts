@@ -2,6 +2,7 @@
  * has not reached a successful provider completion yet. */
 
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import { commandIsReadOnly } from '../agent/command-classifier.js';
 import { isAgentToolName } from '../harness/protocol/tools.js';
 import type { HarnessSession } from '../session/model.js';
 import { normalizeImportedTranscript } from './failover-prompt.js';
@@ -22,32 +23,8 @@ export type PendingTurnWithHints = NonNullable<HarnessSession['pendingTurn']> & 
 
 const MAX_TOUCHED_FILES = 40;
 
-const READ_ONLY_TOOL = /^(?:read|view|open|cat|ls|list(?:_?(?:dir|directory|files))?|glob|grep|search|find|fetch|web_?(?:fetch|search)|(?:notebook|file)_?read|read_?(?:file|many_files|notebook)|codebase_?search|semantic_?search|todo_?(?:read|write)|update_?(?:todos?|plan)|task|agent|think|toolsearch|get_\w+|describe_\w+|lsp\w*)$/i;
+const READ_ONLY_TOOL = /^(?:read|view|open|cat|ls|list(?:_?(?:dir|directory|files))?|glob|grep|search|find|fetch|web_?(?:fetch|search)|(?:notebook|file)_?read|read_?(?:file|many_files|notebook)|codebase_?search|semantic_?search|todo_?(?:read|write)|update_?(?:todos?|plan)|think|toolsearch|get_\w+|describe_\w+|lsp\w*)$/i;
 const CODE_CHANGE_TOOL = /^(?:edit|multi_?edit|write|create|patch|apply_?patch|str_?replace\w*|replace|notebook_?edit|(?:edit|write|create|delete|update|replace_in)_?file|delete|remove|rename|move)$/i;
-const READ_ONLY_COMMAND = /^(?:ls|ll|cat|bat|head|tail|wc|pwd|cd|which|type|file|stat|du|df|tree|rg|grep|egrep|fgrep|ag|fd|find|echo|printf|true|test|\[|date|whoami|uname|env|printenv|nl|sort|uniq|cut|tr|column|diff|cmp|jq|yq|basename|dirname|realpath|readlink)$/;
-const READ_ONLY_GIT = /^git\s+(?:-C\s+\S+\s+)?(?:status|diff|log|show|branch(?:\s+(?:-a|-r|-v|-vv|--list|--show-current))*\s*$|rev-parse|ls-files|blame|describe|remote(?:\s+-v)?\s*$|grep|shortlog|reflog|cat-file|ls-tree|merge-base)\b/;
-
-function commandIsReadOnly(command: string): boolean {
-  let text = command.trim();
-  // `/bin/bash -lc '...'` wrappers (Codex) say nothing about the real command.
-  const wrapped = /^(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]*)\1\s*$/.exec(text);
-  if (wrapped) text = wrapped[2]!.trim();
-  if (!text) return false;
-  // Output redirection to a file, substitution, or a truncated label we cannot
-  // see the end of: cannot be vouched for.
-  if (/>|\$\(|`|…|\.\.\.$/.test(text.replace(/\d?>\s*\/dev\/null|\d>&\d/g, ''))) return false;
-  return text.split(/\s*(?:&&|\|\||;|\|)\s*/).filter(Boolean).every((segment) => {
-    const part = segment.replace(/^(?:\w+=\S*\s+)+/, '').trim();
-    if (READ_ONLY_GIT.test(part)) return true;
-    const [program = '', ...rest] = part.split(/\s+/);
-    const name = program.replace(/^.*\//, '');
-    if (name === 'sed') return rest.includes('-n') && !rest.some((argument) => /^-[a-z]*i/.test(argument));
-    if (name === 'find' || name === 'fd') return !rest.some((argument) => /^-(?:delete|exec|execdir|ok|fprint|fls)$|^--exec/.test(argument));
-    if (name === 'sort' || name === 'tree' || name === 'yq' || name === 'jq') return !rest.some((argument) => /^(?:-o|--output|-i|--inplace|--in-place)/.test(argument));
-    return READ_ONLY_COMMAND.test(name);
-  });
-}
-
 /** Whether an activity label describes something that cannot have changed the
  * workspace. Deliberately conservative: anything unrecognised is NOT read-only,
  * because the cost of a wrong "safe" is silently re-running edits. */
