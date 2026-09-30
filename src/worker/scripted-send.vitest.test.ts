@@ -49,7 +49,15 @@ afterAll(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const client of clients.splice(0)) client.close();
-  for (const pid of workerPids.splice(0)) { try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } }
+  // Waited out before the directory goes: a worker shutting down still
+  // writes its state, and would recreate the directory in /tmp.
+  for (const pid of workerPids.splice(0)) {
+    try { process.kill(pid, 'SIGTERM'); } catch { continue; }
+    for (let waited = 0; waited < 5_000; waited += 50) {
+      try { process.kill(pid, 0); } catch { break; }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    }
+  }
   server?.closeAllConnections();
   await new Promise((resolveClose) => (server ? server.close(resolveClose) : resolveClose(undefined)));
   server = undefined;
