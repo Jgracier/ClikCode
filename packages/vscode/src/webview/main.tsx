@@ -4,6 +4,7 @@
 import { render, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, type ChatModel } from '../model';
+import { applyModelPatch } from '../model-patch';
 import type { IdeConversation, IdePickItem, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewScreen } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
@@ -214,8 +215,11 @@ function App(): JSX.Element {
   useEffect(() => listen((message) => {
     switch (message.type) {
       case 'model':
-        setModel((previous) => (message.sameMessages && previous ? { ...message.model, messages: previous.messages } : message.model));
+        setModel(message.model);
         save({ ...(message.model.sessionId ? { sessionId: message.model.sessionId } : {}) }); return;
+      case 'patch':
+        setModel((previous) => (previous ? applyModelPatch(previous, message.patch) : previous));
+        if (message.patch.set.sessionId) save({ sessionId: message.patch.set.sessionId }); return;
       case 'setDraft': composer.current?.setDraft(message.text); return;
       case 'insert': setScreen('chat'); composer.current?.insert(message.text); return;
       case 'mention': setScreen('chat'); requestAnimationFrame(() => composer.current?.mention(message.mention)); return;

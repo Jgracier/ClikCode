@@ -6,7 +6,7 @@
  * webview), and images are never loaded -- a remote image is a request the
  * model would get to make from the user's machine.
  */
-import { Marked, type Tokens } from 'marked';
+import { Marked, type Token, type Tokens } from 'marked';
 import { pathIn } from './format';
 
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -59,4 +59,59 @@ const marked = new Marked({
 
 export function renderMarkdown(text: string): string {
   return marked.parse(text, { async: false }) as string;
+}
+
+/** A blank line ends this block for good. Not so for a list (the next item
+ * after a blank line joins it and makes it loose), indented code (it runs on
+ * across blank lines) or raw HTML (some kinds do too). */
+function closedBy(before: Token | undefined): boolean {
+  if (!before) return true;
+  if (before.type === 'list' || before.type === 'html') return false;
+  return !(before.type === 'code' && (before as Tokens.Code).codeBlockStyle === 'indented');
+}
+
+/** The live answer as `stable` (every block before the last blank-line
+ * boundary, rendered once and then only appended to) and `tail` (the block
+ * still growing, re-rendered on each delta). Re-parsing the whole answer every
+ * 40 ms made a long one quadratic. The TUI's createStreamingBlockParser uses
+ * the same boundary: text only grows at the end, and a blank line stops a
+ * later line from merging into the construct before it (see closedBy), so
+ * what comes before it renders the same forever. Link reference definitions resolve across the
+ * whole text, so an answer with any is rendered whole. */
+export function createStreamingMarkdown(): (text: string) => { stable: string; tail: string } {
+  let stableText = '';
+  let stableHtml = '';
+  let incremental = true;
+  return (text) => {
+    if (!text.startsWith(stableText)) {
+      // A replacement stream rewrote earlier text: start over.
+      stableText = '';
+      stableHtml = '';
+      incremental = true;
+    }
+    if (!incremental) return { stable: '', tail: renderMarkdown(text) };
+    const rest = text.slice(stableText.length);
+    const tokens = marked.lexer(rest);
+    if (Object.keys(tokens.links).length) {
+      incremental = false;
+      stableText = '';
+      stableHtml = '';
+      return { stable: '', tail: renderMarkdown(text) };
+    }
+    let offset = 0;
+    let cut = 0;
+    let cutIndex = 0;
+    tokens.forEach((token, index) => {
+      if (index > 0 && token.type !== 'space' && tokens[index - 1]!.type === 'space' && closedBy(tokens[index - 2])) {
+        cut = offset;
+        cutIndex = index;
+      }
+      offset += token.raw.length;
+    });
+    if (cutIndex > 0) {
+      stableHtml += marked.parser(tokens.slice(0, cutIndex));
+      stableText += rest.slice(0, cut);
+    }
+    return { stable: stableHtml, tail: marked.parser(tokens.slice(cutIndex)) };
+  };
 }
