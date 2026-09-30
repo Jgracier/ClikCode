@@ -117,6 +117,58 @@ SCENARIOS = {
         ],
         'watch': [], 'final_contains': ['My Mobile Chat', 'The final commit is live.'],
     },
+    # A long turn on a phone-width terminal, left for the board and joined
+    # again several times while its tool calls keep arriving. The running
+    # turn must be drawn once, live -- never folded in as an ended turn
+    # ("Interrupted turn activity: ...") above a second, live copy.
+    'board-and-back-mid-turn': {
+        'cols': 70, 'env': {'FAKE_DELAY_MS': '350'},
+        'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'Step three of the long job.',
+                              'Step four of the long job.', 'The long job is finished.']}],
+        'steps': [
+            ('type', 'run the long job'), ('wait_for', 'Step one of the long job.', 30),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'),
+            ('wait_for', 'The long job is finished.', 60), ('settle', 3),
+        ],
+        'watch': [], 'final_once': ['run the long job', 'Step one of the long job.', 'The long job is finished.'],
+        'never': ['Interrupted turn activity'],
+    },
+    # The phone's case: nothing but tool calls for a long while, then out to
+    # the board and back -- into this conversation, and via another one.
+    'board-and-back-tools-only': {
+        'cols': 70, 'env': {'FAKE_TOOL_MS': '1500'},
+        'turns': [{'tools_first': 10, 'blocks': ['All ten parts pass.']}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'esc to interrupt', 30), ('settle', 4),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 1.5),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 1.5),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'),
+            ('wait_for', 'All ten parts pass.', 60), ('settle', 3),
+        ],
+        'watch': [], 'final_once': ['run every part', 'All ten parts pass.'],
+        'never': ['Interrupted turn activity'],
+    },
+    # Out to the board, into ANOTHER conversation, and back into this one,
+    # twice, while the long turn keeps running in its worker.
+    'other-conversation-and-back-mid-turn': {
+        'cols': 70, 'env': {'FAKE_TOOL_MS': '2000'},
+        'turns': [{'blocks': ['A short first answer.']}, {'tools_first': 12, 'blocks': ['All twelve parts pass.']}],
+        'steps': [
+            ('type', 'say something short'), ('wait_for', 'A short first answer.', 30), ('settle', 2),
+            # A new conversation is started from the board by typing.
+            ('keys', '\x1b[D'), ('settle', 2),
+            ('type', 'run every part'), ('wait_for', 'esc to interrupt', 30), ('settle', 4),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'), ('settle', 2.5),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'All twelve parts pass.', 60), ('settle', 3),
+        ],
+        'watch': [], 'final_once': ['run every part', 'All twelve parts pass.'],
+        'never': ['Interrupted turn activity'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -139,6 +191,7 @@ def run(name, spec, entry, keep):
         'HOME': home, 'CLIKCODE_HOME': state, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
         'FAKE_TURNS': json.dumps(spec['turns']), 'FAKE_STATE': os.path.join(root, 'turn-counter'),
         'FAKE_FAMILY': spec.get('family', 'claude'),
+        **spec.get('env', {}),
         # Remote, so a copy goes to the terminal by OSC 52 -- which this
         # harness can read back out of the output -- and never to a real
         # clipboard binary on the machine running the test.
@@ -149,8 +202,9 @@ def run(name, spec, entry, keep):
     if pid == 0:
         os.chdir(workspace)
         os.execve(node, ['node', entry], env)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, COLS, 0, 0))
-    screen = pyte.Screen(COLS, ROWS)
+    cols = spec.get('cols', COLS)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, cols, 0, 0))
+    screen = pyte.Screen(cols, ROWS)
     stream = pyte.ByteStream(screen)
     raw, frames = bytearray(), []
     start = time.time()
@@ -234,6 +288,11 @@ def run(name, spec, entry, keep):
     for turn in spec['turns']:
         for left, right in zip(turn['blocks'], turn['blocks'][1:]):
             if left + right.split()[0] in final: problems.append(f'jammed with no paragraph break: {left!r} / {right!r}')
+    for phrase in spec.get('final_once', []):
+        if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
+    for phrase in spec.get('never', []):
+        shown = [t for t, text in frames if phrase in text]
+        if shown: problems.append(f'shown in {len(shown)} frame(s), first at {shown[0]:.2f}s, and never should be: {phrase!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     if 'clipboard' in spec:
@@ -245,6 +304,14 @@ def run(name, spec, entry, keep):
 
     open(os.path.join(root, 'capture.bin'), 'wb').write(bytes(raw))
     open(os.path.join(root, 'final.txt'), 'w').write(final)
+    if keep:
+        # Every distinct screen, timed -- the way to see which draw did it.
+        with open(os.path.join(root, 'frames.txt'), 'w') as log:
+            last = None
+            for t, text in frames:
+                if text == last: continue
+                last = text
+                log.write(f'===== {t:.2f}s\n' + '\n'.join(line.rstrip() for line in text.split('\n') if line.strip()) + '\n')
     if not problems and not keep: shutil.rmtree(root, ignore_errors=True)
     return problems, root, final
 
