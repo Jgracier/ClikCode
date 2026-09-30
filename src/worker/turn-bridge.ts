@@ -204,11 +204,17 @@ export function workerRunningTurn(sessionId: string): { prompt?: string } | unde
 /** Follows the turn the worker is running to its end, exactly as if this
  * window had sent it: what has streamed so far, then every event, with
  * cancel and typed messages going to the worker. */
-export async function followWorkerTurn(sessionId: string, rl: TerminalHarnessPrompter): Promise<{ notice?: string; left?: true }> {
+export async function followWorkerTurn(
+  sessionId: string, rl: TerminalHarnessPrompter,
+  /** Where the turn already is when this window joins it: its real start, so
+   * the timer is not reset to zero, and the call it is running now. */
+  joined?: { startedAt?: number; activity?: string },
+): Promise<{ notice?: string; left?: true }> {
   const client = clients.get(sessionId);
   const tracker = client ? trackers.get(client) : undefined;
   if (!client || !tracker?.running) return {};
   return driveWorkerTurn(sessionId, client, rl, () => {
+    if (joined) rl.joinedWaiting(joined.startedAt, joined.activity);
     if (tracker.liveText) rl.response(tracker.liveText, 'replace');
   }, () => tracker.running);
 }

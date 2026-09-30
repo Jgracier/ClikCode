@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
-  sessionTranscriptMessages, updatePendingResponse,
+  runningActivityLabel, sessionTranscriptMessages, settledTranscriptMessages, updatePendingResponse,
 } from './checkpoint.js';
 import type { HarnessSession } from '../session/model.js';
 
@@ -219,5 +219,33 @@ describe('running sub-agents in the turn journal', () => {
     recordPendingActivity(target, { kind: 'tool-start', label: 'Task(Fix it)', id: 'a1' }, at(1));
     recordPendingActivity(target, { kind: 'tool-start', label: 'Edit(src/a.ts)', category: 'edit', id: 'e', parentId: 'a1' }, at(2));
     expect(target.pendingTurn?.activities).toContain('started Edit(src/a.ts)');
+  });
+});
+
+describe('joining a turn another window is running', () => {
+  const running = (): HarnessSession => ({
+    ...session(),
+    pendingTurn: {
+      prompt: 'continue', startedAt: '2026-01-02T00:00:00.000Z', updatedAt: '2026-01-02T00:10:00.000Z', outputStarted: true,
+      activities: ['started Bash(npx vitest)', 'completed tool', 'started Bash(node scripts/verify.mjs)'],
+    },
+  });
+
+  it('draws the conversation without the followed turn, which the live view draws', () => {
+    // Folded in, it read "› continue / Interrupted turn activity: …" and then
+    // the same prompt again live beneath it.
+    expect(settledTranscriptMessages(running(), 'continue')).toEqual(session().messages);
+    expect(sessionTranscriptMessages(running()).at(-1)?.content).toMatch(/^Interrupted turn activity/);
+  });
+
+  it('keeps an older interrupted turn that is not the one being followed', () => {
+    expect(settledTranscriptMessages(running(), 'something newer')).toHaveLength(4);
+  });
+
+  it('names the call the turn is running, and nothing once it completed', () => {
+    expect(runningActivityLabel(running().pendingTurn)).toBe('running Bash(node scripts/verify.mjs)');
+    const done = running();
+    done.pendingTurn!.activities!.push('completed tool');
+    expect(runningActivityLabel(done.pendingTurn)).toBeUndefined();
   });
 });

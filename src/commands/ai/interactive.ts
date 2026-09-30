@@ -48,7 +48,8 @@ import { existsSync } from 'node:fs';
 import { routeSlashInput, slashControls, slashHelpText, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { LiveTurnInputBroker } from '../../turn/live-input.js';
-import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
+import { runningActivityLabel, sessionTranscriptMessages, settledTranscriptMessages } from '../../turn/checkpoint.js';
+import { liveWorkerSessions, sessionActivity } from '../../session/liveness.js';
 import { newConversation, newProviderConversation, releaseQueuedTurn } from './conversations.js';
 import { aiSessionLeave, launchSession } from './sessions.js';
 import { aiSessionCommand } from '../../tui/slash/handlers.js';
@@ -81,6 +82,17 @@ const BOARD_REPLACES_NOTICE = 'Press ← on an empty prompt for your conversatio
 /** What Left on an empty prompt returns: not a slash line, so it cannot be
  * typed, and it opens the board however the registry changes. */
 const BOARD_LINE = '\u0000board';
+
+/** Where a turn this window joins mid-way already is: when it started and
+ * what it is running, from its journal -- only when that journal is the turn
+ * being followed. */
+function joinedTurn(session: HarnessSession, runningPrompt: string | undefined): { startedAt?: number; activity?: string } | undefined {
+  const pending = session.pendingTurn;
+  if (!pending || (runningPrompt !== undefined && pending.prompt.trim() !== runningPrompt.trim())) return undefined;
+  const startedAt = Date.parse(pending.startedAt);
+  const activity = runningActivityLabel(pending);
+  return { ...(Number.isNaN(startedAt) ? {} : { startedAt }), ...(activity ? { activity } : {}) };
+}
 
 /** What a `/` offers on the conversation board: the settings a new
  * conversation starts with. */
@@ -343,7 +355,16 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         }
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         paletteState = latestState;
-        rl.render?.(latest, account, notice);
+        // A turn some worker is still running is not drawn as a settled
+        // message here: the live view draws it, once this window follows it.
+        // Drawn here first it went into scrollback -- which cannot be taken
+        // back -- and then again live beneath it: the prompt and everything
+        // streamed so far, twice, on every switch into a conversation
+        // mid-turn. A journal nothing is running is a real interrupted turn,
+        // and is drawn as one.
+        const turnRunsElsewhere = Boolean(latest.pendingTurn)
+          && sessionActivity(latest, await liveWorkerSessions([latest])) === 'working';
+        rl.render?.(turnRunsElsewhere ? { ...latest, messages: settledTranscriptMessages(latest), pendingTurn: undefined } : latest, account, notice);
         refreshUsage(latest, latestState);
         notice = undefined;
         const queued = latest.queuedTurns?.[0];
@@ -358,8 +379,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const runningTurn = queued && queued.kind !== 'command' && rl instanceof TerminalHarnessPrompter ? workerRunningTurn(latest.id) : undefined;
         if (runningTurn && rl instanceof TerminalHarnessPrompter) {
           rl.submitted(runningTurn.prompt);
-          rl.render({ ...latest, messages: sessionTranscriptMessages(latest), pendingTurn: undefined }, account);
-          const followed = await followWorkerTurn(latest.id, rl);
+          rl.render({ ...latest, messages: settledTranscriptMessages(latest, runningTurn.prompt), pendingTurn: undefined }, account);
+          const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, runningTurn.prompt));
           if (followed.notice) notice = followed.notice;
           if (followed.left) openBoard = true;
           continue;
@@ -392,8 +413,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               // Shown as this window shows its own turns: the prompt as the
               // pending message over the conversation, then the answer.
               rl.submitted(answer.prompt);
-              rl.render({ ...latest, messages: sessionTranscriptMessages(latest), pendingTurn: undefined }, account);
-              const followed = await followWorkerTurn(latest.id, rl);
+              rl.render({ ...latest, messages: settledTranscriptMessages(latest, answer.prompt), pendingTurn: undefined }, account);
+              const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, answer.prompt));
               if (followed.notice) notice = followed.notice;
               if (followed.left) openBoard = true;
             }
