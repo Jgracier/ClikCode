@@ -44,7 +44,7 @@ export async function turboFitModelChanged(
   harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, sessionId: string,
   previous: string | null | undefined, next: string | null | undefined, profile?: string,
 ): Promise<void> {
-  if (harness.command !== 'hermes') return;
+  if (!harness.turboFit) return;
   if (isTurboFitModel(next)) {
     const ready = await withProgress('starting TurboFit…', (progress) => (profile
       ? prepareTurboFitModel(harness, account, sessionId, next!, progress, profile)
@@ -61,7 +61,7 @@ export async function turboFitModelChanged(
 export async function ensureTurboFitForTurn<T extends string | null | undefined>(
   harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, sessionId: string, model: T,
 ): Promise<T> {
-  if (harness.command !== 'hermes' || !isTurboFitModel(model)) return model;
+  if (!harness.turboFit || !isTurboFitModel(model)) return model;
   const routable = hermesTurboFitModelId(model!) as T;
   const ready = await withProgress('starting TurboFit…', (progress) => ensureTurboFitServing(harness, account, sessionId, routable!, progress));
   reportNotice(ready.notice);

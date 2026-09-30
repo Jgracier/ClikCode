@@ -3,15 +3,19 @@ import {
   SESSION_TITLE_MAX, StreamingTitle, TITLE_REQUEST_ATTEMPTS, extractSessionTitle, normalizeSessionTitle,
   prepareSessionTitle, sessionTitleSource, shouldRequestTitle, titleStreamForAttempt, withTitleRequest,
 } from './title.js';
+import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import type { AiLocalHarnessDefinition } from '../harness/definition';
 
-const harness = (command: string): AiLocalHarnessDefinition => ({ command } as AiLocalHarnessDefinition);
+/** The catalog's own entry: which source a harness uses is declared there. */
+const harness = (command: string): AiLocalHarnessDefinition => localHarnessForCommand(command) as AiLocalHarnessDefinition;
 const OPEN = '<clikcode-title>';
 const CLOSE = '</clikcode-title>';
 
 describe('naming a conversation', () => {
   it('asks only the harnesses that do not name their own threads', () => {
     expect(sessionTitleSource(harness('claude'))).toBe('vendor');
+    expect(sessionTitleSource(harness('aider'))).toBe('none');
+    expect(sessionTitleSource(undefined)).toBe('ask');
     for (const command of ['codex', 'gemini', 'opencode', 'cursor']) {
       expect(sessionTitleSource(harness(command)), command).toBe('ask');
     }

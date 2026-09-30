@@ -323,7 +323,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // Typed the way the picker shows it (`claude-code:sonnet`), stored the
     // way the harness takes it (`claude-code/sonnet`).
     const typed = normalizeModelWord(harness ? modelIdFromDisplay(harness, value) : value);
-    const asked = typed && harness?.command === 'hermes' ? hermesTurboFitModelId(typed) : typed;
+    const asked = typed && harness?.turboFit ? hermesTurboFitModelId(typed) : typed;
     const requested = asked && !trusted ? await assertRealModel(harness, account, asked) : asked;
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
