@@ -17,6 +17,19 @@ describe('terminal input decoding', () => {
     expect(decoder.push(Buffer.from('\u001by'))).toEqual(['\u001by']);
   });
 
+  it('holds a slowly arriving bracketed paste open until its end fence', () => {
+    const decoder = new TerminalInputDecoder();
+    expect(decoder.push('\u001b[200~first line\r')).toEqual([]);
+    // The quick escape-sequence flush must not apply while a paste is open:
+    // that submitted the first half of a paste as a message.
+    expect(decoder.flushDelayMs()).toBeGreaterThanOrEqual(5_000);
+    expect(decoder.push('second line')).toEqual([]);
+    expect(decoder.push('\u001b[201~x')).toEqual(['\u001b[200~first line\rsecond line\u001b[201~', 'x']);
+    expect(decoder.flushDelayMs()).toBeUndefined();
+    expect(decoder.push('\u001b')).toEqual([]);
+    expect(decoder.flushDelayMs()).toBeLessThan(1_000);
+  });
+
   it('edits a real composer during generation instead of discarding typed keys', () => {
     let draft = { value: '', cursor: 0, changed: false };
     for (const key of ['n', 'e', 'x', 't']) draft = editWaitingComposer(draft.value, draft.cursor, key);

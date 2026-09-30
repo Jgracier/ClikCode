@@ -14,6 +14,12 @@ type WaitingInputAction = 'cancel-edit' | 'cancel-stop';
 
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
 
+/** A bracketed paste is held until its end fence, however slowly the link
+ * delivers it: flushing early submitted the first half as a message. This is
+ * only the escape hatch for a terminal that never sends the fence, measured
+ * from the last chunk, so a paste that is still arriving is never cut. */
+const OPEN_PASTE_TIMEOUT_MS = 10_000;
+
 export function waitingInputAction(key: string): WaitingInputAction | undefined {
   if (key === '\u001b') return 'cancel-edit';
   if (key === '\u0003') return 'cancel-stop';
@@ -84,7 +90,12 @@ export class TerminalInputDecoder {
     return this.drain(true);
   }
 
-  hasPending(): boolean { return this.pending.length > 0; }
+  /** How long to wait for more bytes before `flush()` gives up on what is
+   * pending, or undefined when nothing is. */
+  flushDelayMs(): number | undefined {
+    if (!this.pending) return undefined;
+    return this.pending.startsWith(PASTE_START) ? OPEN_PASTE_TIMEOUT_MS : ESCAPE_SEQUENCE_TIMEOUT_MS;
+  }
 
   private drain(flush: boolean): string[] {
     const keys: string[] = [];
@@ -223,15 +234,10 @@ export function listenForTerminalKeys(onKey: (key: string) => void): () => void 
   };
   const deliverKeys = (keys: readonly string[]): void => {
     for (const key of keys) {
-      // Escape sequences only -- never typed text, which is the user's message.
-      // What a client sends for a swipe cannot be read from this end any other
-      // way, and "scrolling does nothing" has three possible causes that look
-      // identical from here: no report sent, a report in an encoding we do not
-      // decode, or a report decoded and then dropped.
       // Escape sequences and control keys -- never typed text, which is the
-      // user's message. Ctrl+B arrives as \u0002, which the escape-only rule
-      // here did not record, so a report of "the key does nothing" could not
-      // be told apart from "the key never arrived".
+      // user's message. "Scrolling does nothing" or "the key does nothing"
+      // has causes that look identical from here (nothing sent, an encoding
+      // we do not decode, a key decoded and dropped); the log tells them apart.
       if (key.startsWith('\u001b') || key.charCodeAt(0) < 0x20) {
         logCursorEvent(`input ${JSON.stringify(key)} screen=${output.columns ?? '?'}x${output.rows ?? '?'}`);
       }
@@ -252,10 +258,11 @@ export function listenForTerminalKeys(onKey: (key: string) => void): () => void 
   const onData = (chunk: Buffer | string): void => {
     if (flushTimer) clearTimeout(flushTimer);
     deliver(decoder.push(chunk));
-    if (decoder.hasPending()) {
+    const delay = decoder.flushDelayMs();
+    if (delay !== undefined) {
       // A lone Escape must eventually be delivered, but mobile SSH links can
       // split a cursor/mouse sequence across packets by more than one frame.
-      flushTimer = setTimeout(() => deliver(decoder.flush()), ESCAPE_SEQUENCE_TIMEOUT_MS);
+      flushTimer = setTimeout(() => deliver(decoder.flush()), delay);
       flushTimer.unref();
     }
   };
