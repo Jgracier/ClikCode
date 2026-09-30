@@ -163,7 +163,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // The user's hooks (hooks.ts): context for a conversation's first turn, and
   // the prompt-submit hook, which may refuse the prompt or add to it. A
   // sub-agent's prompt is the parent's, already through them.
-  const turnHookInfo = { sessionId: input.sessionId, cwd };
+  const turnHookInfo = { sessionId: input.sessionId, cwd, ...(signal ? { signal } : {}) };
   const hookContexts: string[] = [];
   let promptBlocked: string | undefined;
   if (!input.subagent && input.hooks) {
@@ -267,8 +267,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     if (problems.length) {
       return finish({ output: `Invalid arguments for ${tool.name}:\n- ${problems.join('\n- ')}\nExpected schema: ${JSON.stringify(tool.parameters)}\nFix the arguments and call the tool again.`, isError: true });
     }
-    const hookInfo = { sessionId: input.sessionId, cwd };
-    const veto = await abortable(Promise.resolve(input.hooks?.preToolUse?.(call, hookInfo)), signal);
+        const veto = await abortable(Promise.resolve(input.hooks?.preToolUse?.(call, turnHookInfo)), signal);
     if (veto && typeof veto.deny === 'string') return finish({ output: `Blocked by a hook: ${veto.deny}`, isError: true });
 
     let streamed = '';
@@ -320,7 +319,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       result = { output: error instanceof Error ? error.message : String(error), isError: true };
     }
     if (wasPlanning && !session.plan.active) input.onPlanModeExit?.(session.plan.approvedPlan ?? '');
-    const rewritten = await abortable(Promise.resolve(input.hooks?.postToolUse?.(call, result, hookInfo)), signal);
+    const rewritten = await abortable(Promise.resolve(input.hooks?.postToolUse?.(call, result, turnHookInfo)), signal);
     if (rewritten && typeof rewritten.output === 'string') result = { ...result, output: rewritten.output };
     return finish(result);
   };
