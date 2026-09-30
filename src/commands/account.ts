@@ -258,10 +258,11 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   try {
     await loginNativeHarness(harness, profileEnvironment(harness, { nativeProfile }));
   } catch (error) {
-    // Antigravity's login command (-p 'hi' ...) doesn't just verify
-    // authentication -- it also runs a real chat turn, so ANY unrelated
-    // failure in that turn (quota, rate limit, a transient API error) exits
-    // non-zero and looks identical to authentication itself having failed.
+    // Antigravity has no login command; ClikCode signs in by running
+    // `-p /help`, which answers locally and stores no conversation (a real
+    // 'hi' turn used to leave one per account). Any failure after the sign-in
+    // (quota, rate limit, a transient error) still exits non-zero and looks
+    // identical to authentication itself having failed.
     // Discarding a login this eagerly threw away real, successful OAuth
     // sessions whenever the account happened to be rate-limited. Hold the
     // error and check independently, via the log Antigravity itself writes
