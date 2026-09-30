@@ -97,7 +97,7 @@ export function rebaseActivityOffsets(
  * running row and the spinner alike. The glyph stays the same for every
  * category on purpose: the shape is the transcript's, the colour is the
  * tool's. Nothing is spelled out in front of a label -- the label already
- * says `Read(...)` or `Bash(...)`, so colour is an aid here, not the only
+ * says `Read src/x` or `$ npm test`, so colour is an aid here, not the only
  * carrier, and a NO_COLOR terminal loses nothing it needs. */
 /** How each kind of work reads: its colour, the verb used while it runs, and
  * the glyph that marks its settled row.
