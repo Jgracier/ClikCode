@@ -89,3 +89,15 @@ describe('a request nobody has answered yet', () => {
     expect(observer.liveSnapshot()).toMatchObject({ prompt: '[background shell bash_1 exited (code 0)] make' });
   });
 });
+
+describe('a notice about the turn', () => {
+  it('reaches every window as a line of the transcript, not as a passing thought', () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking');
+    observer.activity('The answer was cut off: the model reached its output limit.');
+    expect(client.frames.at(-1)).toEqual({ type: 'note', message: 'The answer was cut off: the model reached its output limit.' });
+    expect(observer.turnOutputStarted).toBe(true);
+  });
+});

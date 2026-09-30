@@ -281,6 +281,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         }],
       };
     case 'notice':
+    case 'note':
       return withNote(model, { kind: 'notice', level: 'info', text: stripAnsi(event.message) });
     case 'turn-error':
       return withNote(model, { kind: 'notice', level: 'error', text: stripAnsi(event.message) });
