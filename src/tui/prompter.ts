@@ -17,7 +17,7 @@ import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminal
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
 import { isGatewayService } from '../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../local-models/catalog.js';
@@ -503,7 +503,29 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * source and arrives later; see render/pending-prompt.ts. */
   submitted(prompt: string | undefined): void { this.submittedPrompt = prompt; }
 
-  render(session: HarnessSession, account?: string, notice?: string): void {
+  /** The last render said a worker is still running `currentSession`'s
+   * journal (`pendingTurn`). See transcriptMessages. */
+  private journalLive = false;
+
+  /** The conversation as the transcript shows it outside a turn's own view.
+   *
+   * A journal nothing runs is an interrupted turn and is folded in as one
+   * (prompt, then its text or "Interrupted turn activity: …"). A journal a
+   * live worker runs is NOT: the live view owns that turn. Folding it here
+   * was the one path that drew a running turn as ended -- stepping out to the
+   * board stops waiting, and that repaint folded the last mid-turn snapshot
+   * into scrollback, which cannot be taken back; coming back then drew the
+   * turn again live beneath it, and every later step out added another
+   * folded copy. Decided here, per paint, from what the render said, so no
+   * call site and no arrival order can bring the folded copy back. */
+  private transcriptMessages(session: HarnessSession): NonNullable<HarnessSession['messages']> {
+    return this.journalLive ? settledTranscriptMessages(session) : sessionTranscriptMessages(session);
+  }
+
+  /** `turnLive`: a worker is running this session's journal right now (a
+   * worker snapshot's `live`). Anything that does not know says nothing, and
+   * the journal is treated as the interrupted turn it would then be. */
+  render(session: HarnessSession, account?: string, notice?: string, options?: { turnLive?: boolean }): void {
     if (this.currentSession?.id !== session.id) {
       this.activityEntries = [];
       this.planEntries = [];
@@ -528,6 +550,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
+    this.journalLive = Boolean(options?.turnLive && session.pendingTurn);
     this.currentAccount = account;
     this.currentNotice = notice;
     // A render receives authoritative persisted state. Drop the transient
@@ -568,7 +591,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const last = this.activityEntries[this.activityEntries.length - 1];
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
     this.activityEntries = [...this.activityEntries, {
-      anchor: this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0,
+      anchor: this.waitingLabel ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0,
       ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
       // Every entry gets one, waiting or not: it is this row's identity for
       // "already retired", and two rows that happen to say the same thing are
@@ -601,7 +624,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const thought = sanitizeTerminalText(event.label, { singleLine: true }).replace(/\s+/g, ' ').trim();
       this.latestThought = thought && thought.toLowerCase() !== 'thinking' ? thought : this.latestThought;
     } else if (event.kind === 'tool-start') this.latestThought = undefined;
-    const anchor = this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
+    const anchor = this.waitingLabel ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0;
     const responseOffset = this.waitingLabel ? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
     const lifecycle = activityLifecyclePhase(this.activeTools, event);
@@ -1018,7 +1041,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
     const persistedMessages = pendingPrompt
       ? [...stableMessages, { role: 'user' as const, content: pendingPrompt }]
-      : sessionTranscriptMessages(session);
+      : this.transcriptMessages(session);
     // Tool events often arrive before the first prose token. They still belong
     // to the in-flight assistant message. Render an empty temporary assistant
     // anchor immediately; otherwise the tools remain invisible and then all
