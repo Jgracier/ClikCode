@@ -109,7 +109,6 @@
       {
         "command": "clikcode.open",
         "title": "Open ClikCode",
-        "category": "ClikCode",
         "icon": {
           "light": "media/editor-light.svg",
           "dark": "media/editor-dark.svg"
@@ -164,13 +163,13 @@
       },
       {
         "command": "clikcode.showAccounts",
-        "title": "Accounts and Usage",
+        "title": "Show Accounts and Usage",
         "category": "ClikCode",
         "icon": "$(account)"
       },
       {
         "command": "clikcode.openSettings",
-        "title": "Chat Settings",
+        "title": "Open Chat Settings",
         "category": "ClikCode",
         "icon": "$(settings-gear)"
       },
@@ -217,7 +216,7 @@
       },
       {
         "command": "clikcode.askAboutSelection",
-        "title": "Ask About Selection",
+        "title": "Ask ClikCode About Selection",
         "category": "ClikCode"
       },
       {
@@ -239,13 +238,23 @@
       },
       {
         "command": "clikcode.cancel",
-        "title": "Stop the Running Turn",
+        "title": "Stop Current Turn",
         "category": "ClikCode",
         "icon": "$(debug-stop)"
       },
       {
         "command": "clikcode.restart",
-        "title": "Restart Connection",
+        "title": "Restart ClikCode",
+        "category": "ClikCode"
+      },
+      {
+        "command": "clikcode.configure",
+        "title": "Open Extension Settings",
+        "category": "ClikCode"
+      },
+      {
+        "command": "clikcode.openWalkthrough",
+        "title": "Get Started",
         "category": "ClikCode"
       },
       {
@@ -265,7 +274,7 @@
       },
       {
         "command": "clikcode.updateExtension",
-        "title": "Update Extension",
+        "title": "Update VS Code Extension",
         "category": "ClikCode"
       }
     ],
@@ -343,6 +352,18 @@
         {
           "command": "clikcode.attachFile",
           "when": "false"
+        },
+        {
+          "command": "clikcode.open",
+          "when": "false"
+        },
+        {
+          "command": "clikcode.resumeChat",
+          "when": "false"
+        },
+        {
+          "command": "clikcode.cancel",
+          "when": "clikcode.running"
         }
       ]
     },
@@ -433,7 +454,7 @@
             "title": "Open the chat",
             "description": "ClikCode lives in the secondary side bar, on the right. Open it from the ClikCode button at the top right of any editor, or press Ctrl+Esc (Cmd+Esc on macOS).\n[Open ClikCode](command:clikcode.open)",
             "media": {
-              "image": "media/screenshots/welcome.png",
+              "image": "media/walkthrough/welcome.png",
               "altText": "The ClikCode chat in the secondary side bar"
             },
             "completionEvents": [
@@ -443,10 +464,10 @@
           {
             "id": "provider",
             "title": "Pick a provider and model",
-            "description": "The provider·model button under the message box lists all 25 harnesses, ClikDeploy Gateway and ClikCode Local, with their models. A harness that is not installed installs when you choose it.\n[Open the chat](command:clikcode.focus)",
+            "description": "Under the message box, **Provider** lists all 25 harnesses, ClikDeploy Gateway and ClikCode Local, and **Model** lists the models of the provider the chat is on. A harness that is not installed installs when you choose it.\n[Open the chat](command:clikcode.focus)",
             "media": {
-              "image": "media/screenshots/picker.png",
-              "altText": "The provider and model menu"
+              "image": "media/walkthrough/picker.png",
+              "altText": "The Provider menu"
             }
           },
           {
@@ -454,7 +475,7 @@
             "title": "Sign in and add accounts",
             "description": "Add several accounts per provider. When one hits its usage limit, ClikCode moves the chat to the next automatically. Usage meters show each account's 5-hour and weekly windows.\n[Accounts and usage](command:clikcode.showAccounts)",
             "media": {
-              "image": "media/screenshots/accounts.png",
+              "image": "media/walkthrough/accounts.png",
               "altText": "Accounts and usage"
             },
             "completionEvents": [
@@ -466,7 +487,7 @@
             "title": "Add code to the chat",
             "description": "Type @ to mention a file, press Alt+K in an editor to add the selection, or right-click a file and choose Add to ClikCode Chat.\n[Add the current file](command:clikcode.addToChat)",
             "media": {
-              "image": "media/screenshots/turn.png",
+              "image": "media/walkthrough/turn.png",
               "altText": "A turn with tool activity"
             }
           },
@@ -475,7 +496,7 @@
             "title": "Resume any conversation",
             "description": "Conversations are shared with the clikcode terminal: resume one here, or continue it in the terminal.\n[Show conversations](command:clikcode.showHistory)",
             "media": {
-              "image": "media/screenshots/history.png",
+              "image": "media/walkthrough/history.png",
               "altText": "The conversation list"
             },
             "completionEvents": [

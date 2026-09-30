@@ -571,8 +571,7 @@ export class ClikCodeController implements vscode.Disposable {
         this.bridge?.send({ type: 'ui-response', id: message.id, result: message.result });
         return;
       case 'command':
-        if (message.command === 'clikcode.configure') void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:clikcode.clikcode');
-        else if (message.command.startsWith('clikcode.') || message.command === 'workbench.action.openWalkthrough') {
+        if (message.command.startsWith('clikcode.')) {
           void vscode.commands.executeCommand(message.command, ...(message.args ?? []));
         }
         return;

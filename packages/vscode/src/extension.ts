@@ -7,6 +7,7 @@ import { questionWithSelection } from './editor-context';
 import { providerDisplayName, type ChatModel } from './model';
 import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND } from './compat';
 import { DiffDocuments } from './ui';
+import { modelLabel } from './webview/format';
 import { mentionFromEditor, mentionFromUri } from './mentions';
 import type { WebviewScreen } from './webview-protocol';
 
@@ -29,18 +30,22 @@ export interface ClikCodeApi {
   probe(action: 'query' | 'click' | 'type' | 'key', selector: string, text?: string): Promise<unknown>;
 }
 
+/** The status bar item: ClikCode's name and what it is doing; provider,
+ * model and account are in the composer, and in the tooltip here. */
 export function statusText(model: ChatModel): { text: string; tooltip: string } {
   if (model.connection === 'error' || model.connection === 'stopped') return { text: '$(warning) ClikCode', tooltip: model.connectionError ?? 'ClikCode is not running' };
   if (!model.sessionId) return { text: '$(comment-discussion) ClikCode', tooltip: 'Open the ClikCode chat' };
   const name = providerDisplayName(model);
-  const where = [name ?? 'no provider', model.model].filter(Boolean).join(' · ');
   const usage = model.currentAccount?.usage?.label ?? model.accountUsage;
+  const waiting = model.approvals.length > 0;
   const tooltip = [
-    model.title ?? 'New chat', `Provider: ${name ?? '—'}`, `Model: ${model.model ?? 'default'}`,
+    `${model.title ?? 'New chat'}${waiting ? ' (waiting for your approval)' : model.running ? ' (working)' : ''}`,
+    `Provider: ${name ?? '—'}`, `Model: ${modelLabel(model.model, model.providerId, name) ?? 'default'}`,
     ...(model.account ? [`Account: ${model.account}`] : []), ...(model.effort ? [`Effort: ${model.effort}`] : []),
     ...(model.permissions ? [`Permissions: ${model.permissions}`] : []), ...(usage ? [`Usage: ${usage}`] : []),
   ].join('\n');
-  return { text: `${model.running ? '$(sync~spin)' : '$(comment-discussion)'} ${where}`, tooltip };
+  const icon = waiting ? '$(bell-dot)' : model.running ? '$(sync~spin)' : '$(comment-discussion)';
+  return { text: `${icon} ClikCode`, tooltip };
 }
 
 export function activate(context: vscode.ExtensionContext): ClikCodeApi {
@@ -131,10 +136,14 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   status.command = 'clikcode.focus';
+  let running: boolean | undefined;
   function paint(): void {
-    const { text, tooltip } = statusText(active().state);
+    const state = active().state;
+    const { text, tooltip } = statusText(state);
     status.text = text;
     status.tooltip = tooltip;
+    // "Stop Current Turn" is offered in the command palette only while there is one.
+    if (state.running !== running) { running = state.running; void vscode.commands.executeCommand('setContext', 'clikcode.running', running); }
   }
   paint();
   status.show();
@@ -222,6 +231,8 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.cancel', () => active().cancel(true)),
     vscode.commands.registerCommand('clikcode.restart', () => active().restart()),
     vscode.commands.registerCommand('clikcode.showLog', () => log.show()),
+    vscode.commands.registerCommand('clikcode.configure', () => vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)),
+    vscode.commands.registerCommand('clikcode.openWalkthrough', () => vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#clikcode.start`, false)),
     vscode.commands.registerCommand('clikcode.addToChat', addToChat),
     vscode.commands.registerCommand('clikcode.insertAtMention', () => addToChat(undefined)),
     vscode.commands.registerCommand('clikcode.attachFile', addToChat),
