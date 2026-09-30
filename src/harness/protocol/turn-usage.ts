@@ -104,9 +104,10 @@ export function countsOf(usage: JsonRecord | undefined): TurnUsage {
   assign('input', finiteNumber(usage.input_tokens, usage.inputTokens, usage.prompt_tokens, usage.promptTokens, usage.input));
   assign('output', finiteNumber(usage.output_tokens, usage.outputTokens, usage.completion_tokens, usage.completionTokens, usage.output));
   assign('cacheRead', finiteNumber(usage.cache_read_input_tokens, usage.cached_input_tokens, usage.cachedInputTokens, usage.cache_read_tokens,
-    usage.cacheReadTokens, usage.cachedReadTokens, usage.cacheReadInputTokens, usage.cacheRead, usage.cached, cache?.read));
-  assign('cacheWrite', finiteNumber(usage.cache_creation_input_tokens, usage.cacheWriteTokens, usage.cachedWriteTokens,
-    usage.cacheCreationInputTokens, usage.cacheWriteInputTokens, usage.cacheWrite, cache?.write));
+    usage.cacheReadTokens, usage.cachedReadTokens, usage.cacheReadInputTokens, usage.cacheRead, usage.cached, usage.cachedTokens, cache?.read));
+  // `cache_write_input_tokens` is Goose's spelling, `cache_write_tokens` OpenClaw's.
+  assign('cacheWrite', finiteNumber(usage.cache_creation_input_tokens, usage.cache_write_input_tokens, usage.cache_write_tokens,
+    usage.cacheWriteTokens, usage.cachedWriteTokens, usage.cacheCreationInputTokens, usage.cacheWriteInputTokens, usage.cacheWrite, cache?.write));
   assign('totalTokens', finiteNumber(usage.total_tokens, usage.totalTokens, usage.total));
   // Reasoning tokens are billed and counted by several vendors (antigravity's
   // `thinking_tokens`, OpenAI's `reasoning_tokens`, Codex's
@@ -138,13 +139,26 @@ export function nativeUsageFromValue(value: unknown): TurnUsage | undefined {
   // an unrelated object that happens to hold a `usage` key.
   const envelope = asRecord(record.result) ?? asRecord(record.turn) ?? asRecord(record.data)
     ?? asRecord(record.response) ?? asRecord(record.summary);
-  const usage = asRecord(record.usage) ?? asRecord(record.stats) ?? asRecord(record.token_usage)
+  // OpenClaw's `--json` document: `{payloads, meta:{agentMeta:{usage, costUsd,
+  // contextTokens, promptTokens}}}` -- the run's totals, its price, the
+  // model's window and what the last call occupied.
+  const agentMeta = asRecord(asRecord(record.meta)?.agentMeta);
+  const nested = asRecord(record.usage) ?? asRecord(record.stats) ?? asRecord(record.token_usage)
     ?? asRecord(asRecord(record.part)?.tokens)
-    ?? asRecord(envelope?.usage) ?? asRecord(envelope?.stats) ?? asRecord(envelope?.token_usage);
+    ?? asRecord(envelope?.usage) ?? asRecord(envelope?.stats) ?? asRecord(envelope?.token_usage)
+    ?? asRecord(agentMeta?.usage);
+  // A terminal record may carry its counts itself rather than in a usage
+  // object: Goose ends `run --output-format stream-json` with
+  // `{type:"complete", total_tokens, input_tokens, output_tokens,
+  // cache_read_input_tokens, cache_write_input_tokens}`. Only a record that
+  // declared itself terminal (a `type` that passed the test above) is read
+  // this way, so an untyped document's own fields are never taken for counts.
+  const usage = nested ?? (type ? record : undefined);
   const result = countsOf(usage);
   const assign = assigner(result);
-  assign('costUsd', finiteNumber(record.total_cost_usd, record.cost_usd, record.totalCostUsd, usage?.total_cost_usd, asRecord(record.part)?.cost));
-  assign('contextWindow', modelUsageContextWindow(asRecord(record.modelUsage)));
+  assign('costUsd', finiteNumber(record.total_cost_usd, record.cost_usd, record.totalCostUsd, usage?.total_cost_usd, asRecord(record.part)?.cost, agentMeta?.costUsd));
+  assign('contextWindow', modelUsageContextWindow(asRecord(record.modelUsage)) ?? finiteNumber(agentMeta?.contextTokens));
+  assign('contextUsed', finiteNumber(agentMeta?.promptTokens));
   // Claude: a turn cut short says so in `subtype` (error_max_turns) or in the
   // last message's `stop_reason` (max_tokens, refusal); the reason is
   // meaningful only beside a terminal record, never inside a tool payload.
@@ -177,6 +191,7 @@ export class StreamUsageTally {
    * carries none. */
   note(record: JsonRecord): TurnUsage | undefined {
     if (record.type === 'message_end') return this.finished(asRecord(record.message));
+    if (record.type === 'assistant') return this.assistant(record);
     if (record.type !== 'stream_event') return undefined;
     const event = asRecord(record.event);
     const thread = typeof record.parent_tool_use_id === 'string' ? record.parent_tool_use_id : '';
@@ -201,6 +216,50 @@ export class StreamUsageTally {
     if (reason && reason !== 'completed') reading.stopReason = reason;
     this.messages.set(id, reading);
     return this.total(thread === '' ? reading : undefined);
+  }
+
+  /** A whole assistant message with its usage (Claude-shaped `assistant`
+   * records). Amp's `--stream-json` reports usage ONLY here -- its `result`
+   * carries none -- and Qwen's `message_start` carries none, so without this
+   * neither said anything until the turn ended, and Amp never did. Claude
+   * sends the same message id on its stream events and again here with a
+   * snapshot taken mid-message, so counts merge by the larger value: a
+   * snapshot can confirm a count, never lower one. A record with no id (Amp)
+   * is a message of its own. */
+  private assistant(record: JsonRecord): TurnUsage | undefined {
+    const message = asRecord(record.message);
+    const usage = asRecord(message?.usage);
+    if (!usage) return undefined;
+    const thread = typeof record.parent_tool_use_id === 'string' ? record.parent_tool_use_id : '';
+    const id = typeof message?.id === 'string' && message.id ? message.id : `${thread}#assistant-${this.messages.size}`;
+    const reading: TurnUsage = { ...this.messages.get(id) };
+    for (const [key, value] of Object.entries(countsOf(usage)) as Array<[keyof TurnUsage, number]>) {
+      (reading as Record<string, unknown>)[key] = Math.max(value, (reading[key] as number | undefined) ?? 0);
+    }
+    const reason = turnStopReason(message?.stop_reason);
+    if (reason && reason !== 'completed') reading.stopReason = reason;
+    this.messages.set(id, reading);
+    this.current.set(thread, id);
+    return this.total(thread === '' ? reading : undefined);
+  }
+
+  /** One more finished model call, reported whole by a harness that prints
+   * it rather than streaming records (Aider's footer). Returns the turn's
+   * total so far. */
+  add(reading: TurnUsage): TurnUsage {
+    this.messages.set(`#${this.messages.size}`, reading);
+    return this.total(reading);
+  }
+
+  /** Fields that arrive a line after the rest of the latest call's reading
+   * (Aider prints its cost on its own line when both cache counts appear).
+   * Undefined when there is no call to attach them to. */
+  amendLatest(fields: TurnUsage): TurnUsage | undefined {
+    const key = [...this.messages.keys()].at(-1);
+    if (key === undefined) return undefined;
+    const reading = { ...this.messages.get(key), ...fields };
+    this.messages.set(key, reading);
+    return this.total(reading);
   }
 
   /** Pi: one finished assistant message, usage and cost complete. */
