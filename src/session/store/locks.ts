@@ -67,7 +67,7 @@ async function lockLooksStale(lockPath: string, raw: string): Promise<boolean> {
  * unlinks and re-acquires, the second then unlinks the *fresh* lock. Renaming
  * to a private name is atomic, so exactly one waiter takes the file; it then
  * checks that what it took is the lock it judged, and puts it back otherwise. */
-async function breakStaleLock(lockPath: string, observedRaw: string): Promise<void> {
+export async function breakStaleLock(lockPath: string, observedRaw: string): Promise<void> {
   const current = await readFile(lockPath, 'utf8').catch(() => undefined);
   if (current !== observedRaw) return;
   const aside = `${lockPath}.${process.pid}.${randomBytes(6).toString('hex')}.stale`;

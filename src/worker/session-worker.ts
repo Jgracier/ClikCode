@@ -28,7 +28,7 @@ import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { gatewayModels } from '../gateway/models.js';
 import { routeMcpServers } from '../gateway/mcp.js';
-import { ensureWorkersDirectory, generateWorkerToken, removeWorkerRecord, socketPathFor, writeWorkerRecord, currentWorkerBuild } from './registry.js';
+import { generateWorkerToken, removeWorkerRecord, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold } from './registry.js';
 
 /** No attached client and no turn running, for this long: the worker exits
  * on its own rather than living forever the way the process it replaces
@@ -52,17 +52,36 @@ interface ConnectionState {
   attached: boolean;
 }
 
+/** This conversation for this worker, or undefined when another worker has
+ * it. A scripted turn running in-process (turn/scripted-send.ts) is waited
+ * out: its conversation comes to a worker the moment it ends. */
+async function ownConversation(sessionId: string): Promise<ConversationHold | undefined> {
+  for (;;) {
+    const taken = await takeConversation(sessionId, 'worker');
+    if ('hold' in taken) return taken.hold;
+    if (taken.holder.kind === 'worker') return undefined;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+}
+
 export async function runSessionWorker(sessionId: string): Promise<void> {
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   const state = await readState();
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
 
-  const observer = new BroadcastObserver();
+  // Two windows that both found no worker each spawn one: the second to get
+  // here exits, and the spawning window finds the first by its record.
+  const hold = await ownConversation(sessionId);
+  if (!hold) return;
   const socketPath = socketPathFor(sessionId);
-  const token = generateWorkerToken();
-  await ensureWorkersDirectory();
+  // A worker from a build before the hold existed takes none, and still
+  // answers: it keeps the conversation. Anything else at the path is left
+  // over from a worker that is gone, and binding over it is safe.
+  if (await workerIsReachable(socketPath)) { await hold.release(); return; }
   await unlink(socketPath).catch(() => undefined);
+  const observer = new BroadcastObserver();
+  const token = generateWorkerToken();
 
   /** Set the moment a turn is decided on (startTurn), synchronously, and
    * cleared in runTurn's `finally`: the one guard that keeps two turns from
@@ -522,15 +541,23 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       connection.end();
     }
     server.close();
-    await removeWorkerRecord(sessionId).catch(() => undefined);
-    await unlink(socketPath).catch(() => undefined);
+    // Only what is still this worker's: the record and socket of a worker
+    // that replaced it are that worker's to remove.
+    await removeWorkerRecord(sessionId, token).catch(() => undefined);
+    if (await hold.held()) await unlink(socketPath).catch(() => undefined);
+    await hold.release().catch(() => undefined);
     process.exit(0);
   };
 
-  await new Promise<void>((resolveListening, rejectListening) => {
-    server.once('error', rejectListening);
-    server.listen(socketPath, resolveListening);
-  });
+  try {
+    await new Promise<void>((resolveListening, rejectListening) => {
+      server.once('error', rejectListening);
+      server.listen(socketPath, resolveListening);
+    });
+  } catch (error) {
+    await hold.release();
+    throw error;
+  }
   await writeWorkerRecord({
     pid: process.pid, sessionId, socketPath, installationId: state.installationId, startedAt: new Date().toISOString(), token,
     ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}),

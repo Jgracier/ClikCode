@@ -27,7 +27,9 @@ describe('worker registry', () => {
     const record = { pid: 1234, sessionId: 'abc', socketPath: socketPathFor('abc'), installationId: 'install', startedAt: new Date().toISOString(), token: 'secret' };
     await writeWorkerRecord(record);
     expect(await readWorkerRecord('abc')).toEqual(record);
-    await removeWorkerRecord('abc');
+    await removeWorkerRecord('abc', 'someone else');
+    expect(await readWorkerRecord('abc'), 'a record that is not its own was removed').toEqual(record);
+    await removeWorkerRecord('abc', 'secret');
     expect(await readWorkerRecord('abc')).toBeUndefined();
   });
 
