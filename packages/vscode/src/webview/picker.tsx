@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { IdeChoice, IdeModels, IdeProvider } from '../protocol';
 import { request } from './bus';
-import { titleCase } from './format';
+import { modelLabel, titleCase } from './format';
 import { Icon, KeyList, Popover, Switch, type ListRow } from './ui';
 
 /** Model lists, kept for the panel's life: a second look is instant. */
@@ -39,6 +39,14 @@ function providerIcon(provider: IdeProvider): string | undefined {
 }
 
 /** Whether the provider has a model list to choose from; unknown counts as yes. */
+/** A model row's label. A ClikCode from before model labels sends the id
+ * itself (or its `provider:model` spelling); that one gets the shared rule
+ * here. A label the bridge already shortened is shown as it came. */
+function rowLabel(item: { id: string; label: string }, ...owners: Array<string | undefined>): string {
+  const spelledAsId = item.label === item.id || item.label.replace(':', '/') === item.id;
+  return spelledAsId ? modelLabel(item.label, ...owners) : item.label;
+}
+
 export function providerChoosesModel(providerId: string | undefined): boolean {
   if (!providerId) return false;
   return providerCache?.find((item) => item.id === providerId)?.choosesModel ?? true;
@@ -100,7 +108,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
         render: () => (
           <div class="row" title={item.unavailable}>
             <span class="row-check">{item.current || (drill === current && item.id === props.model.model) ? <Icon name="check" /> : null}</span>
-            <span class="row-main"><span class="row-label">{item.label}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
+            <span class="row-main"><span class="row-label">{rowLabel(item, drill, provider?.name)}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
           </div>
         ),
       }));
