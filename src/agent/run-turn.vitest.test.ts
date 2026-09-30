@@ -541,7 +541,9 @@ describe('runGatewayHarnessTurn', () => {
     const compactedRequest = h.client.requests.find((request, index) => index > 0 && request.items.some((item) => item.type === 'summary' || (item.type === 'tool_result' && /elided to save context/.test(item.output))));
     expect(compactedRequest).toBeDefined();
     // The transcript on disk keeps every original item.
-    const history = await new ConversationStore(stateDir, h.input.sessionId).loadFullHistory();
+    const raw = await fs.readFile(path.join(stateDir, 'sessions', h.input.sessionId, 'harness.jsonl'), 'utf8');
+    const history = raw.split('\n').filter(Boolean).map((line) => JSON.parse(line) as { kind: string; item?: { type: string; output?: string } })
+      .flatMap((entry) => entry.kind === 'item' && entry.item ? [entry.item] : []);
     expect(history.filter((item) => item.type === 'tool_result')).toHaveLength(4);
     expect(history.every((item) => item.type !== 'tool_result' || !/elided/.test(item.output))).toBe(true);
   });

@@ -4,6 +4,7 @@
  * wires a tool up without that layer. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { turnCancelledError } from '../cancellation.js';
 import { globToRegExp, matchGlob } from '../glob-match.js';
 import { readDenyReason, resolvePath, writeDenyReason, type PathScope, type ResolvedPath } from '../security.js';
 import type { ToolContext } from '../tool-contract.js';
@@ -50,7 +51,7 @@ export const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp
 const ALWAYS_SKIPPED_DIRS = new Set(['.git', 'node_modules', '.hg', '.svn']);
 
 export function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+  if (signal?.aborted) throw turnCancelledError();
 }
 
 // ── .gitignore basics ────────────────────────────────────────────────────────

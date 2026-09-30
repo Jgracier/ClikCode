@@ -1,8 +1,6 @@
 /** Cancelling a turn is an outcome, not a failure -- one error code, checked
  * in one place. */
 
-
-
 const TURN_CANCELLED_CODE = 'ERR_TURN_CANCELLED';
 
 export function turnCancelledError(): Error & { code: string } {

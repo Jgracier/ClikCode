@@ -128,23 +128,6 @@ export class ConversationStore {
     }
     return repairDanglingCalls(items);
   }
-
-  /** Every item ever recorded, ignoring compaction markers. */
-  async loadFullHistory(): Promise<ConversationItem[]> {
-    let raw: string;
-    try { raw = await fs.readFile(this.file, 'utf8'); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw error;
-    }
-    const items: ConversationItem[] = [];
-    for (const line of raw.split('\n')) {
-      try {
-        const entry = JSON.parse(line) as { kind?: string; item?: unknown; images?: unknown } | null;
-        if (entry && entry.kind === 'item' && isItem(entry.item)) items.push(withImages(entry.item, entry.images));
-      } catch { /* torn line */ }
-    }
-    return items;
-  }
 }
 
 /** A sub-agent's conversation: the store's surface over an array the caller
@@ -174,50 +157,5 @@ function repairDanglingCalls(items: readonly ConversationItem[]): ConversationIt
     out.push(item);
   }
   flush();
-  return out;
-}
-
-// ── transport renderers ──────────────────────────────────────────────────────
-
-export interface FlatMessage { role: 'user' | 'assistant'; content: string }
-
-interface FlattenOptions {
-  /** Cap for one tool result body. */
-  maxResultChars?: number;
-  maxArgsChars?: number;
-}
-
-function clip(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const half = Math.floor(max / 2);
-  return `${text.slice(0, half)}\n… [${text.length - half * 2} characters truncated] …\n${text.slice(text.length - half)}`;
-}
-
-function renderToolCallLine(item: Extract<ConversationItem, { type: 'tool_call' }>, maxArgsChars = 4000): string {
-  return `[tool call ${item.id}] ${item.name}(${clip(JSON.stringify(item.args), maxArgsChars)})`;
-}
-
-/** Future-proof structured form: one message per role run, with typed parts a
- * native tool-calling transport can map 1:1 onto its wire format. */
-type StructuredPart =
-  | { type: 'text'; text: string }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> }
-  | { type: 'tool-result'; toolCallId: string; toolName: string; output: string; isError: boolean };
-
-interface StructuredMessage { role: 'user' | 'assistant' | 'tool'; content: StructuredPart[] }
-
-function toStructuredMessages(items: readonly ConversationItem[]): StructuredMessage[] {
-  const out: StructuredMessage[] = [];
-  const push = (role: StructuredMessage['role'], part: StructuredPart): void => {
-    const last = out[out.length - 1];
-    if (last && last.role === role) last.content.push(part);
-    else out.push({ role, content: [part] });
-  };
-  for (const item of items) {
-    if (item.type === 'text') push(item.role, { type: 'text', text: item.text });
-    else if (item.type === 'summary') push('user', { type: 'text', text: `Summary of the earlier conversation:\n${item.text}` });
-    else if (item.type === 'tool_call') push('assistant', { type: 'tool-call', toolCallId: item.id, toolName: item.name, input: item.args });
-    else push('tool', { type: 'tool-result', toolCallId: item.id, toolName: item.name, output: item.output, isError: item.isError === true });
-  }
   return out;
 }
