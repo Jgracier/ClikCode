@@ -4,7 +4,7 @@
  * conversation -- the bridge is one conversation at a time, like a terminal. */
 import * as vscode from 'vscode';
 import { homedir, tmpdir } from 'node:os';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
@@ -51,6 +51,9 @@ export class ClikCodeController implements vscode.Disposable {
   private refreshedFor = '';
   private accountTimer: NodeJS.Timeout | undefined;
   private lastAutoRestart = 0;
+  /** Pasted images: path -> sent in a message yet. */
+  private readonly images = new Map<string, boolean>();
+  private imageDir: Promise<string> | undefined;
 
   constructor(
     private readonly host: ControllerHost,
@@ -118,7 +121,10 @@ export class ClikCodeController implements vscode.Disposable {
     this.changed.fire(next);
     this.schedulePost();
     if (previous.running !== next.running) void vscode.commands.executeCommand('setContext', 'clikcode.turnRunning', next.running);
-    if (previous.running && !next.running) this.turnEnded(previous);
+    if (previous.running && !next.running) {
+      this.turnEnded(previous);
+      this.dropSentImages(next);
+    }
     if (next.connection === 'ready' && (next.revision ?? 1) >= STRUCTURED_REVISION && next.sessionId) {
       const key = [next.sessionId, next.providerId, next.model, next.account, next.effort, next.permissions].join('|');
       if (key !== this.refreshedFor) {
@@ -149,6 +155,16 @@ export class ClikCodeController implements vscode.Disposable {
     const patch = diffModel(sent, this.model);
     if (patch) surface.post({ type: 'patch', patch });
     surface.sentModel = this.model;
+  }
+
+  /** An image the agent has had its turn with is deleted, unless a queued
+   * message still names it. */
+  private dropSentImages(model: ChatModel): void {
+    for (const [path, sent] of this.images) {
+      if (!sent || model.queued.some((item) => item.text.includes(path))) continue;
+      this.images.delete(path);
+      void rm(path, { force: true });
+    }
   }
 
   /** A turn finished where nobody is looking: say so, as Claude Code does. */
@@ -455,6 +471,7 @@ export class ClikCodeController implements vscode.Disposable {
       this.note('ClikCode is not connected.', 'error');
       return;
     }
+    for (const path of this.images.keys()) if (text.includes(path)) this.images.set(path, true);
     if (this.model.running && !/^[/!]/.test(text.trim())) this.setModel(typedDuringTurn(this.model, id, text.trim()));
     bridge.send({ type: 'send', text, id });
   }
@@ -517,11 +534,14 @@ export class ClikCodeController implements vscode.Disposable {
         return undefined;
       }
       case 'saveImage': {
-        const dir = join(tmpdir(), 'clikcode-vscode-images');
-        await mkdir(dir, { recursive: true });
+        // A directory of this chat's own (mkdtemp: 0700, a fresh name, so no
+        // other user can read it or plant a link in it), emptied as each
+        // image's turn ends and removed with the chat.
+        this.imageDir ??= mkdtemp(join(tmpdir(), 'clikcode-vscode-images-'));
         const safe = request.name.replace(/[^\w.-]+/g, '_').slice(-60) || 'image.png';
-        const path = join(dir, `${Date.now().toString(36)}-${safe}`);
-        await writeFile(path, Buffer.from(request.dataBase64, 'base64'));
+        const path = join(await this.imageDir, `${Date.now().toString(36)}-${safe}`);
+        await writeFile(path, Buffer.from(request.dataBase64, 'base64'), { mode: 0o600 });
+        this.images.set(path, false);
         return path;
       }
       default:
@@ -600,6 +620,7 @@ export class ClikCodeController implements vscode.Disposable {
     this.bridge?.dispose();
     this.bridge = undefined;
     this.changed.dispose();
+    void this.imageDir?.then((dir) => rm(dir, { recursive: true, force: true }), () => undefined);
   }
 }
 
