@@ -20,14 +20,11 @@ import type { HarnessSession } from './model.js';
 export const SESSION_TITLE_MAX = 20;
 
 /** `vendor` writes its own title into its own session file and ClikCode reads
- * it; `ask` has no such thing, so the turn asks for one. */
+ * it; `ask` has no such thing, so the turn asks for one; `none` gets none, and
+ * an untitled chat shows its first message in the resume list instead. Each
+ * harness declares which in the catalog (`titleSource`). */
 export function sessionTitleSource(harness: AiLocalHarnessDefinition | undefined): 'vendor' | 'ask' | 'none' {
-  if (harness?.command === 'claude') return 'vendor';
-  // Aider's own system prompt outweighs the request: its models answer with
-  // a bare title line ("Memory note") that cannot be told from the answer.
-  // An untitled chat shows its first message in the resume list instead.
-  if (harness?.command === 'aider') return 'none';
-  return 'ask';
+  return harness?.titleSource ?? 'ask';
 }
 
 /** Only the first meaningful turn gets an embedded title request. The request

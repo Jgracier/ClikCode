@@ -75,7 +75,7 @@ async function localModelPicker(rl: HarnessPrompter, id: string, current: string
 export function modelRow(
   harness: AiLocalHarnessDefinition | undefined, catalog: ModelCatalogResult, model: string, current: string | undefined, providerConfigured = false,
 ): PickerOption<string> {
-  const localLabel = harness?.command === 'hermes' && /^(?:custom:)?turbofit:/.test(model)
+  const localLabel = harness?.turboFit && /^(?:custom:)?turbofit:/.test(model)
     ? catalog.labels?.[model]
     : undefined;
   const shown = localLabel ?? (harness ? harnessModelLabel(harness, model) : model);
@@ -116,7 +116,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
     ...discoveredModels.map((model) => modelRow(harness, catalog, model, effective, !session.model && model === catalog.configured)),
-    ...(harness?.command === 'hermes' ? (catalog.localRecommendations ?? []).map((item) => ({
+    ...(harness?.turboFit ? (catalog.localRecommendations ?? []).map((item) => ({
       label: item.label,
       detail: `· TurboFit · ${item.detail}`,
       value: `__turbofit_profile__:${encodeURIComponent(item.id)}`,
@@ -138,7 +138,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     ? '__custom__'
     : await chooseOption(rl, discoveredModels.length || hasLocalRecommendations ? 'Choose a model' : `${harness?.displayName ?? 'This provider'} reported no models — enter one`, options);
   if (!selected) return;
-  if (selected.startsWith('__turbofit_profile__:') && harness?.command === 'hermes') {
+  if (selected.startsWith('__turbofit_profile__:') && harness?.turboFit) {
     const profile = decodeURIComponent(selected.slice('__turbofit_profile__:'.length));
     // Hermes names the provider `turbofit` (config providers:) or
     // `custom:turbofit` (legacy custom_providers:); use the one it listed.

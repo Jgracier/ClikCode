@@ -141,7 +141,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       }
     }
   }
-  if (harness.command === 'hermes') await ensureHermesTurboFit(harness, nativeProfileEnvironment(account?.nativeProfile));
+  if (harness.turboFit) await ensureHermesTurboFit(harness, nativeProfileEnvironment(account?.nativeProfile));
   // Always a real model, never a placeholder -- see resolveNativeModel.
   if (!session.model) {
     const lastUsedModel = [...state.sessions]

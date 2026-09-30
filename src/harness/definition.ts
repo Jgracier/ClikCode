@@ -198,6 +198,9 @@ export interface AiLocalHarnessDefinition {
   installer?: AiHarnessInstaller;
   loginArgv?: readonly string[];
   loginCapturable?: boolean;
+  /** See the catalog (packages/clikrouter/src/ai-local-harness.ts). */
+  titleSource?: 'vendor' | 'none';
+  turboFit?: boolean;
   statusArgv?: readonly string[];
   logoutArgv?: readonly string[];
   planMode?: { option: string; value: true | string };
