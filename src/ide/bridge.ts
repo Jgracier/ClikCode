@@ -70,6 +70,7 @@ import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../work
 import type { WorkerEvent } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
 import { encodeTerminalSpec, IDE_PROTOCOL, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
+import { sessionEvent } from './session-event.js';
 import { selectProviderConversation } from '../tui/pickers/conversation.js';
 import {
   accountList, chatSettings, conversationList, gatewayCheckoutUrl, gatewayStatus, GATEWAY_ID, LOCAL_ID, modelList, providerList,
@@ -206,7 +207,7 @@ export class IdeBridge {
   private async emitSession(): Promise<void> {
     if (!this.sessionId) return;
     const { session, account } = await this.current();
-    this.channel.send({ type: 'session', session, ...(account ? { account } : {}) });
+    this.channel.send(sessionEvent(session, account));
   }
 
   // ---- conversations -------------------------------------------------------

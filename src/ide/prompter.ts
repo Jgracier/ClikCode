@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import type { HarnessPrompter, PickerOption } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import type { IdeEvent, IdePickItem, IdeUiRequest, IdeUiResult } from './protocol.js';
+import { sessionEvent } from './session-event.js';
 
 export interface IdeChannel {
   send(event: IdeEvent): void;
@@ -120,7 +121,7 @@ export class IdePrompter implements HarnessPrompter {
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {
-    this.channel.send({ type: 'session', session, ...(account ? { account } : {}) });
+    this.channel.send(sessionEvent(session, account));
     if (notice) this.channel.send({ type: 'notice', message: notice, level: 'info' });
   }
 

@@ -4,9 +4,9 @@ import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
 import { gatewayModelDetail, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
-import { localHarnessForCommand, localHarnessForProvider, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
+import { localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
-import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
+import { harnessModelLabel, modelIdFromLabel, nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
 import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
@@ -67,7 +67,8 @@ async function localModelPicker(rl: HarnessPrompter, id: string, current: string
 }
 
 /** One model as every model list shows it. A harness that drives other
- * providers shows `provider:model`, and a name only where it says something
+ * providers shows `provider:model` (never its own name as the provider:
+ * OpenCode's `opencode/big-pickle` is `big-pickle`), and a name only where it says something
  * the id does not ("Opus 5.5" for `opus`) -- never the id a second time;
  * "Claude Opus 5.5" only respells `claude-opus-5-5`, compared on letters and
  * digits alone. */
@@ -77,7 +78,7 @@ export function modelRow(
   const localLabel = harness?.command === 'hermes' && /^(?:custom:)?turbofit:/.test(model)
     ? catalog.labels?.[model]
     : undefined;
-  const shown = localLabel ?? (harness ? modelDisplayId(harness, model) : model);
+  const shown = localLabel ?? (harness ? harnessModelLabel(harness, model) : model);
   const name = localLabel ? undefined : catalog.labels?.[model];
   const bare = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '');
   const respells = name !== undefined && [shown, shown.slice(shown.indexOf(':') + 1)].some((id) => bare(id) === bare(name));
@@ -164,7 +165,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     return interactiveModelPicker(rl, id);
   }
   const typed = selected === '__custom__' ? (await rl.question(discoveredModels.length ? 'Model ID › ' : `${harness?.displayName ?? 'This provider'} lists no models — model ID › `)).trim() : undefined;
-  const value = typed !== undefined ? (harness && typed ? modelIdFromDisplay(harness, typed) : typed) : selected;
+  const value = typed !== undefined ? (harness && typed ? modelIdFromLabel(harness, catalog.models, modelIdFromDisplay(harness, typed)) : typed) : selected;
   // Applies to this chat only, no further "apply to" step: a model choice is
   // read as a per-conversation decision, unlike effort/permissions/failover,
   // which are more often "how I always want this provider to behave" and

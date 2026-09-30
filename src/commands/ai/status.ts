@@ -6,6 +6,7 @@ import { emitResult } from '../../cli/structured-output.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
 import { CLIKCODE_USER_AGENT } from '../../version.js';
+import { modelLabel } from '../../harness/model-label.js';
 
 export async function aiModelsList(): Promise<void> {
   const state = await readState();
@@ -15,6 +16,8 @@ export async function aiModelsList(): Promise<void> {
       account: account.label,
       provider: account.provider,
       model,
+      // How ClikCode shows it beside the provider; `model` stays the real id.
+      label: modelLabel(model, account.provider),
       status: account.status,
     }))),
   });

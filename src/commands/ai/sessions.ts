@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { emitResult } from '../../cli/structured-output.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
+import { modelIdFromLabel, nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { liveWorkerSessions, sessionIsLive } from '../../session/liveness.js';
 import { pruneSessionClaims } from '../../session/claims.js';
@@ -40,12 +40,15 @@ const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent o
  * vendor CLI with it. Silent when the catalog itself is empty (discovery
  * failed or the harness has none): a real vendor outage or a harness with no
  * discovery command must not block setting a model that may well be valid. */
-export async function assertRealModel(harness: AiLocalHarnessDefinition | undefined, account: AiHarnessAccount | undefined, model: string): Promise<void> {
-  if (!harness) return;
+export async function assertRealModel(harness: AiLocalHarnessDefinition | undefined, account: AiHarnessAccount | undefined, model: string): Promise<string> {
+  if (!harness) return model;
   const catalog = await nativeModelCatalog(harness, account);
-  if (catalog.models.length && !catalog.models.includes(model)) {
+  // Typed as the lists show it (`big-pickle`), stored as the harness names it.
+  const real = modelIdFromLabel(harness, catalog.models, model);
+  if (catalog.models.length && !catalog.models.includes(real)) {
     throw new Error(`"${model}" is not a model ${harness.displayName} publishes. Choose one of: ${catalog.models.join(', ')}`);
   }
+  return real;
 }
 
 /** A model for a Gateway session: `auto` (and its synonyms) hands the choice
