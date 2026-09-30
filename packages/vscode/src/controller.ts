@@ -17,7 +17,8 @@ import { applyHunks, diffInDetail, diffSides } from './text';
 import { readFile } from 'node:fs/promises';
 import { BridgeQuestion, DiffDocuments, fileNameIn, runInTerminal } from './ui';
 import type { FromWebview, ToWebview, WebviewRequest } from './webview-protocol';
-import { searchWorkspaceFiles } from './mentions';
+import { mentionFromEditor, searchWorkspaceFiles } from './mentions';
+import type { Mention } from './webview-protocol';
 
 type ApprovalPreview = Extract<WorkerEvent, { type: 'approval-request' }>;
 
@@ -51,6 +52,10 @@ export class ClikCodeController implements vscode.Disposable {
   private refreshedFor = '';
   private accountTimer: NodeJS.Timeout | undefined;
   private lastAutoRestart = 0;
+  /** The editor selection the pages offer with the next message. */
+  private selection: Mention | undefined;
+  private selectionTimer: NodeJS.Timeout | undefined;
+  private readonly subscriptions: vscode.Disposable[] = [];
   /** Pasted images: path -> sent in a message yet. */
   private readonly images = new Map<string, boolean>();
   private imageDir: Promise<string> | undefined;
@@ -62,6 +67,31 @@ export class ClikCodeController implements vscode.Disposable {
     readonly label: string,
   ) {
     this.accountTimer = setInterval(() => { if (this.visible) this.refreshStructured(true); }, 60_000);
+    this.subscriptions.push(
+      vscode.window.onDidChangeTextEditorSelection((event) => this.trackSelection(event.textEditor)),
+      vscode.window.onDidChangeActiveTextEditor((editor) => { if (editor) this.trackSelection(editor); }),
+    );
+    if (vscode.window.activeTextEditor) this.trackSelection(vscode.window.activeTextEditor);
+  }
+
+  /** What is selected in the editor, as Claude Code offers it: settled for a
+   * moment before the pages hear of it, since a drag is a stream of events.
+   * A panel that is not a file (output, terminal, the chat tab itself) keeps
+   * the last file's selection. */
+  private trackSelection(editor: vscode.TextEditor): void {
+    const scheme = editor.document.uri.scheme;
+    if (scheme !== 'file' && scheme !== 'untitled') return;
+    if (this.selectionTimer) clearTimeout(this.selectionTimer);
+    this.selectionTimer = setTimeout(() => {
+      this.selectionTimer = undefined;
+      const next = editor.selection.isEmpty ? undefined : mentionFromEditor(editor);
+      const same = next?.path === this.selection?.path && next?.startLine === this.selection?.startLine
+        && next?.endLine === this.selection?.endLine && next?.text === this.selection?.text;
+      if (same) return;
+      this.selection = next;
+      // A page that is still loading is sent the current one when it is ready.
+      for (const surface of this.surfaces) if (surface.ready) surface.post({ type: 'selection', ...(next ? { mention: next } : {}) });
+    }, 150);
   }
 
   get state(): ChatModel {
@@ -571,6 +601,7 @@ export class ClikCodeController implements vscode.Disposable {
         // A page (re)loaded: it has no transcript yet.
         surface.sentModel = undefined;
         this.postModel(surface);
+        if (this.selection) surface.post({ type: 'selection', mention: this.selection });
         void this.ensureStarted();
         return;
       case 'send':
@@ -616,6 +647,8 @@ export class ClikCodeController implements vscode.Disposable {
     if (this.accountTimer) clearInterval(this.accountTimer);
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.postTimer) clearTimeout(this.postTimer);
+    if (this.selectionTimer) clearTimeout(this.selectionTimer);
+    for (const subscription of this.subscriptions) subscription.dispose();
     this.dropQuestions();
     this.bridge?.dispose();
     this.bridge = undefined;

@@ -161,6 +161,9 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .activity.running .activity-line { color: var(--vscode-foreground); }
 .activity.error .activity-status { color: var(--err); }
 .activity-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.selection-context { display: flex; margin-bottom: 4px; font-size: 0.9em; }
+.selection-context .link { display: inline-flex; gap: 6px; align-items: center; }
+.selection-context.excluded .link { opacity: 0.6; text-decoration: line-through; }
 .activity-outcome { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 .activity-outcome.failed { color: var(--err); }
 .activity-output {

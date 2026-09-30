@@ -21,9 +21,16 @@ export interface ComposerHandle {
   insert(text: string): void;
   setDraft(text: string): void;
   mention(mention: Mention): void;
+  /** The editor's current selection (none: nothing selected). */
+  selection(mention: Mention | undefined): void;
 }
 
 interface Attachment { key: string; kind: 'selection' | 'image'; label: string; mention?: Mention; path?: string }
+
+const sameRange = (left: Mention | undefined, right: Mention): boolean =>
+  left?.path === right.path && left.startLine === right.startLine && left.endLine === right.endLine;
+
+const lineCount = (mention: Mention): number => (mention.endLine ?? 1) - (mention.startLine ?? 1) + 1;
 
 let slashCache: { session?: string; commands: IdeSlashCommand[] } | undefined;
 
@@ -61,6 +68,9 @@ export function Composer(props: {
   const [text, setText] = useState(saved().draft ?? '');
   const [caret, setCaret] = useState(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  /** The editor's selection, sent with the next message unless excluded; a
+   * message takes it once, and a new selection offers it again. */
+  const [selection, setSelection] = useState<{ mention: Mention; included: boolean }>();
   const [menu, setMenu] = useState<Menu>();
   const [suggestions, setSuggestions] = useState<ListRow[]>([]);
   const [dismissedToken, setDismissedToken] = useState<string>();
@@ -99,6 +109,7 @@ export function Composer(props: {
         update(`${text}${spacer}@${mention.label} `);
       }
     },
+    selection: (mention) => setSelection(mention ? { mention, included: true } : undefined),
   };
 
   const token = tokenAtCaret(text, caret);
@@ -164,11 +175,15 @@ export function Composer(props: {
   }, [tokenKey, token?.query, model.sessionId]);
 
   const send = (): void => {
-    const message = composeMessage(text, attachments);
+    const offered = selection?.included && !attachments.some((item) => sameRange(item.mention, selection.mention))
+      ? [{ kind: 'selection' as const, mention: selection.mention }] : [];
+    if (!text.trim() && !attachments.length) return;
+    const message = composeMessage(text, [...attachments, ...offered]);
     if (!message || !connected) return;
     post({ type: 'send', text: message, id: uid() });
     setText('');
     setAttachments([]);
+    if (offered.length) setSelection({ mention: selection!.mention, included: false });
     save({ draft: '' });
     setSuggestions([]);
   };
@@ -255,6 +270,17 @@ export function Composer(props: {
         {showSuggestions ? (
           <div class="popover suggestions" role="dialog" aria-label={token?.kind === '/' ? 'Commands' : 'Files'}>
             <KeyList id="suggestions" rows={suggestions} label={token?.kind === '/' ? 'Commands' : 'Files'} inputRef={textarea as unknown as { current: HTMLInputElement | null }} onEscape={() => setDismissedToken(tokenKey)} />
+          </div>
+        ) : null}
+        {selection && !attachments.some((item) => sameRange(item.mention, selection.mention)) ? (
+          <div class={`selection-context${selection.included ? '' : ' excluded'}`}>
+            <button type="button" class="link small" aria-pressed={selection.included}
+              title={selection.included ? 'Sent with your next message. Click to leave it out.' : 'Click to send it with your next message.'}
+              onClick={() => setSelection({ ...selection, included: !selection.included })}>
+              <Icon name={selection.included ? 'eye' : 'eye-closed'} />
+              <span>{lineCount(selection.mention)} line{lineCount(selection.mention) === 1 ? '' : 's'} selected</span>
+              <span class="muted">{selection.mention.label.split(/[\\/]/).pop()}</span>
+            </button>
           </div>
         ) : null}
         {attachments.length ? (
