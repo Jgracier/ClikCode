@@ -75,6 +75,21 @@ export interface HarnessSession {
    * and not the answer. `permissionMode` is the mode it applied. */
   reported?: { at: string; model?: string; permissionMode?: string };
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Last thing asked, for the conversation list. Written when the transcript
+   * changes, so the list does not open the transcript. */
+  listPreview?: string;
+  /** How many messages the transcript holds. Same purpose as `listPreview`. */
+  listMessageCount?: number;
+  /** Set once the transcript has been summarized onto this row. Distinguishes
+   * "not looked at yet" from "looked at, and it was empty". */
+  listChecked?: boolean;
+  /** The in-flight turn, without its response text. The response stays in the
+   * transcript file, which is rewritten many times a second; this is not. */
+  listTurn?: {
+    startedAt: string;
+    prompt: string;
+    subagents?: NonNullable<HarnessSession['pendingTurn']>['subagents'];
+  };
   /** Crash-safe turn journal. It remains separate until completion so a
    * provider retry cannot accidentally submit the same user prompt twice. */
   pendingTurn?: {

@@ -142,6 +142,19 @@ export function baselineOf(state: HarnessState, previous?: StateBaselineData): S
   for (const session of state.sessions ?? []) {
     const kept = previous?.sessions.get(session.id);
     const { meta, claim } = splitSession(session);
+    // Messages left unset were not opened. That is not an empty transcript:
+    // reuse the one this baseline already holds so a later write cannot
+    // replace the file with nothing. A transcript that was opened and cleared
+    // has `messages: []`, which still takes the path below.
+    if (session.messages === undefined && session.pendingTurn === undefined && kept) {
+      sessions.set(session.id, {
+        meta: cloneData(meta),
+        transcript: kept.transcript,
+        ...(claim ? { claim: cloneData(claim) } : {}),
+        ...(kept.messagesFrom ? { messagesFrom: kept.messagesFrom } : {}),
+      });
+      continue;
+    }
     const messages = baselineList(session.messages, kept?.transcript.messages, kept?.messagesFrom);
     const pendingTurn = kept && sameData(kept.transcript.pendingTurn, session.pendingTurn) ? kept.transcript.pendingTurn : cloneData(session.pendingTurn);
     const transcript: SessionTranscript = kept && messages.copy === kept.transcript.messages && pendingTurn === kept.transcript.pendingTurn

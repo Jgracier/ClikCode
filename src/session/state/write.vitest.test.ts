@@ -99,6 +99,65 @@ describe('a streaming turn\'s checkpoint', () => {
   });
 });
 
+describe('a list that does not open every transcript', () => {
+  it('renames one chat and leaves the other transcript on disk', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-light-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    const make = (id: string, content: string): HarnessSession => ({
+      id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content }],
+    } as HarnessSession);
+    state.sessions.push(make('a', 'hello from a'), make('b', 'hello from b'));
+    await writeState(state);
+    const loaded = await readState();
+    await writeState(loaded);
+    resetSessionStoreCache();
+    const light = await readState({ transcripts: [] });
+    expect(light.sessions.find((session) => session.id === 'a')?.messages).toBeUndefined();
+    expect(light.sessions.find((session) => session.id === 'a')?.listPreview).toBe('hello from a');
+    expect(light.sessions.find((session) => session.id === 'a')?.listMessageCount).toBe(1);
+    expect(light.sessions.find((session) => session.id === 'a')?.listChecked).toBe(true);
+    const renamed = light.sessions.find((session) => session.id === 'b')!;
+    renamed.name = 'Renamed';
+    await writeState(light);
+    resetSessionStoreCache();
+    const full = await readState();
+    expect(full.sessions.find((session) => session.id === 'a')?.messages?.[0]?.content).toBe('hello from a');
+    expect(full.sessions.find((session) => session.id === 'b')).toMatchObject({ name: 'Renamed', messages: [{ role: 'user', content: 'hello from b' }] });
+  });
+
+  it('records a turn in flight without its response, and a growing response leaves that record alone', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-list-turn-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    const session = {
+      id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+      messages: [{ role: 'user', content: 'hello' }],
+      pendingTurn: { prompt: 'go', response: 'partial', startedAt: now, updatedAt: now, outputStarted: true },
+    } as HarnessSession;
+    state.sessions.push(session);
+    await writeState(state);
+    const loaded = await readState();
+    await writeState(loaded);
+    resetSessionStoreCache();
+    const light = await readState({ transcripts: [] });
+    expect(light.sessions[0]?.listTurn).toEqual({ startedAt: now, prompt: 'go' });
+    expect(light.sessions[0]?.listPreview).toBe('hello');
+    const again = await readState();
+    again.sessions[0]!.pendingTurn!.response += ' more';
+    again.sessions[0]!.pendingTurn!.updatedAt = new Date(Date.parse(now) + 1000).toISOString();
+    await writeState(again);
+    resetSessionStoreCache();
+    const after = await readState({ transcripts: [] });
+    expect(after.sessions[0]?.listTurn).toEqual({ startedAt: now, prompt: 'go' });
+    expect(JSON.stringify(after.sessions[0]?.listTurn)).not.toContain('partial');
+  });
+});
+
 describe('a chat nothing has happened in', () => {
   it('is kept for this process and never written', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-draft-'));

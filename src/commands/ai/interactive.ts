@@ -10,6 +10,7 @@
 import { isClikCodeAgent } from '../../session/route.js';
 import { ensureTurboFitForTurn } from './turbofit.js';
 import { ensureLocalModelForTurn, reconcileLocalModelLeases } from './local-model.js';
+import { backfillListFacts } from '../../session/list-backfill.js';
 import { chatNamed, isBlankConversation, latestChat } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { discardIfBlank, ensureSessionOnDisk } from '../../session/blank.js';
@@ -133,14 +134,23 @@ const BOARD_COMMANDS: readonly PickerOption<string>[] = [
 // the terminal restore handler tears down the UI and exits the client, while
 // its detached worker can finish an in-flight turn and serve a reconnect.
 
+/** The index, after any chat that predates the row summary has been summarized.
+ *  That pass is once per install; every later open reads the index only. */
+async function stateForNavigation(): Promise<HarnessState> {
+  const state = await readState({ transcripts: [] });
+  if (!state.sessions.some((session) => !session.listChecked && !isBlankConversation(session))) return state;
+  await backfillListFacts();
+  return readState({ transcripts: [] });
+}
+
 export async function aiSessionOpenDefault(config: Conf, options: { continue?: boolean } = {}): Promise<void> {
-  const state = await readState();
+  const state = await stateForNavigation();
   if (options.continue) {
     const latest = latestChat(state.sessions, process.cwd());
     if (latest) return aiSessionResume(config, latest.id);
   }
-  // Empty chats are not conversations. Drop any an older build stored, and
-  // do not store the one this launch opens until something happens in it.
+  // Empty chats are not conversations. Do not store the one this launch
+  // opens until something happens in it.
   state.sessions = state.sessions.filter((session) => !isBlankConversation(session));
   const session = launchSession(state, process.cwd());
   state.sessions.push(session);
@@ -149,7 +159,7 @@ export async function aiSessionOpenDefault(config: Conf, options: { continue?: b
 }
 
 export async function aiSessionResume(config: Conf, ref: string): Promise<void> {
-  const state = await readState();
+  const state = await stateForNavigation();
   // An id, the start of one, a chat's name, or `last`.
   const id = state.sessions.some((item) => item.id === ref) ? ref : chatNamed(state.sessions, ref, '');
   const session = id ? state.sessions.find((item) => item.id === id) : undefined;
@@ -197,10 +207,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // Reassigned whenever a nested flow writes its own state: `session` must stay
   // a member of whichever snapshot we later hand to writeState, or that write
   // both reverts the nested flow's work and drops our own edits.
-  let state = await readState();
+  let state = await readState({ transcripts: [id] });
   let session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (await synchronizeNativeTranscript(state, session)) await writeState(state);
   // Palette rows come from the ONE slash registry (with argHint/group).
   // slashPalette itself leaves out everything the vendor harness owns -- its
   // manager commands, whatever an ACP agent advertised, and the `/<harness>`
@@ -243,7 +252,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     }
     // The picker and auto-select each ran their own read/write cycle, so the
     // snapshot above is stale. Adopt the current one wholesale.
-    state = await readState();
+    state = await readState({ transcripts: [id] });
     const next = state.sessions.find((item) => item.id === id);
     if (!next) return;
     session = next;
@@ -300,7 +309,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
   claimInterval.unref();
   const usageInterval = rl instanceof TerminalHarnessPrompter ? setInterval(() => {
-    void readState().then((latestState) => {
+    void readState({ transcripts: [] }).then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
       if (latest) refreshUsage(latest, latestState);
       // The other accounts too, but only one whose quota may have come back:
@@ -322,7 +331,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   /** The message last re-sent because its own provider had an account back;
    * never twice, so a record that keeps flipping cannot loop. */
   let autoResent: string | undefined;
-  let synchronizedSessionId = id;
+  let synchronizedSessionId = '';
   let transportSessionId = id;
   /** `<session id> <route>` this terminal last prepared a worker for. */
   let preparedRoute: string | undefined;
@@ -337,13 +346,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
       // handoff, resume) closes the child it had.
       if (transportSessionId !== id) {
-        await closePersistentTransport(transportSessionId);
-        nativeAvailableCommands.delete(transportSessionId);
+        const leaving = transportSessionId;
+        nativeAvailableCommands.delete(leaving);
         transportSessionId = id;
+        // The next chat paints while the vendor child it left finishes closing.
+        void closePersistentTransport(leaving);
       }
       try {
         const queueMark = workerQueueMark(id);
-        const latestState = await readState();
+        const latestState = await readState({ transcripts: [id] });
         const latest = latestState.sessions.find((item) => item.id === id);
         if (!latest) break;
         // Whatever the last command or turn did to the conversation this
@@ -361,10 +372,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           void prepareSessionWorker(latest.id, { spawn: isClikCodeAgent(latest) }).catch(() => undefined);
         }
         activeWorkspace = latest.workspace ?? process.cwd();
-        if (synchronizedSessionId !== id) {
-          if (await synchronizeNativeTranscript(latestState, latest)) await writeState(latestState);
-          synchronizedSessionId = id;
-        }
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         paletteState = latestState;
         // The turn the conversation's worker is running, if any -- the
@@ -376,6 +383,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         rl.render?.(latest, account, notice, running ? { running: true, ...running } : { running: false });
         refreshUsage(latest, latestState);
         notice = undefined;
+        if (synchronizedSessionId !== id) {
+          const syncId = id;
+          synchronizedSessionId = syncId;
+          // The vendor file is reconciled after the chat is on screen. Merging
+          // it first is what made Enter wait on a CLI that was not this turn.
+          void synchronizeNativeTranscript(latestState, latest).then(async (changed) => {
+            if (!changed || syncId !== id) return;
+            await writeState(latestState);
+            if (syncId === id) rl.render?.(latest, account, undefined, running ? { running: true, ...running } : { running: false });
+          }).catch(() => undefined);
+        }
         const queued = latest.queuedTurns?.[0];
         if (openBoard) {
           // Before anything that would follow the running turn straight back.
@@ -443,7 +461,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const taken = await acquireSessionClaim(id);
         if (!taken.acquired) notice = 'Still open in the other terminal.';
         else {
-          const held = await readState();
+          const held = await readState({ transcripts: [id] });
           const current = held.sessions.find((item) => item.id === id);
           if (current) { claimSession(current); await writeState(held); }
           notice = 'This window is driving the chat.';
@@ -452,7 +470,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       }
       // Left on an empty prompt: the board, through the handler /resume has.
       const viaBoard = line === BOARD_LINE;
-      const heldNow = (await readState()).sessions.find((item) => item.id === id);
+      const heldNow = (await readState({ transcripts: [] })).sessions.find((item) => item.id === id);
       if (!viaBoard && heldNow && sessionClaimIsLive(heldNow)) {
         notice = WATCHING_NOTICE;
         TERMINAL.active?.restoreDraft(line);
@@ -467,7 +485,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // The worker is another process. A draft is written now, because this
         // message is what makes the chat a conversation.
         if (rl instanceof TerminalHarnessPrompter) await ensureSessionOnDisk(targetId);
-        const activeState = await readState();
+        const activeState = await readState({ transcripts: [targetId] });
         const active = activeState.sessions.find((item) => item.id === targetId);
         const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
         // Held from this process, not the turn's worker: the worker outlives
@@ -695,7 +713,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           const text = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
           const { args } = route;
           const showSession = async (target: string): Promise<void> => {
-            const shown = await readState();
+            const shown = await readState({ transcripts: [target] });
             const session = shown.sessions.find((item) => item.id === target);
             if (session) rl.render?.(session, session.accountId ? shown.accounts.find((item) => item.id === session.accountId)?.label : undefined);
           };
@@ -947,7 +965,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
  * than per turn so a long turn, or a long idle stretch, both keep the claim
  * alive without any traffic of their own. */
 async function refreshSessionClaim(id: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || sessionClaimIsLive(session)) return;
   claimSession(session);
@@ -955,7 +973,7 @@ async function refreshSessionClaim(id: string): Promise<void> {
 }
 
 async function releaseSessionClaim(id: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session?.claim) return;
   releaseSession(session);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { markFromIndex } from './list-facts.js';
 import type { HarnessSession } from './model.js';
 import { chatNamed, conversationPreview, isBlankConversation, relativeTime, sessionPickerOptions } from './options.js';
 
@@ -36,6 +37,17 @@ describe('a chat nothing happened in', () => {
     expect(listed).toContain('open');
     // One a killed process left behind is as invisible as one never made.
     expect(listed).not.toContain('stranded');
+  });
+
+  it('keeps an index row that has not been opened yet, and drops one that was checked and empty', () => {
+    const stored = chat({ id: 'stored', conversationId: 'stored' });
+    markFromIndex(stored);
+    expect(isBlankConversation(stored)).toBe(false);
+    const checked = chat({ id: 'checked', conversationId: 'checked', listChecked: true, listMessageCount: 0 });
+    markFromIndex(checked);
+    expect(isBlankConversation(checked)).toBe(true);
+    const previewed = chat({ id: 'previewed', conversationId: 'previewed', listPreview: 'fix the scroll jump' });
+    expect(conversationPreview(previewed)).toBe('fix the scroll jump');
   });
 
   it('shows how long ago and the last thing asked, not a locale timestamp', () => {

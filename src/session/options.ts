@@ -10,6 +10,9 @@
  * turn loop's file the pickers could not be lifted out without the two
  * importing each other.
  */
+import { conversationPreview, sessionFromIndex, transcriptWasLoaded } from './list-facts.js';
+
+export { conversationPreview };
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent } from './route.js';
 import chalk from 'chalk';
 import { commonControlFor, optionIdsForControl } from '../harness/options.js';
@@ -63,6 +66,15 @@ export function hasConversationContent(session: HarnessSession): boolean {
  * where the rule is explained. Defined here, beside hasConversationContent,
  * because the chat list below needs it and blank.ts needs state I/O. */
 export function isBlankConversation(session: HarnessSession): boolean {
+  // The transcript was not opened. A row in the index is a real chat (its
+  // summary may still be on the way). A draft that was never stored is not.
+  if (!transcriptWasLoaded(session) && session.messages === undefined && session.pendingTurn === undefined) {
+    if (session.listChecked) {
+      return !(session.listMessageCount || session.listPreview || session.listTurn || session.nativeSessionId
+        || session.queuedTurns?.length || session.attachments?.length || session.shellNotes?.length || session.nameSource === 'user');
+    }
+    if (sessionFromIndex(session)) return false;
+  }
   return !hasConversationContent(session)
     && !(session.queuedTurns?.length)
     && !(session.attachments?.length)
@@ -84,22 +96,6 @@ export function relativeTime(iso: string, now = Date.now()): string {
   const days = Math.round(delta / 86_400_000);
   if (days < 14) return `${days}d ago`;
   return new Date(then).toLocaleDateString();
-}
-
-/** The last thing the user asked, one line, for the conversation list. A
- * title is a name; this is the conversation itself, and it is never stored
- * as the name. */
-export function conversationPreview(session: HarnessSession, limit = 48): string | undefined {
-  const messages = session.messages ?? [];
-  let text: string | undefined;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === 'user' && message.content.trim()) { text = message.content; break; }
-  }
-  text ??= session.pendingTurn?.prompt;
-  if (!text?.trim()) return undefined;
-  const line = text.replace(/\s+/g, ' ').trim();
-  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
 }
 
 /** The one conversation a typed name picks out: an exact name (ignoring

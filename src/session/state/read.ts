@@ -3,6 +3,7 @@
 
 import type { HarnessSession, HarnessState } from '../model.js';
 import { ephemeralSessions } from '../ephemeral.js';
+import { markFromIndex, markTranscriptLoaded, sessionFromIndex, transcriptWasLoaded } from '../list-facts.js';
 import { cloneData, sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { readSessionTranscript } from '../store/transcripts.js';
@@ -21,16 +22,22 @@ function sessionClaimView(claim: SessionClaim): NonNullable<HarnessSession['clai
   return { pid: claim.pid, host: claim.host, startedAt: claim.startedAt, heartbeatAt: claim.heartbeatAt };
 }
 
-async function assembleState(index: StateIndex, secrets: HarnessSecrets): Promise<HarnessState> {
+async function assembleState(index: StateIndex, secrets: HarnessSecrets, transcripts: 'all' | ReadonlySet<string>): Promise<HarnessState> {
   const claims = await readSessionClaims();
   const sessions = await Promise.all(index.sessions.map(async (meta): Promise<HarnessSession> => {
-    const transcript = await readSessionTranscript(meta.id);
+    const load = transcripts === 'all' || transcripts.has(meta.id);
+    const transcript = load ? await readSessionTranscript(meta.id) : undefined;
     const claim = claims.get(meta.id);
-    return {
+    const session: HarnessSession = {
       ...cloneData(meta as HarnessSession),
-      ...transcript,
+      ...(transcript ?? {}),
       ...(claim ? { claim: sessionClaimView(claim) } : {}),
     };
+    // After the object exists: a spread would drop these, and a later write
+    // tells "not opened" from "opened and empty" by them.
+    markFromIndex(session);
+    if (load) markTranscriptLoaded(session);
+    return session;
   }));
   const state = {
     version: index.version,
@@ -58,15 +65,21 @@ function normalizedState(raw: HarnessState): HarnessState {
   // Older previews did not include a failover preference. Migrate those
   // sessions to the safe default so a local account does not remain stuck
   // after its known quota window is exhausted.
-  const sessions: HarnessSession[] = raw.sessions.map((session) => ({
-    ...session,
-    ...normalizedConversation(session),
-    accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
-    // Sessions created before lifecycle state existed were still open at the
-    // time of upgrade, so preserve their resumability once.
-    status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
-    ...normalizedSessionPermission(session),
-  }));
+  const sessions: HarnessSession[] = raw.sessions.map((session) => {
+    const next: HarnessSession = {
+      ...session,
+      ...normalizedConversation(session),
+      accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
+      // Sessions created before lifecycle state existed were still open at the
+      // time of upgrade, so preserve their resumability once.
+      status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
+      ...normalizedSessionPermission(session),
+    };
+    // The spread above is a new object, so the marks have to be put back.
+    if (sessionFromIndex(session)) markFromIndex(next);
+    if (transcriptWasLoaded(session)) markTranscriptLoaded(next);
+    return next;
+  });
   // `quotaRetryAt` is kept: it is when a quota refusal stops holding (the
   // vendor's "resets in" hint, else a default window -- see
   // quotaMarkExpiresAt). The 60-second value older builds wrote is long past,
@@ -84,7 +97,15 @@ function normalizedState(raw: HarnessState): HarnessState {
     (raw as HarnessState & { [STATE_ROLLUPS]?: Record<string, InvocationRollup> })[STATE_ROLLUPS] ?? {});
 }
 
-export async function readState(): Promise<HarnessState> {
+export interface ReadStateOptions {
+  /** Which transcripts to open. The default is every one, which is what a
+   * turn needs. An empty list reads the index only: titles, previews, dates. */
+  transcripts?: 'all' | readonly string[];
+}
+
+export async function readState(options?: ReadStateOptions): Promise<HarnessState> {
+  const transcripts = options?.transcripts ?? 'all';
+  const wanted = transcripts === 'all' ? 'all' as const : new Set(transcripts);
   await ensureLayout();
   let index = await loadIndex();
   if (!index) {
@@ -100,7 +121,7 @@ export async function readState(): Promise<HarnessState> {
     await readLocalApiToken();
     secrets = await readSecretsFile();
   }
-  const raw = await assembleState(index, secrets);
+  const raw = await assembleState(index, secrets, wanted);
   rememberBaseline(raw);
   const normalized = normalizedState(raw);
   hidden(normalized, STATE_BASELINE, (raw as BaselinedState)[STATE_BASELINE]);
