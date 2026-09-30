@@ -12,7 +12,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, stat, statfs, writeFile } from 'node:fs/promises';
-import { request } from 'node:http';
+import { nodeHttp } from '../../runtime/lazy-node.js';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
@@ -309,7 +309,7 @@ async function downloadFile(
 function gatewayRequest(method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = 10_000): Promise<{ status: number; text: string }> {
   return new Promise((resolve) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
-    const req = request({
+    const req = nodeHttp().request({
       ...GATEWAY, method, path, timeout: timeoutMs,
       headers: { ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}), authorization: 'Bearer not-needed' },
     }, (res) => {

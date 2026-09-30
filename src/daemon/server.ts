@@ -9,7 +9,8 @@
  */
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, open, readFile, unlink, writeFile, type FileHandle } from 'node:fs/promises';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import { nodeHttp } from '../runtime/lazy-node.js';
 import { join } from 'node:path';
 import type Conf from 'conf';
 import { emitResult } from '../cli/structured-output.js';
@@ -102,7 +103,7 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
   const lockPath = join(runtimeDirectory, 'runtime.lock');
   const runtimeLock = await acquireRuntimeLock(lockPath, runtimePath);
   const startupState = await readState();
-  const server = createServer(async (request, response) => {
+  const server = nodeHttp().createServer(async (request, response) => {
     try {
       // DNS-rebinding guard: only a literal loopback authority on OUR port.
       if (!isAllowedLoopbackHost(request.headers.host, boundPort(server))) return sendJson(response, 403, { error: 'forbidden_host' });

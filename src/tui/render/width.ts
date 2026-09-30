@@ -42,8 +42,11 @@ export function visibleSlice(value: string, width: number): string {
  * combining accent, a skin-tone modifier, a variation selector, and a ZWJ
  * family emoji are all several code points the terminal draws -- and the user
  * edits -- as one unit. Width, cursor motion, and deletion all agree on this
- * boundary, so backspace can never strand half an emoji in the composer. */
-const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+ * boundary, so backspace can never strand half an emoji in the composer.
+ * The segmenter is made on first use: building one loads ICU's break rules,
+ * about 6 ms a worker, the editor bridge or `--version` paid at load. */
+let graphemeSegmenter: Intl.Segmenter | undefined;
+const graphemes = (): Intl.Segmenter => (graphemeSegmenter ??= new Intl.Segmenter(undefined, { granularity: 'grapheme' }));
 
 /** No realistic cluster approaches this many code units, so bounding the
  * segmented window keeps cursor motion O(1) rather than re-segmenting the
@@ -69,7 +72,7 @@ function isWideCodePoint(code: number): boolean {
 export function displayTokens(value: string): string[] {
   const tokens: string[] = [];
   const pushText = (text: string): void => {
-    for (const { segment } of graphemes.segment(text)) tokens.push(segment);
+    for (const { segment } of graphemes().segment(text)) tokens.push(segment);
   };
   let consumed = 0;
   for (const match of value.matchAll(ZERO_WIDTH_SEQUENCES)) {
@@ -110,7 +113,7 @@ export function sliceToWidth(value: string, width: number): string {
 export function terminalCellWidth(value: string): number {
   const plain = value.includes('\u001b') ? value.replace(ZERO_WIDTH_SEQUENCES, '') : value;
   let width = 0;
-  for (const { segment } of graphemes.segment(plain)) {
+  for (const { segment } of graphemes().segment(plain)) {
     if (segment === '\t') { width += TAB_WIDTH - (width % TAB_WIDTH); continue; }
     // Other control characters occupy no cell (and are stripped before paint).
     if (segment.length === 1 && /[\u0000-\u001f\u007f-\u009f]/.test(segment)) continue;
@@ -137,12 +140,12 @@ export function previousCharacterIndex(value: string, index: number): number {
   if (index <= 0) return 0;
   const start = Math.max(0, index - CLUSTER_WINDOW);
   let boundary = 0;
-  for (const { index: offset } of graphemes.segment(value.slice(start, index))) boundary = offset;
+  for (const { index: offset } of graphemes().segment(value.slice(start, index))) boundary = offset;
   return start + boundary;
 }
 
 export function nextCharacterIndex(value: string, index: number): number {
   if (index >= value.length) return value.length;
-  const [first] = graphemes.segment(value.slice(index, index + CLUSTER_WINDOW));
+  const [first] = graphemes().segment(value.slice(index, index + CLUSTER_WINDOW));
   return index + (first ? first.segment.length : 1);
 }
