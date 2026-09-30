@@ -3,13 +3,13 @@
  * beyond the composer and which screen is showing. */
 import { render, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { currentProvider, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, type ChatModel } from '../model';
 import type { IdeConversation, IdePickItem, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewScreen } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, Transcript } from './chat';
 import { Composer, type ComposerHandle } from './composer';
-import { homeRelative, modelLabel, relativeTime } from './format';
+import { homeRelative, relativeTime } from './format';
 import { choose } from './picker';
 import { AccountsScreen, HistoryScreen } from './screens';
 import { inlineStep, Sheet, type InlineTarget, type OpenQuestion } from './sheet';
@@ -62,7 +62,7 @@ function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (t
         <Logo size={44} />
         <h1>What should we build?</h1>
         <p class="muted">
-          {provider ? <>{provider.name}{model.model ? <> · {modelLabel(model.model, model.providerId, provider.name)?.replace(/^[\w-]+\//, '')}</> : null}</> : 'ClikCode'}
+          {provider ? <>{provider.name}{model.model ? <> · {chatModelLabel(model, provider.name)}</> : null}</> : 'ClikCode'}
           {folder ? <> · <span title={homeRelative(model.workspace)}>{folder}</span></> : null}
         </p>
       </div>

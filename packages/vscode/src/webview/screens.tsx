@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { IdeAccount, IdeAccounts, IdeConversation, IdeGateway } from '../protocol';
 import { post, request } from './bus';
-import { homeRelative, modelLabel, relativeTime, resetIn } from './format';
+import { homeRelative, relativeTime, resetIn } from './format';
 import { choose } from './picker';
 import { Icon, IconButton, KeyList, Meter, Switch, type ListRow } from './ui';
 
@@ -73,7 +73,7 @@ export function HistoryScreen(props: { model: ChatModel; onBack: () => void; onE
                   </form>
                 ) : <div class="conversation-title">{row.title}{row.current ? <span class="badge">this chat</span> : null}{row.elsewhere ? <span class="badge muted-badge">open elsewhere</span> : null}</div>}
                 <div class="conversation-meta" title={row.workspace ? homeRelative(row.workspace) : undefined}>
-                  {[row.provider, modelLabel(row.model, row.provider), relativeTime(row.updatedAt), row.workspace ? row.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : undefined, row.history > 1 ? `${row.history} branches` : undefined].filter(Boolean).join(' · ')}
+                  {[row.provider, row.model, relativeTime(row.updatedAt), row.workspace ? row.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : undefined, row.history > 1 ? `${row.history} branches` : undefined].filter(Boolean).join(' · ')}
                 </div>
                 {row.preview ? <div class="conversation-preview">{row.preview}</div> : null}
               </div>

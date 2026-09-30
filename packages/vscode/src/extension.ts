@@ -4,10 +4,9 @@ import { appendFileSync } from 'node:fs';
 import { PANEL_TYPE, supportsSecondarySidebar, VIEW_IDS, WebviewSurface } from './chat-view';
 import { ClikCodeController, type ControllerHost } from './controller';
 import { questionWithSelection } from './editor-context';
-import { providerDisplayName, type ChatModel } from './model';
+import { chatModelLabel, providerDisplayName, type ChatModel } from './model';
 import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND } from './compat';
 import { DiffDocuments } from './ui';
-import { modelLabel } from './webview/format';
 import { mentionFromEditor, mentionFromUri } from './mentions';
 import type { WebviewScreen } from './webview-protocol';
 
@@ -40,7 +39,7 @@ export function statusText(model: ChatModel): { text: string; tooltip: string } 
   const waiting = model.approvals.length > 0;
   const tooltip = [
     `${model.title ?? 'New chat'}${waiting ? ' (waiting for your approval)' : model.running ? ' (working)' : ''}`,
-    `Provider: ${name ?? '—'}`, `Model: ${modelLabel(model.model, model.providerId, name) ?? 'default'}`,
+    `Provider: ${name ?? '—'}`, `Model: ${chatModelLabel(model, name) ?? 'default'}`,
     ...(model.account ? [`Account: ${model.account}`] : []), ...(model.effort ? [`Effort: ${model.effort}`] : []),
     ...(model.permissions ? [`Permissions: ${model.permissions}`] : []), ...(usage ? [`Usage: ${usage}`] : []),
   ].join('\n');

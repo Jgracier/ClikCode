@@ -3,12 +3,12 @@
  * permissions for this chat. */
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { currentProvider, providerDisplayName, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } from '../model';
 import type { IdeSlashCommand } from '../protocol';
 import type { Mention } from '../webview-protocol';
 import { selectionBlock } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
-import { modelLabel, titleCase } from './format';
+import { titleCase } from './format';
 import { EffortMenu, effortLabel, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
 import { UsageBars } from './screens';
 import { Icon, KeyList, type ListRow } from './ui';
@@ -213,7 +213,7 @@ export function Composer(props: {
   };
 
   const providerName = providerDisplayName(model, knownProviders()) ?? 'Choose provider';
-  const modelName = model.model ? modelLabel(model.model, model.providerId, providerName)!.replace(/^[\w-]+\//, '') : undefined;
+  const modelName = chatModelLabel(model, providerName);
   const effort = model.chatSettings?.effort;
   const showSuggestions = suggestions.length > 0 && !menu;
   const account = model.currentAccount;

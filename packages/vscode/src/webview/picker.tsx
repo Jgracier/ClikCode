@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { IdeChoice, IdeModels, IdeProvider } from '../protocol';
 import { request } from './bus';
-import { modelLabel, titleCase } from './format';
+import { titleCase } from './format';
 import { Icon, KeyList, Popover, Switch, type ListRow } from './ui';
 
 /** Model lists, kept for the panel's life: a second look is instant. */
@@ -100,7 +100,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
         render: () => (
           <div class="row" title={item.unavailable}>
             <span class="row-check">{item.current || (drill === current && item.id === props.model.model) ? <Icon name="check" /> : null}</span>
-            <span class="row-main"><span class="row-label">{modelLabel(item.label, drill, provider?.name)}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
+            <span class="row-main"><span class="row-label">{item.label}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
           </div>
         ),
       }));
