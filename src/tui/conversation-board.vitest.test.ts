@@ -45,6 +45,14 @@ describe('the conversation board', () => {
     expect(press(state, '\r')).toEqual({ kind: 'finish', result: { open: 'old' } });
   });
 
+  it('filters the list with Ctrl+F, and Enter opens the match', () => {
+    const state = fresh();
+    expect(press(state, '\u0006')).toEqual({ kind: 'draw' });
+    press(state, 'o', 'l');
+    expect(boardRows(state, conversations, commands).map((row) => row.value)).toEqual(['old']);
+    expect(press(state, '\r')).toEqual({ kind: 'finish', result: { open: 'old' } });
+  });
+
   it('takes typing away from a selected row into a new draft', () => {
     const state = fresh();
     press(state, DOWN, 'h');

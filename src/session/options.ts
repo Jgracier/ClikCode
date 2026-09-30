@@ -66,7 +66,40 @@ export function isBlankConversation(session: HarnessSession): boolean {
   return !hasConversationContent(session)
     && !(session.queuedTurns?.length)
     && !(session.attachments?.length)
+    && !(session.shellNotes?.length)
     && session.nameSource !== 'user';
+}
+
+/** `just now`, `4m ago`, `2h ago`, then a date. A conversation row shares its
+ * width with the title, so a full locale timestamp does not fit. */
+export function relativeTime(iso: string, now = Date.now()): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return '';
+  const delta = Math.max(0, now - then);
+  if (delta < 45_000) return 'just now';
+  const minutes = Math.round(delta / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(delta / 3_600_000);
+  if (hours < 36) return `${hours}h ago`;
+  const days = Math.round(delta / 86_400_000);
+  if (days < 14) return `${days}d ago`;
+  return new Date(then).toLocaleDateString();
+}
+
+/** The last thing the user asked, one line, for the conversation list. A
+ * title is a name; this is the conversation itself, and it is never stored
+ * as the name. */
+export function conversationPreview(session: HarnessSession, limit = 48): string | undefined {
+  const messages = session.messages ?? [];
+  let text: string | undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'user' && message.content.trim()) { text = message.content; break; }
+  }
+  text ??= session.pendingTurn?.prompt;
+  if (!text?.trim()) return undefined;
+  const line = text.replace(/\s+/g, ' ').trim();
+  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
 }
 
 /** The one conversation a typed name picks out: an exact name (ignoring
@@ -107,8 +140,10 @@ export function requiresProviderHandoff(session: HarnessSession, targetHarness: 
 export function sessionPickerOptions(
   sessions: readonly HarnessSession[],
   currentId: string,
-  providerLabel: (session: HarnessSession) => string = sessionProviderLabel,
+  providerLabel: ((session: HarnessSession) => string) | undefined = sessionProviderLabel,
+  now = Date.now(),
 ): PickerOption<string>[] {
+  const labelFor = providerLabel ?? sessionProviderLabel;
   const groups = new Map<string, HarnessSession[]>();
   for (const session of sessions) {
     // A chat nothing happened in is not a conversation to go back to -- only
@@ -148,18 +183,20 @@ export function sessionPickerOptions(
     const latest = [...(active.length ? active : group)].sort((left, right) => timestamp(right) - timestamp(left))[0]!;
     const title = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || 'Untitled chat';
     const model = nativeModelLabel(latest.nativeHarness, latest.model);
+    const preview = conversationPreview(latest);
     return {
       label: title,
       // The model segment is dropped entirely when there is no real one,
       // rather than printed as "default" -- see resolveNativeModel.
+      // Provider history stays on Tab. The row is the conversation: who
+      // answered, how long ago, and the last thing that was asked.
       detail: [
-        `· ${providerLabel(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''}`,
-        model, new Date(latest.updatedAt).toLocaleString(),
-        ...(history.length > 1 ? [`${history.length} history entries · Tab options`] : []),
+        `· ${labelFor(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''}`,
+        model, relativeTime(latest.updatedAt, now), preview,
       ].filter(Boolean).join(' · '),
       value: latest.id,
       alternates: history.length > 1 ? history.map((session) => ({
-        label: `${'  '.repeat(depthFor(session))}${providerLabel(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${new Date(session.updatedAt).toLocaleString()}`,
+        label: `${'  '.repeat(depthFor(session))}${labelFor(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${relativeTime(session.updatedAt, now)}`,
         value: session.id,
       })) : undefined,
     };

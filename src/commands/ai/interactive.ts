@@ -10,9 +10,9 @@
 import { isClikCodeAgent } from '../../session/route.js';
 import { ensureTurboFitForTurn } from './turbofit.js';
 import { ensureLocalModelForTurn, reconcileLocalModelLeases } from './local-model.js';
-import { chatNamed, latestChat } from '../../session/options.js';
+import { chatNamed, isBlankConversation, latestChat } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
-import { discardIfBlank } from '../../session/blank.js';
+import { discardIfBlank, ensureSessionOnDisk } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
 import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
@@ -46,7 +46,8 @@ import { emitHarnessOutput, line } from '../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
-import { claimSession, releaseSession, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
+import { claimSession, releaseSession, sessionClaimIsLive, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
+import { acquireSessionClaim } from '../../session/claims.js';
 import { existsSync } from 'node:fs';
 import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { LiveTurnInputBroker } from '../../turn/live-input.js';
@@ -83,6 +84,7 @@ const BOARD_REPLACES_NOTICE = 'Press ← on an empty prompt for your conversatio
 /** What Left on an empty prompt returns: not a slash line, so it cannot be
  * typed, and it opens the board however the registry changes. */
 const BOARD_LINE = '\u0000board';
+const WATCHING_NOTICE = 'Watching · another terminal has this chat. /takeover when it is free.';
 
 /** Where a turn this window joins mid-way already is: when it started and
  * what it is running, from its journal -- only when that journal is the turn
@@ -137,6 +139,9 @@ export async function aiSessionOpenDefault(config: Conf, options: { continue?: b
     const latest = latestChat(state.sessions, process.cwd());
     if (latest) return aiSessionResume(config, latest.id);
   }
+  // Empty chats are not conversations. Drop any an older build stored, and
+  // do not store the one this launch opens until something happens in it.
+  state.sessions = state.sessions.filter((session) => !isBlankConversation(session));
   const session = launchSession(state, process.cwd());
   state.sessions.push(session);
   await writeState(state);
@@ -244,13 +249,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     session = next;
   }
   let stateChanged = false;
-  if (session.status !== 'active') {
+  // Another terminal holds this chat. Watch it: do not take the claim, and
+  // do not write its record out from under that terminal.
+  const watching = sessionClaimIsLive(session);
+  if (watching) selectionNotice = WATCHING_NOTICE;
+  if (!watching && session.status !== 'active') {
     session.status = 'active';
     session.closedAt = undefined;
     session.updatedAt = new Date().toISOString();
     stateChanged = true;
   }
-  if (!session.model) {
+  if (!watching && !session.model) {
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
       : session.provider ? localHarnessForProvider(session.provider) : undefined;
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
@@ -265,8 +274,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   }
   // Take ownership before the first paint so a terminal opened a moment later
   // skips this conversation instead of attaching to it.
-  claimSession(session);
-  stateChanged = true;
+  if (!watching) {
+    claimSession(session);
+    stateChanged = true;
+  }
   if (stateChanged) await writeState(state);
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
   if (rl.render) rl.render(session, initialAccount, selectionNotice);
@@ -378,7 +389,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         if (runningTurn && rl instanceof TerminalHarnessPrompter) {
           rl.submitted(runningTurn.prompt);
           rl.render(latest, account, undefined, { running: true, ...runningTurn });
-          const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, runningTurn.prompt));
+          const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, runningTurn.prompt), { watch: sessionClaimIsLive(latest) });
           if (followed.notice) notice = followed.notice;
           if (followed.left) openBoard = true;
           continue;
@@ -412,7 +423,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               // pending message over the conversation, then the answer.
               rl.submitted(answer.prompt);
               rl.render(latest, account, undefined, { running: true, ...(answer.prompt !== undefined ? { prompt: answer.prompt } : {}) });
-              const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, answer.prompt));
+              const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, answer.prompt), { watch: sessionClaimIsLive(latest) });
               if (followed.notice) notice = followed.notice;
               if (followed.left) openBoard = true;
             }
@@ -428,14 +439,34 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         throw error;
       }
       if (!line) continue;
+      if (line === '/takeover' || line.startsWith('/takeover ')) {
+        const taken = await acquireSessionClaim(id);
+        if (!taken.acquired) notice = 'Still open in the other terminal.';
+        else {
+          const held = await readState();
+          const current = held.sessions.find((item) => item.id === id);
+          if (current) { claimSession(current); await writeState(held); }
+          notice = 'This window is driving the chat.';
+        }
+        continue;
+      }
       // Left on an empty prompt: the board, through the handler /resume has.
       const viaBoard = line === BOARD_LINE;
+      const heldNow = (await readState()).sessions.find((item) => item.id === id);
+      if (!viaBoard && heldNow && sessionClaimIsLive(heldNow)) {
+        notice = WATCHING_NOTICE;
+        TERMINAL.active?.restoreDraft(line);
+        continue;
+      }
       if (viaBoard) line = '/resume';
       let interruptedSubmission: { text: string; restoreOnEscape: boolean } | undefined;
       /** One turn with the normal waiting / cancel / live-input UI. `echo`
        * paints the submitted text as the pending user message; synthetic
        * prompts (/review, /init, /compact) are not shown as if typed. */
       const runInteractiveTurn = async (targetId: string, promptText: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> => {
+        // The worker is another process. A draft is written now, because this
+        // message is what makes the chat a conversation.
+        if (rl instanceof TerminalHarnessPrompter) await ensureSessionOnDisk(targetId);
         const activeState = await readState();
         const active = activeState.sessions.find((item) => item.id === targetId);
         const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
@@ -918,7 +949,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
 async function refreshSessionClaim(id: string): Promise<void> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
-  if (!session) return;
+  if (!session || sessionClaimIsLive(session)) return;
   claimSession(session);
   await writeState(state);
 }

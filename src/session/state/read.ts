@@ -2,6 +2,7 @@
  * per-session transcripts. */
 
 import type { HarnessSession, HarnessState } from '../model.js';
+import { ephemeralSessions } from '../ephemeral.js';
 import { cloneData, sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { readSessionTranscript } from '../store/transcripts.js';
@@ -104,9 +105,18 @@ export async function readState(): Promise<HarnessState> {
   const normalized = normalizedState(raw);
   hidden(normalized, STATE_BASELINE, (raw as BaselinedState)[STATE_BASELINE]);
   // A newer layout is shown as faithfully as possible and never written to.
-  if (index.version > HARNESS_STATE_VERSION) return normalized;
+  if (index.version > HARNESS_STATE_VERSION) return withDrafts(normalized);
   if (!sameData(normalized, raw)) await writeState(normalized);
-  return normalized;
+  return withDrafts(normalized);
+}
+
+/** Drafts this process has not stored yet. They are not part of the baseline:
+ * a later write must not treat them as records that were on disk. */
+function withDrafts(state: HarnessState): HarnessState {
+  for (const session of ephemeralSessions()) {
+    if (!state.sessions.some((item) => item.id === session.id)) state.sessions.push(session);
+  }
+  return state;
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,8 @@
 
 import { hostname } from 'node:os';
 import type { HarnessSession, HarnessState } from '../model.js';
+import { dropEphemeral, ephemeralSessions, holdEphemeral, sessionForceStored } from '../ephemeral.js';
+import { isBlankConversation } from '../options.js';
 import { sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { deleteSessionTranscript, readSessionTranscript, transcriptParentOf, writeSessionTranscript } from '../store/transcripts.js';
@@ -23,6 +25,8 @@ async function applyClaimIntent(state: HarnessState, baseline: StateBaselineData
   const present = new Set<string>();
   for (const session of state.sessions ?? []) {
     present.add(session.id);
+    // A draft has no file and no claim. Another terminal cannot open it.
+    if (isBlankConversation(session) && !sessionForceStored(session.id)) continue;
     const before = baseline?.sessions.get(session.id)?.claim;
     const after = session.claim;
     if (sameData(before, after)) continue;
@@ -67,13 +71,28 @@ export async function writeState(state: HarnessState): Promise<void> {
     // found nothing to store, and the queued message was lost.
     const taken = baselineOf(state, baseline);
     const sessions = [...(state.sessions ?? [])];
-    const next = baseline && disk ? mergedIndex(baseline, state, disk) : indexFromWorking(state, disk);
+    const diskIds = new Set((disk?.sessions ?? []).map((session) => session.id));
+    // A draft is not a conversation. It stays off disk until it is used, or
+    // until a worker in another process has to read it (force). One already
+    // on disk stays until this process drops it from its working copy, which
+    // is how an empty chat an older build stored gets removed.
+    const writing = new Set(sessions.map((session) => session.id));
+    for (const session of ephemeralSessions()) {
+      if (!writing.has(session.id)) dropEphemeral(session.id);
+    }
+    for (const session of sessions) {
+      if (isBlankConversation(session) && !diskIds.has(session.id) && !sessionForceStored(session.id)) holdEphemeral(session);
+      else dropEphemeral(session.id);
+    }
+    const persisted = sessions.filter((session) => !isBlankConversation(session) || diskIds.has(session.id) || sessionForceStored(session.id));
+    const persistedState = { ...state, sessions: persisted };
+    const next = baseline && disk ? mergedIndex(baseline, persistedState, disk) : indexFromWorking(persistedState, disk);
     next.version = HARNESS_STATE_VERSION;
     capInvocations(next);
 
     // 1. Transcripts first: a session must never be listed before it is readable.
     const diskSessionIds = new Set((disk?.sessions ?? []).map((session) => session.id));
-    for (const session of sessions) {
+    for (const session of persisted) {
       const transcript = taken.sessions.get(session.id)!.transcript;
       const before = baseline?.sessions.get(session.id);
       let changed: boolean;
@@ -106,6 +125,8 @@ export async function writeState(state: HarnessState): Promise<void> {
       };
       if (!sameData(secrets, updated)) await writeSecretsFile(updated);
     }
+    const kept = new Set(persisted.map((session) => session.id));
+    for (const id of [...taken.sessions.keys()]) if (!kept.has(id)) taken.sessions.delete(id);
     written = taken;
   });
   await applyClaimIntent(state, baseline);

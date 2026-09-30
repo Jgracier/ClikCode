@@ -130,12 +130,9 @@ function resetNativeDiscoveryCache(): void {
 /** One discovery at a time for the same inputs -- a picker that reopens while
  * the last one is still running shares it rather than starting another.
  *
- * No longer held for a minute afterwards. That layer sat on top of caches that
- * already follow the right rule (session/discovery/cache.ts: file facts by
- * directory mtime, an empty vendor listing by binary identity plus a clock,
- * a non-empty listing never), and it overrode them: a session started in
- * another terminal was invisible to /resume for up to sixty seconds even
- * though its directory's mtime had already said so. */
+ * No longer held for a minute afterwards. File facts follow the directory's
+ * mtime. A vendor CLI's own list is reused for two minutes (see
+ * SEEN_LISTING_TTL_MS), then asked again. */
 function cachedAdoptableSessions(
   state: HarnessState, workspace: string, early?: (found: AdoptableNativeSession[]) => void,
 ): Promise<AdoptableNativeSession[]> {
@@ -160,10 +157,9 @@ function nativeValue(command: string, nativeId: string, accountId: string | unde
 
 /** Selected while discovery is still running: wait for it, then reopen. */
 const PENDING_DISCOVERY_VALUE = '__discovering__';
-const ACTIVE_GROUP = 'Active';
-const PAST_GROUP = 'Past';
-/** How recently a conversation was used to count as active. */
-const ACTIVE_WITHIN_MS = 24 * 60 * 60_000;
+const WORKING_GROUP = 'Working';
+const HERE_GROUP = 'This folder';
+const ELSEWHERE_GROUP = 'Other folders';
 const NEW_CONVERSATION_VALUE = '__new__';
 const MANAGE_ACTIONS = [
   { label: 'Rename', value: 'rename' },
@@ -171,9 +167,11 @@ const MANAGE_ACTIONS = [
   { label: 'Archive', value: 'archive' },
 ] as const;
 
-/** A running turn first, then everything else by recency. */
-function activityRank(block: { activity?: 'working' | 'idle' }): number {
-  return block.activity === 'working' ? 0 : 1;
+/** A running turn first, then this folder, then everywhere else. */
+function sectionRank(section: string): number {
+  if (section === WORKING_GROUP) return 0;
+  if (section === HERE_GROUP) return 1;
+  return 2;
 }
 
 /** One list for finding a conversation and managing it.
@@ -266,10 +264,10 @@ export async function interactiveSessionPicker(
     // internally but the groups themselves were never interleaved. A source
     // with no real timestamp (an unparsed vendor display string) sorts last
     // rather than claiming a false position.
-    const groupedOptions = sessionPickerOptions(sessions, currentId);
+    const groupedOptions = sessionPickerOptions(sessions, currentId, undefined, openedAt);
     histories.clear();
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
-    type OptionBlock = { sortKey: number; options: PickerOption<string>[]; activity?: 'working' | 'idle'; current?: boolean };
+    type OptionBlock = { sortKey: number; options: PickerOption<string>[]; section: string };
     const trackedBlocks = new Map<string, OptionBlock>();
     for (const option of groupedOptions) {
       const session = sessionsById.get(option.value)!;
@@ -288,10 +286,11 @@ export async function interactiveSessionPicker(
         option.detail = `${option.detail ?? ''} · active in another terminal`;
       }
       const updatedAt = Date.parse(session.updatedAt);
-      const block = trackedBlocks.get(root) ?? { sortKey: -Infinity, options: [] };
+      const here = !session.workspace || session.workspace === workspace;
+      const section = pending ? WORKING_GROUP : here ? HERE_GROUP : ELSEWHERE_GROUP;
+      const block = trackedBlocks.get(root) ?? { sortKey: -Infinity, options: [], section };
       block.sortKey = Math.max(block.sortKey, Number.isNaN(updatedAt) ? -Infinity : updatedAt);
-      block.activity = activity?.activity;
-      if (current && root === conversationIdFor(current)) block.current = true;
+      if (section === WORKING_GROUP) block.section = WORKING_GROUP;
       block.options.push(option);
       trackedBlocks.set(root, block);
     }
@@ -299,27 +298,23 @@ export async function interactiveSessionPicker(
       ...trackedBlocks.values(),
       ...discovered.map(({ harness, item, accountId }) => ({
         sortKey: item.updatedAtMs ?? -Infinity,
+        section: item.workspace && item.workspace !== workspace ? ELSEWHERE_GROUP : HERE_GROUP,
         options: [{
           label: `   ${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
-          detail: `· not yet in ClikCode${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
+          detail: `· not yet in ClikCode${ADOPTED_TRANSCRIPT_READERS[harness.command] ? '' : ' · opens without earlier messages'}${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
           // By identity, not position: the list is replaced when the CLIs
           // answer, and a row chosen from the earlier one must still resolve.
           value: nativeValue(harness.command, item.nativeId, accountId),
         }],
       })),
     ];
-    optionBlocks.sort((left, right) => activityRank(left) - activityRank(right) || right.sortKey - left.sortKey);
-    // Active is what was used in the last day -- a running turn always, and
-    // the chat open here -- running first, then by recency; Past is the rest,
-    // in one recency order whichever source found it. Provider hops stay
-    // behind each root row's history action. Each section is headed with its
-    // size, as Claude Code's session list is.
-    const activeSince = openedAt - ACTIVE_WITHIN_MS;
-    const sectionOf = (block: OptionBlock): string => (block.activity === 'working' || block.current || block.sortKey >= activeSince ? ACTIVE_GROUP : PAST_GROUP);
+    optionBlocks.sort((left, right) => sectionRank(left.section) - sectionRank(right.section) || right.sortKey - left.sortKey);
+    // Working first, then this folder, then other folders. Each section is
+    // headed with its size. Provider hops stay behind Tab.
     const sizes = new Map<string, number>();
-    for (const block of optionBlocks) sizes.set(sectionOf(block), (sizes.get(sectionOf(block)) ?? 0) + block.options.length);
+    for (const block of optionBlocks) sizes.set(block.section, (sizes.get(block.section) ?? 0) + block.options.length);
     const options: PickerOption<string>[] = optionBlocks.flatMap((block) => block.options.map((option) => ({
-      ...option, group: `${sectionOf(block)} ${sizes.get(sectionOf(block))}`,
+      ...option, group: `${block.section} ${sizes.get(block.section)}`,
     })));
     for (const option of options) {
       if (option.value.startsWith('native:')) continue;
@@ -336,7 +331,6 @@ export async function interactiveSessionPicker(
         label: discovered.length ? '  Refreshing chats from other CLIs…' : '  Looking for chats from other CLIs…',
         detail: discovered.length ? '· showing what they listed last time' : '· your ClikCode conversations are listed above',
         value: PENDING_DISCOVERY_VALUE,
-        group: `${PAST_GROUP} ${sizes.get(PAST_GROUP) ?? 0}`,
       });
     }
     return options;

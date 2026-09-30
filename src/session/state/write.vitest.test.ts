@@ -7,6 +7,7 @@ import { writeState } from './write.js';
 import { STATE_BASELINE, type BaselinedState } from './merge.js';
 import { resetSessionStoreCache } from '../store/records.js';
 import type { HarnessSession } from '../model.js';
+import { listStoredSessionIds } from '../store/records.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root: string | undefined;
@@ -95,5 +96,30 @@ describe('a streaming turn\'s checkpoint', () => {
     const stored = (await readState()).sessions.find((item) => item.id === 's')!;
     expect(stored.messages?.at(-1)).toEqual({ role: 'assistant', content: 'edited in place' });
     expect(stored.messages).toHaveLength(4);
+  });
+});
+
+describe('a chat nothing has happened in', () => {
+  it('is kept for this process and never written', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-draft-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    const draft = {
+      id: 'draft', route: 'local', accountId: null, provider: null, model: null, effort: 'medium',
+      permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    } as HarnessSession;
+    state.sessions.push(draft);
+    await writeState(state);
+    expect(await listStoredSessionIds()).not.toContain('draft');
+    resetSessionStoreCache();
+    const again = await readState();
+    expect(again.sessions.map((session) => session.id)).toContain('draft');
+    draft.messages = [{ role: 'user', content: 'now it happened' }];
+    await writeState(state);
+    resetSessionStoreCache();
+    const stored = await readState();
+    expect(stored.sessions.find((session) => session.id === 'draft')?.messages?.[0]?.content).toBe('now it happened');
+    expect(await listStoredSessionIds()).toContain('draft');
   });
 });

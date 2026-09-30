@@ -237,6 +237,9 @@ export async function followWorkerTurn(
   /** Where the turn already is when this window joins it: its real start, so
    * the timer is not reset to zero, and the call it is running now. */
   joined?: { startedAt?: number; activity?: string },
+  /** Watch draws the turn and does not steer or cancel it. The other
+   * terminal still holds the claim. */
+  options?: { watch?: boolean },
 ): Promise<{ notice?: string; left?: true }> {
   const client = clients.get(sessionId);
   const tracker = client ? trackers.get(client) : undefined;
@@ -244,11 +247,12 @@ export async function followWorkerTurn(
   return driveWorkerTurn(sessionId, client, rl, () => {
     if (joined) rl.joinedWaiting(joined.startedAt, joined.activity);
     showLive(rl, tracker);
-  }, () => tracker.running);
+  }, () => tracker.running, options);
 }
 
 async function driveWorkerTurn(
   sessionId: string, client: WorkerClient, rl: TerminalHarnessPrompter, begin: () => void, stillRunning?: () => boolean,
+  options?: { watch?: boolean },
 ): Promise<{ notice?: string; left?: true }> {
   let notice: string | undefined;
   let left = false;
@@ -388,8 +392,8 @@ async function driveWorkerTurn(
       client.on('close', onClose);
       rl.startWaiting(
         'thinking',
-        (restoreDraft) => client.send({ type: 'cancel', restoreDraft }),
-        async (text) => {
+        options?.watch ? undefined : (restoreDraft) => client.send({ type: 'cancel', restoreDraft }),
+        options?.watch ? async () => { throw new Error('Watching the other terminal. /takeover to drive this chat.'); } : async (text) => {
           // The worker decides steered vs. queued -- it owns the broker the
           // steer races -- and now says which, on a `submission` event
           // carrying this id. The client used to assume "queued" and never
@@ -414,8 +418,9 @@ async function driveWorkerTurn(
           return { disposition: outcome?.disposition ?? 'queued', submission };
         },
         // A slash line is never the worker's business: it is ClikCode's own
-        // command, and it runs here when the turn ends.
-        (text) => commandDuringTurn(sessionId, text),
+        // command, and it runs here when the turn ends. A window that is only
+        // watching does not run one.
+        options?.watch ? undefined : (text) => commandDuringTurn(sessionId, text),
         // Stepping away ends this window's following, not the turn: the
         // worker runs it to the end either way, and the connection stays
         // open, so coming back (or another window) picks it up mid-stream.

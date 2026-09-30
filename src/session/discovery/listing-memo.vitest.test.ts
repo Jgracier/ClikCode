@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  EMPTY_LISTING_TTL_MS, lastSeenListing, listingKnownEmpty, rememberListing, rememberSeenListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
+  EMPTY_LISTING_TTL_MS, SEEN_LISTING_TTL_MS, lastSeenListing, listingKnownEmpty, rememberListing, rememberSeenListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache, seenListingFresh,
 } from './cache.js';
 
 /**
@@ -112,5 +112,14 @@ describe('the last list each CLI gave', () => {
   it('never skips asking the CLI: a remembered list is not an empty memo', async () => {
     await rememberSeenListing('kilo', '/work', undefined, [{ nativeId: 'k1' }]);
     expect(await listingKnownEmpty('kilo', '/work', undefined)).toBe(false);
+  });
+
+  it('reuses a list for two minutes, then asks the CLI again', async () => {
+    const now = Date.now();
+    await rememberSeenListing('kilo', '/work', undefined, [{ nativeId: 'k1' }], now, 'kilo-1');
+    expect(await seenListingFresh('kilo', '/work', undefined, now + 1_000, 'kilo-1')).toBe(true);
+    expect(await seenListingFresh('kilo', '/work', undefined, now + SEEN_LISTING_TTL_MS + 1, 'kilo-1')).toBe(false);
+    // A new binary is asked at once.
+    expect(await seenListingFresh('kilo', '/work', undefined, now + 1_000, 'kilo-2')).toBe(false);
   });
 });
