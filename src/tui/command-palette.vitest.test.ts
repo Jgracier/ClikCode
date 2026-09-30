@@ -48,6 +48,16 @@ describe('completing a command\'s argument from its real values', () => {
     expect(commandPaletteMatches('/model 5.5', commands).map((row) => row.label)).toEqual(['opus']);
   });
 
+  it('shows a concise model name while completing its real vendor id', () => {
+    const entries = [{ label: '/model', value: '/model', argValues: () => [
+      { value: 'opencode/big-pickle', label: 'big-pickle' },
+      { value: 'anthropic/claude-sonnet-4', label: 'anthropic/claude-sonnet-4' },
+    ] }];
+    expect(commandPaletteMatches('/model big', entries)[0]).toMatchObject({ label: 'big-pickle', value: '/model opencode/big-pickle' });
+    expect(completedCommandLine('/model big', entries)).toBe('/model opencode/big-pickle');
+    expect(commandPaletteMatches('/model opencode', entries)[0]?.label).toBe('big-pickle');
+  });
+
   it('keeps the hint for a command whose argument is free text', () => {
     expect(commandPaletteMatches('/rename my', commands)).toEqual([commands[1]]);
   });

@@ -36,8 +36,7 @@ export function nativeModelLabel(
   // Code shipped Opus 5.5.
   if (harnessCommand === 'claude') return modelLabel(claudeModelLabel(model) ?? model, harnessCommand);
   // A harness that drives other providers names them one way everywhere:
-  // `provider:model`, as the picker shows it -- and never by its own name
-  // again, which is on screen beside it (`opencode:big-pickle` is `big-pickle`).
+  // `provider/model`, and never by its own name again, which is on screen.
   try {
     const harness = harnessCommand ? localHarnessForCommand(harnessCommand) : undefined;
     return harness ? harnessModelLabel(harness, model) : model;
@@ -56,7 +55,7 @@ export function harnessModelLabel(harness: AiLocalHarnessDefinition, model: stri
  * for OpenCode's `opencode/big-pickle`). */
 export function modelIdFromLabel(harness: AiLocalHarnessDefinition, models: readonly string[], typed: string): string {
   if (models.includes(typed)) return typed;
-  const matches = models.filter((model) => harnessModelLabel(harness, model) === typed);
+  const matches = models.filter((model) => harnessModelLabel(harness, model) === typed || modelDisplayId(harness, model) === typed);
   return matches.length === 1 ? matches[0]! : typed;
 }
 

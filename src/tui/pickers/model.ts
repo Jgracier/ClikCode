@@ -67,7 +67,7 @@ async function localModelPicker(rl: HarnessPrompter, id: string, current: string
 }
 
 /** One model as every model list shows it. A harness that drives other
- * providers shows `provider:model` (never its own name as the provider:
+ * providers shows `provider/model` (never its own name as the provider:
  * OpenCode's `opencode/big-pickle` is `big-pickle`), and a name only where it says something
  * the id does not ("Opus 5.5" for `opus`) -- never the id a second time;
  * "Claude Opus 5.5" only respells `claude-opus-5-5`, compared on letters and
@@ -81,7 +81,7 @@ export function modelRow(
   const shown = localLabel ?? (harness ? harnessModelLabel(harness, model) : model);
   const name = localLabel ? undefined : catalog.labels?.[model];
   const bare = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const respells = name !== undefined && [shown, shown.slice(shown.indexOf(':') + 1)].some((id) => bare(id) === bare(name));
+  const respells = name !== undefined && [shown, shown.slice(shown.indexOf('/') + 1)].some((id) => bare(id) === bare(name));
   const parts = [
     name && !respells ? name : undefined,
     model === current ? 'current' : undefined,

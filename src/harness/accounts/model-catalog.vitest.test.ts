@@ -25,13 +25,13 @@ describe('native model display metadata', () => {
 
   it('never names the harness a model is shown under a second time', () => {
     expect(nativeModelLabel('opencode', 'opencode/big-pickle')).toBe('big-pickle');
-    expect(nativeModelLabel('opencode', 'anthropic/claude-sonnet-4')).toBe('anthropic:claude-sonnet-4');
+    expect(nativeModelLabel('opencode', 'anthropic/claude-sonnet-4')).toBe('anthropic/claude-sonnet-4');
     expect(nativeModelLabel('kilo', 'kilo/openai/gpt-5.1-codex-max')).toBe('openai/gpt-5.1-codex-max');
     expect(nativeModelLabel('kimi', 'kimi-code/k3')).toBe('k3');
     expect(nativeModelLabel('hermes', 'nous:anthropic/claude-opus-5')).toBe('anthropic/claude-opus-5');
-    expect(nativeModelLabel('hermes', 'copilot:gpt-5.4')).toBe('copilot:gpt-5.4');
-    expect(nativeModelLabel('goose', 'openrouter/anthropic/claude-3-haiku')).toBe('openrouter:anthropic/claude-3-haiku');
-    expect(nativeModelLabel('openclaw', 'claude-cli/claude-opus-5')).toBe('claude-cli:claude-opus-5');
+    expect(nativeModelLabel('hermes', 'copilot:gpt-5.4')).toBe('copilot/gpt-5.4');
+    expect(nativeModelLabel('goose', 'openrouter/anthropic/claude-3-haiku')).toBe('openrouter/anthropic/claude-3-haiku');
+    expect(nativeModelLabel('openclaw', 'claude-cli/claude-opus-5')).toBe('claude-cli/claude-opus-5');
     expect(nativeModelLabel(undefined, 'openai/gpt-5.5')).toBe('openai/gpt-5.5');
   });
 
@@ -50,6 +50,7 @@ describe('native model display metadata', () => {
     expect(modelIdFromLabel(opencode, models, 'big-pickle')).toBe('opencode/big-pickle');
     expect(modelIdFromLabel(opencode, models, 'opencode/big-pickle')).toBe('opencode/big-pickle');
     expect(modelIdFromLabel(opencode, models, 'anthropic:claude-sonnet-4')).toBe('anthropic/claude-sonnet-4');
+    expect(modelIdFromLabel(opencode, models, 'anthropic/claude-sonnet-4')).toBe('anthropic/claude-sonnet-4');
     expect(modelIdFromLabel(opencode, models, 'nothing-like-it')).toBe('nothing-like-it');
     expect(modelIdFromLabel(kilo, ['kilo/openai/gpt-5.1'], 'openai/gpt-5.1')).toBe('kilo/openai/gpt-5.1');
     // Two models reading the same: neither is guessed.

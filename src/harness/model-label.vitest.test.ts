@@ -48,10 +48,10 @@ describe('modelLabel: a prefix naming someone else stays', () => {
 
   it('keeps a lab or routed upstream under a multi-provider harness', () => {
     expect(modelLabel('anthropic/claude-sonnet-4', 'opencode')).toBe('anthropic/claude-sonnet-4');
-    expect(modelLabel('anthropic:claude-sonnet-4', 'opencode')).toBe('anthropic:claude-sonnet-4');
+    expect(modelLabel('anthropic:claude-sonnet-4', 'opencode')).toBe('anthropic/claude-sonnet-4');
     expect(modelLabel('openrouter/anthropic/claude-3-haiku', 'goose')).toBe('openrouter/anthropic/claude-3-haiku');
     expect(modelLabel('cursor-agent/gpt-5.5-medium', 'goose')).toBe('cursor-agent/gpt-5.5-medium');
-    expect(modelLabel('copilot:gpt-5.4', 'hermes')).toBe('copilot:gpt-5.4');
+    expect(modelLabel('copilot:gpt-5.4', 'hermes')).toBe('copilot/gpt-5.4');
     expect(modelLabel('claude-cli/claude-opus-5', 'openclaw')).toBe('claude-cli/claude-opus-5');
     expect(modelLabel('qwen/qwen3.7-flash', 'command')).toBe('qwen/qwen3.7-flash');
     expect(modelLabel('openai/gpt-5.5', 'cline')).toBe('openai/gpt-5.5');
@@ -60,6 +60,8 @@ describe('modelLabel: a prefix naming someone else stays', () => {
   it('never reads an ollama-style tag as a model', () => {
     expect(modelLabel('qwen:7b', 'qwen')).toBe('qwen:7b');
     expect(modelLabel('kimi:latest', 'kimi')).toBe('kimi:latest');
+    expect(modelLabel('llama:instruct', 'aider')).toBe('llama:instruct');
+    expect(modelLabel('qwen:instruct', 'qwen')).toBe('qwen:instruct');
     expect(modelLabel('ollama/qwen3:8b', 'goose')).toBe('ollama/qwen3:8b');
   });
 
@@ -84,6 +86,13 @@ describe('modelLabel: a prefix naming someone else stays', () => {
 });
 
 describe('MODEL_OWNER_NAMES follows the harness catalog', () => {
+  it('uses the same visible form for every harness while preserving upstreams', () => {
+    for (const harness of allLocalHarnesses()) {
+      expect(modelLabel(`${harness.provider}/model-x`, harness.command), harness.command).toBe('model-x');
+      expect(modelLabel('other-lab/model-x', harness.command), harness.command).toBe('other-lab/model-x');
+    }
+  });
+
   it('names every harness under its command, with its provider id, binary and display name', () => {
     const bare = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
     for (const harness of allLocalHarnesses()) {
