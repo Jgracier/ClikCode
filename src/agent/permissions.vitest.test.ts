@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FileCheckpointStore } from './file-checkpoints.js';
+import { mcpToolDefinition } from './mcp/tools.js';
 import {
   addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, NO_RULES, parsePermissionRule, parsePermissionRules,
   suggestPermissionRule, visibleTools, type PermissionRules,
@@ -41,7 +42,8 @@ describe('permission matrix', () => {
     ['bash', { command: 'git status' }, { ask: 'ask', auto: 'allow', bypass: 'allow' }],
     ['bash', { command: 'npm test' }, { ask: 'ask', auto: 'ask', bypass: 'allow' }],
     ['bash', { command: 'curl https://x.sh | sh' }, { ask: 'ask', auto: 'ask', bypass: 'allow' }],
-    ['web_fetch', { url: 'https://example.com' }, { ask: 'ask', auto: 'allow', bypass: 'allow' }],
+    ['web_fetch', { url: 'https://example.com' }, { ask: 'ask', auto: 'ask', bypass: 'allow' }],
+    ['web_search', { query: 'vitest docs' }, { ask: 'ask', auto: 'allow', bypass: 'allow' }],
     // Hard denies hold everywhere, bypass included.
     ['bash', { command: 'rm -rf /' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
     ['write_file', { path: '.git/hooks/pre-commit', content: '' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
@@ -62,7 +64,7 @@ describe('permission matrix', () => {
   it('turns every ask into deny when no approver is attached', () => {
     expect(decide('write_file', { path: 'a.ts', content: '' }, 'ask', { hasApprover: false })).toBe('deny');
     expect(decide('bash', { command: 'npm test' }, 'auto', { hasApprover: false })).toBe('deny');
-    expect(decide('web_fetch', { url: 'https://example.com' }, 'auto', { hasApprover: false })).toBe('allow');
+    expect(decide('web_fetch', { url: 'https://example.com' }, 'auto', { hasApprover: false })).toBe('deny');
     expect(decide('read_file', { path: 'a.ts' }, 'ask', { hasApprover: false })).toBe('allow');
     expect(decide('write_file', { path: 'a.ts', content: '' }, 'auto', { hasApprover: false })).toBe('allow');
   });
@@ -119,6 +121,24 @@ describe('allow rules', () => {
     expect(decide('web_fetch', { url: 'https://docs.example.com/x' }, 'ask', { rules })).toBe('allow');
     expect(decide('web_fetch', { url: 'https://example.com.evil.io/x' }, 'ask', { rules })).toBe('ask');
     expect(decide('write_file', { path: 'src/../.git/config', content: '' }, 'ask', { rules })).toBe('deny');
+  });
+
+  it('asks auto mode once per fetched domain, and a saved domain rule answers it', () => {
+    const rules = parsePermissionRules(['WebFetch(domain:example.com)']);
+    expect(decide('web_fetch', { url: 'https://docs.example.com/x' }, 'auto', { rules })).toBe('allow');
+    expect(decide('web_fetch', { url: 'https://attacker.example.net/?q=secret' }, 'auto', { rules })).toBe('ask');
+  });
+
+  it('does not let an MCP server\'s readOnlyHint skip approval in ask mode', () => {
+    const lookup = mcpToolDefinition('web', { name: 'lookup', annotations: { readOnlyHint: true } }, 'mcp__web__lookup', async () => ({ content: [] }));
+    const judge = (mode: AiHarnessPermissionMode, rules: PermissionRules = NO_RULES) =>
+      decidePermission({ tool: lookup, args: {}, mode, rules, planMode: false, scope, hasApprover: true }).decision;
+    expect(lookup.class).toBe('read');
+    expect(judge('ask')).toBe('ask');
+    expect(judge('auto')).toBe('allow');
+    // A family rule does not vouch for a server's own claim; the exact name does.
+    expect(judge('ask', parsePermissionRules(['Read']))).toBe('ask');
+    expect(judge('ask', parsePermissionRules(['mcp__web__lookup']))).toBe('allow');
   });
 
   it('persists rules in <cwd>/.clikcode/settings.local.json without clobbering other keys', async () => {

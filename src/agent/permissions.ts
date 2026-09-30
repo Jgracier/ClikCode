@@ -39,6 +39,9 @@ export function parsePermissionRules(values: unknown): PermissionRules {
 function ruleCoversTool(rule: PermissionRule, tool: ToolDefinition): boolean {
   const family = rule.tool.toLowerCase();
   if (family === tool.name.toLowerCase()) return true;
+  // An MCP tool's class comes from its server's own hints; only a rule naming
+  // the tool exactly vouches for it, never a family like `Read`.
+  if (tool.mcp) return false;
   if (family === 'bash') return tool.name === BASH_TOOL;
   if (family === 'edit' || family === 'write') return tool.class === 'write';
   if (family === 'read') return tool.class === 'read';
@@ -154,6 +157,9 @@ function decide(request: PermissionRequest): PermissionDecision {
   switch (tool.class) {
     case 'read':
     case 'meta':
+      // readOnlyHint is the server's claim about itself. It may run the call
+      // beside other reads, but in ask mode it does not skip the question.
+      if (tool.mcp && mode === 'ask') return { decision: 'ask', reason: `MCP tool from "${tool.mcp.server}"` };
       return allConfined ? { decision: 'allow', reason: `${tool.class} tool` } : { decision: 'ask', reason: 'path is outside the workspace' };
     case 'write':
       if (mode === 'auto' && allConfined) return { decision: 'allow', reason: 'write confined to the workspace' };
@@ -162,11 +168,11 @@ function decide(request: PermissionRequest): PermissionDecision {
       if (mode === 'auto' && command?.tier === 'safe') return { decision: 'allow', reason: command.reason };
       return { decision: 'ask', reason: command?.reason ?? 'commands need approval' };
     case 'network':
-      // The session's permission mode is the whole policy: auto approves what
-      // changes nothing on this machine, and a fetch or search changes nothing.
-      // Only ask mode asks.
-      if (mode === 'auto') return { decision: 'allow', reason: 'auto mode: network reads change nothing locally' };
-      return { decision: 'ask', reason: 'network access needs approval' };
+      // A search sends only its query to the search backend. A fetch goes to
+      // whatever host the model names -- and the URL itself can carry what it
+      // read -- so auto mode asks once per domain, which "always" remembers.
+      if (mode === 'auto' && args.url === undefined) return { decision: 'allow', reason: 'auto mode: a web search changes nothing locally' };
+      return { decision: 'ask', reason: mode === 'auto' ? `first request to ${hostOf(args.url) ?? 'this host'}` : 'network access needs approval' };
   }
 }
 
