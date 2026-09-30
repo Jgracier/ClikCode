@@ -11,6 +11,8 @@ import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession 
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
 import { appServerThreadOverrides, declaredOptionArgv } from '../harness/transport/options.js';
 import { recordDerivedUsage } from '../harness/accounts/stream-usage.js';
+import { readAcpUsageFile } from '../harness/transport/acp-usage-file.js';
+import { turnShareOf } from '../harness/protocol/turn-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { closePersistentTransport, persistentTransportFor, vendorChildKey } from './vendor-process.js';
@@ -87,8 +89,16 @@ export async function runVendorSessionAttempt(input: {
         environment, signal, images, onSessionId,
         ...sharedObserver,
       };
+      // An agent that keeps its usage only in its session file (Cline): the
+      // turn's share is what the file's total grew by.
+      const usageFile = harness.acp?.usageFile;
+      const usageBefore = usageFile && session.nativeSessionId
+        ? await readAcpUsageFile(usageFile, session.nativeSessionId, environment) ?? {}
+        : {};
       try {
         result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
+        const usageAfter = usageFile && result.nativeSessionId ? await readAcpUsageFile(usageFile, result.nativeSessionId, environment) : undefined;
+        if (usageAfter) sharedObserver.onUsage?.(turnShareOf(usageAfter, usageBefore));
       } catch (error) {
         if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback || !harness.turn) throw error;
         prompter?.phase('using structured CLI fallback');
