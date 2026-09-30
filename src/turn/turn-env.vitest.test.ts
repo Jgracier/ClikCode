@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { turnEnvironment } from './runtime.js';
+import { turnEnvironment } from './turn-environment.js';
 
 describe('a harness turn\'s environment', () => {
   it('carries the catalog\'s turnEnv on a turn, not on a management command', () => {

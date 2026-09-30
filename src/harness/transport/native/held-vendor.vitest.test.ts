@@ -41,7 +41,7 @@ const vendor = (delayMs: number | null): string[] => {
     process.stdin.resume();`];
 };
 
-/** The turn loop's side, as drive.ts wires it. */
+/** The turn loop's side, as the vendor turn wires it. */
 async function runTurn(sessionId: string, delayMs: number | null) {
   const input = createTurnInput();
   const idle = createTurnIdleController();

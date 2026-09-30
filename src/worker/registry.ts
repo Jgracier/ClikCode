@@ -2,7 +2,7 @@
  *
  * One worker per session, on demand, not a shared daemon: turn execution
  * already assumes one live vendor child and one checkpoint stream per
- * session (see turn/runtime.ts's persistentTransportFor/DurableTurnCheckpoint),
+ * session (see turn/vendor-process.ts's persistentTransportFor and turn/turn-journal.ts's DurableTurnCheckpoint),
  * so a worker holding exactly one session's slice of HarnessState makes that
  * assumption explicit instead of coordinated by convention. It also means a
  * worker can crash without taking any other open conversation down with it.

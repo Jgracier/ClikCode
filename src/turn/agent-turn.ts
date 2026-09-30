@@ -5,33 +5,26 @@ import type Conf from 'conf';
 import chalk from 'chalk';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { modelClientForSession } from '../agent/models/for-session.js';
-import { isClikCodeAgent, isGatewayService } from '../session/route.js';
+import { isGatewayService } from '../session/route.js';
 import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { extractSessionTitle, stripRepeatedTitles, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
-import { readState } from '../session/state/read.js';
-import { localModelTurnHooks, releaseHeldLocalModel } from '../commands/ai/local-model.js';
-import { completeTurnCheckpoint, startTurnCheckpoint, type TurnRunOptions } from './runtime.js';
+import { localModelTurnHooks } from '../commands/ai/local-model.js';
+import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
+import type { TurnRunOptions } from './session-turn.js';
+import type { HarnessSession, HarnessState } from '../session/model.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
-import { aiSessionSend } from './account-turn.js';
 import { runPlatformAssistantTurn } from './platform-assistant-turn.js';
 
-/** Send a turn on a route that runs ClikCode's own agent: the Gateway, or
- * ClikCode Local. Any other session goes to aiSessionSend. Only the Gateway
- * has a platform assistant to fall back to. */
-export async function aiGatewaySessionSend(
-  config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
-): Promise<void> {
+/** A turn on a route that runs ClikCode's own agent: the Gateway, or
+ * ClikCode Local. Only the Gateway has a platform assistant to fall back to. */
+export async function runAgentTurn(input: {
+  config: Conf; state: HarnessState; session: HarnessSession; prompt: string; signal?: AbortSignal; run: TurnRunOptions;
+}): Promise<void> {
+  const { config, state, session, prompt, signal, run } = input;
   const prompter = run.prompter;
-  const state = await readState();
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session) throw new Error(`AI session "${id}" was not found`);
-  // A session that left ClikCode Local lets go of the model this process
-  // held for it (a worker that ran its earlier turns, say).
-  if (session.route !== 'clikcode-local') await releaseHeldLocalModel(session.id);
-  if (!isClikCodeAgent(session)) return aiSessionSend(id, prompt, signal, run);
   const gatewayService = isGatewayService(session);
   // Attribution for the invocation log and the output payload: the route's
   // own name, so ClikCode Local turns are never counted as Gateway usage.

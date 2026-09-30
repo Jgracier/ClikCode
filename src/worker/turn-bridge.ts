@@ -7,7 +7,7 @@
  * commands/ai/interactive.ts's runInteractiveTurn already runs -- paint the
  * pending message, start waiting, run the turn, stop waiting -- translating
  * each TurnObserver-shaped WorkerEvent into the identical TerminalHarness-
- * Prompter method call drive.ts would have made directly in the old,
+ * Prompter method call the turn would have made directly in the old,
  * single-process model. rl cannot tell the difference (see turn/observer.ts
  * for why that is true by construction, not by care taken here).
  */

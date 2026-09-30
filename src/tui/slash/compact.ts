@@ -3,7 +3,7 @@
 import type { HarnessSession } from '../../session/model.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
-import { closePersistentTransport } from '../../turn/runtime.js';
+import { closePersistentTransport } from '../../turn/vendor-process.js';
 import { conversationIdFor, hasConversationContent } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversationSession } from '../../commands/ai/conversations.js';

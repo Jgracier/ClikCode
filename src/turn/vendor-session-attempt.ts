@@ -6,7 +6,7 @@ import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { HarnessTurnTransport } from '../harness/transport/select.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import type { DurableTurnCheckpoint } from './turn-journal.js';
-import type { TurnRunOptions } from './turn-options.js';
+import type { TurnRunOptions } from './session-turn.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
 import { appServerThreadOverrides, declaredOptionArgv } from '../harness/transport/options.js';

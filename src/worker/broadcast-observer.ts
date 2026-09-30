@@ -1,9 +1,9 @@
-/** The worker's own TurnObserver: satisfies exactly what turn/drive.ts and
+/** The worker's own TurnObserver: satisfies exactly what the turn code and
  * gateway/harness.ts need from "whoever is watching this turn", by
  * broadcasting to every currently-attached client socket instead of
  * painting a terminal directly. This is the one place a worker and a real
  * TerminalHarnessPrompter genuinely differ in behaviour -- everywhere else,
- * drive.ts cannot tell the difference, by construction (see turn/observer.ts).
+ * the turn cannot tell the difference, by construction (see turn/observer.ts).
  *
  * Also the one in-memory copy of "what has streamed so far" a late-attaching
  * client's snapshot is built from -- there is no second copy anywhere to

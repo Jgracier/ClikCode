@@ -8,7 +8,7 @@ import type { HarnessPrompter } from '../../harness/prompter.js';
 import type { HarnessSession } from '../../session/model.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
-import { synchronizeNativeTranscript } from '../../turn/runtime.js';
+import { synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { conversationIdFor, hasConversationContent, requiresProviderHandoff } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';

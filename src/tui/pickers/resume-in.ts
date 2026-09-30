@@ -15,7 +15,7 @@ import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../ru
 import { readState } from '../../session/state/read.js';
 import { newProviderConversation } from '../../commands/ai/conversations.js';
 import { preferredAccountId } from '../../commands/ai/preferred-account.js';
-import { discardInterruptedTurn } from '../../turn/runtime.js';
+import { discardInterruptedTurn } from '../../turn/turn-journal.js';
 import { nextQuotaReset, quotaResetPhrase } from '../../turn/usage-exhausted.js';
 import { chooseOption } from './choose.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';

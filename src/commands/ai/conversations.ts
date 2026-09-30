@@ -8,7 +8,7 @@ import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
-import { createHandoffBranch, synchronizeNativeTranscript } from '../../turn/runtime.js';
+import { createHandoffBranch, synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './preferred-account.js';

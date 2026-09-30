@@ -13,7 +13,7 @@ import { installMcpServerEverywhere } from '../../harness/mcp-registry.js';
 import { runNativeHarnessCommand } from '../../harness/transport/native/command.js';
 import { localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
-import { turnEnvironment } from '../../turn/runtime.js';
+import { turnEnvironment } from '../../turn/turn-environment.js';
 import { nativeManagerListing } from '../slash/native-manager.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { chooseOption } from './choose.js';
