@@ -48,15 +48,14 @@ import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
 import { claimSession, releaseSession, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
 import { existsSync } from 'node:fs';
-import { routeSlashInput, slashControls, slashHelpText, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../../tui/slash/registry.js';
-import { customCommandPrompt } from '../../session/custom-commands.js';
+import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { LiveTurnInputBroker } from '../../turn/live-input.js';
 import { runningActivityLabel, sessionTranscriptMessages, settledTranscriptMessages } from '../../turn/checkpoint.js';
 import { liveWorkerSessions, sessionActivity } from '../../session/liveness.js';
 import { newConversation, newProviderConversation, releaseQueuedTurn } from './conversations.js';
 import { aiSessionLeave, launchSession } from './sessions.js';
-import { aiSessionCommand } from '../../tui/slash/handlers.js';
-import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from '../../tui/slash/context.js';
+import { aiSessionCommand, slashRouteTurn } from '../../tui/slash/handlers.js';
+import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../../tui/slash/context.js';
 import { capabilitiesText } from '../../tui/slash/capabilities-text.js';
 import { compactConversation } from '../../tui/slash/compact.js';
 import { exportTranscript } from '../../tui/slash/export-transcript.js';
@@ -600,15 +599,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           }
           outcome = { prompt: route.prompt, echo: true };
         }
-        else if (route.kind === 'native') {
-          if (isClikCodeAgent(commandSession)) throw new Error('Native harness commands apply only to local harnesses.');
-          outcome = { prompt: route.prompt, echo: true };
-        }
-        else if (route.kind === 'unknown') throw new Error(unknownSlashMessage(route));
-        else if (route.kind === 'custom') {
-          const custom = customCommandsFor(commandSession, commandHarness).find((item) => item.name === route.name);
-          if (!custom) throw new Error(`custom command /${route.name} is no longer available`);
-          outcome = { prompt: customCommandPrompt(custom, route.args, commandHarness), echo: false };
+        else if (route.kind === 'native' || route.kind === 'custom' || route.kind === 'unknown') {
+          outcome = slashRouteTurn(route, commandSession, commandHarness) ?? {};
         }
         else if (route.kind === 'harness') {
           // `/<harness> [request]`: hand off, ADOPT the resulting session, and

@@ -38,7 +38,7 @@ import { TERMINAL } from '../active-terminal.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../session/attachments.js';
 import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, sessionPermissionModes, setSessionHarnessOption } from '../../session/options.js';
-import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey } from './registry.js';
+import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey, type SlashRoute } from './registry.js';
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { impliedHarnessCommand } from './infer-provider.js';
@@ -729,17 +729,31 @@ export async function aiSessionCommand(id: string, input: string, inferred = fal
     emitHarnessOutput({ panel: route.name, text: `${listing.label}\n\n${listing.text}` });
     return id;
   }
+  const turn = slashRouteTurn(route, session, harness);
+  if (turn) {
+    await sendSessionTurn(id, turn.prompt);
+    return id;
+  }
+  throw new Error('slash command is required');
+}
+
+/** The turn a slash line becomes, when it becomes one: a native command the
+ * harness runs itself, or a custom command expanded into its prompt (not
+ * echoed as if typed). An unknown command is refused here. One decision for
+ * the interactive loop and the headless handler, which each run the turn
+ * their own way. */
+export function slashRouteTurn(
+  route: SlashRoute, session: HarnessSession, harness: AiLocalHarnessDefinition | undefined,
+): { prompt: string; echo: boolean } | undefined {
+  if (route.kind === 'unknown') throw new Error(unknownSlashMessage(route));
+  if (route.kind === 'native') {
+    if (isClikCodeAgent(session)) throw new Error('Native harness commands apply only to local harnesses.');
+    return { prompt: route.prompt, echo: true };
+  }
   if (route.kind === 'custom') {
     const command = customCommandsFor(session, harness).find((item) => item.name === route.name);
     if (!command) throw new Error(`custom command /${route.name} is no longer available`);
-    await sendSessionTurn(id, customCommandPrompt(command, route.args, harness));
-    return id;
+    return { prompt: customCommandPrompt(command, route.args, harness), echo: false };
   }
-  if (route.kind === 'native') {
-    if (isClikCodeAgent(session)) throw new Error('Native harness commands apply only to local harnesses.');
-    await sendSessionTurn(id, route.prompt);
-    return id;
-  }
-  if (route.kind === 'unknown') throw new Error(unknownSlashMessage(route));
-  throw new Error('slash command is required');
+  return undefined;
 }

@@ -364,7 +364,7 @@ export interface SlashRouteContext {
   pathExists?: (path: string) => boolean;
 }
 
-type SlashRoute =
+export type SlashRoute =
   | { kind: 'prompt'; prompt: string }
   | { kind: 'command'; entry: SlashCommandEntry; head: string; args: string; words: string[] }
   | { kind: 'harness'; command: string; args: string }
