@@ -5,7 +5,7 @@ import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js
 import { auggieUsageLabel } from '../auggie-usage.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
-import { CLI_VERSION } from '../../cli/program.js';
+import { CLIKCODE_VERSION } from '../../version.js';
 import type { NativeUsageProbe } from '../definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { UsageReading, UsageWindow, usageReading, usageWindow, usageWindowName } from './usage-reading.js';
@@ -92,7 +92,7 @@ async function codexUsageReading(_session: HarnessSession, environment: Readonly
     });
     child.once('error', () => finish());
     child.once('exit', () => finish());
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'clikcode', version: CLI_VERSION } } });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'clikcode', version: CLIKCODE_VERSION } } });
     send({ method: 'initialized', params: {} });
     const timer = setTimeout(() => finish(), 8_000);
     timer.unref();

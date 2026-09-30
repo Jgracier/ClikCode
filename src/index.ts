@@ -1,10 +1,8 @@
 /**
  * ClikCode — a local-first AI coding runtime.
  *
- * No shebang here on purpose: this file is only ever bundled, and
- * scripts/build.mjs's esbuild banner supplies dist/index.js's shebang
- * alongside the createRequire shim. A second one lands on line 2 of the
- * bundle, which node rejects outright.
+ * Bundled to dist/cli.js, which dist/index.js (written by scripts/build.mjs,
+ * with the shebang) loads once Node's compile cache is on.
  */
 import Conf from 'conf';
 import { buildBaseProgram, runProgram, CLIKCODE_BANNER } from './cli/program.js';
