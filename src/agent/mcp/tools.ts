@@ -79,7 +79,9 @@ export interface McpToolCaller {
 /** One MCP tool as a ToolDefinition.
  *
  * Permission class: `read` only when the server itself says the tool is
- * read-only. Anything else is `exec`, not `write`: in this loop `write` means
+ * read-only -- which lets it run beside other reads, and lets auto mode run
+ * it, but ask mode still asks: the hint is the server's claim about itself
+ * (permissions.ts). Anything else is `exec`, not `write`: in this loop `write` means
  * "changes these paths", and a write with no paths is allowed outright in
  * auto mode and covered by a bare `Edit` rule. An MCP tool that sends email
  * or deploys has no path to confine, so it must ask every time -- which
