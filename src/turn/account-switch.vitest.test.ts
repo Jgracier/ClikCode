@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
-import type { HarnessState } from '../session/model.js';
+import type { HarnessSession, HarnessState } from '../session/model.js';
+import type { AccountFailureKind } from './failover.js';
 import { noteStoredQuota } from './account-switch.js';
 import { nextUsableFailoverAccount, providerHasAccountForTurn } from './runtime.js';
-import { initialAccountChoice, matchesDirectTurnModel, terminalFailoverError, turnBackendForAccount } from './account-routing.js';
+import { accountAfterFailure, initialAccountChoice, matchesDirectTurnModel, terminalFailoverError, turnBackendForAccount, type FailoverTally } from './account-routing.js';
 
 vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../runtime/lazy-bridge.js')>(),
@@ -209,5 +210,48 @@ describe('stored-usage account switch', () => {
     expect(providerHasAccountForTurn(state([spent, pending, elsewhere]), 'anthropic', () => true)).toBe(false);
     // An account that failed some other way still has its quota.
     expect(providerHasAccountForTurn(state([spent, pending, crashed]), 'anthropic', () => true)).toBe(true);
+  });
+});
+
+describe('the failover step both account backends take', () => {
+  const step = (input: { accounts: AiHarnessAccount[]; failure: unknown; kind: AccountFailureKind; signal?: AbortSignal; failover?: 'never' | 'on-quota-exhausted' }) => {
+    const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
+    const persist = vi.fn(async () => undefined);
+    const session = { accountFailover: input.failover ?? 'on-quota-exhausted' } as HarnessSession;
+    const result = accountAfterFailure({
+      state: state(input.accounts), session, account: input.accounts[0]!, failure: input.failure, kind: input.kind,
+      ...(input.signal ? { signal: input.signal } : {}), matchesBackend: () => true, tally, persist,
+    });
+    return { result, tally, persist };
+  };
+
+  it('moves to the next account whatever the failure, and marks spent only a quota refusal', async () => {
+    const crashed = account('crashed');
+    const { result, tally } = step({ accounts: [crashed, account('next')], failure: new Error('segfault'), kind: 'other' });
+    expect((await result).id).toBe('next');
+    expect([...tally.attempted]).toEqual(['crashed']);
+    expect(tally.exhaustedAny).toBe(false);
+    expect(crashed.quotaState).toBeUndefined();
+  });
+
+  it('stops on Esc instead of walking the accounts', async () => {
+    // The direct API-key path had no guard: the abort was classed "other" and
+    // retried on every account with the already-aborted signal.
+    const controller = new AbortController();
+    controller.abort();
+    const abort = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+    const { result, tally } = step({ accounts: [account('first'), account('second')], failure: abort, kind: 'other', signal: controller.signal });
+    await expect(result).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    expect(tally.attempted.size).toBe(0);
+  });
+
+  it('surfaces a rejected request without trying another account', async () => {
+    const refused = new Error('--effort is not supported for model x');
+    await expect(step({ accounts: [account('a'), account('b')], failure: refused, kind: 'request-invalid' }).result).rejects.toBe(refused);
+  });
+
+  it('says usage ran out, not the vendor wording, when failover is off', async () => {
+    const { result } = step({ accounts: [account('only'), account('other')], failure: new Error('Payment Required'), kind: 'quota-exhausted', failover: 'never' });
+    await expect(result).rejects.toThrow(/Usage Exhausted|exhausted/i);
   });
 });

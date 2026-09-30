@@ -5,13 +5,13 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
-import { startTurnCheckpoint, completeTurnCheckpoint, nextUsableFailoverAccount, type TurnRunOptions } from './runtime.js';
+import { startTurnCheckpoint, completeTurnCheckpoint, type TurnRunOptions } from './runtime.js';
 import { writeState } from '../session/state/write.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../daemon/server.js';
 import { accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, type AccountFailureKind } from './failover.js';
-import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
-import { initialAccountChoice, matchesDirectTurnModel, terminalFailoverError } from './account-routing.js';
+import { recordSuccessfulAccountTurn } from './account-outcome.js';
+import { accountAfterFailure, initialAccountChoice, matchesDirectTurnModel, type FailoverTally } from './account-routing.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { prepareAttachments } from '../session/attachments.js';
 
@@ -42,26 +42,27 @@ export async function sendDirectApiTurn(input: {
   let switchedFrom: string | undefined;
   /** Why the turn left that account: the failure it met there. */
   let switchReason: AccountFailureKind = 'quota-exhausted';
-  const attemptedAccounts = new Set<string>();
+  const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
+  const onThisModel = (item: AiHarnessAccount): boolean => matchesDirectTurnModel(item, model);
+  const switchAccount = (to: AiHarnessAccount, why: AccountFailureKind): void => {
+    prompter?.activity(chalk.yellow(accountSwitchNotice(why, to.label)));
+    prompter?.phase(accountSwitchPhase(to.label));
+    switchedFrom = account.label;
+    switchReason = why;
+    account = to;
+    session.accountId = to.id;
+  };
   try {
-  const initial = initialAccountChoice(
-    state, account, session.accountFailover, (item) => matchesDirectTurnModel(item, model), attemptedAccounts,
-  );
+  const initial = initialAccountChoice(state, account, session.accountFailover, onThisModel, tally.attempted);
   if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
   if (initial.kind === 'switch') {
-    const fallback = initial.account;
-    switchedFrom = account.label;
-    prompter?.activity(chalk.yellow(accountSwitchNotice('quota-exhausted', fallback.label)));
-    prompter?.phase(accountSwitchPhase(fallback.label));
-    account = fallback;
-    session.accountId = fallback.id;
+    switchAccount(initial.account, 'quota-exhausted');
     await checkpoint.persistNow();
   }
   const invoke = (active: AiHarnessAccount) => {
-    // A retry is a new response attempt. Clear any partial text from the
-    // exhausted account, then append each real provider delta directly to the
-    // checkpoint/UI. The router has always exposed onDelta;
-    // omitting it here was why direct-API responses appeared only at the end.
+    // A retry is a new response attempt: this path re-sends the whole prompt,
+    // so the partial answer from the account that failed is cleared first.
+    // Each provider delta then goes straight to the checkpoint and the screen.
     checkpoint.response('', 'replace');
     prompter?.response('', 'replace');
     return streamLocalAiTurn({
@@ -77,13 +78,9 @@ export async function sendDirectApiTurn(input: {
     });
   };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
-  /** Whether any account here actually ran out, as opposed to failing some
-   * other way -- decides whether "Usage Exhausted" is the truth at the end. */
-  let exhaustedAnyApiAccount = false;
-  let lastOtherApiFailure: unknown;
   for (;;) {
-    // Same rule as the native loop above. This path re-sends the whole prompt
-    // on a switch, title request included, so the stream restarts rather than
+    // Same rule as the vendor path. This path re-sends the whole prompt on a
+    // switch, title request included, so the stream restarts rather than
     // being dropped -- which is a consequence of the rule, not a second rule.
     titleStream = titleStreamForAttempt(titleStream, turnText, session);
     try {
@@ -91,46 +88,12 @@ export async function sendDirectApiTurn(input: {
       break;
     } catch (error) {
       const failureKind = classifyAccountFailure(error);
-      if (failureKind === 'authentication-required') {
-        account.status = 'needs_login';
-        await writeState(state);
-      }
-      // Same rules as the vendor-CLI path above, both of them: a rejected
-      // request is not an account problem and no other account will accept
-      // it either, so surface it rather than walking the list; otherwise move
-      // to the next account that has usage whatever went wrong, and only call
-      // an account spent when it actually refused for quota.
-      if (failureKind === 'request-invalid') throw error;
-      if (session.accountFailover !== 'on-quota-exhausted') throw error;
-      const exhaustedAccount = account;
-      if (failureKind === 'quota-exhausted') {
-        recordQuotaRefusal(state, exhaustedAccount, error);
-        exhaustedAnyApiAccount = true;
-      } else lastOtherApiFailure = error;
-      attemptedAccounts.add(exhaustedAccount.id);
-      // Preserve every failed candidate before looking for the next one. A
-      // chain of stale account records therefore terminates instead of merely
-      // moving the same failure to one alternate and abandoning the router.
-      await writeState(state);
-      const fallback = await nextUsableFailoverAccount(
-        state, exhaustedAccount,
-        (item) => matchesDirectTurnModel(item, model),
-        attemptedAccounts,
-      );
-      if (!fallback) {
-        await writeState(state);
-        throw terminalFailoverError({
-          state, current: exhaustedAccount, attempted: attemptedAccounts,
-          matchesBackend: (item) => matchesDirectTurnModel(item, model),
-          exhaustedAny: exhaustedAnyApiAccount, lastFailure: error, lastOtherFailure: lastOtherApiFailure,
-        });
-      }
-      switchedFrom = exhaustedAccount.label;
-      switchReason = failureKind;
-      prompter?.activity(chalk.yellow(accountSwitchNotice(failureKind, fallback.label)));
-      prompter?.phase(accountSwitchPhase(fallback.label));
-      account = fallback;
-      session.accountId = fallback.id;
+      const fallback = await accountAfterFailure({
+        state, session, account, failure: error, kind: failureKind, signal, matchesBackend: onThisModel, tally,
+        persist: () => checkpoint.persistNow(),
+        notice: (message) => prompter?.activity(chalk.yellow(message)),
+      });
+      switchAccount(fallback, failureKind);
     }
   }
   const invocation = {
