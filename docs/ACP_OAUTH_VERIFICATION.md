@@ -1,10 +1,13 @@
 # OAuth-capable ACP harness verification
 
-Checked on Linux, 2026-09-30. The catalog declares 15 harnesses with both `oauth` in `localAuth` and an ACP entry point. All 15 installed binaries answered ACP `initialize`; 12 also created a session. A complete live check means ClikCode sent a short prompt, received an actual answer, resumed the same conversation, and kept `nativeTransport: acp` with the same vendor session ID. An ACP handshake or a normal protocol stop with a quota notice is not a complete check.
+Checked on Linux, 2026-09-30. The catalog declares 18 harnesses with both `oauth` in `localAuth` and an ACP entry point. All 18 installed ACP executables answered `initialize`; 15 also created a session. A complete live check means ClikCode sent a short prompt, received an actual answer, resumed the same conversation, and kept `nativeTransport: acp` with the same vendor session ID. An ACP handshake or a normal protocol stop with a quota notice is not a complete check.
 
 | Harness | ACP startup | ClikCode turn and resume | Current blocker |
 | --- | --- | --- | --- |
 | OpenCode | Pass | Pass | None; tested with `opencode/big-pickle` |
+| Claude Code | Pass | Pass | Official `claude-agent-acp` adapter auto-installed, tested with `haiku` |
+| Cursor Agent | Pass | Pass | Native `cursor-agent acp`, tested with `default[]` |
+| Grok Build | Pass | Pass | Native `grok agent stdio`, tested with `grok-4.6`; usage is a session total and is converted to a turn delta |
 | Goose | Pass | Pass | None; tested with `codex/gpt-6-luna` and `claude-code/haiku`, including ACP provider/model selection and native resume |
 | Kiro | Pass | Pass | None; tested with `auto` |
 | Cline | Pass | Pass | None; tested with `anthropic/claude-sonnet-5` |
@@ -20,7 +23,7 @@ Checked on Linux, 2026-09-30. The catalog declares 15 harnesses with both `oauth
 | Junie | `initialize` and `session/new` pass | Blocked | `session/prompt` requests Junie account sign-in |
 | MiniMax Code | `initialize` passes; `session/new` requires login | Blocked | Run `mcode login` with a usable account |
 
-ClikCode now prefers ACP for all 15. When an interactive turn receives an authentication refusal and the agent advertises exactly one agent-managed ACP method, ClikCode calls ACP `authenticate` and retries once. Terminal-only methods still use the vendor's terminal login. A new chat may use its CLI only for an ACP capability the agent does not offer; existing vendor threads stay on their original transport.
+ClikCode now prefers ACP for all 18. When an interactive turn receives an authentication refusal and the agent advertises exactly one agent-managed ACP method, ClikCode calls ACP `authenticate` and retries once. Terminal-only methods still use the vendor's terminal login. A new chat may use its CLI only for an ACP capability the agent does not offer; existing vendor threads stay on their original transport.
 
 The three previously missing CLIs (Devin, Junie, MiniMax Code) are installed and pass `initialize`. Devin's official installer exits nonzero when its optional post-install login is canceled; ClikCode now accepts the install if the binary is present. These install and authentication checks do not claim that an unlicensed vendor account can complete a turn.
 

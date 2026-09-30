@@ -13,10 +13,9 @@ describe('harness turn transports', () => {
   it('routes rich protocols from the catalog declaration and retains safe CLI fallbacks', () => {
     expect(harnessTurnTransport(catalog('codex'))).toBe('codex-app-server');
     expect(harnessTurnTransport(catalog('codex'), true)).toBe('codex-app-server');
-    for (const command of ['cline', 'copilot', 'droid', 'hermes', 'kimi', 'vibe', 'openhands']) {
+    for (const command of ['claude', 'cline', 'copilot', 'cursor', 'droid', 'grok', 'hermes', 'kimi', 'vibe', 'openhands']) {
       expect(harnessTurnTransport(catalog(command)), command).toBe('acp');
     }
-    expect(harnessTurnTransport(catalog('cursor'))).toBe('structured-cli');
     expect(harnessTurnTransport(catalog('aider'))).toBe('text-cli');
   });
 
@@ -24,7 +23,7 @@ describe('harness turn transports', () => {
     expect(harnessTurnTransport(catalog('droid'), true)).toBe('structured-cli');
     expect(harnessTurnTransport(catalog('copilot'), true)).toBe('text-cli');
     expect(harnessTurnTransport(catalog('droid'), true, { acpImages: true })).toBe('acp');
-    expect(harnessTurnTransport(catalog('cursor'), true, { acpImages: true })).toBe('structured-cli');
+    expect(harnessTurnTransport(catalog('cursor'), true, { acpImages: true })).toBe('acp');
   });
 
   it('uses ACP for every catalog entry that declares it', () => {
@@ -36,7 +35,7 @@ describe('harness turn transports', () => {
   it('keeps native conversations on the transport that created their vendor session', () => {
     const openCode = catalog('opencode');
     expect(sessionTurnTransport(openCode, {})).toBe('acp');
-    for (const command of ['gemini', 'opencode', 'goose', 'kiro', 'qwen', 'kilo', 'auggie']) {
+    for (const command of ['claude', 'gemini', 'opencode', 'goose', 'kiro', 'qwen', 'kilo', 'auggie', 'cursor', 'grok']) {
       expect(sessionTurnTransport(catalog(command), { nativeSessionId: 'old-cli-thread' }), command).toBe('structured-cli');
     }
     expect(sessionTurnTransport(openCode, { nativeSessionId: 'new-acp-thread', nativeTransport: 'acp' }, true, { acpImages: true })).toBe('acp');
@@ -46,7 +45,7 @@ describe('harness turn transports', () => {
 
   it('decides from the declaration, not the command name', () => {
     const renamed = { ...catalog('cursor'), command: 'copilot' };
-    expect(harnessTurnTransport(renamed)).toBe('structured-cli');
+    expect(harnessTurnTransport(renamed)).toBe('acp');
     const adopted = { ...catalog('cursor'), command: 'brand-new', transport: 'acp' as const, acp: { argv: ['acp'] } };
     expect(harnessTurnTransport(adopted)).toBe('acp');
   });

@@ -154,6 +154,7 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     // The binary: an update changes what `models` prints and, for Claude
     // Code, the alias table read out of the bundle itself.
     await resolveBinaryPath(harness.binary),
+    ...(harness.acp?.binary ? [await resolveBinaryPath(harness.acp.binary)] : []),
     ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
     ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
     ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json'), join(root, '.env')] : []),
@@ -179,7 +180,15 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
       return drivenHarness ? catalogFingerprint(drivenHarness) : '';
     }))
     : [];
-  return [...identities, ...driven, (account?.models ?? []).join(',')].join('|');
+  // A ClikCode update can change a harness from CLI discovery to ACP without
+  // changing either vendor binary. Cached CLI IDs must not then be offered to
+  // an ACP session (Cursor's IDs, for example, have a different shape).
+  const discoveryContract = JSON.stringify({
+    transport: harness.transport,
+    acp: harness.acp && { binary: harness.acp.binary, argv: harness.acp.argv, listsModels: harness.acp.listsModels },
+    modelDiscoveryArgv: harness.modelDiscoveryArgv,
+  });
+  return [discoveryContract, ...identities, ...driven, (account?.models ?? []).join(',')].join('|');
 }
 
 function cacheKey(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): string {
@@ -521,10 +530,14 @@ async function nativeModelCatalogUncached(
   }
   // No list command, but the ACP session says (Cline: 318 models through its
   // own gateway, none of which ClikCode could offer before).
-  if (harness.acp && harness.command !== 'hermes' && !harness.modelDiscoveryArgv) {
+  if (harness.acp && harness.acp.listsModels !== false && harness.command !== 'hermes' && !harness.modelDiscoveryArgv) {
     const listed = await queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, nativeProfileEnvironment(account?.nativeProfile),
       async (request) => acpSessionModels(await request('session/new', { cwd: homedir(), mcpServers: [] })), 30_000).catch(() => undefined);
     if (listed?.models.length) {
+      // A declared ACP model list is authoritative for ACP sessions. Keeping
+      // persisted CLI ids alongside it can select an id this transport does
+      // not accept after an upgrade (Cursor's `auto` vs `default[]`).
+      if (harness.acp.listsModels === true) models.clear();
       listed.models.forEach((model) => models.add(model));
       labels = { ...labels, ...listed.labels };
       configured ??= listed.current;

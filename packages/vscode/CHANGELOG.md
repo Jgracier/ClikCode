@@ -16,7 +16,7 @@ ClikCode in VS Code, rebuilt as a finished product: everything ClikCode is, in t
   ClikDeploy Gateway and ClikCode Local, grouped by signed in / installed / available, with a
   search; a harness that is not installed installs when chosen, with progress shown. *Model* lists
   the models of the provider the chat is on, so it changes when the provider does.
-- **ACP sessions** for all 18 harnesses that declare an ACP entry point, with
+- **ACP sessions** for all 21 harnesses that declare an ACP entry point, with
   model and supported mode controls carried over the protocol. Existing CLI
   conversations stay on their original transport.
 - **Effort and permissions** (Ask / Auto / Bypass, plan mode, Gateway fast mode) in the footer.

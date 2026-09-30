@@ -8,7 +8,7 @@ import { installStepFor } from './install-locations.js';
 
 export type InstallSpec = Pick<NativeHarnessSpec, 'command' | 'binary' | 'displayName' | 'surface' | 'npmPackage'> & {
   installer?: AiHarnessInstaller;
-  acp?: { binary?: string };
+  acp?: { binary?: string; npmPackage?: string };
 };
 
 export type HarnessInstallRoute =
