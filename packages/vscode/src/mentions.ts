@@ -2,16 +2,38 @@
  * editor's selection or a file into a mention. */
 import * as vscode from 'vscode';
 import type { Mention } from './webview-protocol';
+import { execFile } from 'node:child_process';
 import { mentionScore } from './text';
 
 const EXCLUDE = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/.next/**,**/build/**,**/coverage/**}';
+const LIMIT = 20_000;
 const LIST_TTL_MS = 30_000;
 let listing: { at: number; files: Promise<vscode.Uri[]> } | undefined;
 
+/** A folder's files as git sees them: tracked, plus untracked ones no ignore
+ * file excludes -- what the project's own .gitignore says is its source.
+ * Undefined outside a repository. `core.fsmonitor=` keeps a repository's
+ * config from running a program of its choosing. */
+function gitFiles(folder: vscode.Uri): Promise<vscode.Uri[] | undefined> {
+  return new Promise((resolve) => {
+    execFile('git', ['-c', 'core.fsmonitor=', '-C', folder.fsPath, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      { maxBuffer: 64 * 1024 * 1024, timeout: 10_000 }, (error, stdout) => {
+        if (error) { resolve(undefined); return; }
+        resolve(stdout.split('\0').filter(Boolean).slice(0, LIMIT).map((path) => vscode.Uri.joinPath(folder, path)));
+      });
+  });
+}
+
+async function listWorkspaceFiles(): Promise<vscode.Uri[]> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const perFolder = await Promise.all(folders.map(async (folder) => (folder.uri.scheme === 'file' ? await gitFiles(folder.uri) : undefined)
+    // Not a repository (or no git): a fixed list of the usual build output.
+    ?? await vscode.workspace.findFiles(new vscode.RelativePattern(folder, '**/*'), EXCLUDE, LIMIT)));
+  return perFolder.flat().slice(0, LIMIT);
+}
+
 function workspaceFiles(): Promise<vscode.Uri[]> {
-  if (!listing || Date.now() - listing.at > LIST_TTL_MS) {
-    listing = { at: Date.now(), files: Promise.resolve(vscode.workspace.findFiles('**/*', EXCLUDE, 20_000)) };
-  }
+  if (!listing || Date.now() - listing.at > LIST_TTL_MS) listing = { at: Date.now(), files: listWorkspaceFiles() };
   return listing.files;
 }
 
