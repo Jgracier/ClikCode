@@ -48,4 +48,11 @@ describe('encodeFrame/FrameDecoder', () => {
     expect(decoded).toEqual([{ type: 'notice', message: text }]);
     expect(performance.now() - started).toBeLessThan(2_000);
   });
+
+  it('keeps four-byte characters whole when a chunk ends anywhere inside them', () => {
+    const message = { type: 'delta', text: '\u65e5\u672c \u{1F680} done', mode: 'append' };
+    const bytes = Buffer.from(encodeFrame(message) + encodeFrame(message));
+    const frames = new FrameDecoder();
+    expect([...bytes].flatMap((byte) => frames.push(Buffer.from([byte])))).toEqual([message, message]);
+  });
 });

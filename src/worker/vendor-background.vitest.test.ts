@@ -24,6 +24,7 @@ function fakeObserver() {
     setPlan: () => undefined,
     approval: async () => true,
     render: (session: HarnessSession) => frames.push(`render ${session.messages?.length ?? 0}`),
+    endTurn(session?: HarnessSession) { if (session) this.render(session); this.stopWaiting(); },
   };
 }
 

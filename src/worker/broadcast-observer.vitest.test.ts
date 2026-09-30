@@ -101,3 +101,66 @@ describe('a notice about the turn', () => {
     expect(observer.turnOutputStarted).toBe(true);
   });
 });
+
+describe('a window joining a running turn', () => {
+  it('is given the turn\'s tool rows, where they fell in its answer, and its plan', () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking', 'fix the build');
+    observer.response('Looking first.');
+    observer.activityEvent({ kind: 'thinking', label: 'pondering' });
+    observer.activityEvent({ kind: 'tool-start', id: 't1', label: 'Bash(npm test)' });
+    observer.response(' Then fixing.');
+    observer.activityEvent({ kind: 'tool-done', id: 't1', label: 'Bash(npm test)' });
+    observer.setPlan([{ content: 'fix it', status: 'in_progress' }]);
+    expect(observer.liveSnapshot()).toEqual({
+      text: 'Looking first. Then fixing.', waitingLabel: 'thinking', prompt: 'fix the build',
+      // A thought is never a transcript row, so it is not one here either.
+      activities: [
+        { event: { kind: 'tool-start', id: 't1', label: 'Bash(npm test)' }, responseOffset: 14 },
+        { event: { kind: 'tool-done', id: 't1', label: 'Bash(npm test)' }, responseOffset: 27 },
+      ],
+      plan: [{ content: 'fix it', status: 'in_progress' }],
+    });
+    // The next turn starts from nothing.
+    observer.stopWaiting();
+    observer.startTurn('thinking', 'next');
+    expect(observer.liveSnapshot()).toMatchObject({ text: '', activities: [], plan: [] });
+  });
+
+  it('is told the turn is over by a snapshot without `live`, then waiting-stop', () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking', 'go');
+    observer.render({ id: 's' } as never);
+    observer.endTurn({ id: 's' } as never, 'work');
+    const [midTurn, final, stop] = client.frames.slice(-3);
+    expect(midTurn).toMatchObject({ type: 'snapshot', live: { prompt: 'go' } });
+    expect(final).toEqual({ type: 'snapshot', session: { id: 's' }, account: 'work' });
+    expect(stop).toEqual({ type: 'waiting-stop' });
+  });
+});
+
+describe('a window that stops reading', () => {
+  it('is let go once too far behind, instead of growing the worker without bound', () => {
+    const observer = new BroadcastObserver();
+    const written: string[] = [];
+    let destroyed = false;
+    const stalled = {
+      writableLength: 0,
+      get destroyed() { return destroyed; },
+      write(frame: string) { written.push(frame); this.writableLength += frame.length; return false; },
+      destroy() { destroyed = true; },
+    };
+    observer.attach(stalled as unknown as Socket);
+    observer.startTurn('thinking');
+    const chunk = 'x'.repeat(1024 * 1024);
+    for (let index = 0; index < 40; index += 1) observer.response(chunk);
+    expect(destroyed).toBe(true);
+    // Nothing more is queued for it once it is closed.
+    expect(stalled.writableLength).toBeLessThan(18 * 1024 * 1024);
+    const before = written.length;
+    observer.response('more');
+    expect(written.length).toBe(before);
+  });
+});
