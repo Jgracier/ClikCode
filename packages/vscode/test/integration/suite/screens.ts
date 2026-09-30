@@ -62,19 +62,20 @@ export function screensSuite(): void {
       await screenshot('welcome', 2_000);
     });
 
-    it('provider and model menu', async () => {
-      await click(api, '#provider-button');
-      await waitFor(api, '#provider-picker', 'the menu');
-      await screenshot('picker-models-current');
+    it('provider and model menus', async () => {
       await openProviderList(api);
       await screenshot('picker');
-      await type(api, '#provider-picker input', 'opencode');
-      await click(api, '#provider-picker [data-key="p:opencode"]');
-      await waitFor(api, '#provider-picker [data-key="m:opencode/big-pickle"]', 'OpenCode models', 120_000);
-      await screenshot('picker-models');
       await api.probe('key', '#provider-picker input', 'Escape');
+      await click(api, '#model-button');
+      await waitFor(api, '#model-picker', 'the Model menu');
+      await screenshot('picker-models-current');
+      await api.probe('key', '#model-picker input', 'Escape');
       await pickProviderModel(api, 'opencode', 'opencode/big-pickle');
       await until(api, (state) => state.model === 'opencode/big-pickle', 'big-pickle', 180_000);
+      await click(api, '#model-button');
+      await waitFor(api, '#model-picker [data-key="m:opencode/big-pickle"]', 'OpenCode models');
+      await screenshot('picker-models');
+      await api.probe('key', '#model-picker input', 'Escape');
     });
 
     it('a turn with tool activity', async () => {

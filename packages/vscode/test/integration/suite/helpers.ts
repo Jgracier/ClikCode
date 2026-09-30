@@ -78,25 +78,26 @@ export async function activate(): Promise<ClikCodeApi> {
   return await extension.activate() as ClikCodeApi;
 }
 
-/** The composer's provider·model menu, at its list of providers (it opens
- * on the current provider's models). */
+/** The composer's Provider menu, open on its list of providers. */
 export async function openProviderList(api: ClikCodeApi): Promise<void> {
   if (!(await query(api, '#provider-picker')).count) await click(api, '#provider-button');
-  await waitFor(api, '#provider-picker', 'the provider menu');
-  if ((await query(api, '#picker-back')).count) await click(api, '#picker-back');
   await waitFor(api, '#provider-picker [data-key^="p:"]', 'the provider list');
 }
 
-/** Chooses a provider and model the way a user does: the composer's
- * provider·model menu, search, the provider, then the model. */
+/** Chooses a provider and model the way a user does: the Provider button,
+ * search, the provider; then the Model button, now listing that provider's
+ * models, search, the model. */
 export async function pickProviderModel(api: ClikCodeApi, provider: string, model: string, beforeChoosing?: () => Promise<void>): Promise<void> {
   await openProviderList(api);
   await type(api, '#provider-picker input', provider);
   await waitFor(api, `#provider-picker [data-key="p:${provider}"]`, `the ${provider} row`);
   await click(api, `#provider-picker [data-key="p:${provider}"]`);
-  await waitFor(api, `#provider-picker [data-key="m:${model}"]`, `the ${model} model`, 120_000);
-  await type(api, '#provider-picker input', model.split('/').pop()!);
-  await waitFor(api, `#provider-picker [data-key="m:${model}"]`, `the ${model} model after search`);
+  await until(api, (state) => (state.providerId ?? state.harness) === provider, `the chat on ${provider}`, 180_000);
+  await waitFor(api, '#model-button', 'the Model button');
+  await click(api, '#model-button');
+  await waitFor(api, `#model-picker [data-key="m:${model}"]`, `the ${model} model`, 120_000);
+  await type(api, '#model-picker input', model.split('/').pop()!);
+  await waitFor(api, `#model-picker [data-key="m:${model}"]`, `the ${model} model after search`);
   if (beforeChoosing) await beforeChoosing();
-  await click(api, `#provider-picker [data-key="m:${model}"]`);
+  await click(api, `#model-picker [data-key="m:${model}"]`);
 }

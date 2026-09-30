@@ -225,9 +225,17 @@ textarea {
 textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .composer-footer { display: flex; align-items: center; gap: 2px; padding: 4px 6px 6px; min-width: 0; }
 .composer-box { container-type: inline-size; }
-@container (max-width: 360px) {
-  #effort-button .chip-text, #mode-button .chip-text { display: none; }
+/* Provider and model names keep their room longest: effort, then
+   permissions, fold to their icons first (their tooltips still say which). */
+@container (max-width: 480px) {
+  #effort-button .chip-text { display: none; }
+}
+@container (max-width: 380px) {
+  #mode-button .chip-text { display: none; }
   .chip-sub { display: none; }
+  /* The names are the point of these two; their icons and chevrons give way. */
+  #provider-button > .codicon, #model-button > .codicon { display: none; }
+  #provider-button, #model-button { padding: 0 6px; min-width: 56px; }
 }
 @container (max-width: 340px) {
   .composer-footer .icon-button { display: none; }
@@ -243,6 +251,9 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .chip-sub { color: var(--muted); }
 #provider-button { color: var(--vscode-foreground); flex: 0 1 auto; }
+/* Provider and model share what room there is; neither drops below a readable stub. */
+#model-button { flex: 0 1 auto; }
+#provider-button, #model-button { min-width: 72px; }
 .send {
   width: 28px; height: 28px; border-radius: 50%; border: none; display: inline-flex; align-items: center; justify-content: center;
   background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: 2px;
