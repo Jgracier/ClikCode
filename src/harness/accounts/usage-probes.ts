@@ -126,7 +126,9 @@ async function claudeUsageProbe(session: HarnessSession, environment: Readonly<R
 async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   const binary = harnessBinary('claude');
   return new Promise<UsageReading | undefined>((resolveUsage) => {
-    const child = spawn(binary, ['-p', 'hi', '--verbose', '--output-format', 'stream-json'], {
+    // --no-session-persistence: a probe is not a conversation, and without it
+    // every reading left a "hi" chat in the account's resume list.
+    const child = spawn(binary, ['-p', 'hi', '--verbose', '--output-format', 'stream-json', '--no-session-persistence'], {
       stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...environment },
     });
     let buffer = '';
@@ -244,6 +246,11 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsagePro
   // Free: an ACP extension call, not a turn (grok-usage.ts).
   grok: grokUsageProbe,
 };
+
+/** Probes that cost a model turn. Only an explicit ask (`/usage`, the account
+ * picker, `accounts status`) runs one; every other probe is a free local or
+ * API read and may run on a passive paint. */
+export const BILLED_USAGE_PROBES: ReadonlySet<string> = new Set(['claude']);
 
 type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
 
