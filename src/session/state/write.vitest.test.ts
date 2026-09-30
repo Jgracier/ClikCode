@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from './read.js';
 import { writeState } from './write.js';
+import { STATE_BASELINE, type BaselinedState } from './merge.js';
+import { resetSessionStoreCache } from '../store/records.js';
 import type { HarnessSession } from '../model.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
@@ -46,5 +48,52 @@ describe('writing state a caller keeps changing', () => {
     const stored = (await readState()).sessions.find((item) => item.id === 's')!;
     expect(stored.queuedTurns?.map((item) => item.id)).toEqual(session.queuedTurns!.map((item) => item.id));
     expect(stored.messages).toEqual(session.messages);
+  });
+});
+
+describe('a streaming turn\'s checkpoint', () => {
+  const setup = async (history: number) => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    const session = {
+      id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+      messages: Array.from({ length: history }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: `message ${index}` })),
+      pendingTurn: { prompt: 'go', response: '', startedAt: now, updatedAt: now },
+    } as HarnessSession;
+    state.sessions.push(session);
+    await writeState(state);
+    await writeState(state);
+    return { state, session };
+  };
+  const baselineHistory = (state: object) => (state as BaselinedState)[STATE_BASELINE]!.sessions.get('s')!.transcript.messages;
+
+  it('neither copies nor compares the history again while only the answer grows', async () => {
+    const { state, session } = await setup(5_000);
+    const history = baselineHistory(state);
+    for (let step = 1; step <= 3; step++) {
+      session.pendingTurn!.response += ` part ${step}`;
+      await writeState(state);
+      // The same copy of the history, not a fresh one: nothing re-copied it.
+      expect(baselineHistory(state)).toBe(history);
+    }
+    resetSessionStoreCache();
+    const stored = (await readState()).sessions.find((item) => item.id === 's')!;
+    expect(stored.pendingTurn?.response).toBe(' part 1 part 2 part 3');
+    expect(stored.messages).toEqual(session.messages);
+  });
+
+  it('still sees history that grew or whose last message changed in place', async () => {
+    const { state, session } = await setup(3);
+    session.messages!.push({ role: 'assistant', content: 'appended in place' });
+    await writeState(state);
+    session.messages![session.messages!.length - 1]!.content = 'edited in place';
+    await writeState(state);
+    resetSessionStoreCache();
+    const stored = (await readState()).sessions.find((item) => item.id === 's')!;
+    expect(stored.messages?.at(-1)).toEqual({ role: 'assistant', content: 'edited in place' });
+    expect(stored.messages).toHaveLength(4);
   });
 });

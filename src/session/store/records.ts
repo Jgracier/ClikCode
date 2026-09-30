@@ -3,7 +3,6 @@
 
 import { readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { cloneData } from './data.js';
 import { atomicWriteFile } from './files.js';
 import { sessionFilePath, sessionsDirectory } from './paths.js';
 import type { SessionTranscript, TranscriptRef } from './transcripts.js';
@@ -62,13 +61,32 @@ export async function loadSessionFile(id: string): Promise<SessionFile | undefin
   return file;
 }
 
+/** Serialized histories, by the array they were serialized from. A turn's
+ * checkpoint rewrites the file several times a second with the same history
+ * and a new pending turn; serializing that history again every time cost
+ * time in proportion to the whole conversation. Arrays stored here are never
+ * changed (see storeSessionFile), so the text stays true to them. */
+const serializedMessages = new WeakMap<readonly unknown[], string>();
+
+function serializeSessionFile(file: SessionFile): string {
+  const { messages, ...rest } = file;
+  if (!messages) return JSON.stringify(rest);
+  let history = serializedMessages.get(messages);
+  if (history === undefined) serializedMessages.set(messages, history = JSON.stringify(messages));
+  const head = JSON.stringify(rest);
+  return `${head.slice(0, -1)}${head.length > 2 ? ',' : ''}"messages":${history}}`;
+}
+
+/** `file` becomes the cache entry as it is: the caller hands it over and does
+ * not change it afterwards. Every caller builds it fresh or passes a
+ * baseline copy that nothing mutates. */
 export async function storeSessionFile(id: string, file: SessionFile): Promise<void> {
   const path = sessionFilePath(id);
   // Compact on purpose: this is bulk data rewritten several times a second.
-  await atomicWriteFile(path, JSON.stringify(file));
+  await atomicWriteFile(path, serializeSessionFile(file));
   SESSION_STORE_STATS.fileWrites += 1;
   const info = await stat(path).catch(() => undefined);
-  if (info) fileCache.set(path, { ino: info.ino, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, file: cloneData(file) });
+  if (info) fileCache.set(path, { ino: info.ino, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, file });
   else fileCache.delete(path);
 }
 

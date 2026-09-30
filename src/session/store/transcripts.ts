@@ -58,6 +58,8 @@ function sameMessage(left: TranscriptMessage | undefined, right: TranscriptMessa
 }
 
 function commonPrefixLength(left: readonly TranscriptMessage[], right: readonly TranscriptMessage[]): number {
+  // The history last stored, stored again: the checkpoint of a streaming turn.
+  if (left === right) return left.length;
   const limit = Math.min(left.length, right.length);
   let index = 0;
   while (index < limit && sameMessage(left[index], right[index])) index += 1;
@@ -99,6 +101,10 @@ async function materializeChildrenOf(parentId: string): Promise<string[]> {
 interface TranscriptWriteOptions {
   /** Session whose history this one may share (its fork/handoff parent). */
   parentSessionId?: string;
+  /** `next` is a baseline copy that nothing will change (state/merge.ts), so
+   * it is stored as it is instead of copied again. Its unchanged history is
+   * then recognised by identity on the next write (commonPrefixLength). */
+  frozen?: boolean;
 }
 
 /** Below this, a reference saves nothing worth the indirection. */
@@ -128,16 +134,18 @@ export async function writeSessionTranscript(id: string, next: SessionTranscript
         const parentMessages = await materializedMessages(parent, new Set([parentId]));
         const shared = commonPrefixLength(parentMessages ?? [], next.messages ?? []);
         if (shared < MIN_SHARED_MESSAGES) return false;
-        await storeSessionFile(id, cloneData({
+        const file: SessionFile = {
           v: 1 as const, id, transcriptRef: { sessionId: parentId, uptoIndex: shared },
           messages: next.messages!.slice(shared),
           ...(next.pendingTurn !== undefined ? { pendingTurn: next.pendingTurn } : {}),
-        }));
+        };
+        await storeSessionFile(id, options.frozen ? file : cloneData(file));
         return true;
       });
       if (stored) return;
     }
-    await storeSessionFile(id, cloneData({ v: 1 as const, id, ...next }));
+    const file: SessionFile = { v: 1 as const, id, ...next };
+    await storeSessionFile(id, options.frozen ? file : cloneData(file));
   });
 }
 
