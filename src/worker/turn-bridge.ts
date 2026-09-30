@@ -249,7 +249,10 @@ async function driveWorkerTurn(
       const onEvent = (event: WorkerEvent): void => {
         switch (event.type) {
           case 'snapshot':
-            rl.render(event.session, event.account);
+            // `live`: the worker is still running this journal, so no paint
+            // may fold it in as an ended turn -- not even the one when this
+            // window steps out to the board (see prompter transcriptMessages).
+            rl.render(event.session, event.account, undefined, { turnLive: Boolean(event.live) });
             // The worker was already running this turn (a queued message it
             // started first): what has streamed so far.
             if (event.live?.text) rl.response(event.live.text, 'replace');
