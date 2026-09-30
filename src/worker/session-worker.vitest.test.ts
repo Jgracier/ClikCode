@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtemp, rm, access } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -10,7 +10,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { WorkerClient } from './client.js';
-import { readWorkerRecord, writeWorkerRecord } from './registry.js';
+import { readWorkerRecord, takeConversation, workerIsReachable, writeWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
@@ -261,4 +261,70 @@ describe('session worker (real spawned process, real socket)', () => {
     await expect(nextEvent(client, 'snapshot')).resolves.toMatchObject({ session: { id: session.id } });
   });
 
+});
+
+describe('one worker per conversation', () => {
+  const children: ChildProcess[] = [];
+  afterEach(() => { for (const child of children.splice(0)) if (child.exitCode === null) child.kill('SIGTERM'); });
+
+  /** A worker started directly, as two windows racing to spawn one do. */
+  const startWorker = (sessionId: string): ChildProcess => {
+    const child = spawn(process.execPath, [distEntry, 'session-worker', sessionId], { stdio: 'ignore', env: process.env });
+    children.push(child);
+    return child;
+  };
+  const exited = (child: ChildProcess): Promise<number | null> => child.exitCode !== null
+    ? Promise.resolve(child.exitCode) : new Promise((resolveExit) => child.once('exit', (code) => resolveExit(code)));
+  const until = async (condition: () => Promise<boolean>, what: string, timeoutMs = 8_000): Promise<void> => {
+    const deadline = Date.now() + timeoutMs;
+    while (!await condition()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    }
+  };
+  const serving = async (sessionId: string): Promise<boolean> => {
+    const record = await readWorkerRecord(sessionId);
+    return Boolean(record && await workerIsReachable(record.socketPath));
+  };
+
+  it('three started at once: one serves the conversation and the others exit', async () => {
+    const session = await isolatedSession();
+    const started = [startWorker(session.id), startWorker(session.id), startWorker(session.id)];
+    await until(() => serving(session.id), 'a worker to serve');
+    const record = await readWorkerRecord(session.id);
+    const winner = started.find((child) => child.pid === record?.pid);
+    expect(winner, 'the record names none of the workers started').toBeDefined();
+    for (const loser of started.filter((child) => child !== winner)) expect(await exited(loser)).toBe(0);
+    expect(winner!.exitCode, 'the worker serving the conversation exited').toBeNull();
+    // The survivor is the one windows reach, and its socket was never taken.
+    const client = await WorkerClient.attach(session.id);
+    spawnedClients.push(client);
+    expect(await client.initialSnapshot).toMatchObject({ type: 'snapshot', session: { id: session.id } });
+    expect((await readWorkerRecord(session.id))?.pid).toBe(record?.pid);
+  });
+
+  it('a worker shutting down leaves a record that is not its own', async () => {
+    const session = await isolatedSession();
+    const worker = startWorker(session.id);
+    await until(() => serving(session.id), 'the worker to serve');
+    const record = (await readWorkerRecord(session.id))!;
+    const replacement = { ...record, pid: record.pid + 100_000, token: 'the replacement' };
+    await writeWorkerRecord(replacement);
+    worker.kill('SIGTERM');
+    expect(await exited(worker)).toBe(0);
+    expect(await readWorkerRecord(session.id)).toEqual(replacement);
+  });
+
+  it('waits while a scripted turn runs the conversation in-process, then serves it', async () => {
+    const session = await isolatedSession();
+    const taken = await takeConversation(session.id, 'turn');
+    if (!('hold' in taken)) throw new Error('the conversation was already held');
+    const worker = startWorker(session.id);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+    expect(await readWorkerRecord(session.id), 'a worker started in the middle of a turn').toBeUndefined();
+    expect(worker.exitCode).toBeNull();
+    await taken.hold.release();
+    await until(() => serving(session.id), 'the worker to serve once the turn ended');
+    expect((await readWorkerRecord(session.id))?.pid).toBe(worker.pid);
+  });
 });

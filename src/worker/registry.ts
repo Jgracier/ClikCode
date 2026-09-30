@@ -9,10 +9,11 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { breakStaleLock, pidIsAlive } from '../session/store/locks.js';
 import { stateDirectory } from '../session/store/paths.js';
 
 export interface WorkerRuntimeRecord {
@@ -74,12 +75,16 @@ function workersDirectory(): string {
  * collision here just means one worker's socket briefly looks reachable
  * under the other's path, caught immediately by the token check on connect,
  * not a security boundary). */
+function sessionKey(sessionId: string): string {
+  return createHash('sha256').update(sessionId).digest('hex').slice(0, 20);
+}
+
 function socketFileName(sessionId: string): string {
-  return `${createHash('sha256').update(sessionId).digest('hex').slice(0, 20)}.sock`;
+  return `${sessionKey(sessionId)}.sock`;
 }
 
 function recordPath(sessionId: string): string {
-  return join(workersDirectory(), `${createHash('sha256').update(sessionId).digest('hex').slice(0, 20)}.json`);
+  return join(workersDirectory(), `${sessionKey(sessionId)}.json`);
 }
 
 /** Must run before anything binds a UDS under this directory -- `listen()`
@@ -136,10 +141,132 @@ export function generateWorkerToken(): string {
   return randomBytes(16).toString('hex');
 }
 
-export async function removeWorkerRecord(sessionId: string): Promise<void> {
+/** Removes the record only while it is still `token`'s: a worker shutting
+ * down must never delete the record of the worker that replaced it. */
+export async function removeWorkerRecord(sessionId: string, token: string): Promise<void> {
+  if ((await readWorkerRecord(sessionId).catch(() => undefined))?.token !== token) return;
   await unlink(recordPath(sessionId)).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== 'ENOENT') throw error;
   });
+}
+
+/** Who runs a conversation's turns: its worker, for as long as it lives, or
+ * -- with no worker reachable -- a process running one turn in-process (a
+ * scripted `clikcode send`). Exactly one at a time.
+ *
+ * Without this two workers could serve one conversation: two windows that
+ * both found none spawned one each, and the second unlinked the first's
+ * socket and bound its own, leaving the first running turns nobody could
+ * reach. And a scripted send running in-process let a worker start mid-turn,
+ * and the two journals' last full-file writer won.
+ *
+ * Taken by an exclusive create (a staged file hard-linked into place, so it
+ * appears complete or not at all), refreshed while held, released only by
+ * its owner. A holder is gone when its pid is, or when it stopped refreshing
+ * -- pids get reused -- except a worker that still answers on its socket (a
+ * suspended laptop stalls every timer at once). */
+export type ConversationOwnerKind = 'worker' | 'turn';
+
+export interface ConversationOwner {
+  pid: number;
+  host: string;
+  kind: ConversationOwnerKind;
+  nonce: string;
+  at: string;
+}
+
+export interface ConversationHold {
+  /** Still this process's: it was not judged stale and taken over. */
+  held(): Promise<boolean>;
+  release(): Promise<void>;
+}
+
+const OWNER_REFRESH_MS = 10_000;
+const OWNER_STALE_MS = 60_000;
+
+function ownerPath(sessionId: string): string {
+  return join(workersDirectory(), `${sessionKey(sessionId)}.owner`);
+}
+
+function parseOwner(raw: string): ConversationOwner | undefined {
+  try {
+    const parsed = JSON.parse(raw) as Partial<ConversationOwner>;
+    return typeof parsed.pid === 'number' && typeof parsed.host === 'string' && (parsed.kind === 'worker' || parsed.kind === 'turn')
+      ? parsed as ConversationOwner : undefined;
+  } catch {
+    // fail-open-ok: an unreadable owner file identifies no one; age alone condemns it
+    return undefined;
+  }
+}
+
+async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefined): Promise<boolean> {
+  const modified = await stat(ownerPath(sessionId)).then((info) => info.mtimeMs, () => undefined);
+  if (modified === undefined) return false;
+  const fresh = Date.now() - modified < OWNER_STALE_MS;
+  // A holder between create and write, or another machine's (a shared
+  // home): only its age can be judged.
+  if (!owner || owner.host !== hostname()) return fresh;
+  if (!pidIsAlive(owner.pid)) return false;
+  if (fresh) return true;
+  return owner.kind === 'worker' && workerIsReachable(socketPathFor(sessionId));
+}
+
+/** Who runs the conversation's turns now, if anyone does. */
+export async function conversationHolder(sessionId: string): Promise<ConversationOwner | undefined> {
+  const raw = await readFile(ownerPath(sessionId), 'utf8').catch(() => undefined);
+  const owner = raw === undefined ? undefined : parseOwner(raw);
+  return owner && await ownerIsLive(sessionId, owner) ? owner : undefined;
+}
+
+/** The conversation for this process, or who holds it now. */
+export async function takeConversation(
+  sessionId: string, kind: ConversationOwnerKind,
+): Promise<{ hold: ConversationHold } | { holder: ConversationOwner }> {
+  await ensureWorkersDirectory();
+  const path = ownerPath(sessionId);
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const owner: ConversationOwner = { pid: process.pid, host: hostname(), kind, nonce: randomBytes(9).toString('hex'), at: new Date().toISOString() };
+    const mine = JSON.stringify(owner);
+    const staging = `${path}.${process.pid}.${owner.nonce}.new`;
+    await writeFile(staging, mine, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    try {
+      await link(staging, path);
+      return { hold: holdOf(path, mine) };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    } finally {
+      await unlink(staging).catch(() => undefined);
+    }
+    const raw = await readFile(path, 'utf8').catch(() => undefined);
+    if (raw === undefined) continue; // Released between the two calls.
+    const holder = parseOwner(raw);
+    if (holder && await ownerIsLive(sessionId, holder)) return { holder };
+    if (!holder && await ownerIsLive(sessionId, undefined)) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      continue;
+    }
+    await breakStaleLock(path, raw);
+  }
+  throw new Error(`Could not settle who runs conversation ${sessionId}.`);
+}
+
+function holdOf(path: string, mine: string): ConversationHold {
+  const held = async (): Promise<boolean> => (await readFile(path, 'utf8').catch(() => undefined)) === mine;
+  const refresh = setInterval(() => {
+    void held().then((still) => {
+      if (!still) { clearInterval(refresh); return undefined; }
+      const now = new Date();
+      return utimes(path, now, now);
+    }).catch(() => undefined);
+  }, OWNER_REFRESH_MS);
+  refresh.unref();
+  return {
+    held,
+    release: async () => {
+      clearInterval(refresh);
+      if (await held()) await unlink(path).catch(() => undefined);
+    },
+  };
 }
 
 /** The only liveness question that matters: can a connection actually be

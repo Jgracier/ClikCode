@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
-import { currentWorkerBuild, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
+import { conversationHolder, currentWorkerBuild, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
 import { readState } from '../session/state/read.js';
 import { decodeFrames, encodeFrame, type ClientCommand, type WorkerEvent } from './protocol.js';
 
@@ -49,7 +49,11 @@ async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecor
   for (;;) {
     const record = await readWorkerRecord(sessionId);
     if (record && await workerIsReachable(record.socketPath)) return record;
-    if (Date.now() > deadline) throw new Error(`session worker for "${sessionId}" did not start in time`);
+    // A scripted send is running a turn in-process: the worker starts when it
+    // ends, and this waits for it like any turn already running.
+    if (Date.now() > deadline && (await conversationHolder(sessionId))?.kind !== 'turn') {
+      throw new Error(`session worker for "${sessionId}" did not start in time`);
+    }
     await delay(SPAWN_POLL_MS);
   }
 }
