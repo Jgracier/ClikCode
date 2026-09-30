@@ -10,6 +10,7 @@ import { queueShellNotification, type BackgroundShell } from '../session-state.j
 import { turnCancelledError } from '../cancellation.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { scopeOf } from './fs-helpers.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string }
 
@@ -146,7 +147,7 @@ export const bashTool = defineTool<BashArgs>({
       run_in_background: { type: 'boolean' },
     },
   },
-  label: (args) => args.command.length > 120 ? `${args.command.slice(0, 117)}…` : args.command,
+  label: (args) => formatToolRow('bash', args.command, 'run'),
   async run(args, ctx) {
     // Held here as well as in the permission layer: a hard-denied command
     // must never execute, however this tool was reached.
@@ -182,7 +183,7 @@ export const bashTool = defineTool<BashArgs>({
           const body = redactSecrets(text).replace(/\s+$/, '');
           if (timedOut) return resolve({ output: `${body}\n\n[timed out after ${Math.round(timeoutMs / 1000)}s; the process group was killed. For long-running work use run_in_background.]`.trim(), isError: true });
           const status = code === 0 ? '' : `\n\n[exit code ${code ?? `signal ${signal}`}]`;
-          resolve({ output: `${body || '(no output)'}${status}`, isError: code !== 0 });
+          resolve({ output: `${body || '(no output)'}${status}`, isError: code !== 0, ...(code !== null ? { exitCode: code } : {}) });
         }, reject);
       });
     });

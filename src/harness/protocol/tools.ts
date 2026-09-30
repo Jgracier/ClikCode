@@ -4,27 +4,62 @@
 import { visibleSlice } from '../../tui/render/width.js';
 import type { ToolCategory } from '../prompter.js';
 
-/** `Edit(src/app.ts)` rather than a bare `Edit`. The tool name alone says
- * nothing about what was touched; every vendor carries the target in the
- * call's input under one of a few well-known keys. */
-/** The one place that decides what a tool row looks like.
+/** The one place that decides what a tool row says.
  *
- * Every harness's parser funnels through here so the shape, the first-line
- * rule and the width cap are identical no matter which vendor produced the
- * event. They had drifted into four shapes -- `name(detail)`, a bare detail
- * with no name, `name` alone, and a hand-built `name(description)` that
- * repeated this formatting inline -- so the same action looked different
- * depending on which harness ran it.
+ * Every harness's parser, and ClikCode's own agent, funnels through here, so
+ * the same action reads the same whichever vendor ran it: `Read src/x`,
+ * `Edit src/x`, `$ npm test`, `Grep TODO`, `Fetch https://…`, `Agent find the
+ * retry logic`, `github › create_issue title=…`. The verb comes from what the
+ * call does (its category), never from the vendor's spelling of the tool,
+ * which is how `Bash(ls)`, `run_command(ls)`, `developer__shell(ls)` and a
+ * bare `ls` had become four looks for one command.
  *
- * A detail that adds nothing is dropped rather than padded: a tool whose only
- * parameters are an opaque id reads better as its bare name than as
- * `name(some-uuid)`. */
-export function formatToolRow(name: string, detail?: string): string {
-  const firstLine = detail?.split(/\r?\n/, 1)[0]?.trim();
-  return firstLine ? `${name}(${visibleSlice(firstLine, 72)})` : name;
+ * Only the first line of the detail is kept (marked `…` when there is more),
+ * capped, so a multi-line command cannot break the row. A detail that adds nothing is dropped rather than
+ * padded; a tool nothing classifies keeps its own name. */
+export function formatToolRow(name: string, detail?: string, category?: ToolCategory): string {
+  const lines = detail?.trim().split(/\r?\n/) ?? [];
+  const firstLine = lines[0]?.trim();
+  // More lines are marked, not hidden: `$ ls` must not stand for `ls\nrm -rf x`.
+  const shown = firstLine ? visibleSlice(lines.length > 1 ? `${firstLine} …` : firstLine, 72) : '';
+  const verb = toolVerb(name, category ?? toolCategory(name));
+  if (verb === '$') return shown ? `$ ${shown}` : name;
+  return shown ? `${verb} ${shown}` : verb;
 }
 
-export function toolLabel(name: string, input?: Record<string, unknown>): string {
+/** The word a row starts with. `$` for a shell command. */
+function toolVerb(name: string, category: ToolCategory | undefined): string {
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
+  if (mcp) return `${mcp[1]} › ${mcp[2]}`;
+  if (isAgentToolName(name)) return 'Agent';
+  const normalized = name.toLowerCase().replace(/[^a-z]/g, '');
+  switch (category) {
+    case 'run': return '$';
+    case 'read': return 'Read';
+    case 'edit': return /write|create/.test(normalized) ? 'Write' : 'Edit';
+    case 'search':
+      if (/glob|findfiles/.test(normalized)) return 'Glob';
+      if (/^(grep|rg|ripgrep)$/.test(normalized)) return 'Grep';
+      if (/^(ls|list|listdir|listfiles|listdirectory)$/.test(normalized)) return 'List';
+      return 'Search';
+    case 'fetch': return /search/.test(normalized) ? 'Web search' : 'Fetch';
+    default: return name;
+  }
+}
+
+/** Short `key=value` summary of a call's arguments, for a tool whose input
+ * has no single target (an MCP tool's). Strings first, each clipped. */
+export function argumentSummary(input?: Record<string, unknown>, max = 60): string | undefined {
+  const parts = Object.entries(input ?? {}).flatMap(([key, value]) => {
+    if (value === undefined || value === null || value === '') return [];
+    const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : JSON.stringify(value);
+    return text ? [`${key}=${text.length > 24 ? `${text.slice(0, 23)}…` : text}`] : [];
+  });
+  const joined = parts.join(' ');
+  return joined ? (joined.length > max ? `${joined.slice(0, max - 1)}…` : joined) : undefined;
+}
+
+export function toolLabel(name: string, input?: Record<string, unknown>, category?: ToolCategory): string {
   // Matched with separators and case removed, the same way tool NAMES are
   // below, because vendors disagree about spelling far more than about
   // meaning: Antigravity writes CommandLine and AbsolutePath where others
@@ -33,24 +68,27 @@ export function toolLabel(name: string, input?: Record<string, unknown>): string
   const WANTED = ['filepath', 'path', 'notebookpath', 'absolutepath', 'command', 'commandline',
     'pattern', 'query', 'url'];
   const normalise = (key: string): string => key.replace(/[\s_-]/g, '').toLowerCase();
-  const target = WANTED
+  const pick = (keys: readonly string[]) => keys
     .map((wanted) => Object.entries(input ?? {}).find(([key]) => normalise(key) === wanted)?.[1])
+    .map((value) => Array.isArray(value) && value.every((part) => typeof part === 'string') ? value.join(' ') : value)
     .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
-  if (target || !isAgentToolName(name)) return formatToolRow(name, target);
+  const kind = category ?? toolCategory(name, input);
+  const target = pick(WANTED);
+  if (target) return formatToolRow(name, target, kind);
   // A sub-agent's row is the task, not the bare tool name. These keys are
   // not targets for any other tool: a command still wins above, and a tool
   // that is not an agent never reads them.
-  const detail = ['description', 'task', 'prompt', 'instructions']
-    .map((wanted) => Object.entries(input ?? {}).find(([key]) => normalise(key) === wanted)?.[1])
-    .find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
-  return formatToolRow(name, detail);
+  if (isAgentToolName(name)) return formatToolRow(name, pick(['description', 'task', 'prompt', 'instructions']), kind);
+  // An MCP tool's input has no single target; a short summary says which call it was.
+  return formatToolRow(name, name.startsWith('mcp__') ? argumentSummary(input) : undefined, kind);
 }
 
 /** Tool names that mean "a sub-agent is working", with separators and case
  * removed. A shell command is not one of these: callers that already know
  * the call is a `run` must not ask. */
 export function isAgentToolName(name: string): boolean {
-  const normalized = name.split('(')[0]?.toLowerCase().replace(/[^a-z]/g, '') ?? '';
+  // The name, or a row's first word (`Agent review the tests`, `Task(review)`).
+  const normalized = name.split(/[\s(]/, 1)[0]?.toLowerCase().replace(/[^a-z]/g, '') ?? '';
   return /^(task|agent|subagent|delegate|spawn|spawnagent|followuptask|collabagent|launchagent|runagent)$/.test(normalized)
     || normalized.endsWith('subagent');
 }

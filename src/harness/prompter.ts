@@ -39,6 +39,11 @@ export interface HarnessActivityEvent {
    * earlier lines to the window sliding past them, not show a real "more"
    * indicator -- capping here means the +N truncation notice is honest. */
   diff?: { removed: string[]; added: string[] };
+  /** How long the call ran, where the vendor (or ClikCode's own loop)
+   * reports it. Only on a completion. */
+  durationMs?: number;
+  /** A finished command's exit code, where the vendor reports one. */
+  exitCode?: number;
 }
 
 export interface HarnessPrompter {

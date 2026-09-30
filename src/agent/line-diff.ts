@@ -66,6 +66,16 @@ export function eventDiff(before: string, after: string, cap = EVENT_DIFF_LINE_C
   };
 }
 
+/** The same shape from a unified diff a vendor already computed (Codex's
+ * file changes): its `-`/`+` lines, headers and hunk markers dropped. */
+export function unifiedEventDiff(diff: string, cap = EVENT_DIFF_LINE_CAP): LineDiff {
+  const lines = splitLines(diff).filter((line) => !/^(?:---|\+\+\+|@@|diff |index )/.test(line));
+  return {
+    removed: capped(lines.filter((line) => line.startsWith('-')).map((line) => line.slice(1)), cap),
+    added: capped(lines.filter((line) => line.startsWith('+')).map((line) => line.slice(1)), cap),
+  };
+}
+
 /** Unified-style preview with a little context, for approval prompts. */
 export function renderDiffPreview(before: string, after: string, options: { context?: number; maxLines?: number } = {}): string {
   const context = options.context ?? 2;

@@ -4,7 +4,8 @@ import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
-import { categoryOf, formatToolRow } from '../protocol/tools.js';
+import { commandOutcome, fileChangeActivity } from '../protocol/activity-events.js';
+import { categoryOf, formatToolRow, toolLabel } from '../protocol/tools.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
 import { createTurnWatchdog, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 
@@ -97,27 +98,31 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
   if (type === 'commandExecution') {
     const aggregated = completed && typeof item.aggregatedOutput === 'string' ? outputTail(item.aggregatedOutput) : undefined;
     return {
-      kind: completed ? completedKind : 'tool-start', label: codexCommandText(item.command) ?? 'command', category: 'run', ...(id ? { id } : {}),
+      kind: completed ? completedKind : 'tool-start', label: formatToolRow('shell', codexCommandText(item.command) ?? 'command', 'run'), category: 'run', ...(id ? { id } : {}),
       ...(aggregated?.length ? { output: aggregated } : {}),
+      ...(completed ? commandOutcome(item) : {}),
     };
   }
-  if (type === 'fileChange') return { kind: completed ? completedKind : 'tool-start', label: 'files updated', ...(id ? { id } : {}) };
+  if (type === 'fileChange') return { kind: completed ? completedKind : 'tool-start', ...fileChangeActivity(item.changes), ...(id ? { id } : {}) };
   if (type === 'collabAgentToolCall') {
     const tool = String(item.tool ?? item.name ?? 'agent');
     const detail = typeof item.prompt === 'string' ? item.prompt
       : typeof item.task === 'string' ? item.task
         : typeof item.description === 'string' ? item.description : undefined;
     return {
-      kind: completed ? completedKind : 'tool-start', label: formatToolRow(tool, detail), agent: true, ...(id ? { id } : {}),
+      kind: completed ? completedKind : 'tool-start', label: formatToolRow('agent', detail ?? tool), agent: true, ...(id ? { id } : {}),
     };
   }
   if (type === 'mcpToolCall' || type === 'dynamicToolCall') {
-    const name = String(item.tool ?? item.server ?? item.name ?? 'tool');
+    const name = typeof item.server === 'string' && typeof item.tool === 'string' ? `mcp__${item.server}__${item.tool}` : String(item.tool ?? item.server ?? item.name ?? 'tool');
+    const args = item.arguments && typeof item.arguments === 'object' && !Array.isArray(item.arguments) ? item.arguments as Record<string, unknown> : undefined;
+    const classified = categoryOf(name, args, 'codex');
     return {
-      kind: completed ? completedKind : 'tool-start', label: name, ...categoryOf(name, undefined, 'codex'), ...(id ? { id } : {}),
+      kind: completed ? completedKind : 'tool-start', label: toolLabel(name, args, classified.category), ...classified, ...(id ? { id } : {}),
+      ...(completed ? commandOutcome(item) : {}),
     };
   }
-  if (type === 'webSearch') return { kind: completed ? completedKind : 'tool-start', label: 'web search', ...(id ? { id } : {}) };
+  if (type === 'webSearch') return { kind: completed ? completedKind : 'tool-start', label: formatToolRow('web_search', typeof item.query === 'string' ? item.query : undefined, 'fetch'), category: 'fetch', ...(id ? { id } : {}) };
   if (type === 'reasoning' && completed) {
     const summary = Array.isArray(item.summary) ? item.summary.filter((part): part is string => typeof part === 'string').join(' ') : '';
     if (summary) return { kind: 'thinking', label: summary.replace(/\s+/g, ' ').slice(0, 140) };

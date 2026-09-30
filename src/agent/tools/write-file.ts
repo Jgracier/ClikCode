@@ -3,6 +3,7 @@ import path from 'node:path';
 import { eventDiff, renderDiffPreview } from '../line-diff.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, looksBinary, resolveForWrite } from './fs-helpers.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface WriteFileArgs { path: string; content: string }
 
@@ -50,7 +51,7 @@ export const writeFileTool = defineTool<WriteFileArgs>({
       content: { type: 'string', description: 'Complete new file contents.' },
     },
   },
-  label: (args) => `Write ${args.path}`,
+  label: (args) => formatToolRow('write_file', args.path, 'edit'),
   paths: (args) => [args.path],
   async preview(args, ctx) {
     const existing = await readExisting(resolveForWrite(args.path, ctx).real);

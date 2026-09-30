@@ -33,11 +33,14 @@ describe('shared ACP adapter contract', () => {
       sessionUpdate: 'tool_call', toolCallId: 'w', title: 'Write', status: 'pending',
       content: [{ type: 'diff', path: '/repo/new.ts', oldText: null, newText: 'a\nb\n' }],
     })).toMatchObject({ diff: { removed: [], added: ['a', 'b'] } });
-    const big = Array.from({ length: 500 }, (_, index) => `line ${index}`).join('\n');
-    const event = acpActivityEvent({ sessionUpdate: 'tool_call', status: 'pending', content: [{ type: 'diff', oldText: big, newText: big }] })!;
+    const big = (tag: string) => Array.from({ length: 500 }, (_, index) => `${tag} ${index}`).join('\n');
+    const event = acpActivityEvent({ sessionUpdate: 'tool_call', status: 'pending', content: [{ type: 'diff', oldText: big('old'), newText: big('new') }] })!;
     expect(event.diff!.added).toHaveLength(201);
     expect(event.diff!.removed).toHaveLength(201);
-    expect(event.diff!.added.at(-1)).toBe('... 300 more lines');
+    expect(event.diff!.added.at(-1)).toBe('… 300 more lines');
+    // Only what changed: the lines both texts share are not repeated.
+    expect(acpActivityEvent({ sessionUpdate: 'tool_call', status: 'pending', content: [{ type: 'diff', oldText: 'a\nb\nc', newText: 'a\nB\nc' }] })!.diff)
+      .toEqual({ removed: ['b'], added: ['B'] });
   });
 
   it('carries bounded tool output', () => {

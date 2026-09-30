@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { defineTool } from '../tool-contract.js';
 import { displayPath, resolveForRead } from './fs-helpers.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface ListDirArgs { path?: string }
 
@@ -15,7 +16,7 @@ export const listDirTool = defineTool<ListDirArgs>({
     type: 'object', additionalProperties: false,
     properties: { path: { type: 'string', description: 'Directory to list. Defaults to the working directory.' } },
   },
-  label: (args) => `List ${args.path ?? '.'}`,
+  label: (args) => formatToolRow('list_dir', args.path ?? '.', 'search'),
   paths: (args) => [args.path ?? '.'],
   async run(args, ctx) {
     const resolved = resolveForRead(args.path ?? '.', ctx);

@@ -4,16 +4,28 @@ import { codexActivityForItem, codexPermissionSettings, codexSteerParams, comple
 describe('Codex app-server protocol mapping', () => {
   it('preserves native ids so tool completion updates the start row', () => {
     const item = { type: 'commandExecution', id: 'tool-1', command: 'git status' };
-    expect(codexActivityForItem(item, false)).toEqual({ kind: 'tool-start', label: 'git status', category: 'run', id: 'tool-1' });
-    expect(codexActivityForItem(item, true)).toEqual({ kind: 'tool-done', label: 'git status', category: 'run', id: 'tool-1' });
-    expect(codexActivityForItem({ ...item, exitCode: 1 }, true))
-      .toEqual({ kind: 'tool-error', label: 'git status', category: 'run', id: 'tool-1' });
+    expect(codexActivityForItem(item, false)).toEqual({ kind: 'tool-start', label: '$ git status', category: 'run', id: 'tool-1' });
+    expect(codexActivityForItem(item, true)).toEqual({ kind: 'tool-done', label: '$ git status', category: 'run', id: 'tool-1' });
+    expect(codexActivityForItem({ ...item, exitCode: 1, durationMs: 1200 }, true))
+      .toEqual({ kind: 'tool-error', label: '$ git status', category: 'run', id: 'tool-1', exitCode: 1, durationMs: 1200 });
   });
 
   it('marks a collab call as a sub-agent the chat can show while it runs', () => {
     expect(codexActivityForItem({
       type: 'collabAgentToolCall', id: 'agent-1', tool: 'spawn_agent', prompt: 'review the tests',
-    }, false)).toEqual({ kind: 'tool-start', label: 'spawn_agent(review the tests)', agent: true, id: 'agent-1' });
+    }, false)).toEqual({ kind: 'tool-start', label: 'Agent review the tests', agent: true, id: 'agent-1' });
+  });
+
+  it('shows a file change as its paths and its diff, not "files updated"', () => {
+    expect(codexActivityForItem({
+      type: 'fileChange', id: 'fc', status: 'completed',
+      changes: [{ path: 'src/a.ts', kind: { type: 'update' }, diff: '@@ -1 +1 @@\n-const a = 1;\n+const a = 2;\n' }],
+    }, true)).toEqual({ kind: 'tool-done', label: 'Edit src/a.ts', category: 'edit', id: 'fc', diff: { removed: ['const a = 1;'], added: ['const a = 2;'] } });
+  });
+
+  it('names an MCP call by server and tool with a short argument summary', () => {
+    expect(codexActivityForItem({ type: 'mcpToolCall', id: 'm', server: 'github', tool: 'create_issue', arguments: { title: 'Fix it', labels: ['bug'] } }, false))
+      .toMatchObject({ kind: 'tool-start', label: 'github › create_issue title=Fix it labels=["bug"]' });
   });
 
   it('maps Ask, Auto, and Bypass without weakening their approval policy', () => {

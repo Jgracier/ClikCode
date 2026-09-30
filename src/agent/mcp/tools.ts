@@ -1,6 +1,7 @@
 /** MCP tools as the agent loop's own ToolDefinitions: the name the model
  * sees, the permission class, and what a result reads like. */
 import { createHash } from 'node:crypto';
+import { argumentSummary, formatToolRow } from '../../harness/protocol/tools.js';
 import { defineTool, type ToolDefinition, type ToolRunResult } from '../tool-contract.js';
 import type { McpCallResult, McpContent, McpToolInfo } from './client.js';
 
@@ -96,7 +97,7 @@ export function mcpToolDefinition(server: string, info: McpToolInfo, name: strin
     parameters: mcpToolParameters(info.inputSchema),
     class: info.annotations?.readOnlyHint === true ? 'read' : 'exec',
     mcp: { server, tool: info.name, ...(core ? { core: true as const } : {}) },
-    label: () => `${server} › ${title}`,
+    label: (args) => formatToolRow(`mcp__${server}__${info.name}`, argumentSummary(args)),
     preview: async (args) => {
       const json = JSON.stringify(args, null, 2);
       return [`MCP server: ${server}`, `tool: ${info.name}`, 'arguments:',

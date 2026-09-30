@@ -135,7 +135,7 @@ describe('work a Codex turn leaves running', () => {
       const seen: HarnessActivityEvent[] = [];
       turns[0]!.attach({ onActivity: (event) => seen.push(event) });
       expect(await turns[0]!.finished).toEqual({ text: '', ended: 'completed' });
-      expect(seen).toEqual([{ kind: 'tool-done', label: 'sleep 30; echo BG', category: 'run', id: 'bg-1', output: ['BG'] }]);
+      expect(seen).toEqual([{ kind: 'tool-done', label: '$ sleep 30; echo BG', category: 'run', id: 'bg-1', output: ['BG'], exitCode: 0 }]);
     } finally { await codex.close(); }
   });
 

@@ -9,6 +9,7 @@ import { OUTPUT_CAPS } from '../security.js';
 import { turnCancelledError } from '../cancellation.js';
 import { type NetworkSeams, type PinnedRequestOptions, type PinnedResponse, type ResolvedAddress } from '../model-client.js';
 import { defineTool } from '../tool-contract.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface WebFetchArgs { url: string; raw?: boolean }
 
@@ -210,7 +211,7 @@ export const webFetchTool = defineTool<WebFetchArgs>({
     type: 'object', additionalProperties: false, required: ['url'],
     properties: { url: { type: 'string', description: 'Absolute http:// or https:// URL.' }, raw: { type: 'boolean', description: 'Return the body unmodified.' } },
   },
-  label: (args) => `Fetch ${args.url}`,
+  label: (args) => formatToolRow('web_fetch', args.url, 'fetch'),
   async run(args, ctx) {
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), TIMEOUT_MS);

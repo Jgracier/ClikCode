@@ -33,6 +33,8 @@ export interface ToolRunResult {
   output: string;
   isError?: boolean;
   diff?: { removed: string[]; added: string[] };
+  /** A finished command's exit code, shown on its row. */
+  exitCode?: number;
 }
 
 type ToolClass = 'read' | 'write' | 'exec' | 'network' | 'meta';

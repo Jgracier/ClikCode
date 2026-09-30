@@ -17,6 +17,7 @@ import { turnCancelledError } from '../cancellation.js';
 import type { NetworkSeams } from '../model-client.js';
 import { defineTool } from '../tool-contract.js';
 import { decodeHtmlEntities, fetchVetted } from './web-fetch.js';
+import { formatToolRow } from '../../harness/protocol/tools.js';
 
 interface WebSearchArgs { query: string; max_results?: number }
 
@@ -207,7 +208,7 @@ export function createWebSearchTool(options: WebSearchOptions = {}) {
         max_results: { type: 'integer', minimum: 1, maximum: MAX_RESULTS, description: `How many results to return (default ${DEFAULT_RESULTS}, at most ${MAX_RESULTS}).` },
       },
     },
-    label: (args) => `Search the web for ${args.query}`,
+    label: (args) => formatToolRow('web_search', args.query, 'fetch'),
     async run(args, ctx) {
       const query = String(args.query ?? '').trim();
       if (!query) return { output: 'The search query is empty.', isError: true };
