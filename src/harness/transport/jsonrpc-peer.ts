@@ -4,6 +4,7 @@
  * instead of drifting apart in two hand-rolled copies. */
 import type { ChildProcess } from 'node:child_process';
 import { killProcessTreePortable } from './spawn.js';
+import { LineBuffer } from '../protocol/json-lines.js';
 
 type JsonRpcMessage = Record<string, any>;
 
@@ -97,7 +98,7 @@ interface Pending {
 export class JsonRpcPeer {
   private readonly pending = new Map<number, Pending>();
   private nextId = 1;
-  private lineBuffer = '';
+  private readonly lines = new LineBuffer();
   private stderrTail = '';
   private stdoutNoise = '';
   private isClosed = false;
@@ -253,8 +254,7 @@ export class JsonRpcPeer {
     if (this.isClosed) return;
     if (this.closeFallback) clearTimeout(this.closeFallback);
     // A final response may sit in the buffer without a trailing newline.
-    const tail = this.lineBuffer;
-    this.lineBuffer = '';
+    const tail = this.lines.flush();
     if (tail.trim()) this.handleLine(tail);
     const error = cause ?? this.closedError();
     this.isClosed = true;
@@ -264,9 +264,7 @@ export class JsonRpcPeer {
 
   private receive(chunk: string): void {
     if (this.isClosed) return;
-    const lines = (this.lineBuffer + chunk).split(/\r?\n/);
-    this.lineBuffer = lines.pop() ?? '';
-    for (const line of lines) if (line.trim()) this.handleLine(line);
+    for (const line of this.lines.push(chunk)) if (line.trim()) this.handleLine(line);
   }
 
   private handleLine(line: string): void {

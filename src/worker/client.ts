@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
 import { conversationHolder, currentWorkerBuild, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
 import { readState } from '../session/state/read.js';
-import { decodeFrames, encodeFrame, type ClientCommand, type WorkerEvent } from './protocol.js';
+import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
 /** A new worker is looked for this often: the first message of a
@@ -119,7 +119,7 @@ const RETIRE_ANSWER_MS = 500;
 function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined' | 'unanswered'> {
   return new Promise((resolveAnswer) => {
     const socket = connect(record.socketPath);
-    let buffer = '';
+    const frames = new FrameDecoder();
     let answered = false;
     const answer = (value: 'retired' | 'declined' | 'unanswered'): void => {
       if (answered) return;
@@ -134,9 +134,7 @@ function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined
       socket.write(encodeFrame({ type: 'retire' } satisfies ClientCommand));
     });
     socket.on('data', (chunk) => {
-      const { messages, rest } = decodeFrames(buffer + chunk.toString('utf8'));
-      buffer = rest;
-      for (const message of messages as WorkerEvent[]) {
+      for (const message of frames.push(chunk) as WorkerEvent[]) {
         if (message.type === 'retire-declined') answer('declined');
         else if (message.type === 'attach-rejected') answer('unanswered');
         else if (message.type === 'shutdown') answer('retired');
@@ -196,7 +194,7 @@ async function findRunningWorker(sessionId: string): Promise<WorkerRuntimeRecord
  * already did. Confirmed live, not theoretical: a fake-terminal test
  * caught this exact ordering the first time this shipped. */
 export class WorkerClient extends EventEmitter {
-  private buffer = '';
+  private readonly frames = new FrameDecoder();
   private early: WorkerEvent[] | undefined = [];
   readonly initialSnapshot: Promise<Extract<WorkerEvent, { type: 'snapshot' | 'attach-rejected' }>>;
   /** The same event, readable synchronously once attach() has resolved. */
@@ -208,9 +206,7 @@ export class WorkerClient extends EventEmitter {
     let sawInitial = false;
     this.initialSnapshot = new Promise((resolve) => { resolveInitial = resolve; });
     socket.on('data', (chunk) => {
-      const { messages, rest } = decodeFrames(this.buffer + chunk.toString('utf8'));
-      this.buffer = rest;
-      for (const message of messages) {
+      for (const message of this.frames.push(chunk)) {
         const event = message as WorkerEvent;
         if (!sawInitial && (event.type === 'snapshot' || event.type === 'attach-rejected')) {
           sawInitial = true;

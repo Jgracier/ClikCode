@@ -1,10 +1,12 @@
 /** The message shapes a session worker and an attached client exchange over
  * their socket. Framed as newline-delimited JSON: `encodeFrame` appends the
- * one separator the wire format depends on, `decodeFrames` consumes however
- * many complete frames a chunk contains and holds back a trailing partial
- * one for the next chunk -- a socket delivers bytes, not messages, and JSON
- * has no self-delimiting end marker of its own.
+ * one separator the wire format depends on, a `FrameDecoder` hands back
+ * however many complete frames a chunk completes and holds back a trailing
+ * partial one for the next chunk -- a socket delivers bytes, not messages,
+ * and JSON has no self-delimiting end marker of its own.
  */
+import { StringDecoder } from 'node:string_decoder';
+import { LineBuffer } from '../harness/protocol/json-lines.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessSession } from '../session/model.js';
@@ -113,17 +115,24 @@ export function encodeFrame(message: ClientCommand | WorkerEvent): string {
   return `${JSON.stringify(message)}${FRAME_SEPARATOR}`;
 }
 
-/** Consumes every complete frame in `buffer`, returning the parsed messages
- * and whatever incomplete tail is left to prepend to the next chunk.
- * Unparseable frames are dropped rather than thrown -- one corrupt line must
- * not take the whole connection down when every frame around it is fine. */
-export function decodeFrames(buffer: string): { messages: unknown[]; rest: string } {
-  const parts = buffer.split(FRAME_SEPARATOR);
-  const rest = parts.pop() ?? '';
-  const messages: unknown[] = [];
-  for (const part of parts) {
-    if (!part) continue;
-    try { messages.push(JSON.parse(part)); } catch { /* one corrupt frame does not sink the connection */ }
+/** One connection's incoming frames. Bytes are decoded as a stream, so a
+ * character split across two chunks arrives whole, and only each new chunk
+ * is searched for frame ends (json-lines.ts LineBuffer) -- a snapshot of a
+ * long conversation arrives in many chunks, and re-splitting everything held
+ * on each one cost the square of its size. Unparseable frames are dropped
+ * rather than thrown -- one corrupt line must not take the whole connection
+ * down when every frame around it is fine. */
+export class FrameDecoder {
+  private readonly text = new StringDecoder('utf8');
+  private readonly lines = new LineBuffer();
+
+  /** The messages this chunk completed, in order. */
+  push(chunk: Buffer | string): unknown[] {
+    const messages: unknown[] = [];
+    for (const frame of this.lines.push(typeof chunk === 'string' ? chunk : this.text.write(chunk))) {
+      if (!frame) continue;
+      try { messages.push(JSON.parse(frame)); } catch { /* one corrupt frame does not sink the connection */ }
+    }
+    return messages;
   }
-  return { messages, rest };
 }
