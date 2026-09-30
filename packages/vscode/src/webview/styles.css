@@ -116,8 +116,11 @@ button.primary kbd, button.secondary kbd { border-color: currentColor; opacity: 
   background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); white-space: nowrap;
 }
 .badge.muted-badge { background: transparent; border: 1px solid var(--border); color: var(--muted); }
-.badge.ok { background: transparent; border: 1px solid var(--ok); color: var(--ok); }
-.badge.warn { background: transparent; border: 1px solid var(--warn); color: var(--warn); }
+/* Status badges: the theme's text on a tint of the status colour, readable
+   in light themes where green or amber text on white is not. */
+.badge.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 60%, transparent); color: var(--vscode-foreground); }
+.badge.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 60%, transparent); color: var(--vscode-foreground); }
+body.vscode-high-contrast .badge.ok, body.vscode-high-contrast .badge.warn { background: transparent; }
 .count { margin-left: 6px; color: var(--muted); font-weight: 400; }
 
 /* ---- transcript ---- */
