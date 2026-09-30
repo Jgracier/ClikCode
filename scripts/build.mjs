@@ -1,7 +1,10 @@
 /**
- * ClikCode build. Produces three files in dist/:
+ * ClikCode build. Produces four files in dist/:
  *
- *   index.js               ESM entry (bin). Small pure-JS dependencies are inlined
+ *   index.js               The entry (bin): turns on Node's compile cache, then
+ *                          loads cli.js. Rewritten on every build, since its
+ *                          mtime and size are the build a worker records.
+ *   cli.js                 The program (ESM). Small pure-JS dependencies are inlined
  *                          so startup is one file read instead of a node_modules walk.
  *   harness-catalog.cjs    The pure harness catalog (no AI SDKs); cheap to load.
  *   ai-router-runtime.cjs  Catalog + streamAiChatTurn (`ai` + @ai-sdk providers);
@@ -9,17 +12,18 @@
  *
  * Flags:
  *   --analyze   Print a metafile report: top inputs by bytes, runtime externals,
- *               and any deployment-CLI sources that landed in index.js.
+ *               and any deployment-CLI sources that landed in cli.js.
  *   --no-strict Downgrade the deployment-source check to a warning. By default
  *               (and with the legacy --strict spelling) the build FAILS when a
  *               source named like the deployment CLI's (server-*, deploy*,
- *               docker*, admin-*) is in index.js — those dragged in axios,
+ *               docker*, admin-*) is in cli.js — those dragged in axios,
  *               inquirer and ora before the split and must not come back.
  *
  * Always enforced (cheap, and each one is a broken publish if it regresses):
- *   - every package index.js imports at runtime is in package.json `dependencies`
+ *   - every package cli.js imports at runtime is in package.json `dependencies`
  *   - harness-catalog.cjs contains no node_modules code at all
  * */
+import { createHash } from 'node:crypto';
 import { chmod, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { builtinModules } from 'node:module';
 import { dirname, join, relative } from 'node:path';
@@ -42,7 +46,7 @@ const strict = !process.argv.includes('--no-strict');
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 
 /**
- * Inlined into index.js. Pure JS, no native addons, no runtime file lookups
+ * Inlined into cli.js. Pure JS, no native addons, no runtime file lookups
  * relative to their own package directory. Their transitive dependencies are
  * inlined with them. Everything else imported from source stays external and
  * must therefore be listed in package.json `dependencies`.
@@ -91,13 +95,30 @@ const index = await build({
   // require() for node builtins; native ESM has no `require`, so provide one.
   banner: {
     js: [
-      '#!/usr/bin/env node',
       `import { createRequire as __clikcodeCreateRequire } from 'node:module';`,
       'const require = __clikcodeCreateRequire(import.meta.url);',
     ].join('\n'),
   },
-  outfile: 'dist/index.js',
+  outfile: 'dist/cli.js',
 });
+
+// Compiling the 2 MB program was ~30 ms of every start, and the catalog's CJS
+// another ~10: the compile cache keeps V8's code per file content, so each is
+// compiled once per build. It has to be on before cli.js is imported, hence a
+// file of its own. The digest is there so this file changes with the program.
+// It is a cache of code, not ClikCode state, so it lives in the user cache
+// directory whatever CLIKCODE_HOME says (NODE_COMPILE_CACHE, if set, wins).
+const programDigest = createHash('sha256').update(await readFile('dist/cli.js')).digest('hex').slice(0, 16);
+await writeFile('dist/index.js', `#!/usr/bin/env node
+// ClikCode (program ${programDigest}). Written by scripts/build.mjs; the program is cli.js.
+import module from 'node:module';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+try {
+  module.enableCompileCache?.(join(process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache'), 'clikcode', 'node-compile-cache'));
+} catch { /* fail-open-ok: no cache is only a slower start. */ }
+await import('./cli.js');
+`);
 
 const catalog = await build({
   ...common,
@@ -132,7 +153,7 @@ function runtimeExternals(metafile, outfile) {
   return [...names].sort();
 }
 
-const indexExternals = runtimeExternals(index.metafile, 'dist/index.js');
+const indexExternals = runtimeExternals(index.metafile, 'dist/cli.js');
 const routerExternals = runtimeExternals(router.metafile, 'dist/ai-router-runtime.cjs');
 for (const name of [...indexExternals, ...routerExternals]) {
   if (!pkg.dependencies?.[name]) failures.push(`dist imports "${name}" at runtime but package.json "dependencies" does not list it`);
@@ -174,14 +195,14 @@ function topInputs(metafile, outfile, limit) {
 }
 
 if (analyze) {
-  for (const [metafile, outfile, limit] of [[index.metafile, 'dist/index.js', 30], [catalog.metafile, 'dist/harness-catalog.cjs', 8], [router.metafile, 'dist/ai-router-runtime.cjs', 12]]) {
+  for (const [metafile, outfile, limit] of [[index.metafile, 'dist/cli.js', 30], [catalog.metafile, 'dist/harness-catalog.cjs', 8], [router.metafile, 'dist/ai-router-runtime.cjs', 12]]) {
     const total = metafile.outputs[outfile].bytes;
     console.log(`\n${outfile}  ${kb(total)}`);
     for (const [name, bytes] of topInputs(metafile, outfile, limit)) {
       console.log(`  ${kb(bytes).padStart(10)}  ${((bytes / total) * 100).toFixed(1).padStart(5)}%  ${name}`);
     }
   }
-  console.log(`\nindex.js runtime packages: ${indexExternals.join(', ') || '(none)'}`);
+  console.log(`\ncli.js runtime packages: ${indexExternals.join(', ') || '(none)'}`);
   console.log(`ai-router-runtime.cjs runtime packages: ${routerExternals.join(', ') || '(none)'}`);
   // Outside dist/ on purpose: everything in dist/ is published.
   await mkdir('node_modules/.cache/clikcode', { recursive: true });

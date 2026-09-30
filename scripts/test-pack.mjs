@@ -47,7 +47,7 @@ function fail(message) {
 // 1. File list -----------------------------------------------------------------
 const [dryRun] = parsePackJson(run(npm, ['pack', '--dry-run', '--json'], { cwd: root }));
 const files = dryRun.files.map((file) => file.path.split('\\').join('/')).sort();
-const REQUIRED = ['LICENSE', 'README.md', 'package.json', 'dist/index.js', 'dist/harness-catalog.cjs', 'dist/ai-router-runtime.cjs'];
+const REQUIRED = ['LICENSE', 'README.md', 'package.json', 'dist/index.js', 'dist/cli.js', 'dist/harness-catalog.cjs', 'dist/ai-router-runtime.cjs'];
 const allowed = (path) => path === 'LICENSE' || path === 'README.md' || path === 'package.json' || /^dist\/[^/]+$/.test(path);
 const unexpected = files.filter((path) => !allowed(path));
 const missing = REQUIRED.filter((path) => !files.includes(path));

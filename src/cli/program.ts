@@ -3,7 +3,6 @@
  * global flags, the first-run banner, crash capture and the error renderer.
  */
 
-import { createRequire } from 'node:module';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -16,19 +15,7 @@ import { isJsonDefaultMode } from './output-mode.js';
 import { bindGlobalFlags } from './flags.js';
 import { emitResult } from './structured-output.js';
 import { restoreTerminal } from '../tui/restore.js';
-
-export const CLI_VERSION: string = (() => {
-  try {
-    // ESM build (package.json "type": "module"): there is no `require` at
-    // runtime. createRequire gives us the same relative-to-this-module lookup,
-    // and it resolves identically from src/cli/ and dist/cli/ since the
-    // package.json sits two levels up in both layouts.
-    const requireFromHere = createRequire(import.meta.url);
-    return String(requireFromHere('../../package.json')?.version || '0.0.0');
-  } catch {
-    return '0.0.0';
-  }
-})();
+import { CLIKCODE_VERSION } from '../version.js';
 
 /** Rows are padded by measured cell width, not typed by hand: the lightning
  * bolt is two cells wide, and the hand-spaced version left the right border
@@ -111,7 +98,7 @@ export function buildBaseProgram(config: Conf, options: { banner?: string; versi
   program
     .name('clikcode')
     .description('The terminal harness for all your AI coding providers')
-    .version(options.version ?? CLI_VERSION)
+    .version(options.version ?? CLIKCODE_VERSION)
     .option('--json', 'Write results as JSON, one record per line (the default when output is not a terminal)')
     .option('--human', 'Write results as readable text (the default in a terminal)')
     .option(
