@@ -7,20 +7,28 @@ const compactCount = (count: number): string => (count < 1000 ? String(count)
 
 const dollars = (amount: number): string => `$${amount < 0.01 ? amount.toFixed(4) : amount.toFixed(2)}`;
 
+/** Streamed text is roughly four characters a token. Only ever shown marked
+ * as an estimate, and only until the vendor's own count covers it. */
+export function estimatedTokens(characters: number): number {
+  return Math.ceil(Math.max(0, characters) / 4);
+}
+
 /** `↑ 1.2k ↓ 340 tokens · 37k cached · 48k/200k context · $0.02`: what the
  * harness has reported so far, each part only once it is known. Empty before
- * the harness reports anything. */
-export function formatTurnUsage(usage?: TurnUsage): string {
-  if (!usage) return '';
+ * there is anything to count. `estimatedOutput` is what has streamed since
+ * the vendor last reported output tokens; while it is non-zero the output
+ * figure is marked `~`. */
+export function formatTurnUsage(usage?: TurnUsage, estimatedOutput = 0): string {
+  const output = (usage?.output ?? 0) + estimatedOutput;
   const flow = [
-    ...(usage.input ? [`↑ ${compactCount(usage.input)}`] : []),
-    ...(usage.output ? [`↓ ${compactCount(usage.output)}`] : []),
+    ...(usage?.input ? [`↑ ${compactCount(usage.input)}`] : []),
+    ...(output ? [`↓ ${estimatedOutput ? '~' : ''}${compactCount(output)}`] : []),
   ];
   const parts = [
     ...(flow.length ? [`${flow.join(' ')} tokens`] : []),
-    ...(usage.cacheRead ? [`${compactCount(usage.cacheRead)} cached`] : []),
-    ...(usage.contextUsed ? [`${compactCount(usage.contextUsed)}${usage.contextWindow ? `/${compactCount(usage.contextWindow)}` : ''} context`] : []),
-    ...(usage.costUsd ? [dollars(usage.costUsd)] : []),
+    ...(usage?.cacheRead ? [`${compactCount(usage.cacheRead)} cached`] : []),
+    ...(usage?.contextUsed ? [`${compactCount(usage.contextUsed)}${usage.contextWindow ? `/${compactCount(usage.contextWindow)}` : ''} context`] : []),
+    ...(usage?.costUsd ? [dollars(usage.costUsd)] : []),
   ];
   return parts.join(' · ');
 }

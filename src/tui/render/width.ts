@@ -38,6 +38,23 @@ export function visibleSlice(value: string, width: number): string {
   return `${rendered}${linkOpen ? HYPERLINK_CLOSE : ''}${sawAnsi ? '\u001b[0m' : ''}…`;
 }
 
+/** The END of plain text that fits `width` cells, with a leading ellipsis
+ * when anything was cut: for text whose newest part is the one worth
+ * reading, a thought still being written. SGR is not expected here. */
+export function visibleTail(value: string, width: number): string {
+  if (terminalCellWidth(value) <= width) return value;
+  const tokens = displayTokens(value);
+  let kept = '';
+  let keptWidth = 0;
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const tokenWidth = terminalCellWidth(tokens[index]!);
+    if (keptWidth + tokenWidth > Math.max(0, width - 1)) break;
+    kept = tokens[index]! + kept;
+    keptWidth += tokenWidth;
+  }
+  return `…${kept}`;
+}
+
 /** A user-perceived character is a grapheme cluster, not a code point: a
  * combining accent, a skin-tone modifier, a variation selector, and a ZWJ
  * family emoji are all several code points the terminal draws -- and the user

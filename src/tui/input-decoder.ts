@@ -8,7 +8,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 import { nextCharacterIndex } from './render/width.js';
 import { logCursorEvent } from './cursor-log.js';
-import { LEGACY_MOUSE_PREFIX } from './modes.js';
+import { LEGACY_MOUSE_PREFIX, setTerminalRawMode } from './modes.js';
 
 type WaitingInputAction = 'cancel-edit' | 'cancel-stop';
 
@@ -222,7 +222,7 @@ export function onKeyBatchEnd(listener: () => void): () => void {
 
 export function inKeyBatch(): boolean { return keyBatchDepth > 0; }
 
-export function listenForTerminalKeys(onKey: (key: string) => void): () => void {
+function listenForTerminalKeys(onKey: (key: string) => void): () => void {
   const decoder = new TerminalInputDecoder();
   let flushTimer: NodeJS.Timeout | undefined;
   const deliver = (keys: readonly string[]): void => {
@@ -274,3 +274,11 @@ export function listenForTerminalKeys(onKey: (key: string) => void): () => void 
   };
 }
 
+/** Take the keyboard: raw mode, stdin flowing, and every key to `onKey`
+ * until the returned function is called. What a picker does on opening and
+ * again each time a screen it opened hands the keyboard back. */
+export function takeTerminalKeys(onKey: (key: string) => void): () => void {
+  setTerminalRawMode(true);
+  input.resume();
+  return listenForTerminalKeys(onKey);
+}

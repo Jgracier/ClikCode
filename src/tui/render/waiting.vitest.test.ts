@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './width';
-import { liveConversationLines, liveWaitKind, rightLabeledRule, runningChatLine, waitingSpinnerFrame, waitingSpinnerGlyph } from './waiting';
+import { appendThought, formatElapsed, liveConversationLines, liveWaitKind, rightLabeledRule, runningChatLine, waitingSpinnerFrame, waitingSpinnerGlyph } from './waiting';
+import { visibleTail } from './width';
 
 describe('the waiting band', () => {
   it('packs four animation phases of a logical 4x4 grid into two Braille cells', () => {
@@ -47,5 +48,33 @@ describe('the waiting band', () => {
     const line = rightLabeledRule(12, 'an extremely long title');
     expect(terminalCellWidth(line)).toBe(12);
     expect(line.startsWith('───')).toBe(true);
+  });
+
+  it('times a call that has run for a second or more, and not one that has not', () => {
+    expect(formatElapsed(42_900)).toBe('42s');
+    expect(formatElapsed(185_000)).toBe('3m 5s');
+    expect(runningChatLine('Bash(make)', 0, 'command', 400)).not.toContain('(0s)');
+    expect(runningChatLine('Bash(make)', 0, 'command', 12_300)).toContain('(12s)');
+  });
+
+  it('accumulates reasoning fragments into one thought instead of replacing it', () => {
+    let thought = appendThought(undefined, 'Let');
+    for (const fragment of [' me', ' check', ' the', ' tests', '.']) thought = appendThought(thought, fragment);
+    expect(thought?.text).toBe('Let me check the tests.');
+    // Trimmed fragments still read as words.
+    expect(appendThought(appendThought(undefined, 'Reading'), 'files')?.text).toBe('Reading files');
+    // A transport that sends the running total replaces it, never doubles it.
+    const total = appendThought(appendThought(undefined, 'Plan: read'), 'Plan: read the config');
+    expect(total?.text).toBe('Plan: read the config');
+    // A new reasoning item starts afresh; the bare placeholder changes nothing.
+    const first = appendThought(undefined, 'first idea', 'r1');
+    expect(appendThought(first, 'second idea', 'r2')).toEqual({ id: 'r2', text: 'second idea' });
+    expect(appendThought(first, 'thinking', 'r1')).toBe(first);
+  });
+
+  it('keeps the newest words of a thought that does not fit', () => {
+    expect(visibleTail('short', 10)).toBe('short');
+    expect(visibleTail('the start of a long thought and its end', 12)).toBe('…and its end');
+    expect(terminalCellWidth(visibleTail('the start of a long thought and its end', 12))).toBeLessThanOrEqual(12);
   });
 });

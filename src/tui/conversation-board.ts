@@ -17,10 +17,10 @@
  * The decisions are `boardKey`, a pure function, so they are tested without a
  * terminal; `runConversationBoard` only wires it to one. */
 
-import { stdin as input, stdout as output } from 'node:process';
+import { stdout as output } from 'node:process';
 import type { PickerOption } from '../harness/prompter.js';
-import { listenForTerminalKeys } from './input-decoder.js';
-import { setTerminalRawMode } from './modes.js';
+import { takeTerminalKeys } from './input-decoder.js';
+import { reducedMotion } from './capabilities.js';
 import { pickerDeletesSelection } from './command-palette.js';
 import type { OptionPickerHost } from './option-picker.js';
 import { workingSpinner } from './pickers/conversation-activity.js';
@@ -164,12 +164,13 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     let frame = 0;
     /** A second screen is up (sub-agents, options): the board is not drawn. */
     let aside = false;
-    const spin = setInterval(() => {
+    // No spinner at all under reduced motion: the glyph is the same each frame.
+    const spin = reducedMotion() ? undefined : setInterval(() => {
       if (finished || aside || !rows().some((row) => row.working)) return;
       frame += 1;
       draw();
     }, SPIN_MS);
-    spin.unref();
+    spin?.unref();
     state.selected = boardStartRow(rows(), settings.initial);
     const draw = (): void => {
       const showing = rows();
@@ -191,9 +192,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       resolve(result);
     };
     const listen = (): void => {
-      setTerminalRawMode(true);
-      input.resume();
-      stopInput = listenForTerminalKeys((key) => { if (!finished) handle(key); });
+      stopInput = takeTerminalKeys((key) => { if (!finished) handle(key); });
       draw();
     };
     /** A second screen (sub-agents, options, a delete confirmation) has the
