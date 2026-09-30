@@ -102,3 +102,39 @@ export function parseJsonRecord(lineText: string): JsonRecord | undefined {
     return undefined;
   }
 }
+
+/** Complete lines out of a stream that arrives in arbitrary chunks, the way
+ * a pipe or a socket delivers it. Only the NEW chunk is searched for line
+ * ends: re-splitting everything still pending on every chunk made a long line
+ * (a multi-megabyte tool result, a whole session snapshot) cost the square
+ * of its length as it arrived. A trailing `\r` is dropped with the `\n`. */
+export class LineBuffer {
+  private pending = '';
+
+  /** The lines this chunk completed, in order. */
+  push(chunk: string): string[] {
+    let end = chunk.indexOf('\n');
+    if (end < 0) {
+      this.pending += chunk;
+      return [];
+    }
+    const lines = [withoutCarriageReturn(this.pending + chunk.slice(0, end))];
+    let start = end + 1;
+    while ((end = chunk.indexOf('\n', start)) >= 0) {
+      lines.push(withoutCarriageReturn(chunk.slice(start, end)));
+      start = end + 1;
+    }
+    this.pending = chunk.slice(start);
+    return lines;
+  }
+
+  /** What arrived after the last line end, handed over once (a final line
+   * with no newline at the end of a stream). */
+  flush(): string {
+    const rest = this.pending;
+    this.pending = '';
+    return rest;
+  }
+}
+
+const withoutCarriageReturn = (line: string): string => (line.endsWith('\r') ? line.slice(0, -1) : line);

@@ -21,7 +21,7 @@ import { closePersistentTransport, setVendorBackgroundTurnHandler } from '../tur
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
-import { decodeFrames, encodeFrame, type ClientCommand } from './protocol.js';
+import { encodeFrame, FrameDecoder, type ClientCommand } from './protocol.js';
 import { disposeSessionState, formatShellNotifications, runningShellCount, sessionState, takeShellNotifications, type ShellNotification } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -49,7 +49,7 @@ const ABANDONED_SHELL_MS = 24 * 60 * 60 * 1000;
 
 interface ConnectionState {
   socket: Socket;
-  buffer: string;
+  frames: FrameDecoder;
   attached: boolean;
 }
 
@@ -497,12 +497,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   };
 
   const server = createServer((socket) => {
-    const connection: ConnectionState = { socket, buffer: '', attached: false };
+    const connection: ConnectionState = { socket, frames: new FrameDecoder(), attached: false };
     connections.set(socket, connection);
     socket.on('data', (chunk) => {
-      const { messages, rest } = decodeFrames(connection.buffer + chunk.toString('utf8'));
-      connection.buffer = rest;
-      for (const message of messages) void handleCommand(socket, message as ClientCommand, connection);
+      for (const message of connection.frames.push(chunk)) void handleCommand(socket, message as ClientCommand, connection);
     });
     socket.on('close', () => {
       connections.delete(socket);

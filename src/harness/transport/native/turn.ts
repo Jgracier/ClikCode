@@ -6,6 +6,7 @@ import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
 import { firstUsefulLine } from '../../protocol/stderr-line.js';
+import { LineBuffer } from '../../protocol/json-lines.js';
 
 interface NativeHarnessTurnOutput {
   stdout: string;
@@ -263,8 +264,8 @@ export async function captureNativeHarnessTurn(
     let interrupted = false;
     let settled = false;
     let exited = false;
-    let stdoutPending = '';
-    let stderrPending = '';
+    const stdoutLines = new LineBuffer();
+    const stderrLines = new LineBuffer();
     const stopTimers: NodeJS.Timeout[] = [];
     let idleTimer: NodeJS.Timeout | undefined;
     let closeGraceTimer: NodeJS.Timeout | undefined;
@@ -322,11 +323,7 @@ export async function captureNativeHarnessTurn(
           else stderr = retainTail(held, tailLimit);
         }
       }
-      let pending = (target === 'stdout' ? stdoutPending : stderrPending) + chunk;
-      const lines = pending.split(/\r?\n/);
-      pending = lines.pop() ?? '';
-      if (target === 'stdout') stdoutPending = pending;
-      else stderrPending = pending;
+      const lines = (target === 'stdout' ? stdoutLines : stderrLines).push(chunk);
       if (callback) {
         for (const line of lines) {
           if (!line.trim()) continue;
@@ -393,8 +390,10 @@ export async function captureNativeHarnessTurn(
       if (settled) return;
       settled = true;
       cleanup();
-      try { if (stdoutPending.trim()) options.onStdoutLine?.(stdoutPending); } catch { /* fail-open-ok: presentation-only consumer */ }
-      try { if (stderrPending.trim()) options.onStderrLine?.(stderrPending); } catch { /* fail-open-ok: presentation-only consumer */ }
+      const stdoutTail = stdoutLines.flush();
+      const stderrTail = stderrLines.flush();
+      try { if (stdoutTail.trim()) options.onStdoutLine?.(stdoutTail); } catch { /* fail-open-ok: presentation-only consumer */ }
+      try { if (stderrTail.trim()) options.onStderrLine?.(stderrTail); } catch { /* fail-open-ok: presentation-only consumer */ }
       const exit = { ...(code !== null ? { exitCode: code } : {}), ...(signal ? { signalName: signal } : {}) };
       if (onReleasedExit) {
         try { onReleasedExit({ ...exit, timedOut }); } catch { /* fail-open-ok: the owner's bookkeeping */ }

@@ -190,15 +190,13 @@ describe('session worker (real spawned process, real socket)', () => {
     const record = await readWorkerRecord(session.id);
     expect(record).toBeDefined();
     const { connect } = await import('node:net');
-    const { encodeFrame, decodeFrames } = await import('./protocol.js');
+    const { encodeFrame, FrameDecoder } = await import('./protocol.js');
     const rogueSocket = connect(record!.socketPath);
     await new Promise<void>((resolveConnect) => rogueSocket.once('connect', () => resolveConnect()));
     const rejected = new Promise<void>((resolveRejected) => {
-      let buffer = '';
+      const frames = new FrameDecoder();
       rogueSocket.on('data', (chunk) => {
-        buffer += chunk.toString('utf8');
-        const { messages } = decodeFrames(buffer);
-        if (messages.some((m) => (m as WorkerEvent).type === 'attach-rejected')) resolveRejected();
+        if (frames.push(chunk).some((m) => (m as WorkerEvent).type === 'attach-rejected')) resolveRejected();
       });
     });
     rogueSocket.write(encodeFrame({ type: 'attach', token: 'definitely-not-the-real-token' }));
