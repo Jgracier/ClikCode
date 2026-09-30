@@ -388,7 +388,8 @@ export async function aiAccountStatus(labelOrId: string): Promise<void> {
   const nativeStatus = harness.statusArgv
     ? (await captureNativeHarnessOutput(harness, harness.statusArgv, environment)).trim()
     : await authEvidencePresent(harness, environment) ? 'signed in' : 'not signed in';
-  const usage = await accountUsageLabel(account, state);
+  // An explicit check of one account: ask the harness now.
+  const usage = await accountUsageLabel(account, state, { network: true });
   emitResult({ account: { ...accountView(account), usage }, nativeStatus, credentialBoundary: 'local-only' });
 }
 

@@ -74,6 +74,12 @@ export async function nativeUsageReading(
     nativeUsageCache.set(cacheKey, reusable);
     return { windows: reusable.windows ?? [], ...(reusable.label === undefined ? {} : { label: reusable.label }) };
   }
+  // Only an explicit ask runs the probe. For Claude Code it is a real turn
+  // (usage-probes.ts), and a passive paint -- opening a chat, the status
+  // line's timer, the editor's footer -- used to run one whenever no current
+  // reading existed: on every start with a fresh home, and again each minute
+  // while it failed. A paint shows what the last real turn reported, or none.
+  if (!options.network) return undefined;
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const structured = session.nativeHarness ? NATIVE_USAGE_READING_PROBES[session.nativeHarness] : undefined;
   const reading: UsageReading | undefined = !probe
