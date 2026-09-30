@@ -649,6 +649,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
+  /** A turn this window joined mid-way: count from when it really started,
+   * and say what it is running, instead of "thinking (0s)". */
+  joinedWaiting(startedAt?: number, activity?: string): void {
+    if (!this.waitingLabel) return;
+    if (startedAt !== undefined && startedAt < this.waitingStartedAt) this.waitingStartedAt = startedAt;
+    if (activity) this.waitingLabel = activity;
+    this.updateWaiting();
+  }
+
   startWaiting(
     message: string,
     onCancel?: (restoreDraft: boolean) => void,

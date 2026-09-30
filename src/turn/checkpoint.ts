@@ -131,6 +131,29 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   return messages;
 }
 
+/** The conversation as it stands BEFORE the turn a window is about to follow.
+ *
+ * sessionTranscriptMessages folds an in-flight journal in as if it had ended
+ * -- its prompt, then "Interrupted turn activity: …" -- which is right for a
+ * turn nothing is running. For the turn being followed it drew that turn
+ * twice: once folded in, once live beneath it, on every switch into a
+ * conversation mid-turn. `runningPrompt` is the followed turn's prompt; a
+ * journal for any other prompt is an older interrupted turn and stays. */
+export function settledTranscriptMessages(session: HarnessSession, runningPrompt?: string): Message[] {
+  const pending = session.pendingTurn;
+  const followed = pending && (runningPrompt === undefined || pending.prompt.trim() === runningPrompt.trim());
+  return sessionTranscriptMessages(followed ? { ...session, pendingTurn: undefined } : session);
+}
+
+/** What the followed turn is doing right now, from its journal: the call it
+ * started last, while nothing has completed it. A window that joins a turn
+ * mid-way sees only what happens after it joined, so a twenty-minute command
+ * already running showed as a bare "thinking" -- which reads as stuck. */
+export function runningActivityLabel(pending: HarnessSession['pendingTurn']): string | undefined {
+  const last = pending?.activities?.at(-1);
+  return last?.startsWith('started ') ? `running ${last.slice('started '.length)}` : undefined;
+}
+
 /** Starting another turn commits an older interrupted checkpoint first. */
 export function beginPendingTurn(session: HarnessSession, prompt: string, now: string): void {
   if (session.pendingTurn) session.messages = sessionTranscriptMessages(session);
