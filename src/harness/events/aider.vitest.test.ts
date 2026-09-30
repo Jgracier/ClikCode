@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aiderHistoryNotice, aiderHistoryReply, aiderLine, aiderStdoutReply } from './aider';
+import { aiderFooterUsage, aiderHistoryNotice, aiderHistoryReply, aiderLine, aiderStdoutReply } from './aider';
 import { createStreamState } from './adapters';
 
 // Real Aider 0.86.2 output for `--message "Reply with only the word ok"`.
@@ -67,5 +67,21 @@ describe('a failed Aider turn', () => {
   it('has no notice to report when the turn answered', () => {
     expect(aiderHistoryNotice('#### hi  \nHello there.')).toBeUndefined();
   });
-});
 
+  it('reads the footer as the turn usage, summing a second model call', () => {
+    const state = createStreamState();
+    const usages = STDOUT.split('\n').map((line) => aiderLine(line, state).usage).filter(Boolean);
+    expect(usages.at(-1)).toMatchObject({ input: 2600, output: 4, costUsd: 0.0026 });
+    const next = aiderLine('Tokens: 1k sent, 9 received. Cost: $0.001 message, $0.0036 session.', state).usage;
+    expect(next).toMatchObject({ input: 3600, output: 13, costUsd: 0.0036 });
+  });
+
+  it('reads cache counts, and a cost printed on its own line', () => {
+    // base_coder.py puts the cost on the next line when both cache counts appear.
+    expect(aiderFooterUsage('Tokens: 12k sent, 3.1k cache write, 8.1k cache hit, 45 received.'))
+      .toEqual({ input: 12000, output: 45, cacheWrite: 3100, cacheRead: 8100 });
+    const state = createStreamState();
+    aiderLine('Tokens: 12k sent, 3.1k cache write, 8.1k cache hit, 45 received.', state);
+    expect(aiderLine('Cost: $0.05 message, $0.12 session.', state).usage).toMatchObject({ input: 12000, costUsd: 0.05 });
+  });
+});
