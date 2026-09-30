@@ -129,7 +129,7 @@ export function screensSuite(): void {
       const [folder] = vscode.workspace.workspaceFolders ?? [];
       await vscode.window.showTextDocument(vscode.Uri.joinPath(folder!.uri, 'math.ts'));
       await vscode.commands.executeCommand('clikcode.showHistory');
-      await click(api, '#history-button');
+      await click(api, '#back-button');
       await dragSidebarTo(1440 - 300);
       await waitFor(api, '#composer-input', 'the chat');
       await screenshot('narrow');
@@ -137,6 +137,9 @@ export function screensSuite(): void {
       await waitFor(api, '#provider-picker', 'the menu');
       await screenshot('narrow-picker');
       await api.probe('key', '#provider-picker input', 'Escape');
+      // And a wide one: what a side bar dragged out to 600px shows.
+      await dragSidebarTo(1440 - 600);
+      await screenshot('wide');
       await dragSidebarTo(Number(process.env.CLIKCODE_IT_SIDEBAR_X ?? 960));
     });
 

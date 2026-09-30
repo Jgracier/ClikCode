@@ -4,7 +4,7 @@ import type { JSX } from 'preact';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { Activity, Approval, ChatModel, Note, TurnTrace } from '../model';
 import { post } from './bus';
-import { duration, pathIn } from './format';
+import { duration, pathIn, titleCase } from './format';
 import { renderMarkdown } from './markdown';
 import { Icon } from './ui';
 
@@ -165,7 +165,7 @@ function LiveTurn({ model }: { model: ChatModel }): JSX.Element {
       {live?.text ? <Markdown text={live.text} /> : null}
       <div class="working" role="status">
         <span class="pulse" aria-hidden="true" />
-        <span class="working-label">{label.replace(/…$/, '')}…</span>
+        <span class="working-label">{titleCase(label.replace(/(…|\.\.\.)$/, ''))}…</span>
         <span class="muted">{live ? duration(now - live.startedAt) : ''}{model.ownTurn === false || (!model.ownTurn && model.running) ? ' · running in another window' : ''}</span>
         <span class="muted working-hint">Esc to stop</span>
       </div>

@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { IdeChoice, IdeModels, IdeProvider } from '../protocol';
 import { request } from './bus';
-import { titleCase } from './format';
+import { modelLabel, titleCase } from './format';
 import { Icon, KeyList, Popover, Switch, type ListRow } from './ui';
 
 /** Model lists, kept for the panel's life: a second look is instant. */
@@ -30,10 +30,12 @@ function providerBadge(provider: IdeProvider): JSX.Element | null {
   return null;
 }
 
-function providerIcon(provider: IdeProvider): string {
+/** Only what sets a provider apart gets an icon; an installed harness, the
+ * common case, has none. */
+function providerIcon(provider: IdeProvider): string | undefined {
   if (provider.kind === 'gateway') return 'cloud';
   if (provider.kind === 'clikcode-local') return 'vm';
-  return provider.installed ? 'terminal' : 'cloud-download';
+  return provider.installed ? undefined : 'cloud-download';
 }
 
 /** Whether the provider has a model list to choose from; unknown counts as yes. */
@@ -98,7 +100,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
         render: () => (
           <div class="row" title={item.unavailable}>
             <span class="row-check">{item.current || (drill === current && item.id === props.model.model) ? <Icon name="check" /> : null}</span>
-            <span class="row-main"><span class="row-label">{item.label}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
+            <span class="row-main"><span class="row-label">{modelLabel(item.label, drill, provider?.name)}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
           </div>
         ),
       }));
@@ -128,7 +130,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
           onSelect: () => apply(item.id),
           render: () => (
             <div class="row" title={item.integration ? `${item.name} · ${item.integration}${item.version ? ` · ${item.version}` : ''}` : item.name}>
-              <span class="row-check">{item.current ? <Icon name="check" /> : <Icon name={providerIcon(item)} />}</span>
+              <span class="row-check">{item.current ? <Icon name="check" /> : providerIcon(item) ? <Icon name={providerIcon(item)!} /> : null}</span>
               <span class="row-main"><span class="row-label">{item.name}</span>{providerBadge(item)}</span>
             </div>
           ),
@@ -156,7 +158,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       <KeyList id="picker-list" rows={rows} label={drill ? 'Models' : 'Providers'} inputRef={input} onEscape={props.onClose}
         emptyText={drill ? (loading ? 'Finding models…' : 'No models match.') : providers ? 'No providers match.' : undefined} />
       <div class="picker-foot muted">
-        {drill ? <><kbd>Enter</kbd> choose · the Provider button changes the provider</> : <><kbd>Enter</kbd> switch · then pick its model with the Model button</>}
+        <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>Enter</kbd> select</span><span><kbd>Esc</kbd> close</span>
       </div>
     </Popover>
   );
@@ -191,15 +193,20 @@ export function ModeMenu(props: { model: ChatModel; onClose: () => void; onError
       <div class="menu-title">Permissions</div>
       <KeyList rows={rows} label="Permissions" onEscape={props.onClose} />
       {settings?.plan !== undefined ? (
-        <label class="menu-switch"><span><Icon name="list-tree" /> Plan mode <span class="muted">read-only: plan, change nothing</span></span>
+        <label class="menu-switch"><span><Icon name="list-tree" /> Plan mode <span class="muted">Read-only: plan, change nothing</span></span>
           <Switch checked={settings.plan} label="Plan mode" onChange={(on) => set({ kind: 'plan', on })} /></label>
       ) : null}
       {settings?.fast !== undefined ? (
-        <label class="menu-switch"><span><Icon name="zap" /> Fast <span class="muted">fastest provider, not cheapest</span></span>
+        <label class="menu-switch"><span><Icon name="zap" /> Fast <span class="muted">Fastest provider, not cheapest</span></span>
           <Switch checked={settings.fast} label="Fast" onChange={(on) => set({ kind: 'fast', on })} /></label>
       ) : null}
     </Popover>
   );
+}
+
+/** An effort as the menu names it: the level, or Default when the model decides. */
+export function effortLabel(value: string | undefined): string {
+  return !value || value === 'default' ? 'Default' : titleCase(value);
 }
 
 export function EffortMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
@@ -212,7 +219,7 @@ export function EffortMenu(props: { model: ChatModel; onClose: () => void; onErr
     render: () => (
       <div class="row">
         <span class="row-check">{value === current ? <Icon name="check" /> : null}</span>
-        <span class="row-main"><span class="row-label">{value === 'default' ? 'Default' : titleCase(value)}</span>{value === 'default' ? <span class="row-detail">the model decides</span> : null}</span>
+        <span class="row-main"><span class="row-label">{effortLabel(value)}</span>{value === 'default' ? <span class="row-detail">The model decides</span> : null}</span>
       </div>
     ),
   }));
