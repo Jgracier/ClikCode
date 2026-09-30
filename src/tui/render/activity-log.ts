@@ -2,28 +2,28 @@
  * events arrive and rebased when the transcript above it grows. */
 
 import chalk from 'chalk';
-import { stdout as output } from 'node:process';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../harness/prompter.js';
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
+import { isAgentToolName } from '../../harness/protocol/tools.js';
 
-/** Keep the persisted history window stable while transient assistant and
- * queued rows are appended. Applying the history cap to the combined array
- * drops its first persisted row, breaks the native-scrollback prefix, and
- * causes every live frame to be rejected until the final commit. */
 /** One rendered activity row and where it belongs: the message index it was
  * reported under, and -- for a row produced inside a turn -- the response
- * offset it started at, which is where it is written back into the prose. */
-export type ActivityEntry =
-  { anchor: number; responseOffset?: number; sequence?: number; event?: HarnessActivityEvent; lines: string[] };
+ * offset it started at, which is where it is written back into the prose.
+ * `startedAt` is when the call was first seen, for its running timer. */
+export type ActivityEntry = {
+  anchor: number; responseOffset?: number; sequence?: number; startedAt?: number;
+  event?: HarnessActivityEvent; lines: string[];
+};
 
 /** One provider may publish pending/running/progress frames for the same tool.
  * They describe one lifecycle, not separate calls. Upsert by native id, or by
  * the latest still-open matching label when a protocol omits ids. */
 export function upsertActivityEvent(
   entries: readonly ActivityEntry[], anchor: number, responseOffset: number | undefined, event: HarnessActivityEvent, sequence?: number,
+  now = Date.now(),
 ): ActivityEntry[] {
   // A thought is never a transcript row: reasoning summaries arrive dozens per
   // turn and would bury the answer. The prompter shows the latest one on a
@@ -64,7 +64,7 @@ export function upsertActivityEvent(
   } else {
     next.push({
       anchor, ...(responseOffset === undefined ? {} : { responseOffset }), ...(sequence === undefined ? {} : { sequence }),
-      event: normalized, lines: renderActivityLine(normalized).map((line) => line.trim()),
+      startedAt: now, event: normalized, lines: renderActivityLine(normalized).map((line) => line.trim()),
     });
   }
   // Do not evict old entries here. Some may already be immutable native
@@ -90,27 +90,46 @@ export function rebaseActivityOffsets(
     : entry);
 }
 
-/** Derive the spinner from the whole in-flight tool set rather than the most
+type OpenTool = { label: string; category?: ToolCategory; agent?: boolean };
+
+/** What the status line says while a call runs: the category's verb, and
+ * what it is working on when the label names it -- `Read(src/app.ts)` is
+ * "reading app.ts", `Bash(npm test)` is "running tests", a codex command
+ * label `git status` is "running git". A label that names nothing gets the
+ * bare verb rather than a guess. */
+export function toolStatusVerb(tool: OpenTool): string {
+  const name = tool.label.split('(')[0]!.trim();
+  if (tool.agent || (tool.category !== 'run' && isAgentToolName(tool.label))) return 'waiting on agent';
+  const argument = /^[^(]*\((.*)\)$/s.exec(tool.label)?.[1]?.trim();
+  const subject = (value: string, width = 32): string => visibleSlice(value, width);
+  switch (tool.category) {
+    case 'run': {
+      const command = argument ?? tool.label;
+      if (/(?:^|[\s/])(?:test|tests|vitest|jest|pytest|mocha|rspec|phpunit)\b|\btest:/.test(command)) return 'running tests';
+      const program = command.split(/\s+/).find((word) => word && !/^\w+=/.test(word) && word !== 'sudo');
+      return program ? `running ${subject(program.split('/').pop() || program, 24)}` : 'running';
+    }
+    case 'read':
+    case 'edit': {
+      const verb = TOOL_CATEGORY_STYLE[tool.category].verb;
+      const path = argument?.split(/[\s,]+/)[0];
+      const file = path?.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+      return file ? `${verb} ${subject(file)}` : verb;
+    }
+    case 'search':
+    case 'fetch':
+      return TOOL_CATEGORY_STYLE[tool.category].verb;
+    default:
+      return name ? `running ${subject(name, 24)}` : 'running';
+  }
+}
+
+/** Derive the status from the whole in-flight tool set rather than the most
  * recent provider event. A reasoning summary or one parallel completion must
  * not claim the agent is merely thinking while another tool is still live. */
-/** One place decides how a category looks and reads, for the retired row, the
- * running row and the spinner alike. The glyph stays the same for every
- * category on purpose: the shape is the transcript's, the colour is the
- * tool's. Nothing is spelled out in front of a label -- the label already
- * says `Read src/x` or `$ npm test`, so colour is an aid here, not the only
- * carrier, and a NO_COLOR terminal loses nothing it needs. */
-/** How each kind of work reads: its colour, the verb used while it runs, and
- * the glyph that marks its settled row.
- *
- * The glyphs are all single-width and drawn from the same geometric block, so
- * a column of them lines up and none of them is an emoji -- a terminal that
- * renders one at double width breaks every row beneath it, and a phone is
- * exactly where that happens. Colour alone carried the type before, which is
- * nothing at all on a NO_COLOR or piped transcript. */
-
 export function activityLifecyclePhase(
-  activeTools: ReadonlyMap<string, { label: string; category?: ToolCategory; agent?: boolean }>, event: HarnessActivityEvent,
-): { activeTools: Map<string, { label: string; category?: ToolCategory; agent?: boolean }>; phase: string; category?: ToolCategory } {
+  activeTools: ReadonlyMap<string, OpenTool>, event: HarnessActivityEvent,
+): { activeTools: Map<string, OpenTool>; phase: string; category?: ToolCategory } {
   const next = new Map(activeTools);
   const key = event.id ?? event.label;
   if (event.kind === 'tool-start') next.set(key, {
@@ -127,12 +146,9 @@ export function activityLifecyclePhase(
   const running = [...next.values()];
   const current = running[running.length - 1];
   if (!current) return { activeTools: next, phase: 'thinking' };
-  // The verb names the open call. The status line does not use it: that line
-  // stays the turn ("thinking" / "generating response"). The call itself is
-  // one row in the transcript.
-  const verb = current.category ? TOOL_CATEGORY_STYLE[current.category].verb : 'running';
+  // The newest open call is what the status line names.
   return {
-    activeTools: next, phase: verb,
+    activeTools: next, phase: toolStatusVerb(current),
     ...(current.category ? { category: current.category } : {}),
   };
 }

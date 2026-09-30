@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './activity-log';
+import { activityLifecyclePhase, rebaseActivityOffsets, toolStatusVerb, transientAssistantRequired, upsertActivityEvent } from './activity-log';
 
 describe('the activity log', () => {
   it('updates repeated tool progress in place and ignores reasoning as chat activity', () => {
@@ -22,20 +22,37 @@ describe('the activity log', () => {
     expect(completed[0]).toMatchObject({ responseOffset: 4, event: { kind: 'tool-done', label: 'files updated' } });
   });
 
-  it('keeps the spinner on a remaining parallel tool until all tools finish', () => {
-    // The verb names the open call. The status line does not show it.
+  it('keeps the status on a remaining parallel tool until all tools finish', () => {
+    // The status line names the newest open call.
     let state = activityLifecyclePhase(new Map(), { kind: 'tool-start', id: 'one', label: 'read files', category: 'read' });
-    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-start', id: 'two', label: 'run tests', category: 'run' });
-    expect(state.phase).toBe('running');
+    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-start', id: 'two', label: 'Bash(npm test)', category: 'run' });
+    expect(state.phase).toBe('running tests');
     expect(state.category).toBe('run');
     state = activityLifecyclePhase(state.activeTools, { kind: 'thinking', label: 'reviewed output' });
-    expect(state.phase).toBe('running');
-    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-done', id: 'two', label: 'run tests', category: 'run' });
-    // Falls back to the one still running, which is a read.
+    expect(state.phase).toBe('running tests');
+    state = activityLifecyclePhase(state.activeTools, { kind: 'tool-done', id: 'two', label: 'Bash(npm test)', category: 'run' });
+    // Falls back to the one still running, which is a read naming no file.
     expect(state.phase).toBe('reading');
     expect(state.category).toBe('read');
     state = activityLifecyclePhase(state.activeTools, { kind: 'tool-error', id: 'one', label: 'read files' });
     expect(state.phase).toBe('thinking');
+  });
+
+  it('says what the open call is working on, from its label alone', () => {
+    expect(toolStatusVerb({ label: 'Read(src/tui/app.ts)', category: 'read' })).toBe('reading app.ts');
+    expect(toolStatusVerb({ label: 'Edit(/repo/src/prompter.ts)', category: 'edit' })).toBe('editing prompter.ts');
+    expect(toolStatusVerb({ label: 'Bash(pnpm vitest run src)', category: 'run' })).toBe('running tests');
+    expect(toolStatusVerb({ label: 'git status --short', category: 'run' })).toBe('running git');
+    expect(toolStatusVerb({ label: 'Bash(CI=1 /usr/bin/make build)', category: 'run' })).toBe('running make');
+    expect(toolStatusVerb({ label: 'Grep(TODO)', category: 'search' })).toBe('searching');
+    expect(toolStatusVerb({ label: 'Task(review the diff)' })).toBe('waiting on agent');
+    expect(toolStatusVerb({ label: 'mcp__linear__list_issues' })).toBe('running mcp__linear__list_issues');
+  });
+
+  it('records when a call started and keeps it through its later frames', () => {
+    const started = upsertActivityEvent([], 0, 0, { kind: 'tool-start', id: 'a', label: 'Bash(ls)', category: 'run' }, 1, 1_000);
+    const done = upsertActivityEvent(started, 0, 5, { kind: 'tool-done', id: 'a', label: 'Bash(ls)' }, 2, 9_000);
+    expect(done[0]!.startedAt).toBe(1_000);
   });
 
   it('retains source activity beyond the visual summary limit', () => {

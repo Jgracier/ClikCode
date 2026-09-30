@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTurnUsage } from './usage-line';
+import { estimatedTokens, formatTurnUsage } from './usage-line';
 
 describe('the turn usage line', () => {
   it('is empty until the harness reports something', () => {
@@ -13,5 +13,11 @@ describe('the turn usage line', () => {
       .toBe('↑ 18 ↓ 164 tokens · 37k cached · 23k/200k context · $0.02');
     expect(formatTurnUsage({ contextUsed: 12_000 })).toBe('12k context');
     expect(formatTurnUsage({ input: 1_200, output: 30, costUsd: 0.0042 })).toBe('↑ 1.2k ↓ 30 tokens · $0.0042');
+  });
+
+  it('estimates output tokens from the stream until the vendor counts them', () => {
+    expect(estimatedTokens(401)).toBe(101);
+    expect(formatTurnUsage(undefined, 340)).toBe('↓ ~340 tokens');
+    expect(formatTurnUsage({ input: 1200, output: 300 }, 40)).toBe('↑ 1.2k ↓ ~340 tokens');
   });
 });

@@ -49,15 +49,51 @@ export function rightLabeledRule(width: number, label?: string): string {
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
 }
 
+/** `42s`, then `3m 5s`: the waiting band's clock and a running call's. */
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 /** One open call, drawn under the answer that is still streaming. A command
  * or a sub-agent says so; any other tool is just its own label. The row is
- * repainted, not appended, and the status line is a different place. */
-export function runningChatLine(label: string, frame: number, kind: 'command' | 'agent' | 'tool'): string {
+ * repainted, not appended, and the status line is a different place. A call
+ * running for a second or more shows for how long, the way a native CLI
+ * times its own shell commands. */
+export function runningChatLine(label: string, frame: number, kind: 'command' | 'agent' | 'tool', elapsedMs = 0): string {
   const spinner = kind === 'command' ? chalk.yellow(waitingSpinnerGlyph(frame))
     : kind === 'agent' ? chalk.cyan(waitingSpinnerGlyph(frame))
       : chalk.dim(waitingSpinnerGlyph(frame));
   const verb = kind === 'command' ? 'running ' : kind === 'agent' ? 'agent ' : '';
-  return `  ${spinner}  ${verb}${label}`;
+  const timer = elapsedMs >= 1000 ? chalk.dim(` (${formatElapsed(elapsedMs)})`) : '';
+  return `  ${spinner}  ${verb}${label}${timer}`;
+}
+
+/** The reasoning shown on its one live row. */
+export type Thought = { id?: string; text: string };
+
+/** Longest thought kept: the row shows its tail, and nothing reads further. */
+const THOUGHT_LIMIT = 2000;
+
+/** A reasoning event added to the thought on screen.
+ *
+ * Transports differ: some send each reasoning item whole, some its running
+ * total, some every 1-3 token fragment. Replacing the row with each event
+ * made the last kind a flicker of single words. So within one reasoning item
+ * (same id, or no ids at all) text that extends the thought -- or repeats
+ * it -- replaces it, and anything else is appended; a new item id starts
+ * afresh. Fragments arrive trimmed by some transports, so one without its own
+ * spacing is joined with a space -- a word split mid-way reads better than
+ * words run together. */
+export function appendThought(prior: Thought | undefined, label: string, id?: string): Thought | undefined {
+  const fragment = label.replace(/\s+/g, ' ');
+  const trimmed = fragment.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'thinking') return prior;
+  const withId = (text: string): Thought => ({ ...(id === undefined ? {} : { id }), text: text.length > THOUGHT_LIMIT ? text.slice(-THOUGHT_LIMIT) : text });
+  if (!prior || prior.id !== id) return withId(trimmed);
+  if (trimmed.startsWith(prior.text)) return withId(trimmed);
+  const joined = /^[\s.,;:!?)\]'"]/.test(fragment) || /\s$/.test(prior.text) ? `${prior.text}${fragment}` : `${prior.text} ${fragment}`;
+  return withId(joined.replace(/\s+/g, ' ').trim());
 }
 
 /** A live response must end on content, not its decorative separator. On a

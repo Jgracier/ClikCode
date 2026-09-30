@@ -83,7 +83,7 @@ SCENARIOS = {
         'turns': [{'blocks': ['The final commit is live.']}],
         'steps': [
             ('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30),
-            ('settle', 2), ('damage_and_redraw', 'The final commit is live.'),
+            ('settle', 2), ('quiet', 2), ('damage_and_redraw', 'The final commit is live.'),
         ],
         'watch': [], 'final_contains': ['The final commit is live.'],
     },
@@ -218,6 +218,12 @@ def run(name, spec, entry, keep):
             mouse_reset = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'
             resets = raw[before:].count(mouse_reset)
             if resets != 1: problems.append(f'resize burst sent {resets} mouse resets, expected one')
+        elif step[0] == 'quiet':
+            # Nothing on screen changes, so nothing may be written: a frame
+            # that changes nothing used to toggle the cursor regardless.
+            before = len(raw)
+            pump(step[1])
+            if len(raw) != before: problems.append(f'wrote {len(raw) - before} bytes while nothing changed: {bytes(raw[before:before + 80])!r}')
         elif step[0] == 'resize':
             fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', step[1], step[2], 0, 0))
             screen.resize(lines=step[1], columns=step[2])

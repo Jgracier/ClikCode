@@ -12,11 +12,9 @@
  * cannot be verified by a test.
  */
 
-import { stdin as input } from 'node:process';
 import chalk from 'chalk';
 import type { PickerOption } from '../harness/prompter.js';
-import { listenForTerminalKeys } from './input-decoder.js';
-import { setTerminalRawMode } from './modes.js';
+import { takeTerminalKeys } from './input-decoder.js';
 import { pickerConfirmsSelection, pickerDeletesSelection } from './command-palette.js';
 
 /** What the picker needs from the frame that owns the screen. */
@@ -121,6 +119,12 @@ export function runOptionPicker<T>(
       host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, headings: true, hint });
     };
     let finished = false;
+    /** The keyboard, taken on opening and again whenever a screen this one
+     * opened hands it back. */
+    const listen = (): void => {
+      stopInput = takeTerminalKeys((key) => { if (!finished) handleKey(key); });
+      draw();
+    };
     const finish = (value: T | undefined, exit: typeof lastPickerExit = 'choose'): void => {
       if (finished) return;
       finished = true;
@@ -158,10 +162,7 @@ export function runOptionPicker<T>(
         return;
       }
       if (finished) return;
-      setTerminalRawMode(true);
-      input.resume();
-      stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
-      draw();
+      listen();
     };
     const openAlternates = async (option: PickerOption<T>): Promise<void> => {
       if (!option.alternates?.length) return;
@@ -169,10 +170,7 @@ export function runOptionPicker<T>(
       const value = await host.select(option.label, option.alternates);
       if (value !== undefined) return finish(value);
       if (finished) return;
-      setTerminalRawMode(true);
-      input.resume();
-      stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
-      draw();
+      listen();
     };
     const openInner = async (option: PickerOption<T>): Promise<void> => {
       if (!option.inner?.options.length) return;
@@ -180,10 +178,7 @@ export function runOptionPicker<T>(
       const value = await host.select(option.inner.title, option.inner.options);
       if (value !== undefined) return finish(value);
       if (finished) return;
-      setTerminalRawMode(true);
-      input.resume();
-      stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
-      draw();
+      listen();
     };
     const confirmDelete = async (option: PickerOption<T>): Promise<void> => {
       const action = option.deleteAction;
@@ -199,10 +194,7 @@ export function runOptionPicker<T>(
         return;
       }
       if (finished) return;
-      setTerminalRawMode(true);
-      input.resume();
-      stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
-      draw();
+      listen();
     };
     /** An inline row's choice is shown at once and applied when the cursor
      * leaves the row or the picker closes -- not on every step, which turned
@@ -274,10 +266,7 @@ export function runOptionPicker<T>(
       else return;
       draw();
     };
-    setTerminalRawMode(true);
-    input.resume();
-    stopInput = listenForTerminalKeys((key) => { if (!finished) handleKey(key); });
-    draw();
+    listen();
     // Rows can land in stages (known ones, then fresh ones): redraw at each.
     for (const refresh of [settings?.refresh ?? []].flat()) void refresh.then(() => { if (!finished) draw(); }, () => { if (!finished) draw(); });
   });
