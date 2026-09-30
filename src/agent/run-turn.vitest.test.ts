@@ -141,6 +141,22 @@ describe('runGatewayHarnessTurn', () => {
     expect(h.events.filter((event) => event.kind === 'tool-error').map((event) => event.id)).toEqual(['bad', 'nope']);
   });
 
+  it('gives calls that share an id distinct ids, so every result reaches its own call', async () => {
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'A\n');
+    await fs.writeFile(path.join(cwd, 'b.txt'), 'B\n');
+    const h = harness([
+      { toolCalls: [{ id: 'dup', name: 'read_file', args: { path: 'a.txt' } }, { id: 'dup', name: 'read_file', args: { path: 'b.txt' } }] },
+      { text: 'ok' },
+    ]);
+    await runGatewayHarnessTurn(h.input);
+    const items = h.client.requests[1].items;
+    const calls = items.filter((item) => item.type === 'tool_call').map((item) => item.type === 'tool_call' && item.id);
+    const results = items.filter((item) => item.type === 'tool_result');
+    expect(new Set(calls).size).toBe(2);
+    expect(results.map((item) => item.type === 'tool_result' && item.id)).toEqual(calls);
+    expect(results.map((item) => item.type === 'tool_result' && item.output.includes('B'))).toEqual([false, true]);
+  });
+
   it('stops at maxSteps', async () => {
     const h = harness([], { maxSteps: 3 }, (_request, index) => ({ toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `loop${index}` }] }));
     const result = await runGatewayHarnessTurn(h.input);
@@ -155,7 +171,10 @@ describe('runGatewayHarnessTurn', () => {
     const result = await runGatewayHarnessTurn(h.input);
     expect(result).toMatchObject({ steps: 4, stopReason: 'no-progress', isError: true, text: 'I cannot find missing.txt.' });
     const last = h.client.requests[3];
-    expect(last.tools).toEqual([]);
+    // The tools stay declared -- the history holds tool calls, which Anthropic
+    // refuses without them -- and the model is told not to call one.
+    expect(last.tools.length).toBeGreaterThan(0);
+    expect(last.toolChoice).toBe('none');
     const notice = last.items[last.items.length - 1];
     expect(notice.type === 'text' && notice.text).toMatch(/failed 3 times with identical arguments/);
     // The tool call the model tried to sneak into the final reply never ran.
@@ -340,6 +359,21 @@ describe('runGatewayHarnessTurn', () => {
     await runGatewayHarnessTurn(h.input);
     expect(prompts).toHaveLength(1);
     expect(await fs.readFile(path.join(cwd, 'second.txt'), 'utf8')).toBe('2\n');
+  });
+
+  it('applies an "always" answer to the rest of the turn, the same step included', async () => {
+    const prompts: string[] = [];
+    const h = harness([
+      { toolCalls: [{ id: 'a', name: 'bash', args: { command: 'true 1' } }, { id: 'b', name: 'bash', args: { command: 'true 1 again' } }] },
+      { toolCalls: [{ id: 'c', name: 'bash', args: { command: 'true 1 later' } }] },
+      { text: 'done' },
+    ], {
+      permissionMode: 'ask',
+      onApproval: async (title, _detail, rule) => { prompts.push(`${title} ${rule}`); return 'always'; },
+    });
+    await runGatewayHarnessTurn(h.input);
+    expect(prompts).toEqual(['Approve command Bash(true 1:*)']);
+    expect(h.events.filter((event) => event.kind === 'tool-done')).toHaveLength(3);
   });
 
   it('keeps the mode the turn started with when the current mode cannot be read', async () => {

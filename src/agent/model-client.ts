@@ -6,6 +6,7 @@ import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { ToolDefinition, ToolRunResult } from './tool-contract.js';
 import type { ContextHints, ContextProfileName } from './context-profile.js';
+import type { PermissionRules } from './permissions.js';
 
 export interface TokenUsage {
   input?: number;
@@ -45,6 +46,10 @@ export interface ModelStepRequest {
   system: string;
   items: readonly ConversationItem[];
   tools: readonly ToolSpec[];
+  /** `none`: the tools stay declared (a history holding tool calls needs
+   * them -- Anthropic rejects the request otherwise) but the model may not
+   * call one this step. */
+  toolChoice?: 'none';
   signal?: AbortSignal;
   onTextDelta(text: string): void;
   onReasoningDelta?(text: string): void;
@@ -147,6 +152,10 @@ export interface GatewayHarnessTurnInput {
   /** MCP / skills plug in here later. */
   extraTools?: readonly ToolDefinition[];
   hooks?: HarnessHooks;
+  /** The turn's allow rules, shared by reference with its sub-agents so an
+   * "always" given anywhere applies to the rest of the turn. Read from the
+   * workspace's settings when absent. */
+  permissionRules?: { current: PermissionRules };
   /** Replaces the built-in tool set (tests, restricted embeddings). */
   tools?: readonly ToolDefinition[];
   /** Network seams for web_fetch; tests inject fakes. */

@@ -114,6 +114,24 @@ describe('OpenAIModelClient', () => {
     expect(received[0].body.tools).toEqual([{ type: 'function', function: { name: 'write_file', description: 'Write', parameters: tools[0].parameters } }]);
   });
 
+  it('does not concatenate a name the server repeats in every fragment', async () => {
+    reply = { chunks: [
+      delta({ tool_calls: [{ index: 0, id: 'c', function: { name: 'read_file', arguments: '{"pa' } }] }),
+      delta({ tool_calls: [{ index: 0, function: { name: 'read_file', arguments: 'th":"a"}' } }] }),
+      delta({}, 'tool_calls'), 'data: [DONE]\n\n',
+    ] };
+    const result = await new OpenAIModelClient({ baseUrl, model: 'm' }).step(request());
+    expect(result.toolCalls).toEqual([{ id: 'c', name: 'read_file', args: { path: 'a' } }]);
+  });
+
+  it('keeps the tools declared and sends tool_choice none when calls are not allowed', async () => {
+    reply = { chunks: [delta({ content: 'ok' }, 'stop'), 'data: [DONE]\n\n'] };
+    const tools = [{ name: 'read_file', description: 'Read', parameters: { type: 'object', properties: {} } }];
+    await new OpenAIModelClient({ baseUrl, model: 'm' }).step(request(undefined, { tools, toolChoice: 'none' }));
+    expect(received[0].body.tools).toHaveLength(1);
+    expect(received[0].body.tool_choice).toBe('none');
+  });
+
   it('marks a call whose arguments are not JSON instead of guessing', async () => {
     reply = { chunks: [delta({ tool_calls: [{ index: 0, id: 'c', function: { name: 'bash', arguments: '{"command": "ls' } }] }, 'tool_calls'), 'data: [DONE]\n\n'] };
     const result = await new OpenAIModelClient({ baseUrl, model: 'm' }).step(request());

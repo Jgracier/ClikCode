@@ -5,7 +5,7 @@ import path from 'node:path';
 import { ConversationStore, memoryConversationStore } from './conversation.js';
 import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, toolOutputCap } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
-import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, suggestPermissionRule, visibleTools, type PermissionRules } from './permissions.js';
+import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, parsePermissionRules, suggestPermissionRule, visibleTools } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
 import { formatShellNotifications, sessionState, takeShellNotifications } from './session-state.js';
@@ -113,6 +113,18 @@ function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
 
 interface CallOutcome { call: ModelToolCall; result: ToolRunResult }
 
+/** Results are matched back to calls by id, and the model APIs reject a
+ * repeated one, so a step that reuses an id (or sends none) gets distinct ones. */
+function withUniqueIds(calls: readonly ModelToolCall[]): ModelToolCall[] {
+  const seen = new Set<string>();
+  return calls.map((call, index) => {
+    let id = call.id || `call_${index}`;
+    for (let n = 2; seen.has(id); n++) id = `${call.id || 'call'}_${n}`;
+    seen.add(id);
+    return id === call.id ? call : { ...call, id };
+  });
+}
+
 export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Promise<GatewayHarnessTurnResult> {
   const signal = input.signal;
   const throwIfAborted = (): void => { if (signal?.aborted) throw turnCancelledError(); };
@@ -137,9 +149,9 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   const tools = exposure.all;
   const maxSteps = Math.max(1, Math.floor(input.maxSteps ?? DEFAULT_MAX_STEPS));
 
-  const [loaded, rules, baseSystem] = await abortable(Promise.all([
+  const [loaded, savedRules, baseSystem] = await abortable(Promise.all([
     store.load(),
-    loadPermissionRules(cwd),
+    input.permissionRules ? Promise.resolve(input.permissionRules.current) : loadPermissionRules(cwd),
     // A sub-agent keeps its own short prompt. Skills are listed only when the
     // tool that loads them is present.
     input.subagent ? input.subagent.system
@@ -149,6 +161,9 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
           skillsSection: skillsPromptSection(catalog.skills, profile), toolUsageGuidance: profile.toolUsageGuidance,
         })),
   ]), signal);
+  // One rule set for the whole turn, its sub-agents included: an "always"
+  // answered for one call already covers the calls queued behind it.
+  const turnRules = input.permissionRules ?? { current: savedRules };
   let items: ConversationItem[] = loaded;
   const append = async (...added: ConversationItem[]): Promise<void> => { items.push(...added); await store.append(...added); };
 
@@ -226,7 +241,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   const onApproval = input.onApproval;
   const runSubagent = input.subagent ? undefined : createSubagentRunner({
     // A sub-agent runs under its parent's profile, whatever decided it.
-    parent: { ...input, contextProfile: profile.name }, tools, runTurn: runGatewayHarnessTurn,
+    parent: { ...input, contextProfile: profile.name, permissionRules: turnRules }, tools, runTurn: runGatewayHarnessTurn,
     ...(onApproval ? { approve: (title: string, detail?: string, rule?: string) => queueApproval(() => onApproval(title, detail, rule)) } : {}),
     // A sub-agent's spend is this turn's spend: it lands in the same ledger
     // and is reported as it happens, not when the task returns.
@@ -243,7 +258,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
 
-  const executeCall = async (call: ModelToolCall, rulesNow: PermissionRules): Promise<ToolRunResult> => {
+  const executeCall = async (call: ModelToolCall): Promise<ToolRunResult> => {
     const tool: ToolDefinition | undefined = tools.find((candidate) => candidate.name === call.name);
     let label = call.name;
     if (tool) { try { label = tool.label(call.args); } catch { /* invalid args: fall back to the name */ } }
@@ -281,7 +296,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       if (output) input.onActivity?.({ kind: 'tool-start', label, id: call.id, output, ...category });
     });
 
-    const verdict = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: rulesNow, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });
+    const verdict = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: turnRules.current, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });
     if (verdict.decision === 'deny') return finish({ output: `Permission denied: ${verdict.reason}. Do not retry this call; choose another approach or tell the user what you need.`, isError: true });
     if (verdict.decision === 'ask') {
       // The rule this call could be answered with once and for all, e.g.
@@ -293,7 +308,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         throwIfAborted();
         // Queued behind another approval while the user switched modes: judge it
         // again now, so a switch to bypass stops the prompts that were waiting.
-        const now = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: rulesNow, planMode: session.plan.active, scope, hasApprover: true });
+        const now = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: turnRules.current, planMode: session.plan.active, scope, hasApprover: true });
         if (now.decision === 'allow') return true;
         const prompt = await buildApprovalPrompt(tool, call.args, ctx, verdict.reason);
         input.onPhase?.('waiting for approval');
@@ -305,7 +320,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       // already in force if this same call asks again -- and a failed write
       // only costs the remembering, never the approval they already gave.
       if (approved === 'always' && rule) {
-        rulesNow = await addPermissionAllowRule(ctx.cwd, rule).catch(() => rulesNow);
+        turnRules.current = await addPermissionAllowRule(ctx.cwd, rule).catch(() => ({ allow: [...turnRules.current.allow, ...parsePermissionRules([rule]).allow] }));
       }
     }
 
@@ -333,7 +348,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       let end = index + 1;
       if (isRead(calls[index])) while (end < calls.length && isRead(calls[end])) end++;
       const batch = calls.slice(index, end);
-      const settled = await Promise.allSettled(batch.map((call) => executeCall(call, rules)));
+      const settled = await Promise.allSettled(batch.map((call) => executeCall(call)));
       let failure: unknown;
       settled.forEach((entry, offset) => {
         if (entry.status === 'fulfilled') collected.push({ call: batch[offset], result: entry.value });
@@ -389,7 +404,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       try {
         step = await abortable(input.modelClient.step({
           system, items, signal,
-          tools: finalOnly ? [] : profile.shapeSpecs(toolSpecs(visibleTools(exposure.advertised(items), session.plan.active))),
+          tools: profile.shapeSpecs(toolSpecs(visibleTools(exposure.advertised(items), session.plan.active))),
+          ...(finalOnly ? { toolChoice: 'none' as const } : {}),
           onTextDelta: (text) => {
             if (!text || signal?.aborted) return;
             if (!streamedThisStep && needsSeparator) input.onResponseDelta?.('\n\n', 'append');
@@ -443,7 +459,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       const stepText = step.text || streamedThisStep;
       if (reasoning.trim()) input.onActivity?.({ kind: 'thinking', label: reasoning.replace(/\s+/g, ' ').trim().slice(0, 140) });
 
-      const calls = finalOnly ? [] : step.toolCalls;
+      const calls = finalOnly ? [] : withUniqueIds(step.toolCalls);
       const produced: ConversationItem[] = [];
       if (stepText.trim()) { produced.push({ type: 'text', role: 'assistant', text: stepText }); segments.push(stepText.trim()); needsSeparator = true; }
       produced.push(...calls.map((call): ConversationItem => ({ type: 'tool_call', id: call.id, name: call.name, args: call.args })));

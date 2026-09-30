@@ -105,6 +105,8 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
       const result = await options.runTurn({
         sessionId, cwd: parent.cwd, prompt: request.prompt,
         permissionMode: parent.permissionMode,
+        ...(parent.currentPermissionMode ? { currentPermissionMode: parent.currentPermissionMode } : {}),
+        ...(parent.permissionRules ? { permissionRules: parent.permissionRules } : {}),
         modelClient: parent.modelClient,
         stateDir: parent.stateDir,
         tools, maxSteps,
