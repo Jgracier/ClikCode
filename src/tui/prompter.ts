@@ -1049,9 +1049,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
   }
 
-  /** Every update is a complete atomic frame. Partial footer/composer paints
-   * were smaller, but depended on a particular older frame already being on
-   * screen and became invalid when slow terminals dropped intermediate work. */
   /** Repaint with the composer exactly as the last paint left it.
    *
    * This spread appeared nine times, and three of those omitted the palette
@@ -2365,9 +2362,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
   }
 
-  /** Provider/model/effort pickers share the same atomic frame and palette
-   * layout as slash commands, so the conversation stays visible above them. */
-  /** Type-to-filter: a picker with more than a screenful of options (the
+  /** Provider/model/effort pickers share the same frame and palette layout as
+   * slash commands, so the conversation stays visible above them.
+   *
+   * Type-to-filter: a picker with more than a screenful of options (the
    * /resume list, across every ClikCode session plus every discovered vendor
    * chat, easily exceeds 50) was arrow-keys-only with no count, no scroll
    * indicator, and silent wraparound at each end -- a real conversation could
