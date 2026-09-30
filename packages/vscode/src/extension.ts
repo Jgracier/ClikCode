@@ -7,6 +7,7 @@ import { questionWithSelection } from './editor-context';
 import { chatModelLabel, providerDisplayName, type ChatModel } from './model';
 import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND } from './compat';
 import { DiffDocuments } from './ui';
+import { registerCustomAcpCommands } from './custom-acp';
 import { mentionFromEditor, mentionFromUri } from './mentions';
 import type { WebviewScreen } from './webview-protocol';
 
@@ -189,6 +190,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     if (tab?.input instanceof vscode.TabInputTextDiff && DiffDocuments.approvalOf(tab.input.modified) === id) await vscode.window.tabGroups.close(tab);
   };
 
+  registerCustomAcpCommands(context);
   context.subscriptions.push(
     log, status, sidebar,
     sidebar.onDidChange(paint),

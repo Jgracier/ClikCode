@@ -4,6 +4,7 @@
  * per-vendor fact is a declared field on the catalog entry. */
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { reloadCustomAcpHarnesses } from '../harness/custom-acp.js';
 import { augmentProcessPath } from '../harness/transport/native/install-locations.js';
 import type { AiHarnessAcpLaunch, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition, AiRouterRuntime } from '../harness/definition.js';
 
@@ -39,6 +40,7 @@ function localCatalog(): HarnessCatalogRuntime {
     // ClikCode's own npm prefix) put binaries in go on the end of PATH.
     augmentProcessPath(catalogRuntime.allLocalHarnesses());
   }
+  reloadCustomAcpHarnesses(catalogRuntime);
   return catalogRuntime;
 }
 

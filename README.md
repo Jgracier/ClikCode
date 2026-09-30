@@ -17,6 +17,9 @@ what it adds is this:
 For the 21 harnesses with an ACP entry point or adapter, ClikCode uses ACP for
 ordinary turns. When an agent cannot carry a particular image, model, or
 reasoning choice over ACP, ClikCode uses that harness's CLI path where safe.
+Any other ACP agent can be added with `clikcode acp add`, and it then appears
+in the same provider list.
+
 
 **Every tool, one way of working.** Stop memorizing flags. ClikCode asks each
 tool what it supports and offers you that — models, reasoning level, approval

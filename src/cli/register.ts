@@ -5,6 +5,7 @@
  */
 import { untilStopped } from './stop-signal.js';
 import type { Command } from 'commander';
+import { acpAdd, acpList, acpRemove } from '../commands/acp.js';
 import { mcpAdd, mcpTargets } from '../commands/mcp.js';
 import type Conf from 'conf';
 import { sendScriptedTurn } from '../worker/scripted-send.js';
@@ -81,6 +82,15 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       const id = await startOrResumeChat(options);
       await untilStopped((signal) => sendScriptedTurn(config, id, prompt.join(' '), signal));
     });
+  const acp = program.command('acp').description('Add an Agent Client Protocol harness the catalog does not ship');
+  acp.command('list').description('List harnesses added on this machine').action(acpList);
+  acp.command('add <command> <binary> [argv...]')
+    .description('Register an ACP executable. Arguments after the binary are its ACP flags, for example -- --stdio')
+    .option('--name <name>', 'Name shown in the provider list')
+    .option('--provider <provider>', 'Provider id, when it should not be acp:<command>')
+    .allowUnknownOption()
+    .action((command: string, binary: string, argv: string[], options: { name?: string; provider?: string }) => acpAdd(command, binary, argv, options));
+  acp.command('remove <command>').description('Remove a harness added on this machine').action(acpRemove);
   // One MCP server, added once, written into every harness that takes one.
   const mcp = program.command('mcp').description('Share an MCP server with every harness that supports one');
   mcp.command('add')
