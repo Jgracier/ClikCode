@@ -1,34 +1,7 @@
 /**
- * Release-only AI runtime. This is bundled separately as CommonJS because a
- * provider SDK may carry optional native modules; the public CLI itself stays
- * normal native ESM and loads this only for local model work.
+ * The direct API-key route's turn, bundled on its own as CommonJS
+ * (dist/ai-router-runtime.cjs) because `ai` and the @ai-sdk providers are 3 MB
+ * that only such a turn needs. The harness catalog is dist/harness-catalog.cjs
+ * (catalog.ts); it is not repeated here.
  */
 export { streamAiChatTurn } from '@clikcode/router/ai-provider-models';
-export {
-  AI_LOCAL_HARNESS_ADAPTER_VERSION,
-  AI_LOCAL_HARNESSES,
-  AI_LOCAL_HARNESS_CAPABILITIES,
-  HOME_REDIRECT_ENV_DEFAULTS,
-  allLocalHarnesses,
-  customAcpHarness,
-  guardedPromptArgv,
-  harnessAcpLaunch,
-  harnessLoginArgvForModel,
-  harnessReplyError,
-  modelProvider,
-  harnessCanRunTurns,
-  harnessTierRank,
-  harnessTurnTransport,
-  maxPromptArgvBytes,
-  promptExceedsArgvLimit,
-  registerCustomHarnesses,
-  harnessSupportsEffort,
-  harnessSupportsImages,
-  harnessIntegrationLevel,
-  harnessSupportsPermissionMode,
-  localHarnessForCommand,
-  localHarnessCapabilityManifest,
-  localHarnessForProvider,
-  nativeHarnessLaunchArgv,
-  nativeHarnessTurnArgv,
-} from '@clikcode/router/ai-local-harness';

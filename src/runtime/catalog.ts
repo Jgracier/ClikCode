@@ -1,24 +1,14 @@
 /**
- * Catalog-only slice of the router runtime.
- *
- * router.ts also exports `streamAiChatTurn`, which pulls `ai` and
- * ~25 @ai-sdk providers (2.8 MB of CJS plus a native module). Harness catalog
- * lookups — every `doctor`, every account/picker render, every brokered vendor
- * turn — need none of that: ai-local-harness and the provider registry are
- * pure data and functions. scripts/build.mjs bundles this entry to
- * dist/harness-catalog.cjs and fails the build if an AI SDK ever leaks in.
- *
- * Every catalog export of router.ts is exported here under the same
- * name, so this is a drop-in for the catalog members of `AiRouterRuntime` (see
- * HarnessCatalogRuntime below).
+ * The harness catalog, bundled on its own (dist/harness-catalog.cjs): every
+ * `doctor`, account and picker render and every brokered vendor turn reads it,
+ * and none of them needs the AI SDK the direct route's turn carries
+ * (router.ts). ai-local-harness and the provider registry are pure data and
+ * functions; scripts/build.mjs fails the build if an AI SDK ever leaks in.
+ * ALL catalog calls go through this one bundle: registerCustomHarnesses()
+ * keeps module state that a second copy would not see.
  */
 import type { AiRouterRuntime } from '../harness/definition.js';
 
-// `export *`, not a name list: router.ts re-exports a growing subset
-// of this module, and a wildcard is a superset of any such list by
-// construction, so the two entries cannot drift apart. It also matters that ALL
-// catalog calls go through one bundle: registerCustomHarnesses() keeps module
-// state, and a second copy inside ai-router-runtime.cjs would not see it.
 export * from '@clikcode/router/ai-local-harness';
 
 /** The provider registry's own lookup, for the one question the app cannot

@@ -7,7 +7,7 @@
  *   cli.js                 The program (ESM). Small pure-JS dependencies are inlined
  *                          so startup is one file read instead of a node_modules walk.
  *   harness-catalog.cjs    The pure harness catalog (no AI SDKs); cheap to load.
- *   ai-router-runtime.cjs  Catalog + streamAiChatTurn (`ai` + @ai-sdk providers);
+ *   ai-router-runtime.cjs  streamAiChatTurn (`ai` + @ai-sdk providers);
  *                          only needed for local API-key model turns.
  *
  * Flags:

@@ -67,8 +67,8 @@ export async function sendDirectApiTurn(input: {
     checkpoint.response('', 'replace');
     prompter?.response('', 'replace');
     return streamLocalAiTurn({
-      provider: session.provider ?? active.provider, model, apiKey: localApiKey(active), credentialSource: 'env',
-      messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort as never,
+      provider: session.provider ?? active.provider, model, apiKey: localApiKey(active),
+      messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort,
       ...(signal ? { abortSignal: signal } : {}),
       onDelta: (delta: string) => {
         const visible = titleStream ? titleStream.push(delta, 'append') : delta;

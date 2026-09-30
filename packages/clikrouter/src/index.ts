@@ -1,15 +1,11 @@
 // ============================================
-// CLIKROUTER — provider-agnostic AI dialect normalization + router selection
+// CLIKROUTER — ClikCode's harness catalog and its direct API-key route
 // ============================================
-// See the package README for scope: what lives here (registry, request/
-// response dialect normalization across ~40 providers, the candidate-
-// ranking algorithm) vs. what deliberately does NOT (storage, credential
-// resolution, billing — those are the calling app's job, injected as plain
-// data into the functions here, never read from a database or Redis client
-// this package owns).
+// The harness catalog (ai-local-harness), the provider registry the direct
+// route reads, and the AI SDK turn that serves it (ai-provider-models).
+// ClikCode imports the subpaths; scripts/build.mjs bundles them into
+// dist/harness-catalog.cjs and dist/ai-router-runtime.cjs.
 
 export * from './ai-provider-registry-public';
-export * from './ai-provider-http';
 export * from './ai-provider-models';
 export * from './ai-local-harness';
-export * from './ai-harness-gateway-protocol';
