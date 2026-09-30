@@ -84,6 +84,18 @@ const SHELL_RC_FILES = new Set([
   '.kshrc', '.cshrc', '.tcshrc', '.inputrc', '.gitconfig', '.npmrc', '.netrc',
 ]);
 
+/** Agent settings files, by the folder they sit in, whose contents run
+ * commands (hooks, MCP servers) or grant permissions: Claude Code's (whose
+ * hooks ClikCode's own agent runs, hooks.ts) and those of the harnesses
+ * ClikCode fronts. `.mcp.json` is refused wherever it is. */
+const AGENT_CONFIG_FILES: Readonly<Record<string, RegExp>> = {
+  '.claude': /^settings(?:\..+)?\.json$/,
+  '.gemini': /^settings\.json$/,
+  '.qwen': /^settings\.json$/,
+  '.codex': /^config\.toml$/,
+  '.cursor': /^(?:mcp|hooks|cli)\.json$/,
+};
+
 /** Why a write to this location is refused in every mode, or undefined. */
 export function writeDenyReason(resolved: ResolvedPath, scope: PathScope): string | undefined {
   for (const candidate of new Set([resolved.real, resolved.absolute])) {
@@ -95,8 +107,11 @@ export function writeDenyReason(resolved: ResolvedPath, scope: PathScope): strin
     }
     if (isInside(candidate, realpathNearest(path.resolve(scope.stateDir)))) return 'the ClikCode state directory is managed by ClikCode itself';
     const name = path.basename(candidate);
-    // The model must not be able to grant itself permissions.
+    // The model must not be able to grant itself permissions, or write a
+    // command that ClikCode or a harness it fronts runs without asking.
     if (segments.includes('.clikcode') && /^settings(?:\..+)?\.json$/.test(name)) return 'ClikCode permission settings can only be changed by the user';
+    const config = AGENT_CONFIG_FILES[path.basename(path.dirname(candidate))];
+    if ((config && config.test(name)) || name === '.mcp.json') return `${path.join(path.basename(path.dirname(candidate)), name)} declares hooks, permissions or MCP servers, and can only be changed by the user`;
     const inHomeRoot = path.dirname(candidate) === home;
     if (inHomeRoot && SHELL_RC_FILES.has(name) && !resolved.confined) return `${name} is a shell/credential startup file outside the workspace`;
     if (isInside(candidate, path.join(home, '.config', 'fish')) && !resolved.confined) return 'fish shell configuration is outside the workspace';

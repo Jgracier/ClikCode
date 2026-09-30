@@ -88,15 +88,19 @@ type UsageReport = TokenUsage & { contextTokens?: number; contextWindow?: number
 
 /** Optional pre/post tool interception. A pre hook may only veto (it can
  * never widen permissions); a post hook may only rewrite what the model sees. */
+/** What every hook call is told; `signal` is the turn's, and cancelling it
+ * stops a hook that is still running. */
+export interface HookInfo { sessionId: string; cwd: string; signal?: AbortSignal }
+
 interface HarnessHooks {
-  preToolUse?(call: ModelToolCall, info: { sessionId: string; cwd: string }): Promise<{ deny?: string } | void> | { deny?: string } | void;
-  postToolUse?(call: ModelToolCall, result: ToolRunResult, info: { sessionId: string; cwd: string }): Promise<{ output?: string } | void> | { output?: string } | void;
+  preToolUse?(call: ModelToolCall, info: HookInfo): Promise<{ deny?: string } | void> | { deny?: string } | void;
+  postToolUse?(call: ModelToolCall, result: ToolRunResult, info: HookInfo): Promise<{ output?: string } | void> | { output?: string } | void;
   /** May refuse the prompt (`block`, shown to the user) or add context to it. */
-  userPromptSubmit?(prompt: string, info: { sessionId: string; cwd: string }): Promise<{ block?: string; context?: string } | void>;
+  userPromptSubmit?(prompt: string, info: HookInfo): Promise<{ block?: string; context?: string } | void>;
   /** Context for a conversation's first turn (`startup`) or its first after a restart (`resume`). */
-  sessionStart?(info: { sessionId: string; cwd: string; source: 'startup' | 'resume' }): Promise<{ context?: string } | void>;
+  sessionStart?(info: HookInfo & { source: 'startup' | 'resume' }): Promise<{ context?: string } | void>;
   /** May keep the agent working when it would finish (`continueWith` is given to the model). */
-  stop?(info: { sessionId: string; cwd: string; stopHookActive: boolean }): Promise<{ continueWith?: string } | void>;
+  stop?(info: HookInfo & { stopHookActive: boolean }): Promise<{ continueWith?: string } | void>;
 }
 
 export interface GatewayHarnessTurnInput {

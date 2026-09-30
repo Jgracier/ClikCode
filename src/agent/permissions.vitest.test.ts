@@ -47,6 +47,12 @@ describe('permission matrix', () => {
     ['write_file', { path: '.git/hooks/pre-commit', content: '' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
     ['write_file', { path: '~/.ssh/authorized_keys', content: '' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
     ['write_file', { path: '.clikcode/settings.local.json', content: '{}' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
+    // Files whose hooks or MCP servers run commands without asking.
+    ['write_file', { path: '.claude/settings.json', content: '{}' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
+    ['edit_file', { path: '.claude/settings.local.json', old_string: 'a', new_string: 'b' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
+    ['write_file', { path: 'sub/.mcp.json', content: '{}' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
+    ['write_file', { path: '.codex/config.toml', content: '' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
+    ['write_file', { path: '.claude/agents/reviewer.md', content: '' }, { ask: 'ask', auto: 'allow', bypass: 'allow' }],
     ['read_file', { path: '~/.ssh/id_rsa' }, { ask: 'deny', auto: 'deny', bypass: 'deny' }],
   ];
   it.each(cases)('%s %j', (name, args, expected) => {

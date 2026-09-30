@@ -2,7 +2,8 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { claudeToolName, hookMatches, readClaudeHooks, toolHooksFrom } from './hooks.js';
+import { claudeToolName, hookMatches, hooksForWorkspace, readClaudeHooks, toolHooksFrom } from './hooks.js';
+import { isWorkspaceTrusted } from './workspace-trust.js';
 
 async function workspaceWith(settings: unknown, local?: unknown) {
   const cwd = await mkdtemp(path.join(tmpdir(), 'cc-hooks-'));
@@ -27,7 +28,7 @@ describe('Claude Code hooks on ClikCode\'s own agent', () => {
 
   it('blocks a call on exit 2 with the hook\'s reason, and hands the hook Claude\'s JSON', async () => {
     const { cwd, home } = await workspaceWith({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'cat > seen.json; echo "no rm -rf here" >&2; exit 2' }] }] } });
-    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home))!;
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))!;
     const verdict = await hooks.preToolUse!({ id: 'c', name: 'bash', args: { command: 'rm -rf /' } }, info(cwd));
     expect(verdict).toEqual({ deny: 'no rm -rf here' });
     const seen = JSON.parse(await readFile(path.join(cwd, 'seen.json'), 'utf8'));
@@ -38,7 +39,7 @@ describe('Claude Code hooks on ClikCode\'s own agent', () => {
 
   it('blocks on a JSON deny decision, and passes a file tool\'s path as file_path', async () => {
     const { cwd, home } = await workspaceWith({}, { hooks: { PreToolUse: [{ matcher: 'Write', hooks: [{ command: 'cat > seen.json; echo \'{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"protected file"}}\'' }] }] } });
-    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home))!;
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))!;
     expect(await hooks.preToolUse!({ id: 'c', name: 'write_file', args: { path: '.env', content: 'x' } }, info(cwd))).toEqual({ deny: 'protected file' });
     expect(JSON.parse(await readFile(path.join(cwd, 'seen.json'), 'utf8')).tool_input).toEqual({ file_path: '.env', content: 'x' });
   });
@@ -49,7 +50,7 @@ describe('Claude Code hooks on ClikCode\'s own agent', () => {
       PostToolUse: [{ matcher: 'Edit', hooks: [{ command: 'echo "lint: missing semicolon" >&2; exit 2' }] }],
       PreToolUse: [{ matcher: 'Read', hooks: [{ command: 'exit 1' }] }],
     } });
-    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home), (message) => errors.push(message))!;
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }), (message) => errors.push(message))!;
     const after = await hooks.postToolUse!({ id: 'c', name: 'edit_file', args: { path: 'a.ts' } }, { output: 'edited' }, info(cwd));
     expect(after).toEqual({ output: 'edited\n\n[PostToolUse hook] lint: missing semicolon' });
     expect(await hooks.preToolUse!({ id: 'd', name: 'read_file', args: { path: 'a.ts' } }, info(cwd))).toBeUndefined();
@@ -58,29 +59,117 @@ describe('Claude Code hooks on ClikCode\'s own agent', () => {
 
   it('declares nothing when no settings file has hooks', async () => {
     const { cwd, home } = await workspaceWith({ permissions: {} });
-    expect(toolHooksFrom(await readClaudeHooks(cwd, home))).toBeUndefined();
+    expect(toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))).toBeUndefined();
   });
 });
 
 describe('the prompt, session and stop hooks', () => {
   it('lets a UserPromptSubmit hook block a prompt or add context to it, ignoring matchers as Claude does', async () => {
     const { cwd, home } = await workspaceWith({ hooks: { UserPromptSubmit: [{ matcher: 'ignored', hooks: [{ command: 'grep -q secret && { echo "no secrets in prompts" >&2; exit 2; }; echo "branch: main"' }] }] } });
-    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home))!;
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))!;
     expect(await hooks.userPromptSubmit!('here is my secret', info(cwd))).toEqual({ block: 'no secrets in prompts' });
     expect(await hooks.userPromptSubmit!('fix the bug', info(cwd))).toEqual({ context: 'branch: main' });
   });
 
   it('adds SessionStart context for a matching source only', async () => {
     const { cwd, home } = await workspaceWith({ hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ command: 'echo \'{"hookSpecificOutput":{"additionalContext":"on-call: ana"}}\'' }] }] } });
-    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home))!;
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))!;
     expect(await hooks.sessionStart!({ ...info(cwd), source: 'startup' })).toEqual({ context: 'on-call: ana' });
     expect(await hooks.sessionStart!({ ...info(cwd), source: 'resume' })).toBeUndefined();
   });
 
   it('lets a Stop hook send the agent back to work, and tells it when it already did', async () => {
     const { cwd, home } = await workspaceWith({ hooks: { Stop: [{ hooks: [{ command: 'grep -q \'"stop_hook_active":true\' && exit 0; echo "tests are not run yet" >&2; exit 2' }] }] } });
-    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home))!;
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))!;
     expect(await hooks.stop!({ ...info(cwd), stopHookActive: false })).toEqual({ continueWith: 'tests are not run yet' });
     expect(await hooks.stop!({ ...info(cwd), stopHookActive: true })).toBeUndefined();
+  });
+});
+
+describe('workspace trust', () => {
+  const projectHook = { hooks: { UserPromptSubmit: [{ hooks: [{ command: 'touch ran.txt' }] }] } };
+
+  it('never reads a project\'s hooks unless asked to', async () => {
+    const { cwd, home } = await workspaceWith(projectHook);
+    expect(toolHooksFrom(await readClaudeHooks(cwd, home))).toBeUndefined();
+  });
+
+  it('refuses an untrusted workspace\'s hooks with a notice when no one can be asked', async () => {
+    const { cwd, home } = await workspaceWith(projectHook);
+    const stateDir = await mkdtemp(path.join(tmpdir(), 'cc-state-'));
+    const notices: string[] = [];
+    const config = await hooksForWorkspace({ cwd, home, stateDir, notice: (message) => notices.push(message) });
+    expect(toolHooksFrom(config)).toBeUndefined();
+    expect(notices[0]).toMatch(/not trusted/);
+    expect(await isWorkspaceTrusted(stateDir, cwd)).toBe(false);
+  });
+
+  it('asks once, remembers a yes, and then runs them without asking', async () => {
+    const { cwd, home } = await workspaceWith(projectHook);
+    const stateDir = await mkdtemp(path.join(tmpdir(), 'cc-state-'));
+    const asked: string[] = [];
+    const ask = async (_title: string, detail: string) => { asked.push(detail); return true; };
+    const first = await hooksForWorkspace({ cwd, home, stateDir, ask, notice: () => undefined });
+    expect(asked[0]).toContain('touch ran.txt');
+    expect(toolHooksFrom(first)?.userPromptSubmit).toBeDefined();
+    await hooksForWorkspace({ cwd, home, stateDir, ask, notice: () => undefined });
+    expect(asked).toHaveLength(1);
+  });
+
+  it('does not ask again in the same process after a no', async () => {
+    const { cwd, home } = await workspaceWith(projectHook);
+    const stateDir = await mkdtemp(path.join(tmpdir(), 'cc-state-'));
+    let asked = 0;
+    const ask = async () => { asked += 1; return false; };
+    expect(toolHooksFrom(await hooksForWorkspace({ cwd, home, stateDir, ask, notice: () => undefined }))).toBeUndefined();
+    expect(toolHooksFrom(await hooksForWorkspace({ cwd, home, stateDir, ask, notice: () => undefined }))).toBeUndefined();
+    expect(asked).toBe(1);
+  });
+
+  it('runs the user\'s own hooks once when the workspace is the home folder', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'cc-home-'));
+    await mkdir(path.join(home, '.claude'), { recursive: true });
+    await writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: 'true' }] }] } }));
+    const stateDir = await mkdtemp(path.join(tmpdir(), 'cc-state-'));
+    let asked = 0;
+    const config = await hooksForWorkspace({ cwd: home, home, stateDir, ask: async () => { asked += 1; return true; }, notice: () => undefined });
+    expect(asked).toBe(0);
+    expect(config.Stop).toHaveLength(1);
+  });
+});
+
+describe('hook processes', () => {
+  it('scrubs credentials from the hook\'s environment, as the bash tool does', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { UserPromptSubmit: [{ hooks: [{ command: 'echo "key=${OPENAI_API_KEY:-none} dir=${CLAUDE_PROJECT_DIR:+set}"' }] }] } });
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-should-not-leak';
+    try {
+      const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))!;
+      expect(await hooks.userPromptSubmit!('hi', info(cwd))).toEqual({ context: 'key=none dir=set' });
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
+    }
+  });
+
+  it('kills the whole process group on timeout, not just the shell', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { Stop: [{ hooks: [{ command: '(sleep 3; touch orphan.txt) & sleep 30', timeout: 1 }] }] } });
+    const errors: string[] = [];
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }), (message) => errors.push(message))!;
+    const started = Date.now();
+    expect(await hooks.stop!({ ...info(cwd), stopHookActive: false })).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(errors[0]).toContain('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await expect(readFile(path.join(cwd, 'orphan.txt'))).rejects.toThrow();
+  }, 15_000);
+
+  it('stops a running hook when the turn is cancelled', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { Stop: [{ hooks: [{ command: 'sleep 30' }] }] } });
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }), () => undefined)!;
+    const controller = new AbortController();
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 200);
+    await hooks.stop!({ ...info(cwd), signal: controller.signal, stopHookActive: false });
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });

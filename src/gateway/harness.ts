@@ -16,7 +16,7 @@ import { stdout as output } from 'node:process';
 import { ModelClientError } from '../agent/models/gateway-client.js';
 import { runGatewayHarnessTurn } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
-import { readClaudeHooks, toolHooksFrom } from '../agent/hooks.js';
+import { hooksForWorkspace, toolHooksFrom } from '../agent/hooks.js';
 import type { GatewayHarnessTurnResult, ModelClient } from '../agent/model-client.js';
 import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
@@ -69,9 +69,15 @@ export async function runGatewayHarnessSessionTurn(
   // harness. One that is down is named here rather than silently missing.
   const mcp = await mcpToolsForTurn(stateDir, input.signal, input.mcpServers ?? []);
   for (const note of mcp.notes) prompter?.activity(note);
-  // The user's Claude Code tool hooks, so they run whichever lane serves the turn.
+  // The user's Claude Code tool hooks, so they run whichever lane serves the
+  // turn; a workspace's own only once the user trusts it.
   const workspace = session.workspace ?? process.cwd();
-  const hooks = toolHooksFrom(await readClaudeHooks(workspace), (message) => prompter?.activity(message));
+  const hookConfig = await hooksForWorkspace({
+    cwd: workspace, stateDir,
+    ...(prompter ? { ask: (title: string, detail: string) => prompter.approval(title, detail) } : {}),
+    notice: (message) => { if (prompter) prompter.activity(message); else process.stderr.write(`${message}\n`); },
+  });
+  const hooks = toolHooksFrom(hookConfig, (message) => prompter?.activity(message));
   return runGatewayHarnessTurn({
     sessionId: session.id,
     cwd: workspace,
