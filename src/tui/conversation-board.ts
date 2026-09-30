@@ -23,6 +23,11 @@ import { listenForTerminalKeys } from './input-decoder.js';
 import { setTerminalRawMode } from './modes.js';
 import { pickerDeletesSelection } from './command-palette.js';
 import type { OptionPickerHost } from './option-picker.js';
+import { workingSpinner } from './pickers/conversation-activity.js';
+
+/** How often a running conversation's spinner moves. Only its cells change
+ * between frames, so this costs a few bytes each, even over SSH. */
+const SPIN_MS = 160;
 
 export type BoardResult = { open: string } | { compose: string } | { command: string };
 
@@ -156,18 +161,30 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     let finished = false;
     let stopInput: () => void = () => {};
     const rows = (): readonly PickerOption<string>[] => boardRows(state, settings.conversations(), settings.commands);
+    let frame = 0;
+    /** A second screen is up (sub-agents, options): the board is not drawn. */
+    let aside = false;
+    const spin = setInterval(() => {
+      if (finished || aside || !rows().some((row) => row.working)) return;
+      frame += 1;
+      draw();
+    }, SPIN_MS);
+    spin.unref();
     state.selected = boardStartRow(rows(), settings.initial);
     const draw = (): void => {
       const showing = rows();
       if (state.selected >= showing.length) state.selected = showing.length - 1;
       // The whole page: the list takes every row the composer does not.
       const capacity = Math.max(6, (output.rows ?? 24) - BOARD_CHROME_ROWS);
-      host.paint(state.draft, showing.map((row) => ({ label: row.label, detail: row.detail, value: '', group: row.group })),
+      host.paint(state.draft, showing.map((row) => ({
+        label: row.working ? `${workingSpinner(frame, row.working)} ${row.label}` : row.label, detail: row.detail, value: '', group: row.group,
+      })),
         state.selected, '› ', state.draft.length, { capacity, headings: true, hint: boardHint(state, showing) });
     };
     const finish = (result: BoardResult | undefined): void => {
       if (finished) return;
       finished = true;
+      clearInterval(spin);
       host.setSelecting(false);
       stopInput();
       host.clearFrame();
@@ -181,9 +198,14 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     };
     /** A second screen (sub-agents, options, a delete confirmation) has the
      * keyboard until it closes; then the board takes it back. */
-    const aside = async (open: () => Promise<boolean>): Promise<void> => {
+    const openAside = async (open: () => Promise<boolean>): Promise<void> => {
       stopInput();
-      if (await open()) return;
+      aside = true;
+      try {
+        if (await open()) return;
+      } finally {
+        aside = false;
+      }
       if (!finished) listen();
     };
     const handle = (key: string): void => {
@@ -193,7 +215,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       else if (effect.kind === 'finish') finish(effect.result);
       else if (effect.kind === 'inner') {
         const inner = effect.option.inner!;
-        void aside(async () => {
+        void openAside(async () => {
           const value = await host.select(inner.title, inner.options);
           if (value === undefined) return false;
           finish({ open: value });
@@ -201,7 +223,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
         });
       } else if (effect.kind === 'actions') {
         const option = effect.option;
-        void aside(async () => {
+        void openAside(async () => {
           const action = await host.select(option.label, (option.actions ?? []).map((item) => ({ label: item.label, value: item.value })));
           if (!action) return false;
           await settings.onAction?.(option.value, action);
@@ -212,7 +234,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       } else if (effect.kind === 'delete') {
         const option = effect.option;
         const action = option.deleteAction!;
-        void aside(async () => {
+        void openAside(async () => {
           const confirmed = await host.select(`${action.label} ${option.label}?`, [
             { label: 'Cancel', value: false }, { label: `${action.label} ${option.label}`, value: true },
           ]);
