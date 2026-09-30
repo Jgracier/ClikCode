@@ -36,6 +36,18 @@ ClikCode in VS Code, rebuilt as a finished product: everything ClikCode is, in t
 - Notifications when a turn finishes or asks for approval while the chat is out of sight.
 - Themed entirely from VS Code's colours (dark, light, high contrast), keyboard navigable with
   ARIA roles, and still with reduced motion.
+- **Tidy and consistent**: Conversations and Accounts take over the panel's header (back arrow,
+  title, their own actions) instead of stacking a second header under it, and Esc goes back from
+  both; the composer's provider and model read as plain names, effort always names its level; model
+  ids read without a repeated provider prefix (`big-pickle`, not `opencode:big-pickle`); the More
+  menu is grouped (Chat, Open, Help); menus show their keys (↑↓, Enter, Esc); status badges stay
+  readable in light themes.
+- The status bar item is just *ClikCode*, with a spinner while a turn runs and a bell when one
+  waits for approval; provider, model, account and usage are in its tooltip.
+- Commands: *ClikCode: Stop Current Turn* appears only while a turn runs, *Resume Chat…* (the same
+  as *Show Conversations*) is gone from the palette, *Open Extension Settings* and *Get Started* are
+  new, and the editor menu says *Ask ClikCode About Selection*.
+- The *Get started* walkthrough ships its images.
 - Needs ClikCode with IDE protocol revision 2 for the menus and screens above; with an older
   ClikCode the chat still works, with ClikCode's own pickers in the panel.
 
