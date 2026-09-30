@@ -160,8 +160,10 @@ function nativeValue(command: string, nativeId: string, accountId: string | unde
 
 /** Selected while discovery is still running: wait for it, then reopen. */
 const PENDING_DISCOVERY_VALUE = '__discovering__';
+const ACTIVE_GROUP = 'Active';
 const PAST_GROUP = 'Past';
-const SECTION_NAMES = { working: 'Working', idle: 'Open' } as const;
+/** How recently a conversation was used to count as active. */
+const ACTIVE_WITHIN_MS = 24 * 60 * 60_000;
 const NEW_CONVERSATION_VALUE = '__new__';
 const MANAGE_ACTIONS = [
   { label: 'Rename', value: 'rename' },
@@ -169,9 +171,9 @@ const MANAGE_ACTIONS = [
   { label: 'Archive', value: 'archive' },
 ] as const;
 
-/** Working before open-between-turns before everything else. */
+/** A running turn first, then everything else by recency. */
 function activityRank(block: { activity?: 'working' | 'idle' }): number {
-  return block.activity === 'working' ? 0 : block.activity === 'idle' ? 1 : 2;
+  return block.activity === 'working' ? 0 : 1;
 }
 
 /** One list for finding a conversation and managing it.
@@ -267,14 +269,17 @@ export async function interactiveSessionPicker(
     const groupedOptions = sessionPickerOptions(sessions, currentId);
     histories.clear();
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
-    type OptionBlock = { sortKey: number; options: PickerOption<string>[]; activity?: 'working' | 'idle' };
+    type OptionBlock = { sortKey: number; options: PickerOption<string>[]; activity?: 'working' | 'idle'; current?: boolean };
     const trackedBlocks = new Map<string, OptionBlock>();
     for (const option of groupedOptions) {
       const session = sessionsById.get(option.value)!;
       const root = conversationIdFor(session);
       const activity = activityByRoot.get(root);
       const pending = activity?.pending;
-      option.label = `${activityGlyph(activity?.activity, pending && turnPace(pending.updatedAt, openedAt))} ${option.label}`;
+      // Three cells in front of every title, so they line up: a running turn's
+      // spinner (the board animates it) or its dot, otherwise blank.
+      if (pending) option.working = turnPace(pending.updatedAt, openedAt);
+      option.label = pending ? (onBoard ? option.label : `${activityGlyph('working', option.working)}  ${option.label}`) : `   ${option.label}`;
       if (pending) {
         option.detail = `${workingDetail(pending, openedAt)} ${option.detail ?? ''}`;
         if (pending.subagents?.length) option.inner = { title: 'Subagents', options: subagentOptions(pending, option.value, openedAt) };
@@ -286,6 +291,7 @@ export async function interactiveSessionPicker(
       const block = trackedBlocks.get(root) ?? { sortKey: -Infinity, options: [] };
       block.sortKey = Math.max(block.sortKey, Number.isNaN(updatedAt) ? -Infinity : updatedAt);
       block.activity = activity?.activity;
+      if (current && root === conversationIdFor(current)) block.current = true;
       block.options.push(option);
       trackedBlocks.set(root, block);
     }
@@ -294,7 +300,7 @@ export async function interactiveSessionPicker(
       ...discovered.map(({ harness, item, accountId }) => ({
         sortKey: item.updatedAtMs ?? -Infinity,
         options: [{
-          label: `  ${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
+          label: `   ${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
           detail: `· not yet in ClikCode${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
           // By identity, not position: the list is replaced when the CLIs
           // answer, and a row chosen from the earlier one must still resolve.
@@ -303,11 +309,13 @@ export async function interactiveSessionPicker(
       })),
     ];
     optionBlocks.sort((left, right) => activityRank(left) - activityRank(right) || right.sortKey - left.sortKey);
-    // What is running comes first -- working, then open between turns -- and
-    // everything else is below it to resume, in one recency order whichever
-    // source found it. Provider hops stay behind each root row's history action.
-    // Each section is headed with its size, as Claude Code's session list is.
-    const sectionOf = (block: OptionBlock): string => block.activity ? SECTION_NAMES[block.activity] : PAST_GROUP;
+    // Active is what was used in the last day -- a running turn always, and
+    // the chat open here -- running first, then by recency; Past is the rest,
+    // in one recency order whichever source found it. Provider hops stay
+    // behind each root row's history action. Each section is headed with its
+    // size, as Claude Code's session list is.
+    const activeSince = openedAt - ACTIVE_WITHIN_MS;
+    const sectionOf = (block: OptionBlock): string => (block.activity === 'working' || block.current || block.sortKey >= activeSince ? ACTIVE_GROUP : PAST_GROUP);
     const sizes = new Map<string, number>();
     for (const block of optionBlocks) sizes.set(sectionOf(block), (sizes.get(sectionOf(block)) ?? 0) + block.options.length);
     const options: PickerOption<string>[] = optionBlocks.flatMap((block) => block.options.map((option) => ({

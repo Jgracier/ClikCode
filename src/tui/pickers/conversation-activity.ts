@@ -7,6 +7,7 @@
  * background jobs. The thresholds are Claude Code's: three minutes, fifteen. */
 
 import chalk from 'chalk';
+import { waitingSpinnerGlyph } from '../render/waiting.js';
 import type { PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession } from '../../session/model.js';
 
@@ -76,4 +77,10 @@ export function subagentOptions(
       value: conversationValue,
     };
   });
+}
+
+/** A running turn's spinner in the conversation list: the same two-cell
+ * spinner as the waiting line, coloured by how the turn is going. */
+export function workingSpinner(frame: number, pace: TurnPace): string {
+  return PACE_COLOR[pace](waitingSpinnerGlyph(frame));
 }

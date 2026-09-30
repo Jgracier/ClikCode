@@ -111,4 +111,7 @@ export interface PickerOption<T> {
   /** A list inside this row, opened with Left Arrow -- a conversation's
    * running sub-agents. Left from inside it comes back out. */
   inner?: { title: string; options: readonly PickerOption<T>[] };
+  /** A turn is running in this row's conversation, at this pace: a list that
+   * can animate draws a spinner in front of the label, one that cannot a dot. */
+  working?: 'flowing' | 'slowing' | 'stuck';
 }
