@@ -103,7 +103,7 @@ export class BroadcastObserver implements TurnObserver {
 
   activity(message: string): void {
     this.outputStarted = true;
-    this.broadcast({ type: 'activity', event: { kind: 'thinking', label: message } });
+    this.broadcast({ type: 'note', message });
   }
 
   activityEvent(event: HarnessActivityEvent): void {

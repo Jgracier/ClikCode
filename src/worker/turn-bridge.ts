@@ -260,6 +260,9 @@ async function driveWorkerTurn(
           case 'activity':
             rl.activityEvent(event.event);
             return;
+          case 'note':
+            rl.activity(event.message);
+            return;
           case 'phase':
             rl.phase(event.message);
             return;

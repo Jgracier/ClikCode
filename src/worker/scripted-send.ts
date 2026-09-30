@@ -115,6 +115,9 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
         case 'activity':
           if (ours && !isJsonDefaultMode()) for (const line of renderActivityLine(event.event)) output.write(`${line}\n`);
           return;
+        case 'note':
+          if (ours && !isJsonDefaultMode()) output.write(`${event.message}\n`);
+          return;
         case 'turn-error':
           if (ours) failure = new Error(event.message);
           return;

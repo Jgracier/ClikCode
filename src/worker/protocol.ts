@@ -64,6 +64,10 @@ export type WorkerEvent =
   | { type: 'snapshot'; session: HarnessSession; account?: string; live?: { text: string; waitingLabel: string; prompt?: string } }
   | { type: 'delta'; text: string; mode: 'append' | 'replace' }
   | { type: 'activity'; event: HarnessActivityEvent }
+  /** A line of the turn's own transcript that is not a tool call: an account
+   * switch, a model substitution, an answer cut off at its limit. It was
+   * sent as a thought, which a window shows only until the next one. */
+  | { type: 'note'; message: string }
   | { type: 'phase'; message: string }
   | { type: 'plan'; entries: readonly PlanEntry[] }
   | { type: 'usage'; usage: TurnUsage }
