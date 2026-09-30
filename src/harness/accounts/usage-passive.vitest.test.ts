@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { claude, grok } = vi.hoisted(() => ({
+const { claude, grok, amp } = vi.hoisted(() => ({
   claude: vi.fn(async () => '5h 10% left'),
+  amp: vi.fn(async () => '$9.05 credits left'),
   grok: vi.fn(async () => ({ windows: [{ name: 'weekly', usedPercent: 0, resetsAt: '2999-01-01T00:00:00.000Z' }], label: 'weekly 100% left' })),
 }));
 vi.mock('./usage-probes.js', async (original) => {
   const grokLabel = async () => 'weekly 100% left';
   return {
     ...(await original<typeof import('./usage-probes.js')>()),
-    NATIVE_USAGE_PROBES: { claude, grok: grokLabel },
+    NATIVE_USAGE_PROBES: { claude, grok: grokLabel, amp },
     NATIVE_USAGE_READING_PROBES: { grok: { label: grokLabel, reading: grok } },
   };
 });
@@ -21,7 +22,7 @@ import type { HarnessSession, HarnessState } from '../../session/model.js';
 const account = { id: 'a', provider: 'anthropic', label: 'a', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:a' };
 const stateWith = (invocations: HarnessState['invocations'] = []): HarnessState => ({ accounts: [{ ...account }], sessions: [], invocations } as unknown as HarnessState);
 
-beforeEach(() => { nativeUsageCache.clear(); claude.mockClear(); grok.mockClear(); });
+beforeEach(() => { nativeUsageCache.clear(); claude.mockClear(); grok.mockClear(); amp.mockClear(); });
 
 describe('usage on a passive paint', () => {
   it('never runs a billed probe (a real Claude Code turn) without an explicit ask', async () => {
@@ -40,5 +41,24 @@ describe('usage on a passive paint', () => {
     const later = new Date(Date.now() + 60_000).toISOString();
     await nativeUsageReading(session, stateWith([{ id: 'i', accountId: 'a', provider: 'xai', at: later, latencyMs: 1_000 }]));
     expect(grok).toHaveBeenCalledTimes(2);
+  });
+
+  it('never spawns a probe for an account that is not signed in, nor for no account', async () => {
+    const signedOut = { accounts: [{ ...account, status: 'needs-login' }], sessions: [], invocations: [] } as unknown as HarnessState;
+    expect(await nativeUsageReading({ id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession, signedOut, { network: true })).toBeUndefined();
+    expect(await nativeUsageReading({ id: 's', nativeHarness: 'grok' } as HarnessSession, stateWith(), { network: true })).toBeUndefined();
+    expect(grok).not.toHaveBeenCalled();
+  });
+
+  it('reuses a windowless balance for a few minutes instead of asking on every tick', async () => {
+    const session = { id: 's', nativeHarness: 'amp', accountId: 'a' } as HarnessSession;
+    expect((await nativeUsageReading(session, stateWith()))?.label).toBe('$9.05 credits left');
+    expect((await nativeUsageReading(session, stateWith()))?.label).toBe('$9.05 credits left');
+    expect(amp).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    try {
+      await nativeUsageReading(session, stateWith());
+      expect(amp).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
   });
 });
