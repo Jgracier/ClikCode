@@ -18,12 +18,12 @@ import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminal
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
 import { isGatewayService } from '../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
-import type { HarnessActivityEvent, HarnessPrompter, MessageBlock, PickerOption, ToolCategory } from '../harness/prompter.js';
+import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
@@ -126,6 +126,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingSubmit?: (text: string) => Promise<LiveTurnInputResult>;
   /** Stop showing the running turn without stopping it (Left, empty draft). */
   private leaveWaiting?: () => void;
+  /** The turn this window stepped out of (leaveTurn), still running in its
+   * worker. What it already wrote to scrollback is remembered here, nothing
+   * more of it is drawn while away, and following the same turn again
+   * carries on from where scrollback stops. */
+  private steppedOut?: { sessionId: string; prompt?: string; anchor: number };
+  /** The highest index of the running turn's activities already shown (see
+   * activityEvent's `live`), so replaying them on a (re)join adds only the
+   * ones this window has not seen. */
+  private liveActivitiesShown = -1;
+  /** What the last render said about `currentSession`'s journal. */
+  private journal: JournalState = { running: true };
   /** `id` arrives with the answer to the submission, and is the same id its
    * durable copy (a queued turn, a recorded steer) is stored under. */
   private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command' }> = [];
@@ -503,7 +514,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * source and arrives later; see render/pending-prompt.ts. */
   submitted(prompt: string | undefined): void { this.submittedPrompt = prompt; }
 
-  render(session: HarnessSession, account?: string, notice?: string): void {
+  /** The conversation as the transcript writes it outside a turn's own view.
+   *
+   * A journal nothing runs is an interrupted turn, folded in as one (its
+   * prompt, then its text or "Interrupted turn activity: …"). A journal a
+   * worker is still running is NOT: the live view owns that turn. Folded, it
+   * went into scrollback -- which cannot be taken back -- above the same turn
+   * drawn live, a second copy for every trip to the board and back; and its
+   * summary text, which grows with each call, then hid the seam, so the real
+   * answer was never written at all. Decided here, for every paint, from what
+   * the render said: unsaid means it may be running, so no caller that does
+   * not know can fold it. */
+  private transcriptMessages(session: HarnessSession): NonNullable<HarnessSession['messages']> {
+    return this.journal.running ? settledTranscriptMessages(session, this.journal.prompt) : sessionTranscriptMessages(session);
+  }
+
+  render(session: HarnessSession, account?: string, notice?: string, journal?: JournalState): void {
     if (this.currentSession?.id !== session.id) {
       this.activityEntries = [];
       this.planEntries = [];
@@ -511,6 +537,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // The previous conversation is scrolled up into scrollback -- preserved,
       // not erased -- so the new one starts on a clean viewport.
       this.emitted.requestReseed();
+      // Rewritten whole, a turn still running included, once it is followed.
+      this.steppedOut = undefined;
+    }
+    this.journal = journal ?? { running: true };
+    // The turn stepped out of is over -- ended, with its record saved, or
+    // interrupted. What it streamed is matched against that like any end.
+    if (this.steppedOut && (!this.journal.running || (session.messages?.length ?? 0) > this.steppedOut.anchor)) {
+      this.steppedOut = undefined;
     }
     // A snapshot that already holds this turn's durable record -- folded into
     // `messages`, its journal gone -- IS the end of the turn for the screen,
@@ -535,8 +569,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // but NOT while a turn is running, where the live answer is the one thing
     // that is not persisted yet. A setting applied mid-turn renders the status
     // line (see harness/output.ts), and clearing here would take the
-    // half-written answer off the screen with it.
-    if (!this.waitingLabel) {
+    // half-written answer off the screen with it. Nor while stepped out of a
+    // turn: that answer is carried on from when the turn is followed again.
+    if (!this.waitingLabel && !this.steppedOut) {
       if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
       this.responsePaintTimer = undefined;
       this.liveResponse = '';
@@ -576,7 +611,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
     this.noteData();
     this.activityEntries = [...this.activityEntries, {
-      anchor: this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0,
+      anchor: this.waitingLabel ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0,
       ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
       // Every entry gets one, waiting or not: it is this row's identity for
       // "already retired", and two rows that happen to say the same thing are
@@ -595,7 +630,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
-  activityEvent(event: HarnessActivityEvent): void {
+  /** `live`: this is the running turn's activity number `index`, which
+   * happened `responseOffset` characters into its answer -- a worker's
+   * record of the turn, replayed whole whenever a window (re)joins it. One
+   * already shown is skipped, so replaying is safe at any moment. */
+  activityEvent(event: HarnessActivityEvent, live?: { index: number; responseOffset: number }): void {
+    if (live) {
+      if (live.index <= this.liveActivitiesShown) return;
+      this.liveActivitiesShown = live.index;
+    }
     this.noteData();
     if (event.parentId) {
       // A sub-agent's own calls stay inside the agent row. They are not
@@ -619,8 +662,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return;
     }
     if (event.kind === 'tool-start') this.thought = undefined;
-    const anchor = this.waitingLabel ? this.activityAnchor : this.currentSession ? sessionTranscriptMessages(this.currentSession).length : 0;
-    const responseOffset = this.waitingLabel ? this.liveResponse.length : undefined;
+    const anchor = this.waitingLabel ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0;
+    const responseOffset = this.waitingLabel ? live?.responseOffset ?? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
     // The status line follows the work: "running tests", "editing app.ts"
     // while a call is open, the turn's own phase otherwise. The call itself
@@ -692,9 +735,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const submittedPrompt = this.submittedPrompt;
     this.stopWaiting(false);
     this.submittedPrompt = submittedPrompt;
+    // Following again the very turn this window stepped out of, with nothing
+    // redrawn in between: what it wrote is in scrollback, so it carries on
+    // from there rather than starting the turn's view over beneath it.
+    const out = this.steppedOut;
+    this.steppedOut = undefined;
+    const rejoined = Boolean(out && this.currentSession?.id === out.sessionId && out.prompt === submittedPrompt
+      && (this.currentSession?.messages?.length ?? 0) === out.anchor);
     // A new turn is the reader rejoining the conversation.
     this.alternateScrollback = 0;
-    this.liveResponse = '';
+    if (!rejoined) this.liveResponse = '';
     // A running turn always renders as stable messages, its submitted user
     // prompt, then one live assistant slot. Keep that slot fixed for the
     // whole turn: deriving it from sessionTranscriptMessages made the anchor
@@ -713,9 +763,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingDraft = '';
     this.waitingCursor = 0;
     this.waitingSubmissions = [];
-    this.activeTools = new Map();
-    this.toolPhase = '';
-    this.childActivity.clear();
     this.waitingCancelled = false;
     this.waitingFrame = 0;
     this.waitingStartedAt = Date.now();
@@ -729,10 +776,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.panelState = undefined;
     // Whatever the previous turn retired belongs to the terminal now. This one
     // starts owing everything it produces, and nothing from before it.
-    this.turnTranscript.reset();
-    this.emitted.liveAnswerSettled();
-    this.emitted.turnSequenceFloor = this.timelineSequence;
-    this.streamingBlocks = createStreamingBlockParser();
+    if (!rejoined) {
+      this.activeTools = new Map();
+      this.toolPhase = '';
+      this.childActivity.clear();
+      this.liveActivitiesShown = -1;
+      this.turnTranscript.reset();
+      this.emitted.liveAnswerSettled();
+      this.emitted.turnSequenceFloor = this.timelineSequence;
+      this.streamingBlocks = createStreamingBlockParser();
+    }
     if (input.isTTY) {
       const listen = (): void => {
         this.stopWaitingInput = takeTerminalKeys(this.onWaitingKey);
@@ -829,6 +882,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return Boolean(this.liveResponse || this.activityEntries.some((entry) =>
       entry.anchor === this.activityAnchor && entry.responseOffset !== undefined
       && (entry.event?.kind === 'tool-start' || entry.event?.kind === 'tool-done' || entry.event?.kind === 'tool-error')));
+  }
+
+  /** This window stops following the running turn (← to the board); its
+   * worker carries on with it. Not the turn's end, so nothing of it is
+   * settled: treated as one, the half-streamed answer went into scrollback
+   * cut mid-word, and following the turn again drew it all a second time
+   * beneath. See steppedOut. */
+  leaveTurn(): void {
+    if (this.waitingLabel && this.currentSession) {
+      this.steppedOut = { sessionId: this.currentSession.id, ...(this.submittedPrompt !== undefined ? { prompt: this.submittedPrompt } : {}), anchor: this.activityAnchor };
+    }
+    this.stopWaiting();
   }
 
   stopWaiting(refresh = true): void {
@@ -1119,16 +1184,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
     const persistedMessages = pendingPrompt
       ? [...stableMessages, { role: 'user' as const, content: pendingPrompt }]
-      : sessionTranscriptMessages(session);
+      : this.transcriptMessages(session);
     // Tool events often arrive before the first prose token. They still belong
     // to the in-flight assistant message. Render an empty temporary assistant
     // anchor immediately; otherwise the tools remain invisible and then all
     // appear at once when the first sentence arrives.
     const settledMessage = pendingPrompt ? undefined : persistedMessages[persistedMessages.length - 1];
-    const hasTransientAssistant = transientAssistantRequired(
+    // Nothing of a turn stepped out of is drawn until it is followed again.
+    const hasTransientAssistant = !this.steppedOut && (transientAssistantRequired(
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
       settledMessage?.role === 'assistant' ? settledMessage.content : undefined,
-    ) || Boolean(pending?.steers?.length);
+    ) || Boolean(pending?.steers?.length));
     const storedQueued = session.queuedTurns ?? [];
     // A queued message has two sources and they overlap. It is drawn live the
     // moment it is typed (waitingSubmissions), and the loop then writes it

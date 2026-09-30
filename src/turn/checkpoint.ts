@@ -126,14 +126,14 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   return messages;
 }
 
-/** The conversation as it stands BEFORE the turn a window is about to follow.
+/** The conversation as it stands BEFORE a turn a worker is still running.
  *
  * sessionTranscriptMessages folds an in-flight journal in as if it had ended
  * -- its prompt, then "Interrupted turn activity: …" -- which is right for a
- * turn nothing is running. For the turn being followed it drew that turn
- * twice: once folded in, once live beneath it, on every switch into a
- * conversation mid-turn. `runningPrompt` is the followed turn's prompt; a
- * journal for any other prompt is an older interrupted turn and stays. */
+ * turn nothing is running. For a running turn it drew that turn twice: once
+ * folded in, once live beneath it (see the prompter's transcriptMessages).
+ * `runningPrompt` is the running turn's prompt; a journal for any other
+ * prompt is an older interrupted turn and stays. */
 export function settledTranscriptMessages(session: HarnessSession, runningPrompt?: string): Message[] {
   const pending = session.pendingTurn;
   const followed = pending && (runningPrompt === undefined || pending.prompt.trim() === runningPrompt.trim());
