@@ -96,6 +96,9 @@ export async function runVendorSessionAttempt(input: {
         // every ordinary turn through the CLI fallback.
         effortRequiresProtocol: harness.acp?.inheritCliOptions === false && effort !== 'medium',
         effortConfigId: harness.acp?.effortConfigId,
+        providerConfigId: harness.acp?.providerConfigId,
+        modelProviderSeparator: harness.modelProviderSeparator,
+        allowAgentAuth: Boolean(prompter),
         permissionModeIds: harness.acp?.permissionModeIds,
         environment, signal, images, onSessionId,
         ...sharedObserver,

@@ -51,7 +51,7 @@ interface AccountFailureSignals {
 // "No API key found for provider …" and "No route-compatible authentication
 // source is configured for openai." are OpenClaw's (2026.9.6); "No access
 // token found for Nous Portal login." is Hermes's.
-const AUTH_TEXT = /(?:not authenticated|authentication (?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected|headless mode requires existing settings|no (?:api[ _-]?key|access token) found|no (?:route-compatible )?authentication source is configured)/i;
+const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected|headless mode requires existing settings|no (?:api[ _-]?key|access token) found|no (?:route-compatible )?authentication source is configured)/i;
 // Both halves of "ran out" matter, because vendors write it either way
 // round. Captured verbatim from real refusals on this machine:
 //   antigravity  'RESOURCE_EXHAUSTED (code 429): Individual quota reached.
@@ -91,7 +91,7 @@ const THROTTLE_TEXT = /(?:rate limit|too many requests|temporar(?:y|ily) throttl
  *  the user was told "account failed" -- true but useless, since it names
  *  neither the problem nor the fix. Signing in again cannot help, which is
  *  why this is distinct from authentication-required. */
-const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|no valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription))/i;
+const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|no valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual)/i;
 const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
@@ -243,6 +243,10 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // 403 is also "this model is not on your plan", "region blocked", a WAF, or
   // a content policy refusal. Marking the account needs_login for those sends
   // the user through a sign-in that cannot fix anything.
+  // Kimi prefixes a plan denial with "Authentication required: 403"; Gemini
+  // prefixes an individual-account shutdown with client wording. Re-login
+  // cannot fix either, so these explicit eligibility denials take precedence.
+  if (INELIGIBLE_TEXT.test(text)) return 'account-ineligible';
   if (AUTH_TEXT.test(text)) return 'authentication-required';
   if (rateLimitStatus === 'rejected' || QUOTA_TEXT.test(text)) return 'quota-exhausted';
   if (status === 429 || THROTTLE_TEXT.test(text)) return 'temporarily-throttled';
@@ -257,9 +261,6 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // no other vendor's equivalent phrasing has been verified, so none is
   // guessed at.
   if (/no rollout found/i.test(text)) return 'native-thread-invalid';
-  // Before request-invalid: an ineligible account is about the ACCOUNT, so
-  // the next one is worth trying, whereas a rejected request is not.
-  if (INELIGIBLE_TEXT.test(text)) return 'account-ineligible';
   // Last, so a genuine auth/quota/throttle signal always wins: those can
   // legitimately be worded as a rejection too, and they ARE worth another
   // account.

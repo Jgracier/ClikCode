@@ -618,6 +618,11 @@ describe('replies that are really a failed call', () => {
     expect(harnessReplyError(harness('goose'), failure)).toEqual({});
     expect(harnessReplyError(harness('goose'), 'I ran into this error: the test fails on line 3. Fixed it.')).toBeUndefined();
   });
+
+  it('reads Auggie\'s ACP quota notice as a failure', () => {
+    expect(harnessReplyError(harness('auggie'), '⚠️ **You have run out of usage for an account. Please upgrade.** ⚠️')).toEqual({ statusCode: 402 });
+    expect(harnessReplyError(harness('auggie'), 'The test says “You have run out of usage for” in a fixture.')).toBeUndefined();
+  });
 });
 
 describe('an ACP launch', () => {
