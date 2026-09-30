@@ -72,13 +72,16 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // provider, and the model picker connects new ones.
     // 213 -> 215: OpenClaw's real turn flags, --timeout and --verbose.
     // 78 -> 79: Vibe declares a model selector, so its model row folds.
+    // 79 -> 83: dcode, Devin and Junie add three model selectors and Junie
+    // adds an effort selector; each is owned by a common ClikCode control.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(79);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(83);
     expect(kept.length).toBe(215);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
-    // OpenClaw used to fold everything it published; it has real rows now.
-    expect(emptied.map((h) => h.command)).toEqual([]);
+    // These ACP-only agents expose no vendor-specific option yet. Their
+    // model and effort controls still work through the common picker.
+    expect(emptied.map((h) => h.command)).toEqual(['dcode', 'devin', 'junie']);
   });
 
   it('routes both spellings of extra directories to the same command', () => {

@@ -47,6 +47,10 @@ export const MODEL_OWNER_NAMES: Readonly<Record<string, readonly string[]>> = {
   vibe: ['mistral-vibe', 'vibe-acp', 'Mistral Vibe'],
   openhands: ['OpenHands CLI'],
   cn: ['continue', 'Continue'],
+  dcode: ['deepagents-code', 'Deep Agents Code'],
+  devin: ['Devin CLI'],
+  junie: ['Junie CLI'],
+  mcode: ['minimax-code', 'MiniMax Code'],
   'clikcode-local': ['ClikCode Local'],
   gateway: ['clikdeploy', 'clikdeploy-gateway', 'ClikDeploy Gateway'],
 };
@@ -62,7 +66,7 @@ const GROUPS: ReadonlyArray<ReadonlySet<string>> = Object.entries(MODEL_OWNER_NA
 
 /** Only these harnesses use a provider before a colon in model ids. Other
  * vendors can use a colon for a model tag, which must remain intact. */
-const ROUTED_HARNESSES = new Set(['opencode', 'goose', 'pi', 'hermes', 'openclaw', 'kilo']);
+const ROUTED_HARNESSES = new Set(['opencode', 'goose', 'pi', 'hermes', 'openclaw', 'kilo', 'dcode', 'mcode']);
 const ROUTED_NAMES = new Set([...ROUTED_HARNESSES]
   .flatMap((id) => [id, ...(MODEL_OWNER_NAMES[id] ?? [])].map(bare)));
 

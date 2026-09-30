@@ -464,7 +464,7 @@
           {
             "id": "provider",
             "title": "Pick a provider and model",
-            "description": "Under the message box, **Provider** lists all 25 harnesses, ClikDeploy Gateway and ClikCode Local, and **Model** lists the models of the provider the chat is on. A harness that is not installed installs when you choose it.\n[Open the chat](command:clikcode.focus)",
+            "description": "Under the message box, **Provider** lists the supported harnesses, ClikDeploy Gateway and ClikCode Local, and **Model** lists the models of the provider the chat is on. A harness that is not installed installs when you choose it.\n[Open the chat](command:clikcode.focus)",
             "media": {
               "image": "media/walkthrough/picker.png",
               "altText": "The Provider menu"

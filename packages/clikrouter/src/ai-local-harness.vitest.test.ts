@@ -31,13 +31,31 @@ describe('local harness catalog', () => {
     // guarding.
     expect(AI_LOCAL_HARNESSES.map((item) => item.command).sort()).toEqual([
       'aider', 'amp', 'antigravity', 'auggie', 'claude', 'cline', 'cn', 'codex',
-      'command', 'copilot', 'cursor', 'droid', 'gemini', 'goose', 'grok', 'hermes',
-      'kilo', 'kimi', 'kiro', 'openclaw', 'opencode', 'openhands', 'pi', 'qwen', 'vibe',
+      'command', 'copilot', 'cursor', 'dcode', 'devin', 'droid', 'gemini', 'goose',
+      'grok', 'hermes', 'junie', 'kilo', 'kimi', 'kiro', 'mcode', 'openclaw',
+      'opencode', 'openhands', 'pi', 'qwen', 'vibe',
     ]);
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(localHarnessForCommand(harness.command)).toEqual(harness);
       expect(localHarnessForProvider(harness.provider)).toEqual(harness);
       expect(harness.surface).toBe('terminal');
+    }
+  });
+
+  it('launches the new ACP agents with the vendors’ documented commands', () => {
+    const cases = [
+      ['dcode', ['--acp', '--model', 'anthropic:claude-sonnet-5']],
+      ['devin', ['acp', '--model', 'opus']],
+      ['junie', ['--model', 'sonnet', '--acp', 'true']],
+      ['mcode', ['acp']],
+    ] as const;
+    for (const [command, expected] of cases) {
+      const harness = localHarnessForCommand(command)!;
+      expect(harness.tier).toBe('experimental');
+      expect(harnessTurnTransport(harness)).toBe('acp');
+      const model = command === 'dcode' ? 'anthropic:claude-sonnet-5' : command === 'mcode' ? null : command === 'devin' ? 'opus' : 'sonnet';
+      const launch = harnessAcpLaunch(harness, { model, effort: null, permissionMode: 'ask' })!;
+      expect(launch.argv).toEqual(expected);
     }
   });
 
@@ -59,9 +77,10 @@ describe('local harness catalog', () => {
     expect(localHarnessForCommand('command')).toMatchObject({ surface: 'terminal', binary: 'cmdc' });
   });
 
-  it('keeps every terminal harness behind a centralized one-shot adapter', () => {
+  it('keeps every terminal harness behind a centralized CLI or ACP adapter', () => {
     for (const harness of AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal')) {
-      expect(harness.turn, harness.command).toBeDefined();
+      expect(Boolean(harness.turn || harness.acp), harness.command).toBe(true);
+      if (!harness.turn) expect(harnessTurnTransport(harness), harness.command).toBe('acp');
     }
   });
 
@@ -391,15 +410,16 @@ describe('local harness catalog', () => {
       expect(harnessIntegrationLevel({ ...harness, integration: undefined }), harness.command).toBe(harness.integration);
       // A text parser and a text contract are the same statement (Aider's is
       // text with a banner around the answer).
-      expect(harness.parser === 'text' || harness.parser === 'aider', harness.command).toBe(harness.turn?.output === 'text');
+      if (harness.turn) expect(harness.parser === 'text' || harness.parser === 'aider', harness.command).toBe(harness.turn.output === 'text');
+      else expect(harness.parser, harness.command).toBe('text');
       if (harness.effortArgvPrefix) expect(harness.effortValues?.length, harness.command).toBeGreaterThan(0);
       else expect(harness.effortValues, harness.command).toBeUndefined();
     }
   });
 
-  it('leaves no entry without a turn, and no capability row without an entry', () => {
+  it('leaves no entry without a turn or ACP contract, and no capability row without an entry', () => {
     for (const harness of AI_LOCAL_HARNESSES) {
-      expect(harness.turn, harness.command).toBeDefined();
+      expect(Boolean(harness.turn || harness.acp), harness.command).toBe(true);
       expect(harnessCanRunTurns(harness), harness.command).toBe(true);
     }
     const commands = new Set(AI_LOCAL_HARNESSES.map((item) => item.command));
@@ -511,7 +531,7 @@ describe('local harness catalog', () => {
     expect(guardedPromptArgv({ promptGuard: 'double-dash', promptArgvPrefix: ['-p'] }, '-x')).toEqual([' -x']);
     expect(guardedPromptArgv({}, 'plain - dash inside')).toEqual(['plain - dash inside']);
     for (const harness of AI_LOCAL_HARNESSES) {
-      if (harness.turn?.promptInput === 'stdin') continue;
+      if (!harness.turn || harness.turn.promptInput === 'stdin') continue;
       const argv = nativeHarnessTurnArgv(harness, { prompt: '--version' });
       expect(argv.at(-1) === ' --version' || (argv.at(-2) === '--' && argv.at(-1) === '--version'), harness.command).toBe(true);
       expect(argv.filter((arg) => arg === '--version'), harness.command).toHaveLength(argv.at(-2) === '--' ? 1 : 0);
@@ -613,4 +633,3 @@ describe('an ACP launch', () => {
       .toEqual(['--reasoning-effort', 'high', '--skip-permissions-unsafe']);
   });
 });
-

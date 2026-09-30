@@ -48,7 +48,7 @@ describe('harness turn transports', () => {
         continue;
       }
       const transport = harnessTurnTransport(candidate);
-      expect(candidate.turn, candidate.command).toBeDefined();
+      expect(Boolean(candidate.turn || candidate.acp), candidate.command).toBe(true);
       if (transport === 'text-cli') expect(harnessIntegrationLevel(candidate), candidate.command).toBe('compatibility');
       else expect(['native', 'structured'], candidate.command).toContain(harnessIntegrationLevel(candidate));
     }

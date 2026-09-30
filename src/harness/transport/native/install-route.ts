@@ -41,7 +41,7 @@ function platformName(platform: NodeJS.Platform): string {
 export function manualInstallCommand(route: HarnessInstallRoute, platform: NodeJS.Platform = process.platform): string | undefined {
   switch (route.kind) {
     case 'npm': return `npm install -g ${route.package}`;
-    case 'uv-tool': return `uv tool install ${route.step.python ? `--python ${route.step.python} ` : ''}${route.step.package}`;
+    case 'uv-tool': return `uv tool install ${route.step.python ? `--python ${route.step.python} ` : ''}${route.step.package}${(route.step.with ?? []).map((name) => ` --with ${name}`).join('')}`;
     case 'script': {
       const args = route.step.args ?? [];
       if (platform === 'win32') {

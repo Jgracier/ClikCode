@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
+import { forceStoreSession, unforceStoreSession } from '../session/ephemeral.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { readWorkerRecord } from './registry.js';
 import { closeAllWorkerClients, runTurnThroughWorker } from './turn-bridge.js';
@@ -29,6 +30,7 @@ async function terminateSpawnedWorkers(): Promise<void> {
   for (const sessionId of spawnedSessionIds.splice(0)) {
     const record = await readWorkerRecord(sessionId).catch(() => undefined);
     if (record) { try { process.kill(record.pid, 'SIGTERM'); } catch { /* already gone */ } }
+    unforceStoreSession(sessionId);
   }
 }
 
@@ -64,6 +66,7 @@ async function isolatedSession(): Promise<HarnessSession> {
     effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
+  forceStoreSession(session.id);
   await writeState(state);
   spawnedSessionIds.push(session.id);
   return session;
