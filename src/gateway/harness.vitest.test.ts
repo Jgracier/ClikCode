@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from './harness';
@@ -9,16 +9,31 @@ import type { HarnessSession } from '../session/model';
 
 // A turn saves its conversation under the state directory; without its own,
 // every run appended to ~/.clikcode/sessions/gw-1 and the next run's model
-// was handed all of it.
-const previousHome = process.env.CLIKCODE_HOME;
-beforeEach(() => { process.env.CLIKCODE_HOME = mkdtempSync(join(tmpdir(), 'gw-home-')); });
+// was handed all of it. HOME too: with a state directory set, a turn's first
+// MCP load imports the servers the user gave their vendor harnesses (from
+// ~/.claude.json and friends) and starts them -- the developer's real `npx -y`
+// servers, which took 5-10s and timed tests out.
+const previous = { CLIKCODE_HOME: process.env.CLIKCODE_HOME, HOME: process.env.HOME };
+const created: string[] = [];
+const temporary = (prefix: string): string => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  created.push(dir);
+  return dir;
+};
+beforeEach(() => {
+  process.env.CLIKCODE_HOME = temporary('gw-home-');
+  process.env.HOME = temporary('gw-user-');
+});
 afterEach(() => {
-  if (previousHome === undefined) delete process.env.CLIKCODE_HOME;
-  else process.env.CLIKCODE_HOME = previousHome;
+  for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const [key, value] of Object.entries(previous)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 const workspace = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), 'gw-'));
+  const dir = temporary('gw-');
   mkdirSync(join(dir, 'src'), { recursive: true });
   writeFileSync(join(dir, 'src', 'a.ts'), 'export const a = 1;\n');
   return dir;
@@ -54,7 +69,7 @@ describe('a gateway turn runs the agent loop on this machine', () => {
     const second = client.requests[1];
     expect(JSON.stringify(second?.items ?? []), 'the tool result never reached the model')
       .toContain('export const a = 1;');
-  }, 20_000);
+  });
 });
 
 describe('a headless turn', () => {
@@ -71,7 +86,7 @@ describe('a headless turn', () => {
     const seen = JSON.stringify(client.requests[1]?.items ?? []);
     expect(seen).toMatch(/no approver is attached/);
     expect(seen).not.toMatch(/user declined/);
-  }, 20_000);
+  });
 });
 
 describe('a gateway that cannot serve a harness turn', () => {
