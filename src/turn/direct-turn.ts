@@ -11,7 +11,7 @@ import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../daemon/server.js';
 import { accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, type AccountFailureKind } from './failover.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
-import { accountAfterFailure, initialAccountChoice, matchesDirectTurnModel, type FailoverTally } from './account-routing.js';
+import { accountAfterFailure, initialAccountChoice, matchesDirectTurnModel, turnAccountRecorder, type FailoverTally } from './account-routing.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { prepareAttachments } from '../session/attachments.js';
 
@@ -44,20 +44,20 @@ export async function sendDirectApiTurn(input: {
   let switchReason: AccountFailureKind = 'quota-exhausted';
   const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
   const onThisModel = (item: AiHarnessAccount): boolean => matchesDirectTurnModel(item, model);
-  const switchAccount = (to: AiHarnessAccount, why: AccountFailureKind): void => {
+  const recordAccount = turnAccountRecorder(session, () => checkpoint.persistNow());
+  const switchAccount = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
     prompter?.activity(chalk.yellow(accountSwitchNotice(why, to.label)));
     prompter?.phase(accountSwitchPhase(to.label));
     switchedFrom = account.label;
     switchReason = why;
     account = to;
-    session.accountId = to.id;
+    await recordAccount(to);
   };
   try {
   const initial = initialAccountChoice(state, account, session.accountFailover, onThisModel, tally.attempted);
   if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
   if (initial.kind === 'switch') {
-    switchAccount(initial.account, 'quota-exhausted');
-    await checkpoint.persistNow();
+    await switchAccount(initial.account, 'quota-exhausted');
   }
   const invoke = (active: AiHarnessAccount) => {
     // A retry is a new response attempt: this path re-sends the whole prompt,
@@ -93,7 +93,7 @@ export async function sendDirectApiTurn(input: {
         persist: () => checkpoint.persistNow(),
         notice: (message) => prompter?.activity(chalk.yellow(message)),
       });
-      switchAccount(fallback, failureKind);
+      await switchAccount(fallback, failureKind);
     }
   }
   const invocation = {

@@ -8,6 +8,7 @@ import { usageExhaustedMessage } from './usage-exhausted.js';
 import { accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
 import { recordQuotaRefusal } from './account-outcome.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
+import { readState } from '../session/state/read.js';
 
 /** Credentials do not select a transport by themselves: tool-style providers
  * use their CLI even when the account supplies an API key. */
@@ -164,4 +165,25 @@ export async function accountAfterFailure(input: {
     state, current: account, attempted: tally.attempted, matchesBackend: input.matchesBackend,
     exhaustedAny: tally.exhaustedAny, lastFailure: failure, lastOtherFailure: tally.lastOtherFailure,
   });
+}
+
+/** The conversation's account, as a turn that moved to `to` records it.
+ *
+ * The account a turn runs on is the turn's own; the conversation's is the
+ * user's too. A window's /settings or /accounts can change it mid-turn, and
+ * the turn's copy then wrote its failover choice straight over that: the
+ * three-way merge lets a field this process changed win. So the turn records
+ * its move only while the conversation is still on the account the turn last
+ * recorded -- otherwise the user's choice stands, for the next turn -- and
+ * saves at once, so the next move compares against what is really stored. */
+export function turnAccountRecorder(session: HarnessSession, persist: () => Promise<void>): (to: AiHarnessAccount) => Promise<void> {
+  let recorded = session.accountId;
+  return async (to) => {
+    if (to.id === recorded) return;
+    const stored = (await readState()).sessions.find((item) => item.id === session.id);
+    if (stored && stored.accountId !== recorded) return;
+    session.accountId = to.id;
+    recorded = to.id;
+    await persist();
+  };
 }

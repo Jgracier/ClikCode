@@ -10,7 +10,7 @@ import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
-import { accountAfterFailure, initialAccountChoice, turnBackendForAccount, type FailoverTally } from './account-routing.js';
+import { accountAfterFailure, initialAccountChoice, turnAccountRecorder, turnBackendForAccount, type FailoverTally } from './account-routing.js';
 import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
 import { failoverPrompt, INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { interruptedTurnFailoverPrompt } from './interrupted-turn-prompt.js';
@@ -149,13 +149,14 @@ export async function sendVendorTurn(input: {
   /** Moving the turn to another account: said before the retry, not after it
    * returns (it happens inside one await chain and would otherwise look
    * instantaneous), and with the reason, so a crash is not called a spent plan. */
+  const recordAccount = turnAccountRecorder(session, () => checkpoint.persistNow());
   const switchAccount = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
     prompter?.activity(chalk.yellow(accountSwitchNotice(why, to.label)));
     prompter?.phase(accountSwitchPhase(to.label));
     await closePersistentTransport(session.id);
     switchedFrom = account.label;
     account = to;
-    session.accountId = to.id;
+    await recordAccount(to);
   };
   try {
   const initial = initialAccountChoice(state, account, session.accountFailover, onVendorBackend, tally.attempted);
@@ -388,7 +389,7 @@ export async function sendVendorTurn(input: {
             });
           if (signedIn) {
             account = await syncAccountIdentityAfterLogin(harness, account, state);
-            session.accountId = account.id;
+            await recordAccount(account);
             // The failed reply may already be on screen; the retry replaces it.
             editAnswer('clear');
             continue;
