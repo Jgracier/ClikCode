@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AI_LOCAL_HARNESSES, harnessIntegrationLevel } from '@clikcode/router/ai-local-harness';
-import { harnessTurnTransport } from './select.js';
+import { harnessTurnTransport, sessionTurnTransport } from './select.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const catalog = (command: string): AiLocalHarnessDefinition => {
@@ -27,11 +27,21 @@ describe('harness turn transports', () => {
     expect(harnessTurnTransport(catalog('cursor'), true, { acpImages: true })).toBe('structured-cli');
   });
 
-  it('leaves experimental ACP declarations on their CLI path unless explicitly allowed', () => {
-    for (const command of ['goose', 'qwen', 'kiro']) {
-      expect(harnessTurnTransport(catalog(command)), command).toBe('structured-cli');
-      expect(harnessTurnTransport(catalog(command), false, { allowExperimentalAcp: true }), command).toBe('acp');
+  it('uses ACP for every catalog entry that declares it', () => {
+    for (const candidate of AI_LOCAL_HARNESSES.filter((item) => item.acp)) {
+      expect(harnessTurnTransport(candidate as AiLocalHarnessDefinition), candidate.command).toBe('acp');
     }
+  });
+
+  it('keeps native conversations on the transport that created their vendor session', () => {
+    const openCode = catalog('opencode');
+    expect(sessionTurnTransport(openCode, {})).toBe('acp');
+    for (const command of ['gemini', 'opencode', 'goose', 'kiro', 'qwen', 'kilo', 'auggie']) {
+      expect(sessionTurnTransport(catalog(command), { nativeSessionId: 'old-cli-thread' }), command).toBe('structured-cli');
+    }
+    expect(sessionTurnTransport(openCode, { nativeSessionId: 'new-acp-thread', nativeTransport: 'acp' }, true, { acpImages: true })).toBe('acp');
+    expect(sessionTurnTransport(openCode, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' })).toBe('structured-cli');
+    expect(sessionTurnTransport(openCode, { nativeSessionId: 'locally-minted', nativeSessionPreallocated: true })).toBe('acp');
   });
 
   it('decides from the declaration, not the command name', () => {

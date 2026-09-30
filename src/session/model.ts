@@ -61,6 +61,9 @@ export interface HarnessSession {
    */
   gatewayConfirmed?: true;
   nativeSessionId?: string;
+  /** The transport that owns nativeSessionId. A thread stays on its transport
+   * so an ACP id is never passed to a one-shot CLI, or vice versa. */
+  nativeTransport?: 'acp' | 'structured-cli' | 'text-cli';
   /** `nativeSessionId` was minted by ClikCode (structured-CLI `idKind: 'uuid'`)
    * and the vendor process has not yet confirmed it exists. While set, a retry
    * re-creates with the same id instead of resuming a session that never was. */

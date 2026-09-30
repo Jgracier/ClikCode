@@ -12,10 +12,13 @@ ClikCode in VS Code, rebuilt as a finished product: everything ClikCode is, in t
   New Tab* and *Open in New Window* open more chats, each with a conversation of its own.
 - **A real composer**: `@` to mention files, `/` for every command with descriptions, attached
   selections and pasted images, send and stop in the box, steering while a turn runs.
-- **Provider and Model** as two buttons in the composer footer. *Provider* lists all 25 harnesses,
+- **Provider and Model** as two buttons in the composer footer. *Provider* lists all 29 harnesses,
   ClikDeploy Gateway and ClikCode Local, grouped by signed in / installed / available, with a
   search; a harness that is not installed installs when chosen, with progress shown. *Model* lists
   the models of the provider the chat is on, so it changes when the provider does.
+- **ACP sessions** for all 18 harnesses that declare an ACP entry point, with
+  model and supported mode controls carried over the protocol. Existing CLI
+  conversations stay on their original transport.
 - **Effort and permissions** (Ask / Auto / Bypass, plan mode, Gateway fast mode) in the footer.
 - **Conversations**: search, resume, rename, fork, archive, delete, open in a new tab, or continue
   in the terminal (`clikcode sessions resume`) — the same list as the CLI, running ones first.

@@ -34,7 +34,7 @@ import type { TurnRunOptions } from './session-turn.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
 import { runVendorSessionAttempt } from './vendor-session-attempt.js';
 import { emitHarnessOutput } from '../harness/output.js';
-import { harnessTurnTransport } from '../harness/transport/select.js';
+import { sessionTurnTransport } from '../harness/transport/select.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelProvider } from '../runtime/lazy-bridge.js';
 import { prepareAttachments } from '../session/attachments.js';
@@ -229,6 +229,7 @@ export async function sendVendorTurn(input: {
   const onSessionId = async (nativeSessionId: string): Promise<void> => {
     if (session.nativeSessionId === nativeSessionId && !session.nativeSessionPreallocated) return;
     session.nativeSessionId = nativeSessionId;
+    if (activeTransport === 'acp' || activeTransport === 'structured-cli' || activeTransport === 'text-cli') session.nativeTransport ??= activeTransport;
     delete session.nativeSessionPreallocated;
     await checkpoint.persistNow();
   };
@@ -274,10 +275,12 @@ export async function sendVendorTurn(input: {
     onApproval: async (title: string, detail?: string) => (await prompter?.approval(title, detail)) === true,
     onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
   } satisfies HarnessTurnObserver;
+  let activeTransport: ReturnType<typeof sessionTurnTransport> | undefined;
   for (;;) {
     const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
     const hasImages = images.length > 0;
-    const transport = harnessTurnTransport(harness, hasImages, { acpImages: true });
+    const transport = sessionTurnTransport(harness, session, hasImages, { acpImages: true });
+    activeTransport = transport;
     // A fresh native thread with prior ClikCode messages: see above. Also
     // covers an id ClikCode minted that the vendor never confirmed.
     let caughtTurnFailure: Error | undefined;
@@ -320,6 +323,7 @@ export async function sendVendorTurn(input: {
     const replyError = !result.isError ? harnessReplyError(harness, result.text ?? '') : undefined;
     if (replyError) result = { ...result, isError: true, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
     if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
+    if (session.nativeSessionId && (transport === 'acp' || transport === 'structured-cli' || transport === 'text-cli')) session.nativeTransport ??= transport;
     // A route that keeps no history: forget the session, so the next turn
     // opens a fresh one and carries ClikCode's own transcript (the fresh-
     // thread replay above) instead of resuming into an empty memory.

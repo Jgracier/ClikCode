@@ -2,6 +2,40 @@ import { describe, expect, it } from 'vitest';
 import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, runAcpTurn } from './acp-client.js';
 
 describe('shared ACP adapter contract', () => {
+  it('sets model, permission mode, and effort over ACP before prompting', async () => {
+    const agent = `
+      const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+      const calls = [];
+      let buf = '';
+      process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
+        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+        if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1',
+          configOptions: [
+            { id: 'model', currentValue: 'old', options: [{ value: 'old' }, { value: 'new' }] },
+            { id: 'thinking_effort', currentValue: 'off', options: [{ value: 'off' }, { value: 'high' }] }
+          ], modes: { currentModeId: 'auto', availableModes: [{ id: 'auto' }, { id: 'approve' }] } } });
+        else if (m.method === 'session/set_config_option' || m.method === 'session/set_mode') {
+          calls.push([m.method, m.params]); send({ id: m.id, result: {} });
+        } else if (m.method === 'session/prompt') {
+          send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(calls) } } } });
+          send({ id: m.id, result: { stopReason: 'end_turn' } });
+        }
+      } });
+    `;
+    const result = await runAcpTurn({
+      binary: process.execPath, command: 'goose', argv: ['-e', agent], cwd: process.cwd(),
+      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'new', effort: 'high',
+      modelRequiresProtocol: true, effortRequiresProtocol: true, effortConfigId: 'thinking_effort',
+      permissionModeIds: { ask: 'approve' },
+    });
+    expect(JSON.parse(result.text)).toEqual([
+      ['session/set_config_option', { sessionId: 's1', configId: 'model', value: 'new' }],
+      ['session/set_mode', { sessionId: 's1', modeId: 'approve' }],
+      ['session/set_config_option', { sessionId: 's1', configId: 'thinking_effort', value: 'high' }],
+    ]);
+  });
+
   it('normalizes agent prose and tool lifecycle events', () => {
     expect(acpResponseDelta({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } })).toBe('hello');
     expect(acpActivityEvent({ sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Read config', status: 'pending' }))

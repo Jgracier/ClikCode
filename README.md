@@ -14,6 +14,10 @@ set of controls, the same keystrokes whichever tool answers. It replaces
 nothing — your tools stay yours, the logins you already had keep working — and
 what it adds is this:
 
+For the 18 harnesses with a native ACP entry point, ClikCode uses ACP for
+ordinary turns. When an agent cannot carry a particular image, model, or
+reasoning choice over ACP, ClikCode uses that harness's CLI path where safe.
+
 **Every tool, one way of working.** Stop memorizing flags. ClikCode asks each
 tool what it supports and offers you that — models, reasoning level, approval
 behavior — in the same place every time.

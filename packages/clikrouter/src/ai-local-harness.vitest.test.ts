@@ -433,17 +433,14 @@ describe('local harness catalog', () => {
     expect(acp.droid).toMatchObject({ argv: ['exec', '--output-format', 'acp'], optionPlacement: 'after' });
     expect(acp.hermes).toMatchObject({ argv: ['acp'] });
     for (const command of ['cline', 'copilot', 'droid', 'hermes']) {
-      expect(acp[command]!.experimental, command).toBeUndefined();
       expect(localHarnessForCommand(command)!.transport, command).toBe('acp');
     }
-    // gemini moved to a supported `--acp` (its own --help calls
-    // --experimental-acp deprecated), so it is no longer in the experimental
-    // group even though ClikCode still PREFERS its CLI transport.
+    // Every catalog ACP entry uses the protocol by default; the CLI adapter
+    // is retained only for a turn with unsupported input capabilities.
     expect(acp.gemini).toMatchObject({ argv: ['--acp'] });
-    expect(acp.gemini!.experimental).toBeUndefined();
-    for (const [command, argv] of Object.entries({ opencode: ['acp'], goose: ['acp'], qwen: ['--experimental-acp'], kiro: ['acp'], kilo: ['acp'], auggie: ['--acp'] })) {
-      expect(acp[command], command).toMatchObject({ argv, experimental: true });
-      expect(localHarnessForCommand(command)!.transport, command).not.toBe('acp');
+    for (const [command, argv] of Object.entries({ opencode: ['acp'], goose: ['acp'], qwen: ['--acp'], kiro: ['acp'], kilo: ['acp'], auggie: ['--acp'] })) {
+      expect(acp[command], command).toMatchObject({ argv });
+      expect(localHarnessForCommand(command)!.transport, command).toBe('acp');
     }
     // kimi's ACP is a SUBCOMMAND, not a flag -- corrected in the catalog
     // against the real Kimi Code 2.0.2 and never reflected here.
@@ -458,7 +455,7 @@ describe('local harness catalog', () => {
 
   it('builds the ACP spawn contract from declarations only', () => {
     expect(harnessAcpLaunch(localHarnessForCommand('droid')!, { model: 'gpt-5', effort: 'high', permissionMode: 'auto' }))
-      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp', '--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: ['--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], optionPlacement: 'after', experimental: false });
+      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp', '--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: ['--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], optionPlacement: 'after' });
     expect(harnessAcpLaunch(localHarnessForCommand('copilot')!, { model: 'gpt-5', effort: 'high', permissionMode: 'bypass' }))
       .toMatchObject({ binary: 'copilot', argv: ['--model', 'gpt-5', '--effort', 'high', '--allow-all', '--acp', '--stdio'] });
     expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { effort: 'low', permissionMode: 'auto' }))
@@ -467,17 +464,21 @@ describe('local harness catalog', () => {
     expect(harnessAcpLaunch(localHarnessForCommand('hermes')!, { permissionMode: 'bypass', effort: 'max' }))
       .toMatchObject({ binary: 'hermes', argv: ['--reasoning', 'max', '--yolo', 'acp'] });
     expect(harnessAcpLaunch(localHarnessForCommand('vibe')!)).toMatchObject({ binary: 'vibe-acp', argv: [] });
-    expect(harnessAcpLaunch(localHarnessForCommand('gemini')!)).toMatchObject({ argv: ['--acp'], experimental: false });
+    expect(harnessAcpLaunch(localHarnessForCommand('gemini')!)).toMatchObject({ argv: ['--acp'] });
+    for (const command of ['opencode', 'kilo', 'goose']) {
+      expect(harnessAcpLaunch(localHarnessForCommand(command)!, { model: 'chosen/model', effort: 'high', permissionMode: 'bypass' })?.argv, command).toEqual(['acp']);
+    }
+    expect(harnessAcpLaunch(localHarnessForCommand('kiro')!, { model: 'chosen-model', effort: 'high', permissionMode: 'bypass' })?.argv)
+      .toEqual(['acp', '--model', 'chosen-model', '--effort', 'high', '--trust-all-tools']);
     expect(harnessAcpLaunch(localHarnessForCommand('claude')!)).toBeUndefined();
   });
 
-  it('prefers the proven transport and falls back from ACP for image turns', () => {
+  it('prefers ACP and selects CLI only for image turns that cannot forward images', () => {
     expect(harnessTurnTransport(localHarnessForCommand('codex')!)).toBe('codex-app-server');
     expect(harnessTurnTransport(localHarnessForCommand('copilot')!)).toBe('acp');
     expect(harnessTurnTransport(localHarnessForCommand('copilot')!, { hasImages: true })).toBe('text-cli');
     expect(harnessTurnTransport(localHarnessForCommand('droid')!, { hasImages: true })).toBe('structured-cli');
-    expect(harnessTurnTransport(localHarnessForCommand('gemini')!)).toBe('structured-cli');
-    expect(harnessTurnTransport(localHarnessForCommand('gemini')!, { allowExperimentalAcp: true })).toBe('acp');
+    expect(harnessTurnTransport(localHarnessForCommand('gemini')!)).toBe('acp');
     expect(harnessTurnTransport(localHarnessForCommand('aider')!)).toBe('text-cli');
     expect(harnessTurnTransport(customAcpHarness({ command: 'zed-agent', binary: 'zed-agent', argv: [] }))).toBe('acp');
   });

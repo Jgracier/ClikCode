@@ -47,6 +47,7 @@ export function chatSuite(): void {
       let sawRunning = false;
       const watch = api.onDidChange((state) => { if (state.running) sawRunning = true; });
       await type(api, '#composer-input', 'Reply with exactly the word PONG and nothing else.');
+      await waitFor(api, '#send-button', 'enabled Send button', 10_000, (found) => found.count > 0 && !found.disabled);
       await click(api, '#send-button');
       const done = await until(api, (state) => !state.running && state.messages.some((m) => m.role === 'assistant' && /PONG/.test(m.content)), 'the answer', 240_000);
       watch.dispose();
@@ -148,6 +149,7 @@ export function chatSuite(): void {
       // ClikCode's own agent (ClikDeploy Gateway) asks in `ask` mode; it runs
       // only where this machine is signed in to the Gateway.
       await vscode.commands.executeCommand('clikcode.open');
+      await waitFor(api, '#provider-button', 'the chat panel');
       await openProviderList(api);
       const row = await waitFor(api, '#provider-picker [data-key="p:gateway"]', 'the Gateway row');
       await api.probe('key', '#provider-picker input', 'Escape');
@@ -174,7 +176,18 @@ export function chatSuite(): void {
       assert.match(after, /hello from ClikCode/, 'the diff shows the proposed file');
       // Accepted from the diff editor's title bar, as a user would.
       await vscode.commands.executeCommand('clikcode.acceptProposedDiff', proposed);
-      await until(api, (state) => !state.running, 'the turn to finish', 240_000);
+      // A model may make a second edit after its first approved write. Keep
+      // answering distinct requests so the test covers the whole turn.
+      const seen = new Set([asking.approvals[0]!.id]);
+      const deadline = Date.now() + 240_000;
+      for (;;) {
+        const state = await until(api, (current) => !current.running || current.approvals.some((approval) => !seen.has(approval.id)), 'the turn to finish or ask again', Math.max(1, deadline - Date.now()));
+        if (!state.running) break;
+        const next = state.approvals.find((approval) => !seen.has(approval.id))!;
+        seen.add(next.id);
+        await waitFor(api, '.approval [data-approve="yes"]', 'the next approval button');
+        await click(api, '.approval [data-approve="yes"]');
+      }
       const [folder] = vscode.workspace.workspaceFolders ?? [];
       const written = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder!.uri, 'notes.txt')).then((bytes) => Buffer.from(bytes).toString('utf8'), () => '');
       assert.match(written, /hello from ClikCode/);

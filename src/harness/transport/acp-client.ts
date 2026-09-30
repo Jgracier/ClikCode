@@ -48,9 +48,15 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   permissionMode: AiHarnessPermissionMode;
   model?: string | null;
   effort?: string | null;
+  /** Require model/effort selection over ACP when CLI launch flags are not
+   * valid for this agent's ACP entry point. */
+  modelRequiresProtocol?: boolean;
+  effortRequiresProtocol?: boolean;
+  effortConfigId?: string;
+  permissionModeIds?: Readonly<Partial<Record<AiHarnessPermissionMode, string>>>;
   /** Local image paths, sent as ACP image blocks when the agent advertises
    * `promptCapabilities.image`. Otherwise the turn fails before the prompt
-   * with `acpSafeToFallback` so the caller can use its image-capable CLI. */
+   * with `acpUnsupportedImages` so the caller can use its image-capable CLI. */
   images?: readonly string[];
   /** Catalog-driven ACP mode argv (harnessAcpLaunch().modeArgv). When given,
    * no model/effort/permission flags are derived locally: pass them as
@@ -328,6 +334,7 @@ interface LiveAgent {
   sessionId?: string;
   /** The loaded session's model state (`currentModelId`, `availableModels`). */
   models?: Json;
+  modes?: Json;
   configOptions?: Json[];
 }
 
@@ -431,8 +438,6 @@ class AcpSessionImpl implements AcpSession {
       return await Promise.race([flow, failure]);
     } catch (error) {
       const failureError = error instanceof Error ? error : new Error(String(error));
-      // A cancelled turn must never be retried on the CLI fallback.
-      Object.assign(failureError, { acpSafeToFallback: !turn.promptStarted && !isCancelled(failureError) });
       // After a failure the child's protocol state is unknown. Drop it; the
       // next turn respawns and resumes. Cancellation settles on its own path.
       if (!isCancelled(failureError)) this.dropLive(failureError);
@@ -584,7 +589,7 @@ class AcpSessionImpl implements AcpSession {
     const capabilities = live.capabilities;
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
-      throw new Error(`${input.command} ACP does not accept image prompts`);
+      throw Object.assign(new Error(`${input.command} ACP does not accept image prompts`), { acpUnsupportedImages: true });
     }
     let loaded: Json | undefined;
     const wanted = input.nativeSessionId ?? this.sessionId;
@@ -601,6 +606,7 @@ class AcpSessionImpl implements AcpSession {
         stillRunning();
         live.sessionId = wanted;
         live.models = loaded?.models ?? { configOptions: loaded?.configOptions };
+        live.modes = loaded?.modes;
         live.configOptions = loaded?.configOptions;
       }
       turn.sessionId = wanted;
@@ -612,16 +618,17 @@ class AcpSessionImpl implements AcpSession {
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
       live.sessionId = sessionId;
       live.models = started.models ?? { configOptions: started.configOptions };
+      live.modes = started.modes;
       live.configOptions = started.configOptions;
       turn.sessionId = sessionId;
-      await input.onSessionId?.(sessionId);
-      stillRunning();
     }
-    this.sessionId = turn.sessionId;
     // Agents that publish a model list take the choice over the protocol; a
     // launch flag is not guaranteed to reach the session (`hermes acp` ignores
     // `--model`, and would silently run its configured default).
     const modelId = input.model ? acpModelChoice(live.models, input.model) : undefined;
+    if (input.model && !modelId && input.modelRequiresProtocol) {
+      throw Object.assign(new Error(`${input.command} ACP does not list model ${input.model}`), { acpUnsupportedModel: true });
+    }
     const modelConfig = live.configOptions?.find((option) => (option.id ?? option.configId) === 'model');
     const currentModel = live.models?.currentModelId ?? modelConfig?.currentValue;
     if (modelId && modelId !== currentModel) {
@@ -631,6 +638,30 @@ class AcpSessionImpl implements AcpSession {
       if (modelConfig) live.configOptions = live.configOptions?.map((option) => option === modelConfig ? { ...option, currentValue: modelId } : option);
       else live.models = { ...live.models, currentModelId: modelId };
     }
+    const modeId = input.permissionModeIds?.[input.permissionMode];
+    if (modeId && live.modes?.currentModeId !== modeId) {
+      const available: Json[] = Array.isArray(live.modes?.availableModes) ? live.modes.availableModes : [];
+      if (!available.some((mode) => mode.id === modeId)) throw new Error(`${input.command} ACP does not offer permission mode ${modeId}`);
+      await peer.request('session/set_mode', { sessionId: turn.sessionId, modeId }, setup);
+      stillRunning();
+      live.modes = { ...live.modes, currentModeId: modeId };
+    }
+    if (input.effort && input.effortConfigId) {
+      const effortOption = live.configOptions?.find((option) => (option.id ?? option.configId) === input.effortConfigId);
+      const choices: Json[] = Array.isArray(effortOption?.options) ? effortOption.options : [];
+      if (effortOption && choices.some((option) => option.value === input.effort) && effortOption.currentValue !== input.effort) {
+        await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: input.effortConfigId, value: input.effort }, setup);
+        stillRunning();
+        live.configOptions = live.configOptions?.map((option) => option === effortOption ? { ...option, currentValue: input.effort } : option);
+      } else if ((!effortOption || !choices.some((option) => option.value === input.effort)) && input.effortRequiresProtocol) {
+        throw Object.assign(new Error(`${input.command} ACP does not offer effort ${input.effort}`), { acpUnsupportedEffort: true });
+      }
+    } else if (input.effort && input.effortRequiresProtocol) {
+      throw Object.assign(new Error(`${input.command} ACP does not offer effort control`), { acpUnsupportedEffort: true });
+    }
+    this.sessionId = turn.sessionId;
+    if (!wanted || !created) await input.onSessionId?.(turn.sessionId);
+    stillRunning();
     const blocks: Json[] = [{ type: 'text', text: input.prompt }, ...await Promise.all(images.map(acpImageBlock))];
     stillRunning();
     // Taken now, not when the turn was created: a session/load above may have
