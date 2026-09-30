@@ -1,5 +1,5 @@
-/** The composer footer's menus: provider·model (every harness, the Gateway
- * and ClikCode Local, each with its models), reasoning effort, and
+/** The composer footer's menus: provider (every harness, the Gateway and
+ * ClikCode Local), the chosen provider's models, reasoning effort, and
  * permissions with plan mode. */
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -36,11 +36,20 @@ function providerIcon(provider: IdeProvider): string {
   return provider.installed ? 'terminal' : 'cloud-download';
 }
 
-export function ProviderModelPicker(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
+/** Whether the provider has a model list to choose from; unknown counts as yes. */
+export function providerChoosesModel(providerId: string | undefined): boolean {
+  if (!providerId) return false;
+  return providerCache?.find((item) => item.id === providerId)?.choosesModel ?? true;
+}
+
+/** `provider`: the providers alone; choosing one switches to it on its
+ * default model. `model`: the current provider's models, so the list is
+ * always the provider's the chat is on. */
+export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
   const [providers, setProviders] = useState<IdeProvider[] | undefined>(providerCache);
   const [error, setError] = useState<string>();
   const current = props.model.providerId;
-  const [drill, setDrill] = useState<string | undefined>(current);
+  const drill = props.mode === 'model' ? current : undefined;
   const [models, setModels] = useState<IdeModels | undefined>(drill ? modelCache.get(drill) : undefined);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -64,11 +73,7 @@ export function ProviderModelPicker(props: { model: ChatModel; onClose: () => vo
     return () => { live = false; };
   }, [drill]);
 
-  // Moving between the providers and one provider's models starts a fresh
-  // search, in the same update: reset from an effect, it could land after the
-  // first keys typed on the new list and wipe them.
-  const drillTo = (next: string | undefined): void => { setSearch(''); setDrill(next); };
-  useEffect(() => { input.current?.focus(); }, [drill]);
+  useEffect(() => { input.current?.focus(); }, []);
 
   const apply = (providerId: string, modelId?: string): void => {
     props.onClose();
@@ -103,12 +108,6 @@ export function ProviderModelPicker(props: { model: ChatModel; onClose: () => vo
           render: () => <div class="row"><span class="row-check"><Icon name="edit" /></span><span class="row-main"><span class="row-label">Use “{search.trim()}”</span><span class="row-detail">a model id this list does not show</span></span></div>,
         });
       }
-      if (drill !== current && provider) {
-        result.unshift({
-          key: 'default', onSelect: () => apply(drill),
-          render: () => <div class="row"><span class="row-check"><Icon name="arrow-right" /></span><span class="row-main"><span class="row-label">Switch to {provider.name}</span><span class="row-detail">its default model</span></span></div>,
-        });
-      }
       return result;
     }
     const list = (providers ?? []).filter((item) => !query || item.name.toLowerCase().includes(query) || item.id.includes(query));
@@ -126,53 +125,38 @@ export function ProviderModelPicker(props: { model: ChatModel; onClose: () => vo
         result.push({
           key: `p:${item.id}`,
           disabled: item.install === 'manual',
-          onSelect: () => (item.choosesModel ? drillTo(item.id) : apply(item.id)),
+          onSelect: () => apply(item.id),
           render: () => (
             <div class="row" title={item.integration ? `${item.name} · ${item.integration}${item.version ? ` · ${item.version}` : ''}` : item.name}>
               <span class="row-check">{item.current ? <Icon name="check" /> : <Icon name={providerIcon(item)} />}</span>
               <span class="row-main"><span class="row-label">{item.name}</span>{providerBadge(item)}</span>
-              {item.choosesModel ? <span class="row-end"><Icon name="chevron-right" /></span> : null}
             </div>
           ),
         });
-      }
-    }
-    // Models of lists already loaded match the search too.
-    if (query) {
-      for (const [id, cached] of modelCache) {
-        const owner = providers?.find((item) => item.id === id);
-        const hits = cached.models.filter((item) => !item.unavailable && (item.id.toLowerCase().includes(query) || item.label.toLowerCase().includes(query))).slice(0, 8);
-        if (!owner || !hits.length) continue;
-        result.push({ key: `h:m:${id}`, heading: true, render: () => <>{owner.name} models</> });
-        for (const hit of hits) {
-          result.push({ key: `mm:${id}:${hit.id}`, onSelect: () => apply(id, hit.id), render: () => <div class="row"><span class="row-check" /><span class="row-main"><span class="row-label">{hit.label}</span><span class="row-detail">{owner.name}</span></span></div> });
-        }
       }
     }
     return result;
   }, [drill, models, providers, query, current]);
 
   return (
-    <Popover label="Choose provider and model" onClose={props.onClose} class="picker" id="provider-picker">
+    <Popover label={drill ? 'Choose model' : 'Choose provider'} onClose={props.onClose} class="picker" id={drill ? 'model-picker' : 'provider-picker'}>
       <div class="picker-head">
-        {drill ? <button type="button" id="picker-back" class="icon-button" aria-label="All providers" title="All providers" onClick={() => drillTo(undefined)}><Icon name="arrow-left" /></button> : <Icon name="server-environment" />}
-        <span class="picker-title">{drill ? provider?.name ?? drill : 'Provider and model'}</span>
+        <Icon name={drill ? 'symbol-namespace' : 'server-environment'} />
+        <span class="picker-title">{drill ? <>Model <span class="muted">· {provider?.name ?? drill}</span></> : 'Provider'}</span>
         {drill && loading ? <Icon name="loading" spin label="Loading models" /> : null}
       </div>
       <div class="search">
         <Icon name="search" />
-        <input ref={input} type="text" value={search} placeholder={drill ? 'Search or type a model id…' : 'Search providers and models…'}
+        <input ref={input} type="text" value={search} placeholder={drill ? 'Search or type a model id…' : 'Search providers…'}
           aria-label={drill ? 'Search models' : 'Search providers'} aria-controls="picker-list" onInput={(event) => setSearch((event.target as HTMLInputElement).value)} />
       </div>
       {error ? <div class="picker-error">{error}</div> : null}
       {drill && models?.error ? <div class="picker-error">{models.error}</div> : null}
       {!providers && !error ? <div class="picker-loading"><Icon name="loading" spin /> Loading providers…</div> : null}
       <KeyList id="picker-list" rows={rows} label={drill ? 'Models' : 'Providers'} inputRef={input} onEscape={props.onClose}
-        onBack={drill ? () => drillTo(undefined) : undefined}
-        onForward={drill ? undefined : (key) => { const id = key.startsWith('p:') ? key.slice(2) : undefined; if (id && providers?.find((item) => item.id === id)?.choosesModel) drillTo(id); }}
         emptyText={drill ? (loading ? 'Finding models…' : 'No models match.') : providers ? 'No providers match.' : undefined} />
       <div class="picker-foot muted">
-        {drill ? <><kbd>←</kbd> providers · <kbd>Enter</kbd> choose</> : <><kbd>→</kbd> models · <kbd>Enter</kbd> choose</>}
+        {drill ? <><kbd>Enter</kbd> choose · the Provider button changes the provider</> : <><kbd>Enter</kbd> switch · then pick its model with the Model button</>}
       </div>
     </Popover>
   );

@@ -6,7 +6,7 @@ and models on your own machine with ClikCode Local — and keeps one conversatio
 them. This extension is ClikCode in VS Code: the same conversations, accounts and settings as the
 `clikcode` terminal, in a panel beside your code.
 
-![ClikCode in the secondary side bar: a turn with its tool activity, and the provider and model menu](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/turn.png)
+![ClikCode in the secondary side bar: a turn with its tool activity](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/turn.png)
 
 ## Where it is
 
@@ -18,12 +18,13 @@ them. This extension is ClikCode in VS Code: the same conversations, accounts an
 
 ## What you can do
 
-**Pick any agent and model from the message box.** The provider·model button under the message box
-lists every harness — signed in, installed, and available to install — with its models, and a search
-across all of them. Choosing one that is not installed installs it, with progress in the chat.
-Reasoning effort and permissions (Ask, Auto, Bypass, and plan mode) sit beside it.
+**Pick any agent, then its model, from the message box.** The *Provider* button under the message
+box lists every harness — signed in, installed, and available to install — with a search; choosing one
+that is not installed installs it, with progress in the chat. The *Model* button beside it lists the
+models of the provider you are on, so it changes with the provider. Reasoning effort and permissions
+(Ask, Auto, Bypass, and plan mode) sit beside them.
 
-![The provider and model menu](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/picker.png)
+![The provider menu](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/picker.png)
 
 **Work the way you do in an editor.** Type `@` to mention a file, `/` for commands, paste images.
 Press `Alt+K` in an editor (or right-click → *Add to ClikCode Chat*) to attach the selection with its

@@ -54,20 +54,21 @@ export function chatSuite(): void {
       await screenshot('turn');
     });
 
-    it('drives the provider menu from the keyboard', async () => {
+    it('drives the provider and model menus from the keyboard', async () => {
       // A panel left hidden by the turn before must not fail this test for the wrong reason.
       await vscode.commands.executeCommand('clikcode.focus');
       await waitFor(api, '#provider-button', 'the composer');
       await click(api, '#provider-button');
-      await waitFor(api, '#provider-picker', 'the provider menu');
-      if ((await query(api, '#picker-back')).count) await key(api, '#provider-picker input', 'ArrowLeft');
-      await waitFor(api, '#provider-picker [data-key="p:opencode"]', 'the provider list after ←');
+      await waitFor(api, '#provider-picker [data-key="p:opencode"]', 'the provider list');
+      assert.strictEqual((await query(api, '#provider-picker [data-key^="m:"]')).count, 0, 'the Provider menu lists providers only');
       await type(api, '#provider-picker input', 'opencode');
       await waitFor(api, '#provider-picker [data-key="p:opencode"][data-active="true"]', 'OpenCode highlighted');
       await key(api, '#provider-picker input', 'Enter');
-      await waitFor(api, '#provider-picker [data-key="m:opencode/big-pickle"]', 'its models after Enter', 60_000);
-      await key(api, '#provider-picker input', 'Escape');
-      await waitFor(api, '#provider-picker', 'the menu to close on Esc', 10_000, (found) => found.count === 0);
+      await waitFor(api, '#provider-picker', 'the menu to close on Enter', 10_000, (found) => found.count === 0);
+      await click(api, '#model-button');
+      await waitFor(api, '#model-picker [data-key="m:opencode/big-pickle"]', "OpenCode's models in the Model menu", 60_000);
+      await key(api, '#model-picker input', 'Escape');
+      await waitFor(api, '#model-picker', 'the menu to close on Esc', 10_000, (found) => found.count === 0);
       assert.strictEqual(api.state.running, false, 'Esc in a menu does not touch the turn');
     });
 
@@ -146,8 +147,8 @@ export function chatSuite(): void {
       await api.probe('key', '#provider-picker input', 'Escape');
       if (/sign in/.test(row.text)) this.skip();
       await pickProviderModel(api, 'gateway', 'gpt-5.6-luna').catch(async () => {
-        await type(api, '#provider-picker input', '');
-        await click(api, '#provider-picker [data-key="m:auto"]');
+        await type(api, '#model-picker input', '');
+        await click(api, '#model-picker [data-key="m:auto"]');
       });
       await until(api, (state) => state.providerId === 'gateway', 'the Gateway route', 60_000);
       if (api.state.permissions !== 'ask') {

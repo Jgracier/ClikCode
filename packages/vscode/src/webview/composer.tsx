@@ -9,11 +9,11 @@ import type { Mention } from '../webview-protocol';
 import { selectionBlock } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { titleCase } from './format';
-import { EffortMenu, knownProviders, ModeMenu, permissionLabel, ProviderModelPicker } from './picker';
+import { EffortMenu, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
 import { UsageBars } from './screens';
 import { Icon, KeyList, type ListRow } from './ui';
 
-type Menu = 'provider' | 'effort' | 'mode' | undefined;
+type Menu = 'provider' | 'model' | 'effort' | 'mode' | undefined;
 
 export interface ComposerHandle {
   focus(): void;
@@ -249,7 +249,8 @@ export function Composer(props: {
         </div>
       ) : null}
       <div class="composer-box" data-running={model.running ? 'true' : undefined}>
-        {menu === 'provider' ? <ProviderModelPicker model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
+        {menu === 'provider' ? <ProviderModelPicker mode="provider" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
+        {menu === 'model' ? <ProviderModelPicker key={model.providerId} mode="model" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'effort' ? <EffortMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {showSuggestions ? (
@@ -275,8 +276,9 @@ export function Composer(props: {
           onClick={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
           onKeyDown={onKeyDown} onPaste={onPaste} />
         <div class="composer-footer">
-          {structured ? footerButton('provider', <><Icon name={model.providerId === 'gateway' ? 'cloud' : model.providerId === 'clikcode-local' ? 'vm' : 'hubot'} /><span class="chip-text">{providerName}{modelName ? <span class="chip-sub"> · {modelName}</span> : null}</span><Icon name="chevron-down" /></>, 'Choose provider and model', 'provider-button')
+          {structured ? footerButton('provider', <><Icon name={model.providerId === 'gateway' ? 'cloud' : model.providerId === 'clikcode-local' ? 'vm' : 'hubot'} /><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></>, 'Choose provider', 'provider-button')
             : <button type="button" class="chip-button" disabled={!connected} onClick={() => post({ type: 'send', text: '/provider', id: uid() })}><Icon name="hubot" /><span class="chip-text">{providerName}</span></button>}
+          {structured && providerChoosesModel(model.providerId) ? footerButton('model', <><Icon name="symbol-namespace" /><span class="chip-text">{modelName ?? 'Default model'}</span><Icon name="chevron-down" /></>, 'Choose model', 'model-button') : null}
           {structured && effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current ? titleCase(effort.current) : 'Default'}</span></>, 'Reasoning effort', 'effort-button') : null}
           {structured && model.chatSettings?.permissions ? footerButton('mode', <><Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} /><span class="chip-text">{model.chatSettings.plan ? 'Plan' : permissionLabel(model.permissions)}</span></>, 'Permissions and plan mode', 'mode-button') : null}
           <span class="spacer" />
