@@ -8,6 +8,7 @@
  */
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
+import type { ChatModel } from './model';
 import type { FromWebview, ToWebview } from './webview-protocol';
 export { supportsSecondarySidebar } from './compat';
 
@@ -20,8 +21,8 @@ export class WebviewSurface implements vscode.Disposable {
   ready = false;
   focused = false;
   lastFocusedAt = 0;
-  /** The transcript this page was last sent (see ClikCodeController.postModel). */
-  sentMessages: unknown;
+  /** The model this page was last sent (see ClikCodeController.postModel). */
+  sentModel: ChatModel | undefined;
   private readonly outbox: ToWebview[] = [];
   private readonly disposables: vscode.Disposable[] = [];
   private readonly probes = new Map<string, (result: unknown) => void>();
@@ -62,7 +63,7 @@ export class WebviewSurface implements vscode.Disposable {
 
   post(message: ToWebview): void {
     if (this.ready) void this.webview.postMessage(message);
-    else if (message.type !== 'model') this.outbox.push(message);
+    else if (message.type !== 'model' && message.type !== 'patch') this.outbox.push(message);
   }
 
   /** Integration tests: read or drive the page. */

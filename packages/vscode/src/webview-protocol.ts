@@ -1,5 +1,6 @@
 /** Messages between the extension host and a chat webview. */
 import type { ChatModel } from './model';
+import type { ModelPatch } from './model-patch';
 import type { IdeChoice, IdePickItem, IdeQueryName, IdeUiRequest, IdeUiResult } from './protocol';
 
 /** A composer attachment: a file (or a range of one) the next message names. */
@@ -18,8 +19,9 @@ export interface Mention {
 export type WebviewScreen = 'chat' | 'history' | 'accounts' | 'settings';
 
 export type ToWebview =
-  /** `sameMessages`: the transcript is unchanged since the last one; `messages` is left empty. */
-  | { type: 'model'; model: ChatModel; sameMessages?: true }
+  | { type: 'model'; model: ChatModel }
+  /** What changed since the last `model` or `patch`. */
+  | { type: 'patch'; patch: ModelPatch }
   | { type: 'setDraft'; text: string }
   | { type: 'insert'; text: string }
   | { type: 'mention'; mention: Mention }

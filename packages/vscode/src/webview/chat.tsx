@@ -1,30 +1,48 @@
 /** The conversation: messages, the running turn, its tool activity, plans,
  * notices and approvals. */
 import type { JSX } from 'preact';
-import { useEffect, useMemo, useState } from 'preact/hooks';
-import type { Activity, Approval, ChatModel, Note, TurnTrace } from '../model';
+import { memo } from 'preact/compat';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { Activity, Approval, ChatModel, LiveTurn as Live, Note, TurnTrace } from '../model';
 import { post } from './bus';
 import { duration, pathIn, titleCase } from './format';
-import { renderMarkdown } from './markdown';
+import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon } from './ui';
 
-const markdownCache = new Map<string, string>();
-function markdown(text: string): string {
-  const cached = markdownCache.get(text);
-  if (cached !== undefined) return cached;
+/** Finished messages, rendered once each and kept across a redraw of the
+ * transcript (another conversation and back). Keyed by conversation and
+ * position, checked against the text; the live answer never goes in here. */
+const finishedHtml = new Map<string, { text: string; html: string }>();
+const FINISHED_LIMIT = 400;
+
+function renderFinished(key: string, text: string): string {
+  const hit = finishedHtml.get(key);
+  if (hit?.text === text) return hit.html;
   const html = renderMarkdown(text);
-  if (markdownCache.size > 400) markdownCache.clear();
-  markdownCache.set(text, html);
+  finishedHtml.delete(key);
+  finishedHtml.set(key, { text, html });
+  if (finishedHtml.size > FINISHED_LIMIT) finishedHtml.delete(finishedHtml.keys().next().value!);
   return html;
 }
 
-function Markdown({ text }: { text: string }): JSX.Element {
-  return <div class="markdown" dangerouslySetInnerHTML={{ __html: markdown(text) }} />;
+const AssistantMessage = memo(({ cacheKey, text }: { cacheKey: string; text: string }): JSX.Element => (
+  <div class="message assistant"><div class="markdown" dangerouslySetInnerHTML={{ __html: renderFinished(cacheKey, text) }} /></div>
+));
+
+/** The answer still streaming: the settled blocks and the growing one are
+ * separate nodes, so a delta replaces only the last block's HTML. */
+function LiveMarkdown({ text }: { text: string }): JSX.Element {
+  const render = useRef(createStreamingMarkdown());
+  const { stable, tail } = render.current(text);
+  return (
+    <div class="markdown">
+      <div class="md-part" dangerouslySetInnerHTML={{ __html: stable }} />
+      <div class="md-part" dangerouslySetInnerHTML={{ __html: tail }} />
+    </div>
+  );
 }
 
-function UserMessage({ text }: { text: string }): JSX.Element {
-  return <div class="message user"><div class="bubble">{text}</div></div>;
-}
+const UserMessage = memo(({ text }: { text: string }): JSX.Element => <div class="message user"><div class="bubble">{text}</div></div>);
 
 const CATEGORY_ICON: Record<string, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
 
@@ -88,7 +106,7 @@ function ActivityRow({ activity, workspace }: { activity: Activity; workspace?: 
 }
 
 /** A finished turn's steps, folded to one line above its answer. */
-function TraceRow({ trace, workspace }: { trace: TurnTrace; workspace?: string }): JSX.Element {
+const TraceRow = memo(({ trace, workspace }: { trace: TurnTrace; workspace?: string }): JSX.Element => {
   const [open, setOpen] = useState(false);
   const tools = trace.activities.filter((activity) => activity.kind !== 'thinking');
   const failed = tools.filter((activity) => activity.kind === 'tool-error').length;
@@ -102,9 +120,9 @@ function TraceRow({ trace, workspace }: { trace: TurnTrace; workspace?: string }
       {open ? <div class="activities">{trace.activities.map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} />)}</div> : null}
     </div>
   );
-}
+});
 
-function NoteView({ note }: { note: Note }): JSX.Element {
+const NoteView = memo(({ note }: { note: Note }): JSX.Element => {
   const [open, setOpen] = useState(note.text.split('\n').length <= 14);
   if (note.kind === 'panel') {
     return (
@@ -118,7 +136,7 @@ function NoteView({ note }: { note: Note }): JSX.Element {
   }
   const icon = note.level === 'error' ? 'error' : note.level === 'warning' ? 'warning' : 'info';
   return <div class={`notice ${note.level ?? 'info'}`} role={note.level === 'error' ? 'alert' : undefined}><Icon name={icon} /><span>{note.text}</span></div>;
-}
+});
 
 function Plan({ plan }: { plan: ChatModel['plan'] }): JSX.Element {
   const done = plan.filter((entry) => entry.status === 'completed').length;
@@ -135,53 +153,61 @@ function Plan({ plan }: { plan: ChatModel['plan'] }): JSX.Element {
   );
 }
 
-function useNow(active: boolean): number {
+/** The time, once a second, while mounted. */
+function useNow(): number {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!active) return undefined;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [active]);
+  }, []);
   return now;
 }
 
 const VISIBLE_ACTIVITIES = 6;
+/** Silence this long reads as a stall, not as work. */
+const STALL_MS = 30_000;
 
-function LiveTurn({ model }: { model: ChatModel }): JSX.Element {
-  const live = model.live;
-  const now = useNow(model.running);
+const LiveTurn = memo(({ live, workspace, elsewhere }: { live: Live | undefined; workspace?: string; elsewhere: boolean }): JSX.Element => {
+  const now = useNow();
   const [showAll, setShowAll] = useState(false);
-  const activities = live?.activities.filter((activity) => activity.kind !== 'thinking' || activity.label) ?? [];
+  // Thoughts are one line below, as in the terminal; the rows are tools.
+  const activities = live?.activities.filter((activity) => activity.kind !== 'thinking') ?? [];
   const hidden = showAll ? 0 : Math.max(0, activities.length - VISIBLE_ACTIVITIES);
   const label = live?.phase ?? live?.waitingLabel ?? 'starting';
+  const quiet = live ? now - (live.lastEventAt ?? live.startedAt) : 0;
+  const toolRunning = activities.some((activity) => activity.kind === 'tool-start');
   return (
     <div class="message assistant live" aria-busy="true">
       {activities.length ? (
         <div class="activities">
           {hidden ? <button type="button" class="more-steps" onClick={() => setShowAll(true)}><Icon name="ellipsis" /> {hidden} earlier step{hidden === 1 ? '' : 's'}</button> : null}
-          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={model.workspace} />)}
+          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} />)}
         </div>
       ) : null}
-      {live?.text ? <Markdown text={live.text} /> : null}
+      {live?.text ? <LiveMarkdown key={live.startedAt} text={live.text} /> : null}
+      {live?.thought ? <div class="thought" title={live.thought}><Icon name="lightbulb" /><span>{live.thought}</span></div> : null}
       <div class="working" role="status">
         <span class="pulse" aria-hidden="true" />
         <span class="working-label">{titleCase(label.replace(/(…|\.\.\.)$/, ''))}…</span>
-        <span class="muted">{live ? duration(now - live.startedAt) : ''}{model.ownTurn === false || (!model.ownTurn && model.running) ? ' · running in another window' : ''}</span>
+        <span class="muted">{live ? duration(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
+        {quiet >= STALL_MS ? <span class="stalled" title="Nothing has arrived from the agent for a while"><Icon name="warning" /> {toolRunning ? 'no output' : 'no response'} for {duration(quiet)}</span> : null}
         <span class="muted working-hint">Esc to stop</span>
       </div>
     </div>
   );
-}
+});
 
 /** Messages drawn at first; a long conversation shows its latest and loads
  * earlier ones on demand, so opening it stays instant. */
 const WINDOW = 120;
 
-export function Transcript({ model }: { model: ChatModel }): JSX.Element {
-  const traces = useMemo(() => new Map(model.traces.map((trace) => [trace.userIndex, trace])), [model.traces]);
+/** The settled conversation. Memoized on the fields it draws, which keep
+ * their objects while a turn streams, so a delta does not redraw it. */
+const History = memo(({ sessionId, messages, traces, notes, workspace }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'>): JSX.Element => {
+  const byUser = useMemo(() => new Map(traces.map((trace) => [trace.userIndex, trace])), [traces]);
   const [shown, setShown] = useState(WINDOW);
-  useEffect(() => { setShown(WINDOW); }, [model.sessionId]);
-  const start = Math.max(0, model.messages.length - shown);
+  useEffect(() => { setShown(WINDOW); }, [sessionId]);
+  const start = Math.max(0, messages.length - shown);
   const parts: JSX.Element[] = [];
   if (start > 0) {
     parts.push(
@@ -191,23 +217,28 @@ export function Transcript({ model }: { model: ChatModel }): JSX.Element {
     );
   }
   const notesAt = (index: number): void => {
-    model.notes.forEach((note, position) => { if (note.after === index) parts.push(<NoteView key={`n${position}`} note={note} />); });
+    notes.forEach((note, position) => { if (note.after === index) parts.push(<NoteView key={`n${position}`} note={note} />); });
   };
   if (start === 0) notesAt(0);
-  model.messages.forEach((message, index) => {
+  messages.forEach((message, index) => {
     if (index < start) return;
     if (message.role === 'user') parts.push(<UserMessage key={`m${index}`} text={message.content} />);
     else {
-      const trace = traces.get(index - 1);
-      if (trace) parts.push(<TraceRow key={`t${index}`} trace={trace} workspace={model.workspace} />);
-      parts.push(<div key={`m${index}`} class="message assistant"><Markdown text={message.content} /></div>);
+      const trace = byUser.get(index - 1);
+      if (trace) parts.push(<TraceRow key={`t${index}`} trace={trace} workspace={workspace} />);
+      parts.push(<AssistantMessage key={`m${index}`} cacheKey={`${sessionId}#${index}`} text={message.content} />);
     }
     notesAt(index + 1);
   });
-  model.notes.forEach((note, position) => { if (note.after > model.messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
+  notes.forEach((note, position) => { if (note.after > messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
+  return <>{parts}</>;
+});
+
+export function Transcript({ model }: { model: ChatModel }): JSX.Element {
+  const parts: JSX.Element[] = [];
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
   if (model.plan.length) parts.push(<Plan key="plan" plan={model.plan} />);
-  if (model.running) parts.push(<LiveTurn key="live" model={model} />);
+  if (model.running) parts.push(<LiveTurn key="live" live={model.live} workspace={model.workspace} elsewhere={model.ownTurn === false || (!model.ownTurn && model.running)} />);
   const queuedTexts = new Set(model.queued.map((item) => item.text));
   for (const submission of model.submissions) {
     // A queued message is drawn once, from the stored queue under the composer.
@@ -215,7 +246,12 @@ export function Transcript({ model }: { model: ChatModel }): JSX.Element {
     const said = submission.disposition === 'steered' ? 'Sent into this turn' : submission.disposition === 'queued' ? 'Queued for the next turn' : submission.disposition === 'error' ? 'Not sent' : 'Sending…';
     parts.push(<div key={`s${submission.id}`} class="submission"><Icon name="arrow-small-right" /><span class="muted">{said}:</span> <span>{submission.text}</span></div>);
   }
-  return <div class="transcript" role="log" aria-live="polite" aria-relevant="additions">{parts}</div>;
+  return (
+    <div class="transcript" role="log" aria-live="polite" aria-relevant="additions">
+      <History sessionId={model.sessionId} messages={model.messages} traces={model.traces} notes={model.notes} workspace={model.workspace} />
+      {parts}
+    </div>
+  );
 }
 
 /** Paths inside the workspace, shown relative to it. */

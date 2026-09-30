@@ -8,6 +8,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
+import { diffModel } from './model-patch';
 import { answeredApproval, applyEvent, emptyModel, localNote, typedDuringTurn, type ChatModel } from './model';
 import type { IdeAccounts, IdeChatSettings, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
@@ -136,17 +137,18 @@ export class ClikCodeController implements vscode.Disposable {
     }, POST_INTERVAL_MS);
   }
 
-  /** The model to one page. A streaming turn repaints every 40 ms, and a long
-   * conversation's transcript is most of the model: it is sent only when it
-   * changed, and the page keeps the copy it has. */
+  /** The model to one page: whole the first time, then only what changed
+   * since (see model-patch.ts). */
   private postModel(surface: WebviewSurface): void {
-    const messages = this.model.messages;
-    if (surface.ready && surface.sentMessages === messages) {
-      surface.post({ type: 'model', model: { ...this.model, messages: [] }, sameMessages: true });
+    const sent = surface.sentModel;
+    if (!surface.ready || !sent) {
+      surface.post({ type: 'model', model: this.model });
+      if (surface.ready) surface.sentModel = this.model;
       return;
     }
-    surface.post({ type: 'model', model: this.model });
-    if (surface.ready) surface.sentMessages = messages;
+    const patch = diffModel(sent, this.model);
+    if (patch) surface.post({ type: 'patch', patch });
+    surface.sentModel = this.model;
   }
 
   /** A turn finished where nobody is looking: say so, as Claude Code does. */
@@ -547,7 +549,7 @@ export class ClikCodeController implements vscode.Disposable {
     switch (message.type) {
       case 'ready':
         // A page (re)loaded: it has no transcript yet.
-        surface.sentMessages = undefined;
+        surface.sentModel = undefined;
         this.postModel(surface);
         void this.ensureStarted();
         return;

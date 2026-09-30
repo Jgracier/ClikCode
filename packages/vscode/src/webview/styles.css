@@ -133,6 +133,9 @@ body.vscode-high-contrast .badge.ok, body.vscode-high-contrast .badge.warn { bac
 .markdown { line-height: 1.6; word-break: break-word; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
+.markdown > .md-part { display: contents; }
+.markdown > .md-part:first-child > :first-child { margin-top: 0; }
+.markdown > .md-part:last-child > :last-child { margin-bottom: 0; }
 .markdown p { margin: 0 0 0.75em; }
 .markdown h1, .markdown h2, .markdown h3 { font-size: 1.1em; margin: 1em 0 0.4em; }
 .markdown ul, .markdown ol { padding-left: 1.4em; margin: 0 0 0.75em; }
@@ -174,6 +177,9 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .working { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.93em; }
 .working-label { color: var(--vscode-foreground); }
 .working-hint { margin-left: auto; }
+.thought { display: flex; gap: 6px; align-items: center; margin-top: 6px; color: var(--muted); font-style: italic; font-size: 0.93em; min-width: 0; }
+.thought span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stalled { display: inline-flex; gap: 4px; align-items: center; color: var(--warn); }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-textLink-foreground); animation: pulse 1.4s ease-in-out infinite; flex: none; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
 @keyframes spin { to { transform: rotate(360deg); } }

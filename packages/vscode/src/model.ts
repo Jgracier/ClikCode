@@ -52,6 +52,18 @@ export interface TurnTrace {
   endedAt: number;
 }
 
+export interface LiveTurn {
+  text: string;
+  waitingLabel: string;
+  phase?: string;
+  /** The most recent thought, on one line, as the terminal shows it. */
+  thought?: string;
+  activities: Activity[];
+  startedAt: number;
+  /** When the turn last said anything: text, a tool, a thought, a phase. */
+  lastEventAt: number;
+}
+
 export interface ChatModel {
   connection: 'starting' | 'ready' | 'stopped' | 'error';
   /** IDE protocol revision the bridge speaks: 2 and up has the structured
@@ -84,7 +96,7 @@ export interface ChatModel {
   running: boolean;
   /** This client's submitted prompt, until a snapshot carries it. */
   pendingPrompt?: string;
-  live?: { text: string; waitingLabel: string; phase?: string; activities: Activity[]; startedAt: number };
+  live?: LiveTurn;
   /** This client started the running turn (else it follows another's). */
   ownTurn?: boolean;
   /** Where the running turn's prompt lands in `messages`. */
@@ -171,11 +183,18 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     permissions: session.permissionMode ?? 'ask',
     route: session.route,
     workspace: session.workspace,
-    messages: session.messages ?? [],
+    messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : session.messages ?? [],
     queued: (session.queuedTurns ?? []).map((item) => ({ id: item.id, text: item.text, command: item.kind === 'command' })),
     // The worker's journal of the running turn has the prompt from here on.
     pendingPrompt: pending?.prompt ?? (model.running ? model.pendingPrompt : undefined),
   };
+}
+
+/** Every snapshot carries the whole transcript as a new array; the one the
+ * page already has is kept when it says the same, so it is not resent. */
+function sameMessages(previous: ChatModel['messages'], next: ChatModel['messages']): boolean {
+  return previous.length === next.length
+    && previous.every((message, index) => message.role === next[index]!.role && message.content === next[index]!.content);
 }
 
 function upsertActivity(activities: Activity[], event: HarnessActivityEvent): Activity[] {
@@ -195,6 +214,21 @@ function upsertActivity(activities: Activity[], event: HarnessActivityEvent): Ac
   return [...activities, activity].slice(-MAX_ACTIVITIES);
 }
 
+function freshLive(waitingLabel: string): LiveTurn {
+  const now = Date.now();
+  return { text: '', waitingLabel, activities: [], startedAt: now, lastEventAt: now };
+}
+
+/** The terminal's rule: the latest thought stays until a tool starts, and a
+ * bare "thinking" says nothing the spinner does not. */
+function latestThought(current: string | undefined, event: HarnessActivityEvent): string | undefined {
+  if (event.parentId) return current;
+  if (event.kind === 'tool-start') return undefined;
+  if (event.kind !== 'thinking') return current;
+  const thought = stripAnsi(event.label).replace(/\s+/g, ' ').trim();
+  return thought && thought.toLowerCase() !== 'thinking' ? thought : current;
+}
+
 export function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent): ChatModel {
   if (model.sessionId && sessionId !== model.sessionId) return model;
   switch (event.type) {
@@ -207,26 +241,29 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         ...next,
         running: true,
         turnUserIndex: next.turnUserIndex ?? next.messages.length,
-        live: { activities: next.live?.activities ?? [], startedAt: next.live?.startedAt ?? Date.now(), ...next.live, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel) },
+        live: {
+          ...(next.live ?? freshLive('')), text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel),
+          ...(next.live?.text === event.live.text ? {} : { lastEventAt: Date.now() }),
+        },
       };
     }
     case 'waiting-start':
       return {
         ...model, running: true, turnUserIndex: model.messages.length,
-        live: { text: '', waitingLabel: stripAnsi(event.message), activities: [], startedAt: Date.now() }, plan: [], submissions: [],
+        live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
       };
     case 'waiting-stop':
       return { ...endTurn(model), pendingPrompt: undefined, approvals: [], submissions: [] };
     case 'delta': {
-      const live = model.live ?? { text: '', waitingLabel: 'thinking', activities: [], startedAt: Date.now() };
-      return { ...model, live: { ...live, text: event.mode === 'replace' ? event.text : live.text + event.text } };
+      const live = model.live ?? freshLive('thinking');
+      return { ...model, live: { ...live, text: event.mode === 'replace' ? event.text : live.text + event.text, lastEventAt: Date.now() } };
     }
     case 'activity': {
-      const live = model.live ?? { text: '', waitingLabel: 'thinking', activities: [], startedAt: Date.now() };
-      return { ...model, live: { ...live, activities: upsertActivity(live.activities, event.event) } };
+      const live = model.live ?? freshLive('thinking');
+      return { ...model, live: { ...live, activities: upsertActivity(live.activities, event.event), thought: latestThought(live.thought, event.event), lastEventAt: Date.now() } };
     }
     case 'phase':
-      return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
+      return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message), lastEventAt: Date.now() } } : model;
     case 'plan':
       return { ...model, plan: event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) };
     case 'usage':
