@@ -7,6 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import { currentWorkerBuild } from '../../worker/registry.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { ensureTurboFitForTurn } from './turbofit.js';
 import { ensureLocalModelForTurn, reconcileLocalModelLeases } from './local-model.js';
@@ -48,7 +49,6 @@ import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
 import { claimSession, releaseSession, sessionClaimIsLive, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
-import { acquireSessionClaim } from '../../session/claims.js';
 import { existsSync } from 'node:fs';
 import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { LiveTurnInputBroker } from '../../turn/live-input.js';
@@ -85,7 +85,6 @@ const BOARD_REPLACES_NOTICE = 'Press ← on an empty prompt for your conversatio
 /** What Left on an empty prompt returns: not a slash line, so it cannot be
  * typed, and it opens the board however the registry changes. */
 const BOARD_LINE = '\u0000board';
-const WATCHING_NOTICE = 'Watching · another terminal has this chat. /takeover when it is free.';
 
 /** Where a turn this window joins mid-way already is: when it started and
  * what it is running, from its journal -- only when that journal is the turn
@@ -258,17 +257,18 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     session = next;
   }
   let stateChanged = false;
-  // Another terminal holds this chat. Watch it: do not take the claim, and
-  // do not write its record out from under that terminal.
-  const watching = sessionClaimIsLive(session);
-  if (watching) selectionNotice = WATCHING_NOTICE;
-  if (!watching && session.status !== 'active') {
+  // Any number of shells can have this same chat open; the shared worker
+  // (worker/turn-bridge.ts) is what actually serializes turns, steering into
+  // one already running rather than racing it. The claim below is informational
+  // bookkeeping only -- which shell most recently opened this chat -- never a
+  // lock that keeps another shell from typing.
+  if (session.status !== 'active') {
     session.status = 'active';
     session.closedAt = undefined;
     session.updatedAt = new Date().toISOString();
     stateChanged = true;
   }
-  if (!watching && !session.model) {
+  if (!session.model) {
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
       : session.provider ? localHarnessForProvider(session.provider) : undefined;
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
@@ -281,12 +281,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       }
     }
   }
-  // Take ownership before the first paint so a terminal opened a moment later
-  // skips this conversation instead of attaching to it.
-  if (!watching) {
-    claimSession(session);
-    stateChanged = true;
-  }
+  claimSession(session);
+  stateChanged = true;
   if (stateChanged) await writeState(state);
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
   if (rl.render) rl.render(session, initialAccount, selectionNotice);
@@ -308,7 +304,19 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     void refreshSessionClaim(id).catch(() => undefined);
   }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
   claimInterval.unref();
+  // This process's own build, fingerprinted once at startup the same way a
+  // session worker's is (registry.ts): a rebuild while this terminal sits
+  // open otherwise has no way to say so, and a chat that had already crashed
+  // once today on exactly this kind of silent staleness is worth a notice,
+  // not another surprise. Announced once -- a background tick is not the
+  // place to fight the many other things already writing to `notice`.
+  const startupBuild = currentWorkerBuild();
+  let updateAnnounced = false;
   const usageInterval = rl instanceof TerminalHarnessPrompter ? setInterval(() => {
+    if (!updateAnnounced && startupBuild && currentWorkerBuild() !== startupBuild) {
+      updateAnnounced = true;
+      if (!notice) notice = 'A newer ClikCode build is installed -- /exit and relaunch to use it.';
+    }
     void readState({ transcripts: [] }).then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
       if (latest) refreshUsage(latest, latestState);
@@ -335,6 +343,33 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let transportSessionId = id;
   /** `<session id> <route>` this terminal last prepared a worker for. */
   let preparedRoute: string | undefined;
+  /** followWorkerTurn rejects when the turn it was only watching (started by
+   * this window earlier, another window, or the queue) fails -- most often
+   * "All accounts exhausted" from a worker this window did not drive. Left
+   * uncaught this crashed the whole interactive loop merely for reopening a
+   * chat whose background turn had run out of quota. Mirrors the handling
+   * below for a turn this window submitted directly: same notice, same
+   * "Resume in" offer, when there is prompt text worth resending. */
+  const handleFollowedTurnFailure = async (error: unknown, promptText: string | undefined): Promise<void> => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!rl.render) { emitHarnessOutput({ panel: 'error', message }); return; }
+    notice = isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
+    if (!promptText || !isUsageExhaustedMessage(message) || !(rl instanceof TerminalHarnessPrompter)) return;
+    const again = promptText !== autoResent && await sameProviderCanTakeTurn(id).catch(() => false);
+    if (again) {
+      await discardInterruptedTurn(id, promptText).catch(() => undefined);
+      autoResent = promptText;
+      resend = promptText;
+      notice = undefined;
+    } else {
+      const moved = await interactiveResumeInPicker(rl, id, promptText).catch(() => undefined);
+      if (moved) {
+        id = moved;
+        resend = promptText;
+        notice = undefined;
+      }
+    }
+  };
   try {
     while (true) {
       let line: string;
@@ -407,9 +442,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         if (runningTurn && rl instanceof TerminalHarnessPrompter) {
           rl.submitted(runningTurn.prompt);
           rl.render(latest, account, undefined, { running: true, ...runningTurn });
-          const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, runningTurn.prompt), { watch: sessionClaimIsLive(latest) });
-          if (followed.notice) notice = followed.notice;
-          if (followed.left) openBoard = true;
+          try {
+            const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, runningTurn.prompt));
+            if (followed.notice) notice = followed.notice;
+            if (followed.left) openBoard = true;
+          } catch (error) {
+            await handleFollowedTurnFailure(error, queued?.kind !== 'command' ? queued?.text : undefined);
+          }
           continue;
         }
         if (queued?.kind === 'command') {
@@ -441,9 +480,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               // pending message over the conversation, then the answer.
               rl.submitted(answer.prompt);
               rl.render(latest, account, undefined, { running: true, ...(answer.prompt !== undefined ? { prompt: answer.prompt } : {}) });
-              const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, answer.prompt), { watch: sessionClaimIsLive(latest) });
-              if (followed.notice) notice = followed.notice;
-              if (followed.left) openBoard = true;
+              try {
+                const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, answer.prompt));
+                if (followed.notice) notice = followed.notice;
+                if (followed.left) openBoard = true;
+              } catch (error) {
+                await handleFollowedTurnFailure(error, answer.prompt);
+              }
             }
             continue;
           }
@@ -457,25 +500,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         throw error;
       }
       if (!line) continue;
-      if (line === '/takeover' || line.startsWith('/takeover ')) {
-        const taken = await acquireSessionClaim(id);
-        if (!taken.acquired) notice = 'Still open in the other terminal.';
-        else {
-          const held = await readState({ transcripts: [id] });
-          const current = held.sessions.find((item) => item.id === id);
-          if (current) { claimSession(current); await writeState(held); }
-          notice = 'This window is driving the chat.';
-        }
-        continue;
-      }
       // Left on an empty prompt: the board, through the handler /resume has.
       const viaBoard = line === BOARD_LINE;
-      const heldNow = (await readState({ transcripts: [] })).sessions.find((item) => item.id === id);
-      if (!viaBoard && heldNow && sessionClaimIsLive(heldNow)) {
-        notice = WATCHING_NOTICE;
-        TERMINAL.active?.restoreDraft(line);
-        continue;
-      }
       if (viaBoard) line = '/resume';
       let interruptedSubmission: { text: string; restoreOnEscape: boolean } | undefined;
       /** One turn with the normal waiting / cancel / live-input UI. `echo`
