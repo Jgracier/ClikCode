@@ -97,8 +97,22 @@ function blockText(content: unknown): string {
   }).join('\n');
 }
 
+/** A thought as one row shows it: whitespace folded, and the latest part of
+ * a long one -- a thought streams, and its newest words are the ones that say
+ * what the model is doing now. */
+export function thoughtLabel(text: string): string {
+  const folded = text.replace(/\s+/g, ' ').trim();
+  return folded.length > THOUGHT_LABEL_CHARS ? `…${folded.slice(-(THOUGHT_LABEL_CHARS - 1))}` : folded;
+}
+const THOUGHT_LABEL_CHARS = 240;
+
+/** The id a thought row of Claude message `messageId` goes by, streamed
+ * (events/claude-stream.ts) or completed (below): the completed block
+ * replaces the streamed thought rather than adding a second. */
+export const claudeThinkingId = (messageId: string): string => `thinking:${messageId}`;
+
 /** One Claude-shaped `tool_use` block. */
-function claudeToolStart(tool: JsonRecord, command: string): NativeActivityEvent {
+export function claudeToolStart(tool: JsonRecord, command: string): NativeActivityEvent {
   const name = String(tool.name ?? 'tool');
   const input = asRecord(tool.input);
   const identity = typeof tool.id === 'string' ? { id: tool.id } : {};
@@ -164,23 +178,19 @@ export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, line
 function claudeShapedActivity(value: JsonRecord, command: string): NativeActivityEvent[] | undefined {
   const type = String(value.type ?? '');
   const parent = typeof value.parent_tool_use_id === 'string' && value.parent_tool_use_id ? { parentId: value.parent_tool_use_id } : {};
-  if (type === 'system' || type === 'result' || type === 'rate_limit_event') return [];
-  if (type === 'stream_event') {
-    // The completed block (below) carries the thinking text; the block START is
-    // what tells the UI the model has gone quiet because it is thinking.
-    const event = asRecord(value.event);
-    const block = asRecord(event?.content_block);
-    return event?.type === 'content_block_start' && (block?.type === 'thinking' || block?.type === 'redacted_thinking')
-      ? [{ kind: 'thinking', label: 'thinking', ...parent }] : [];
-  }
-  const content = asRecord(value.message)?.content;
+  // A block in flight is read by the turn's own stream state
+  // (events/claude-stream.ts); a single record says nothing about it.
+  if (type === 'system' || type === 'result' || type === 'rate_limit_event' || type === 'stream_event') return [];
+  const message = asRecord(value.message);
+  const content = message?.content;
   if (type === 'assistant') {
     if (!Array.isArray(content)) return [];
+    const thoughtId = typeof message?.id === 'string' ? { id: claudeThinkingId(message.id) } : {};
     return content.flatMap((part): NativeActivityEvent[] => {
       const block = asRecord(part);
       if (block?.type === 'tool_use' || block?.type === 'server_tool_use') return [{ ...claudeToolStart(block, command), ...parent }];
       if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
-        return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140), ...parent }];
+        return [{ kind: 'thinking', label: thoughtLabel(block.thinking), ...thoughtId, ...parent }];
       }
       return [];
     });
@@ -397,24 +407,20 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       };
     }
   }
-  // Pi's own envelope. Two shapes, and only one of them pairs:
-  //   tool_execution_start / tool_execution_end   -- a real pair, so a tool
-  //     row resolves the moment it finishes, like every other harness.
-  //   message_update -> assistantMessageEvent.toolcall_start  -- verified
-  //     from its own docs (packages/coding-agent/docs/json.md), which name
-  //     no paired completion, so a row started this way is only settled by
-  //     the end of the turn (TurnTranscript's `tool.done || turnEnded`).
-  //
-  // The note here used to add "same as Command Code above", which is no
-  // longer true: that harness maps tool_completed and
-  // tool_errored/denied/hook_blocked, so it resolves its rows normally.
+  // Pi's own envelope (packages/coding-agent/docs/json.md):
+  //   tool_execution_start / tool_execution_end -- a real pair, by
+  //     `toolCallId`, so a row resolves the moment its call finishes.
+  //   message_update -> assistantMessageEvent.toolcall_start -- the model
+  //     choosing the tool; the call is `partial.content[contentIndex]`, with
+  //     the same id the execution then reports.
   if (harness.command === 'pi') {
     // With a toolCallId the pair settles by id, so the start can show its
     // arguments and the end, which carries none, keeps them. Without one the
-    // two are matched by label, which must then be the same on both.
+    // turn's stream state gives each call an id of its own (adapters.ts), and
+    // the label stays the same on both halves for any reader without one.
     const piTool = (record: JsonRecord, start: boolean): NativeActivityEvent => {
       const name = String(record.toolName ?? 'tool');
-      const id = typeof record.toolCallId === 'string' ? record.toolCallId : undefined;
+      const id = typeof record.toolCallId === 'string' && record.toolCallId ? record.toolCallId : undefined;
       const args = asRecord(record.args);
       const classified = categoryOf(name, args, harness.command);
       const label = !id ? formatToolRow(name, undefined, classified.category) : start || args ? toolLabel(name, args, classified.category) : 'tool';
@@ -422,10 +428,11 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     };
     if (type === 'tool_execution_start') return piTool(value, true);
     if (type === 'tool_execution_end') return { ...piTool(value, false), kind: value.isError === true || value.error ? 'tool-error' : 'tool-done' };
-    if (type === 'message_update') {
-      const event = value.assistantMessageEvent && typeof value.assistantMessageEvent === 'object'
-        ? value.assistantMessageEvent as Record<string, unknown> : undefined;
-      if (event?.type === 'toolcall_start') return piTool(event, true);
+    const event = type === 'message_update' ? asRecord(value.assistantMessageEvent) : undefined;
+    if (event?.type === 'toolcall_start') {
+      const content = asRecord(event.partial)?.content;
+      const call = Array.isArray(content) && typeof event.contentIndex === 'number' ? asRecord(content[event.contentIndex]) : undefined;
+      return piTool(call ? { toolCallId: call.id, toolName: call.name, args: call.arguments } : event, true);
     }
   }
   return undefined;

@@ -9,6 +9,7 @@
  * same interface without being a terminal at all, or importing one.
  */
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessSession } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
@@ -22,7 +23,7 @@ export interface TurnObserver {
   phase(message: string): void;
   approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'>;
   setPlan(entries: readonly PlanEntry[]): void;
-  setTurnUsage(usage: { inputTokens?: number; outputTokens?: number }): void;
+  setTurnUsage(usage: TurnUsage): void;
   startWaiting(
     message: string,
     onCancel?: (restoreDraft: boolean) => void,

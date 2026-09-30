@@ -74,9 +74,10 @@ export class BackgroundTurnChannel implements VendorBackgroundTurn {
         forward((observer) => observer.onResponseDelta?.(text, mode));
       },
       onActivity: (event) => forward((observer) => observer.onActivity?.(event)),
-      onThought: (text) => forward((observer) => observer.onThought?.(text)),
+      onThought: (text, id) => forward((observer) => observer.onThought?.(text, id)),
       onPlan: (entries, explanation) => forward((observer) => observer.onPlan?.(entries, explanation)),
       onUsage: (usage) => forward((observer) => observer.onUsage?.(usage)),
+      onNotice: (message) => forward((observer) => observer.onNotice?.(message)),
       onPhase: (phase) => forward((observer) => observer.onPhase?.(phase)),
       onRateLimits: (limits) => forward((observer) => observer.onRateLimits?.(limits)),
       onAvailableCommands: (commands) => forward((observer) => observer.onAvailableCommands?.(commands)),

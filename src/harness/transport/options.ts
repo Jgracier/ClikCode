@@ -98,32 +98,3 @@ export function appServerThreadOverrides(
   }
   return { ...(Object.keys(config).length ? { configOverrides: config } : {}), unmapped };
 }
-
-export interface NormalizedTurnUsage {
-  inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number;
-  costUsd?: number; contextWindow?: number;
-}
-
-const finite = (...candidates: unknown[]): number | undefined =>
-  candidates.find((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate));
-const record = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-
-/** One shape for the usage payloads the transports pass through as published:
- * Codex `{ total|last: { inputTokens, … }, modelContextWindow }`, ACP
- * `{ inputTokens | input_tokens, … }`, and the structured-CLI NativeTurnUsage. */
-export function normalizeTurnUsage(raw: unknown): NormalizedTurnUsage | undefined {
-  const top = record(raw);
-  if (!top) return undefined;
-  const usage = record(top.total) ?? record(top.total_token_usage) ?? record(top.last) ?? top;
-  const cost = record(top.cost);
-  const result: NormalizedTurnUsage = {};
-  const assign = <K extends keyof NormalizedTurnUsage>(key: K, value: number | undefined): void => { if (value !== undefined) result[key] = value; };
-  assign('inputTokens', finite(usage.inputTokens, usage.input_tokens, usage.promptTokens, usage.prompt_tokens));
-  assign('outputTokens', finite(usage.outputTokens, usage.output_tokens, usage.completionTokens, usage.completion_tokens));
-  assign('cacheReadTokens', finite(usage.cacheReadTokens, usage.cachedInputTokens, usage.cached_input_tokens, usage.cache_read_input_tokens, usage.cachedReadTokens));
-  assign('totalTokens', finite(usage.totalTokens, usage.total_tokens, usage.used));
-  assign('costUsd', finite(top.totalCostUsd, top.total_cost_usd, top.costUsd, cost?.amount, usage.totalCostUsd));
-  assign('contextWindow', finite(top.modelContextWindow, top.model_context_window, top.contextWindow, top.size, usage.size));
-  return Object.keys(result).length ? result : undefined;
-}

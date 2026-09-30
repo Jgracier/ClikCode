@@ -13,6 +13,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
+import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import type { BackgroundTurnOutcome, VendorBackgroundTurn } from '../harness/transport/background-turn.js';
 import type { BroadcastObserver } from './broadcast-observer.js';
 
@@ -102,6 +103,8 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
         if (event.kind === 'tool-done' || event.kind === 'tool-error') finished.push(`${event.kind === 'tool-error' ? 'failed ' : ''}${event.label}`);
         observer.activityEvent(event);
       },
+      onThought: (text, id) => observer.activityEvent({ kind: 'thinking', label: thoughtLabel(text), ...(id ? { id } : {}) }),
+      onUsage: (usage) => observer.setTurnUsage(usage),
       onPhase: (phase) => observer.phase(phase),
       onPlan: (entries) => observer.setPlan(entries),
       onApproval: async (title, detail) => (await observer.approval(title, detail)) !== false,

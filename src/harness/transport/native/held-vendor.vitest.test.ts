@@ -55,16 +55,16 @@ async function runTurn(sessionId: string, delayMs: number | null) {
     { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(delayMs), {}, {
       stdinText: streamJsonUserMessage('go'), input, idleController: idle, idleTimeoutMs: 10_000, release,
       onStdoutLine: (line) => {
-        if (held) { held.line(line); return; }
         const record = JSON.parse(line) as Json;
+        if (held) { held.line(line, record); return; }
         background.note(record);
         if (record.type === 'result' && record.is_error !== true && background.pending > 0 && background.quiet) {
           held = holdVendorProcess({
             sessionId, background, release, endInput: () => input.end(), handler: (turn) => { turns.push(turn); },
-            report: (text, observer) => {
+            report: (text, observer, parsed) => {
               let position = streams.get(observer);
               if (!position) streams.set(observer, position = createStreamState());
-              reportStructuredLine(claude, text, observer, position);
+              reportStructuredLine(claude, text, observer, position, parsed);
             },
           });
         }

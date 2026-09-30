@@ -11,6 +11,7 @@ import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } f
 import { eventDiff } from '../../agent/line-diff.js';
 import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
+import { normalizeTurnUsage, turnStopReason } from '../protocol/turn-usage.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
@@ -335,6 +336,13 @@ interface Stream {
   text: string;
   vibeMessageText: string;
   sawActivity: boolean;
+  /** The thought streaming now: ACP sends fragments with no id, so a thought
+   * is a run of `agent_thought_chunk`s that anything else ends. */
+  thought?: { id: string; text: string };
+  thoughts: number;
+  /** The session's cost when this turn began: `usage_update` reports the
+   * session's running cost, and a turn's is what it grew by. */
+  costBase: number;
   watchdog?: TurnWatchdog;
 }
 
@@ -375,6 +383,8 @@ class AcpSessionImpl implements AcpSession {
   private settling?: Promise<void>;
   private sessionId?: string;
   private lastCommand = 'agent';
+  /** The session's cost so far, as its last `usage_update` put it. */
+  private sessionCost = 0;
   private isClosed = false;
   private readonly spawn: AcpSpawn;
   private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
@@ -400,7 +410,7 @@ class AcpSessionImpl implements AcpSession {
     const failure = new Promise<never>((_, reject) => { fail = reject; });
     failure.catch(() => undefined);
     const turn: ActiveTurn = {
-      input, observer: input, command: input.command, text: '', vibeMessageText: '', sawActivity: false, promptStarted: false, done: false, fail,
+      input, observer: input, command: input.command, text: '', vibeMessageText: '', sawActivity: false, thoughts: 0, costBase: this.sessionCost, promptStarted: false, done: false, fail,
     };
     this.turn = turn;
     const onAbort = (): void => this.cancelTurn(turn);
@@ -495,7 +505,7 @@ class AcpSessionImpl implements AcpSession {
     if (!this.onBackgroundTurn || this.isClosed) return undefined;
     if (this.background && !this.background.channel.done) return this.background;
     const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
-    const run: BackgroundRun = { channel, observer: channel.observer, command: this.lastCommand, text: '', vibeMessageText: '', sawActivity: false };
+    const run: BackgroundRun = { channel, observer: channel.observer, command: this.lastCommand, text: '', vibeMessageText: '', sawActivity: false, thoughts: 0, costBase: this.sessionCost };
     run.watchdog = this.watchdog(() => {
       if (this.background !== run) return;
       this.pendingTools.clear();
@@ -620,8 +630,11 @@ class AcpSessionImpl implements AcpSession {
     turn.prompt = peer.request('session/prompt', { sessionId: turn.sessionId, prompt: blocks });
     const completed = await turn.prompt as Json;
     if (completed.stopReason === 'cancelled') throw cancelledError();
-    const usage = completed.usage ?? completed._meta?.usage;
-    if (usage && typeof usage === 'object') input.onUsage?.(usage as Record<string, unknown>);
+    // `end_turn`, or the reason the agent stopped short (max_tokens,
+    // max_turn_requests, refusal), beside whatever usage it counted.
+    const usage = normalizeTurnUsage(completed.usage ?? completed._meta?.usage);
+    const stopReason = turnStopReason(completed.stopReason);
+    if (usage || stopReason) input.onUsage?.({ ...usage, ...(stopReason ? { stopReason } : {}) });
     const text = turn.text.trim();
     // Tool-only turns are real work with nothing to say. Only a turn that
     // produced neither prose nor activity is a failure.
@@ -686,6 +699,9 @@ class AcpSessionImpl implements AcpSession {
       clearTimeout(turn.throttled);
       turn.throttled = undefined;
     }
+    const thought = acpThoughtDelta(update);
+    // Anything but a thought (or a usage reading) ends the thought in progress.
+    if (!thought && update.sessionUpdate !== 'usage_update') target.thought = undefined;
     const delta = acpResponseDelta(update);
     if (delta) {
       if (target.command === 'vibe' && typeof update.messageId === 'string') {
@@ -700,14 +716,24 @@ class AcpSessionImpl implements AcpSession {
       }
       return;
     }
-    const thought = acpThoughtDelta(update);
-    if (thought) return input.onThought?.(thought);
+    if (thought) {
+      target.thought ??= { id: `thought-${++target.thoughts}`, text: '' };
+      target.thought.text += thought;
+      return input.onThought?.(target.thought.text, target.thought.id);
+    }
     const activity = acpActivityEvent(update);
     if (activity) { target.sawActivity = true; input.onActivity?.(activity); return; }
     const plan = acpPlanEntries(update);
     if (plan) return input.onPlan?.(plan);
+    // `usage_update` {used, size, cost}: the context the session occupies,
+    // its window, and what it has cost -- live, while the turn runs.
     if (update.sessionUpdate === 'usage_update' || (update.usage && typeof update.usage === 'object')) {
-      input.onUsage?.((update.usage && typeof update.usage === 'object' ? update.usage : update) as Record<string, unknown>);
+      const usage = normalizeTurnUsage(update.usage && typeof update.usage === 'object' ? update.usage : update);
+      if (usage?.costUsd !== undefined && update.sessionUpdate === 'usage_update') {
+        this.sessionCost = usage.costUsd;
+        usage.costUsd = Math.max(0, usage.costUsd - target.costBase);
+      }
+      if (usage) input.onUsage?.(usage);
     }
   }
 

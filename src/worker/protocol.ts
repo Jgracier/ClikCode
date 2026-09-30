@@ -6,6 +6,7 @@
  * has no self-delimiting end marker of its own.
  */
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessSession } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
@@ -63,7 +64,7 @@ export type WorkerEvent =
   | { type: 'activity'; event: HarnessActivityEvent }
   | { type: 'phase'; message: string }
   | { type: 'plan'; entries: readonly PlanEntry[] }
-  | { type: 'usage'; usage: { inputTokens?: number; outputTokens?: number } }
+  | { type: 'usage'; usage: TurnUsage }
   | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string }
   /** A turn has started. `prompt` (additive) is its text: a client that did
    * not send it -- another window's turn, or one the worker started itself

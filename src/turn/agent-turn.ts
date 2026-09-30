@@ -6,7 +6,8 @@ import chalk from 'chalk';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { modelClientForSession } from '../agent/models/for-session.js';
 import { isGatewayService } from '../session/route.js';
-import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
+import { agentTurnUsage, gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
+import { stopReasonNotice, turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { extractSessionTitle, stripRepeatedTitles, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { localModelTurnHooks } from '../commands/ai/local-model.js';
@@ -59,6 +60,15 @@ export async function runAgentTurn(input: {
   const startedAt = Date.now();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
+  /** Text the title filter held back and now owes: to the saved turn and to
+   * the screen alike, like every streamed delta. */
+  const releaseHeld = (): void => {
+    const held = titleStream?.flush();
+    if (!held) return;
+    checkpoint.response(held, 'append');
+    prompter?.response(held, 'append');
+  };
+  let turnUsage: TurnUsage | undefined;
   // The coding agent runs here, on this machine; the gateway supplies the
   // model step and nothing else. Only a gateway that cannot serve that -- an
   // administrator kill switch, or a deployment older than the endpoint --
@@ -75,14 +85,20 @@ export async function runAgentTurn(input: {
       // start, and hands on whatever the previous step still held.
       ...(titleStream ? {
         onStepStart: () => {
-          const pending = titleStream?.flush();
-          if (pending) prompter?.response(pending, 'append');
+          releaseHeld();
           titleStream?.nextStep();
         },
       } : {}),
       ...(signal ? { signal } : {}),
       ...(prepared.images.length ? { images: prepared.images } : {}),
+      // What streams is saved as it streams, as on every other route: a
+      // worker that dies mid-turn leaves the answer so far, not nothing.
+      onResponseDelta: (delta, mode) => checkpoint.response(delta, mode ?? 'append'),
       onActivity: (event) => checkpoint.activity(event),
+      onUsage: (usage) => {
+        turnUsage = { ...turnUsage, ...usage };
+        session.lastUsage = { ...turnUsage, at: new Date().toISOString() };
+      },
       // The loop takes steering before each model step (run-turn.ts).
       onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
         await handler(steerText);
@@ -92,12 +108,19 @@ export async function runAgentTurn(input: {
     if (harnessTurn.isError) throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
     // A reply shorter than the title filter's decision window is still held
     // back when the stream ends; it is owed to the screen.
-    const held = titleStream?.flush();
-    if (held) prompter?.response(held, 'append');
+    releaseHeld();
+    const usage = { ...agentTurnUsage(harnessTurn.usage), ...turnUsage };
+    // The loop's own reason wins where it ended the turn early (max-steps).
+    const loopStop = turnStopReason(harnessTurn.stopReason);
+    if (loopStop && loopStop !== 'completed') usage.stopReason = loopStop;
     const harnessInvocation = {
       id: randomUUID(), sessionId: session.id, accountId: attributedTo,
       provider: session.provider ?? attributedTo, ...(session.model ? { model: session.model } : {}),
       at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
+      ...(usage.input !== undefined ? { inputTokens: usage.input } : {}),
+      ...(usage.output !== undefined ? { outputTokens: usage.output } : {}),
+      ...(usage.cacheRead !== undefined ? { cacheReadTokens: usage.cacheRead } : {}),
+      ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
       // Which context profile the agent ran under, so an evaluation can
       // attribute time and quality to it (agent/context-profile.ts).
       ...(harnessTurn.contextProfile ? { contextProfile: harnessTurn.contextProfile } : {}),
@@ -106,11 +129,14 @@ export async function runAgentTurn(input: {
     const extracted = extractSessionTitle(harnessTurn.text);
     const named = { ...extracted, text: stripRepeatedTitles(extracted.text) };
     const completedText = await completeTurnCheckpoint(session, checkpoint, named.text, { title: titleStream?.title ?? named.title });
+    const stopped = stopReasonNotice(usage.stopReason);
+    if (stopped && prompter) prompter.activity(chalk.yellow(stopped));
+    else if (stopped && !isJsonDefaultMode()) process.stderr.write(`${chalk.yellow(stopped)}\n`);
     if (!prompter) {
       emitHarnessOutput({
         session, text: completedText, invocation: harnessInvocation,
         usage: {
-          attributedBy: attributedTo, ...harnessTurn.usage,
+          attributedBy: attributedTo, ...usage,
           ...(harnessTurn.contextProfile ? { contextProfile: harnessTurn.contextProfile } : {}),
         },
       });

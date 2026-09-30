@@ -11,7 +11,7 @@ import type { DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { nativeTurnResult } from '../harness/protocol/turn-result.js';
-import { nativeTurnUsage } from '../harness/protocol/turn-usage.js';
+import { parseJsonRecord } from '../harness/protocol/json-lines.js';
 import { aiderHistoryNotice, aiderHistoryReply, aiderStdoutReply } from '../harness/events/aider.js';
 import { createStreamState } from '../harness/events/adapters.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
@@ -108,6 +108,10 @@ export async function runVendorCliAttempt(input: {
   // a vendor's per-record session ids must not decide which records
   // belong together (see adapters.ts StreamState).
   const stream = createStreamState();
+  /** Usage already reached the observer line by line, the moment each record
+   * arrived. Only a harness whose output is one document at exit (or text)
+   * leaves it to be read afterwards. */
+  let sawLineUsage = false;
   // A stream-json stdin stays open while the vendor has background work
   // running, so the turn it starts when that work finishes reaches this
   // conversation instead of being killed at exit (background-wait.ts).
@@ -155,19 +159,19 @@ export async function runVendorCliAttempt(input: {
     ...(heldInput ? { input: heldInput } : {}),
     ...(release ? { release } : {}),
     onStdoutLine: (lineText) => {
+      // Parsed here, once: every reader below takes this record.
+      const record = parseJsonRecord(lineText);
       if (held) {
-        held.line(lineText);
+        held.line(lineText, record);
         void recordNativeStreamUsage(session, lineText).catch(() => undefined);
         return;
       }
-      if (background && lineText.trimStart().startsWith('{')) {
-        try { background.note(JSON.parse(lineText) as Record<string, unknown>); } catch { /* fail-open-ok: not a record; the parser below says the same */ }
-      } else if (/"task_notification"|"isBackground":true/.test(lineText)) {
+      if (background && record) background.note(record);
+      else if (record && /"task_notification"|"isBackground":true/.test(lineText)) {
         // A vendor that waits for its own background work in-process
         // (Cursor) is silent meanwhile: that silence gets the running-tool
         // budget, not the ordinary one. See background-task.ts.
-        let event: ReturnType<typeof vendorBackgroundEvent>;
-        try { event = vendorBackgroundEvent(JSON.parse(lineText) as Record<string, unknown>); } catch { event = undefined; }
+        const event = vendorBackgroundEvent(record);
         if (event?.kind === 'started' && !vendorBackground.has(event.id)) {
           vendorBackground.add(event.id);
           idle.toolStarted(`background:${event.id}`);
@@ -192,7 +196,8 @@ export async function runVendorCliAttempt(input: {
           noteTurnActivityEvent(idle, event);
           sharedObserver.onActivity?.(event);
         },
-      }, stream);
+      }, stream, record);
+      if (outcome.usage) sawLineUsage = true;
       if (outcome.live) confirmNativeSession();
       if (outcome.error) onStreamError(outcome.error);
       if (outcome.result) idle.noteResult(outcome.result);
@@ -204,10 +209,10 @@ export async function runVendorCliAttempt(input: {
           sessionId: session.id, background, release, handler: backgroundHandler,
           endInput: () => heldInput!.end(),
           // One stream position per background turn, like per attempt.
-          report: (text, observer) => {
+          report: (text, observer, parsed) => {
             let position = heldStreams.get(observer);
             if (!position) heldStreams.set(observer, position = createStreamState());
-            reportStructuredLine(cliHarness, text, observer, position);
+            reportStructuredLine(cliHarness, text, observer, position, parsed);
           },
         });
       }
@@ -258,6 +263,6 @@ export async function runVendorCliAttempt(input: {
     cliResult = { ...cliResult, text: reply };
   }
   if (!cliResult.isError) confirmNativeSession();
-  sharedObserver.onUsage?.(cliResult.usage ?? nativeTurnUsage(cliHarness, turnOutput.stdout));
+  if (!sawLineUsage && cliResult.usage) sharedObserver.onUsage?.(cliResult.usage);
   return cliResult;
 }

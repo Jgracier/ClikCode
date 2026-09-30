@@ -44,6 +44,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, listenForTerminalKeys, onKeyBatchEnd, w
 import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { formatTurnUsage } from './render/usage-line.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { composerUsageLabel, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, rightLabeledRule, runningChatLine, waitingSpinnerGlyph } from './render/waiting.js';
 
 const EXIT_CONFIRM_MS = 2000;
@@ -170,7 +171,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** A short-lived hint (the Ctrl+C exit warning) that takes the notice row. */
   private transientNotice?: string;
   private transientNoticeTimer?: NodeJS.Timeout;
-  private turnUsage?: { inputTokens?: number; outputTokens?: number };
+  private turnUsage?: TurnUsage;
   private latestThought?: string;
   private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
@@ -799,7 +800,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** Optional: token counts for the turn in flight, shown beside the elapsed
    * time. Cleared by the next startWaiting(). */
-  setTurnUsage(usage: { inputTokens?: number; outputTokens?: number }): void {
+  setTurnUsage(usage: TurnUsage): void {
     this.turnUsage = { ...this.turnUsage, ...usage };
     this.updateWaiting();
   }

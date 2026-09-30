@@ -8,7 +8,7 @@ import type { IdeSlashCommand } from '../protocol';
 import type { Mention } from '../webview-protocol';
 import { selectionBlock } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
-import { titleCase } from './format';
+import { formatTurnUsage, titleCase } from './format';
 import { EffortMenu, effortLabel, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
 import { UsageBars } from './screens';
 import { Icon, KeyList, type ListRow } from './ui';
@@ -219,8 +219,7 @@ export function Composer(props: {
   const account = model.currentAccount;
   const busy = model.busy;
   const installing = busy && /^(installing|waiting for another ClikCode to finish installing)/i.test(busy);
-  const tokens = model.turnUsage && (model.turnUsage.inputTokens || model.turnUsage.outputTokens)
-    ? `${(model.turnUsage.inputTokens ?? 0).toLocaleString()} in · ${(model.turnUsage.outputTokens ?? 0).toLocaleString()} out` : undefined;
+  const tokens = formatTurnUsage(model.turnUsage) || undefined;
 
   const placeholder = !connected ? 'ClikCode is not connected'
     : model.running ? 'Steer the running turn, or queue a message…'

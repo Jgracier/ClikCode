@@ -87,3 +87,18 @@ export function parseJsonDocument(text: string): JsonRecord[] {
   }
   return parseJsonLines(text).values;
 }
+
+/** One stdout line as the JSON object it holds, or undefined for anything
+ * else (a banner, progress chatter, an array). Parsed once per line: every
+ * reader of the line takes this object rather than parsing the text again. */
+export function parseJsonRecord(lineText: string): JsonRecord | undefined {
+  const candidate = lineText.trim();
+  if (candidate[0] !== '{') return undefined;
+  try {
+    return asRecord(JSON.parse(candidate));
+  } catch {
+    // fail-open-ok: vendors interleave non-JSON banners and progress chatter
+    // with their records; such a line is simply not a record.
+    return undefined;
+  }
+}

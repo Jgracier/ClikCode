@@ -25,6 +25,8 @@ import type { HarnessTurnObserver } from '../../events/turn-observer.js';
 import type { BackgroundWait } from './background-wait.js';
 import type { ReleasedTurnExit } from './turn.js';
 
+type Json = Record<string, unknown>;
+
 /** Wall-clock ceiling on a held process: after this its stdin closes. */
 export const HELD_VENDOR_CEILING_MS = 60 * 60 * 1000;
 /** How long a new turn waits for a held process to exit before stopping it. */
@@ -38,14 +40,16 @@ export interface HeldVendorOptions {
   /** The turn's release handle: ends the turn now, keeps the process. */
   release: { release(onExit: (exit: ReleasedTurnExit) => void): boolean; terminate(): void };
   handler: VendorBackgroundTurnHandler;
-  /** Report one stdout line to a background turn's observer. */
-  report(line: string, observer: HarnessTurnObserver): void;
+  /** Report one stdout line (and its record, when it is one) to a
+   * background turn's observer. */
+  report(line: string, observer: HarnessTurnObserver, record: Json | undefined): void;
   ceilingMs?: number;
 }
 
 export interface HeldVendor {
-  /** Every stdout line after the release, in order. */
-  line(text: string): void;
+  /** Every stdout line after the release, in order, with the record it
+   * holds when it is one (parsed once, by the caller). */
+  line(text: string, record: Json | undefined): void;
   /** Claude went between turns (BackgroundWait onQuiet). */
   quiet(): void;
   /** End it: close stdin and wait for the exit (bounded; then stopped). */
@@ -53,8 +57,6 @@ export interface HeldVendor {
 }
 
 const held = new Map<string, HeldVendor>();
-
-type Json = Record<string, unknown>;
 
 /** A record that begins work a background turn should show. */
 function opensBackgroundTurn(record: Json): boolean {
@@ -78,17 +80,13 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
   const ceiling = setTimeout(() => { closing = true; end('completed'); options.endInput(); }, options.ceilingMs ?? HELD_VENDOR_CEILING_MS);
   ceiling.unref();
   const vendor: HeldVendor = {
-    line(text) {
-      let record: Json | undefined;
-      if (text.trimStart().startsWith('{')) {
-        try { record = JSON.parse(text) as Json; } catch { record = undefined; }
-      }
+    line(text, record) {
       if (!channel && !closing && record && opensBackgroundTurn(record) && !options.background.settled) {
         channel = new BackgroundTurnChannel('structured-cli', 'background-work');
         try { options.handler(channel); } catch { /* fail-open-ok: the owner's bookkeeping */ }
       }
       if (channel) {
-        try { options.report(text, channel.observer); } catch { /* fail-open-ok: presentation-only consumer */ }
+        try { options.report(text, channel.observer, record); } catch { /* fail-open-ok: presentation-only consumer */ }
       }
       // After reporting: the record may end the background turn (a result).
       if (record) options.background.note(record);

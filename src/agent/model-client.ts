@@ -89,7 +89,9 @@ export type HarnessErrorKind = 'quota' | 'auth' | 'other';
 
 export type PlanEntry = { content: string; status: 'pending' | 'in_progress' | 'completed' };
 
-type UsageReport = TokenUsage & { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile?: ContextProfileName };
+/** The turn's usage so far, where its context stands, and why the latest
+ * model step stopped (`length` is an answer cut off at its output limit). */
+export type UsageReport = TokenUsage & { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile?: ContextProfileName; stopReason?: string };
 
 /** Optional pre/post tool interception. A pre hook may only veto (it can
  * never widen permissions); a post hook may only rewrite what the model sees. */

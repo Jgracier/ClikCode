@@ -8,7 +8,7 @@ import { stdout as output } from 'node:process';
 import chalk from 'chalk';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
+import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { accountAfterFailure, initialAccountChoice, turnAccountRecorder, turnBackendForAccount, type FailoverTally } from './account-routing.js';
 import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
@@ -38,7 +38,8 @@ import { harnessTurnTransport } from '../harness/transport/select.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelProvider } from '../runtime/lazy-bridge.js';
 import { prepareAttachments } from '../session/attachments.js';
-import { normalizeTurnUsage, type NormalizedTurnUsage } from '../harness/transport/options.js';
+import { addTurnUsage, stopReasonNotice, type TurnUsage } from '../harness/protocol/turn-usage.js';
+import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 
@@ -197,14 +198,14 @@ export async function sendVendorTurn(input: {
   let nativeThreadRetried = false;
   const effortKey = (): string => `${harness.command} ${model ?? ''} ${session.effort}`;
   const turnEffort = (): string | undefined => session.effort && session.effortRefused !== effortKey() ? session.effort : undefined;
-  /** Shared by every transport: usage seen on the wire for this attempt. */
-  let turnUsage: NormalizedTurnUsage | undefined;
-  const noteUsage = (raw: unknown): void => {
-    const usage = normalizeTurnUsage(raw);
-    if (!usage) return;
+  /** Shared by every transport: usage seen on the wire for this attempt.
+   * Each report is the attempt's running total, so its fields replace. */
+  let turnUsage: TurnUsage | undefined;
+  const noteUsage = (usage: TurnUsage): void => {
     turnUsage = { ...turnUsage, ...usage };
-    session.lastUsage = { ...turnUsage, at: new Date().toISOString() };
-    prompter?.setTurnUsage(turnUsage);
+    const shown = addTurnUsage(carriedPendingUsage, turnUsage)!;
+    session.lastUsage = { ...shown, at: new Date().toISOString() };
+    prompter?.setTurnUsage(shown);
   };
   const pendingWork = createPendingWorkTracker(harness.command);
   let pendingContinuations = 0;
@@ -212,16 +213,18 @@ export async function sendVendorTurn(input: {
   /** Tokens from earlier attempts of this same continued turn; the loop
    *  clears turnUsage on every pass, which is right for a failover and
    *  wrong for a continuation. */
-  let carriedPendingUsage: NormalizedTurnUsage | undefined;
+  let carriedPendingUsage: TurnUsage | undefined;
   const onActivity = (event: HarnessActivityEvent): void => {
     pendingWork.note(event);
     checkpoint.activity(event);
     if (prompter) prompter.activityEvent(event);
     else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
   };
-  const onThought = (thought: string): void => {
-    const label = thought.replace(/\s+/g, ' ').trim();
-    if (label) onActivity({ kind: 'thinking', label: label.slice(0, 200) });
+  /** A transport's thought is the whole of it so far: one row per id,
+   *  replaced as it grows (activity-events.ts thoughtLabel). */
+  const onThought = (thought: string, id?: string): void => {
+    const label = thoughtLabel(thought);
+    if (label) onActivity({ kind: 'thinking', label, ...(id ? { id } : {}) });
   };
   const onSessionId = async (nativeSessionId: string): Promise<void> => {
     if (session.nativeSessionId === nativeSessionId && !session.nativeSessionPreallocated) return;
@@ -262,6 +265,7 @@ export async function sendVendorTurn(input: {
     onActivity, onThought, onUsage: noteUsage,
     onResponseDelta: emitResponseDelta,
     onPhase: (phase: string) => prompter?.phase(phase),
+    onNotice: (message: string) => prompter?.activity(chalk.yellow(message)),
     onPlan: (entries: readonly HarnessPlanEntry[]) => prompter?.setPlan(entries),
     // A native harness runs its OWN tools, so ClikCode has no rule to
     // remember on its behalf -- and with no rule offered the prompter never
@@ -459,19 +463,6 @@ export async function sendVendorTurn(input: {
     }
     session.nativeStartedAt ??= new Date().toISOString();
     delete session.nativeSessionPreallocated;
-    const usage = addTurnUsage(carriedPendingUsage, turnUsage as NormalizedTurnUsage | undefined);
-    const invocation = {
-      id: randomUUID(), accountId: account.id, provider: harness.provider, ...(model ? { model } : {}),
-      at: new Date().toISOString(), sessionId: session.id,
-      ...(usage?.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
-      ...(usage?.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
-      ...(usage?.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
-      ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
-      ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-      latencyMs: Date.now() - startedAt,
-    };
-    state.invocations.push(invocation);
-    recordSuccessfulAccountTurn(state, account, invocation.at);
     // The harness ended the turn with a tool it never settled -- it
     // backgrounded a command and stopped. Re-drive it so it goes and reads
     // the result, instead of leaving the answer stranded in a task log and
@@ -488,6 +479,26 @@ export async function sendVendorTurn(input: {
       turnText = PENDING_CONTINUATION_PROMPT;
       continue;
     }
+    // One invocation for the whole turn, however many continuations it took:
+    // recording one per pass counted every earlier pass again each time
+    // (usage-learning fits its limits from exactly these records).
+    const usage = addTurnUsage(carriedPendingUsage, turnUsage);
+    const invocation = {
+      id: randomUUID(), accountId: account.id, provider: harness.provider, ...(model ? { model } : {}),
+      at: new Date().toISOString(), sessionId: session.id,
+      ...(usage?.input !== undefined ? { inputTokens: usage.input } : {}),
+      ...(usage?.output !== undefined ? { outputTokens: usage.output } : {}),
+      ...(usage?.cacheRead !== undefined ? { cacheReadTokens: usage.cacheRead } : {}),
+      ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
+      ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+      latencyMs: Date.now() - startedAt,
+    };
+    state.invocations.push(invocation);
+    recordSuccessfulAccountTurn(state, account, invocation.at);
+    // An answer the vendor cut short says so, beside the answer.
+    const stopped = stopReasonNotice(usage?.stopReason);
+    if (stopped && prompter) prompter.activity(chalk.yellow(stopped));
+    else if (stopped && !isJsonDefaultMode()) process.stderr.write(`${chalk.yellow(stopped)}\n`);
     // Completion always extracts the title, including when the stream that
     // filtered an earlier attempt was replaced during a retry.
     const completedText = await completeTurnCheckpoint(session, checkpoint, result.text, {
