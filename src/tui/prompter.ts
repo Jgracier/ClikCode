@@ -1,6 +1,7 @@
-/** The interactive terminal: one atomic live region holding the changing
- * response, controls and composer, with persisted conversation lines emitted
- * once into native scrollback. */
+/** The interactive terminal, drawn on the alternate screen: the conversation
+ * as a transcript this UI keeps and scrolls itself, and below it one live
+ * region holding the changing response, controls and composer. Every row is
+ * written at an address, and a frame writes only the rows that changed. */
 
 import chalk from 'chalk';
 import { pastedText } from './keys.js';
@@ -110,8 +111,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private suspended = false;
   private readonly reducedMotion = reducedMotion();
   private activityAnchor = 0;
-  /** Everything this UI writes goes through one append-only stream: finished
-   * rows into native scrollback, one small live region below them. */
+  /** Rows retired since the last frame reached the terminal, and the live
+   * region that frame will draw below them. */
   private pendingFinished: string[] = [];
   private pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean };
   /** The last row retired, so a blank separator is never doubled across the
@@ -120,26 +121,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The row before it, so the guard that separates messages can tell one
    * empty row from two across a frame boundary. */
   private secondLastFinishedRow?: string;
-  /** Persisted messages already in scrollback, and the standalone activity
-   * rows already written. Everything before `emittedMessages` belongs to the
-   * terminal now; this UI never addresses it again. */
-  /** `role:content` of the last message written, used to locate the next seam. */
-  /** Sequence numbers of the standalone activity rows already retired. One
-   * number per activity event, alongside activityEntries itself, which is
-   * deliberately never evicted -- some of it is immutable scrollback. */
-  /** User text already retired, so a steer materialized into the transcript by
-   * an earlier frame is not drawn a second time as a live row. */
-  /** Absolute message index where the streamed answer lands in the full
-   * transcript, so its persisted copy adds only what the stream has not retired. */
   private readonly turnTranscript = new TurnTranscript();
-  /** What is already in the terminal's scrollback. See emitted-transcript.ts:
-   *  every write there is irreversible, so the rules live in one place. */
+  /** What is already in the transcript. See emitted-transcript.ts: a retired
+   *  row is never rewritten in place, so the rules live in one place. */
   private readonly emitted = new EmittedTranscript();
-  /** Timeline sequence this turn started at, so activity left over from an
-   * earlier turn at the same anchor is never adopted into it. */
-  /** Write the full history once: the first frame of the process, and the
-   * first frame of a newly opened session. */
-  private lastColumns = output.columns || 0;
+  /** The width the transcript's rows were wrapped at. A resize to another
+   * width wraps the whole conversation again (see rewrapTranscript). */
+  private transcriptColumns = output.columns || 0;
   private usageLabel?: string;
   private usageResetLabel?: string;
   private selecting = false;
@@ -316,22 +304,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   };
   private readonly onResize = (): void => {
     if (!this.closed) {
-      // A resize invalidates the wrapping of the live region only. Rows already
-      // in scrollback keep the wrapping they were written with -- exactly as
-      // Ink and ratatui behave, and precisely why neither of them re-dumps the
-      // transcript on every resize. The live region is redrawn at the new width
-      // by the ordinary frame below.
-      //
-      // The one thing this cannot prove: the region is erased by walking up
-      // the number of rows it was written as, and a terminal that reflows on
-      // resize (xterm and iTerm do; tmux does not) may since have turned a row
-      // wider than the new width into two. Walking up too few rows leaves a
-      // stale row above the composer until the region next changes height;
-      // walking up more than were written would erase real scrollback. The
-      // cosmetic failure is the one to prefer, so the walk is capped at what
-      // was written and never guessed upward. Both reference implementations
-      // have this same limit, for this same reason.
-      this.lastColumns = output.columns || 0;
+      // The settled repaint redraws everything at the new size, and a change
+      // of width wraps the transcript again from its source first.
       this.forgetScreenPosition();
       logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
       // A phone sends several size changes while its keyboard moves. Queue
@@ -345,7 +319,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.repaintAfterResize();
     }
   };
-
 
   /** Never taller than the screen actually is: a live region that overflows
    * makes the walk back up to the composer clamp at the top edge, which is
@@ -382,16 +355,33 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.resizePaintTimer = setTimeout(() => {
       this.resizePaintTimer = undefined;
       if (this.closed || this.suspended) return;
+      this.rewrapIfWidthChanged();
       this.repaint();
     }, RESIZE_SETTLE_MS);
     this.resizePaintTimer.unref();
   }
 
-
-
-
-
-
+  /** A row retired at one width is wrong at any other. Narrower, it is wider
+   * than the screen: it wraps (or, with autowrap off, loses its tail) and
+   * every row below it lands one out. So the transcript is not re-clipped
+   * row by row but written again from its source -- the session's messages
+   * and this turn's state -- exactly as opening the conversation writes it. */
+  private rewrapIfWidthChanged(): void {
+    const columns = output.columns || 0;
+    if (columns === this.transcriptColumns) return;
+    this.transcriptColumns = columns;
+    // Line numbers stay unique across the rewrite, so nothing that holds one
+    // can land on a row it did not mean.
+    this.alternateTrimmed += this.alternateTranscript.length;
+    this.alternateTranscript.length = 0;
+    this.pendingFinished = [];
+    this.lastFinishedRow = undefined;
+    this.secondLastFinishedRow = undefined;
+    this.alternateScrollback = 0;
+    this.stopSelectionScroll();
+    this.selection = undefined;
+    this.emitted.requestReseed(false);
+  }
 
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */
@@ -407,33 +397,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Rows the last frame gave the transcript above the live region. The
    * scroll offset is bounded by it, and it changes with the screen. */
   private alternateAbove = 0;
-  /** Which screen this frame belongs on.
-   *
-   * The conversation lives on the main screen, in a scroll region, because
-   * that is the only place the TERMINAL owns the transcript -- and a swipe
-   * scrolls what the terminal owns, with no bytes sent, whatever the client
-   * is doing with its keyboard.
-   *
-   * A palette or a picker goes to the alternate screen instead. Two reasons,
-   * and they point the same way. It is modal, full-screen, transient UI, which
-   * is what that screen is for. And a bottom region cannot grow to fit one
-   * without pushing rows off the top of the scrolling half, which the terminal
-   * cannot give back -- opening and closing a palette ten times walked the
-   * conversation fifty rows away. On the alternate screen it costs nothing:
-   * the main screen, transcript and all, is exactly as it was when it closes.
-   *
-   * On the alternate screen it costs nothing: the screen underneath, the
-   * conversation and all, is exactly as it was when the overlay closes. */
-  /** The alternate screen is not optional, and the old `alternateScreen`
-   * field was not a real choice: both construction sites are gated on
-   * terminalUiSupported(), which REQUIRES output.isTTY -- the one value the
-   * field was computed from. It was always true, so every
-   * `if (!this.alternateScreen) return false` was guarding against a
-   * line-oriented mode that cannot exist. The invariant is now asserted once
-   * in the constructor instead of re-tested at nine call sites, and a non-TTY
-   * caller fails loudly there rather than entering a half-working mode. */
-  /** The title last given to the terminal, so a repaint does not resend it. */
+  /** Whether the last frame left the cursor shown (undefined: not known), and
+   * where it parked it, so a frame that changes neither writes nothing. */
+  private cursorShown: boolean | undefined;
+  private lastPark = '';
 
+  /** The alternate screen is not optional: construction is gated on
+   * terminalUiSupported(), which requires a TTY, and a non-TTY caller fails
+   * here rather than entering a half-working mode. */
   constructor() {
     if (!output.isTTY) {
       throw new Error('TerminalHarnessPrompter requires a TTY on stdout; construct it behind terminalUiSupported()');
@@ -557,7 +528,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The thought led to this text; once the answer is arriving it is stale.
     if (text) this.latestThought = undefined;
     if (mode === 'replace') {
-      this.activityEntries = rebaseActivityOffsets(this.activityEntries, this.activityAnchor, this.liveResponse, text);
+      // Only a turn in flight has tool rows whose place in the answer can
+      // move. After it, a replacement (a snapshot's copy of the finished
+      // answer) would rebase them against an empty stream -- to offset zero,
+      // above the prose they followed.
+      if (this.waitingLabel) this.activityEntries = rebaseActivityOffsets(this.activityEntries, this.activityAnchor, this.liveResponse, text);
       this.liveResponse = text;
     } else this.liveResponse += text;
     this.schedulePaint();
@@ -988,9 +963,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.draftPrompt = prompt;
     this.draftCursor = cursor;
     this.draftPalette = palette ? { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } : undefined;
-    // The last column is never printed in. DEC autowrap is off for this whole
-    // frame (the `\u001b[?7l` at the top of it), which makes filling it safe
-    // on a terminal that honours that -- but several mobile SSH clients, and
+    // The last column is never printed in. DEC autowrap is off (every frame
+    // that draws re-sends `\u001b[?7l`), which makes filling it safe on a
+    // terminal that honours that -- but several mobile SSH clients, and
     // anything that filters the mode out in between, wrap eagerly instead and
     // turn a full-width row into two. Every motion in a frame is relative, so
     // each such row put the walk back up to the composer one row out, which is
@@ -1115,12 +1090,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     );
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     // -------------------------------------------------------------------
-    // The append-only transcript. A finished row is handed to the terminal's
-    // own scrollback exactly once and is never addressed again; only the live
-    // region below it -- the block still receiving tokens, queued turns and
-    // the footer -- is erased and redrawn. Nothing here rebuilds the
-    // conversation to work out which prefix is safe to promote. TurnTranscript
-    // decides what can no longer change, and that is the whole decision.
+    // The append-only transcript. A finished row is retired into it exactly
+    // once and never rewritten in place (only a change of width writes the
+    // whole of it again); the live region below it -- the block still
+    // receiving tokens, queued turns and the footer -- is rebuilt each frame.
+    // TurnTranscript decides what can no longer change, and that is the whole
+    // decision.
     // -------------------------------------------------------------------
     const finished: string[] = [];
     const emit = (rows: readonly string[]): void => {
@@ -1172,32 +1147,34 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
      * live region, spinner instead of the settled glyph, so finishing it
      * changes the glyph rather than moving the row. At the end of the turn
      * a tool that never reported completion settles anyway. */
+    const toolRow = (entry: ActivityEntry, ended: boolean): SettlingTool => {
+      const id = entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`;
+      const running = !ended && entry.event?.kind === 'tool-start';
+      if (!running) {
+        return {
+          id, done: true, responseOffset: entry.responseOffset,
+          lines: activityRows(entry.lines, entry.event?.category),
+        };
+      }
+      const kind = liveWaitKind(entry.event!) ?? 'tool';
+      const child = entry.event?.id ? this.childActivity.get(entry.event.id) : undefined;
+      const row = runningChatLine(entry.event?.label ?? '', this.reducedMotion ? 0 : this.waitingFrame, kind).trim();
+      return {
+        id, done: false, responseOffset: entry.responseOffset,
+        lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(child)}`] : []), ''],
+      };
+    };
+    /** A turn's own tool calls: anchored at the message count when it began,
+     * which is at or before the index its answer lands at. */
+    const turnEntries = (from: number, to = from): ActivityEntry[] => this.activityEntries.filter((entry) =>
+      entry.anchor >= from && entry.anchor <= to && entry.responseOffset !== undefined && !entry.event?.parentId);
     const turnTools = (ended: boolean): SettlingTool[] => {
-      const frame = this.reducedMotion ? 0 : this.waitingFrame;
-      const tools: SettlingTool[] = this.activityEntries
+      const tools: SettlingTool[] = turnEntries(this.activityAnchor)
         // An anchor is reused: the next turn's assistant occupies the same
         // index when the previous one was never persisted. The turn that
         // produced an entry is what decides whether it belongs to this one.
-        .filter((entry) => entry.anchor === this.activityAnchor && entry.responseOffset !== undefined
-          && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor)
-        .filter((entry) => !entry.event?.parentId)
-        .map((entry) => {
-          const id = entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`;
-          const running = !ended && entry.event?.kind === 'tool-start';
-          if (!running) {
-            return {
-              id, done: true, responseOffset: entry.responseOffset,
-              lines: activityRows(entry.lines, entry.event?.category),
-            };
-          }
-          const kind = liveWaitKind(entry.event!) ?? 'tool';
-          const child = entry.event?.id ? this.childActivity.get(entry.event.id) : undefined;
-          const row = runningChatLine(entry.event?.label ?? '', frame, kind).trim();
-          return {
-            id, done: false, responseOffset: entry.responseOffset,
-            lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(child)}`] : []), ''],
-          };
-        });
+        .filter((entry) => (entry.sequence ?? 0) > this.emitted.turnSequenceFloor)
+        .map((entry) => toolRow(entry, ended));
       // One row on each side, matching every other message: a steer is a
       // message the user wrote mid-answer.
       const steerRows = (text: string): string[] => [
@@ -1214,17 +1191,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const renderLive = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
       renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage, true);
 
+    const reseeding = Boolean(this.emitted.pendingReseed());
     if (this.emitted.pendingReseed() === 'scroll-away') {
       finished.push(...Array.from({ length: targetHeight }, () => ''));
       this.lastFinishedRow = '';
     }
     if (this.emitted.pendingReseed()) {
-      // The first frame of the process, or of a newly opened session, writes
-      // the conversation once -- ALL of it. Everything already in scrollback
-      // (the shell's own output, the previous conversation) stays where it is.
-      //
-      // The full transcript must be written: scrollback is where this terminal
-      // keeps conversation history, and omitted rows cannot be read back later.
+      // The first frame of the process, of a newly opened session, or at a
+      // new width writes the conversation once -- ALL of it: the transcript
+      // is the only place it can be scrolled back through.
       this.emitted.reseeded();
       this.turnTranscript.reset();
     }
@@ -1237,8 +1212,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     let liveAssistant = resume.liveAssistant;
 
     emit(standaloneActivity(firstUnwritten));
+    let turnStart = firstUnwritten;
     for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
       const message = persistedMessages[index]!;
+      const pastTools = reseeding && message.role === 'assistant' && index !== liveAssistant ? turnEntries(turnStart, index) : [];
+      if (message.role === 'assistant') turnStart = index + 1;
       if (index === liveAssistant && message.role === 'assistant') {
         // The answer that just streamed. Its rows are already in scrollback and
         // the transcript knows exactly which blocks it still owes, so a
@@ -1247,6 +1225,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // identical to what streamed contributes nothing at all.
         emit(this.turnTranscript.advance({
           content: sanitizeTerminalText(message.content), tools: turnTools(true), turnEnded: true, renderBlocks,
+        }).finished);
+      } else if (pastTools.length) {
+        // An earlier turn of this window, written again at a new width: its
+        // tool rows go back where they happened, as they did the first time.
+        emit(new TurnTranscript().advance({
+          content: sanitizeTerminalText(message.content), tools: pastTools.map((entry) => toolRow(entry, true)),
+          turnEnded: true, renderBlocks,
         }).finished);
       } else {
         // A change of speaker is a bigger break than a change of paragraph.
@@ -1396,7 +1381,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const overflow = Math.max(0, unbounded.length - targetHeight);
     const live = overflow ? unbounded.slice(overflow) : unbounded;
     // The composer's own row and column, whether or not the frame shows the
-    // cursor: see parkCursorAt. The block's last row is the status line, and a
+    // cursor: a phone client draws its caret wherever it was left, hidden or
+    // not (see flushAlternateFrame). The block's last row is the status line, and a
     // caret parked there is the one every report of "the cursor is under the
     // composer" is actually describing.
     const cursorRow = Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
@@ -1404,9 +1390,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
   }
 
-  /** One append-only frame. `finished` rows are handed to the terminal's own
-   * scrollback -- written once, never addressed again -- and only the live
-   * region below them is erased and redrawn. */
+  /** One frame: `finished` rows are retired into the transcript, and the live
+   * region below them is replaced. */
   private renderFrame(
     finished: readonly string[], live: readonly string[], cursorRow: number, cursorColumn: number, hideCursor: boolean,
   ): void {
@@ -1559,7 +1544,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // block's last row: the status line, under the composer. Only the `?25h`
     // below depends on whether the frame shows it.
     const park = `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
-    if (!updates.length && !park) return;
+    const mouseReset = this.mouseResetPending && !SELECTION_MODE.active ? ENABLE_MOUSE_TRACKING : '';
+    const showCursor = !pending.hideCursor;
+    // Nothing changed: nothing is written. A clock that ticks every second
+    // used to send a cursor hide, a park and a show each time regardless.
+    if (!updates.length && !mouseReset && park === this.lastPark && showCursor === this.cursorShown) return;
     // A frame that redraws everything clears first, and homes, which is what
     // Claude Code does after a resize on this user's phone:
     //
@@ -1567,9 +1556,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     //
     // Addressed rows would overwrite every cell anyway; the clear costs seven
     // bytes and leaves nothing of the old size behind on a screen that just
-    // changed shape.
+    // changed shape. Autowrap goes off with every frame that draws: a vendor
+    // CLI or a teardown may have turned it back on, and a row that reaches
+    // the last column must not become two.
     const clear = full ? '\u001b[2J\u001b[H' : '';
-    const frame = `${this.mouseResetPending && !SELECTION_MODE.active ? ENABLE_MOUSE_TRACKING : ''}\u001b[?25l${clear}${updates.join('')}${park}${pending.hideCursor ? '' : '\u001b[?25h'}`;
+    const draw = updates.length ? `\u001b[?25l\u001b[?7l${clear}${updates.join('')}` : '';
+    const cursor = showCursor && (updates.length || !this.cursorShown) ? '\u001b[?25h'
+      : !showCursor && !updates.length && this.cursorShown !== false ? '\u001b[?25l' : '';
+    // One synchronized update (DEC 2026): a terminal that supports it shows
+    // the frame whole or not at all, never half-drawn; one that does not
+    // ignores the two sequences. restoreTerminal closes it on any exit.
+    const frame = `\u001b[?2026h${mouseReset}${draw}${park}${cursor}\u001b[?2026l`;
+    this.lastPark = park;
+    this.cursorShown = showCursor;
     this.mouseResetPending = false;
     this.frameInFlight = true;
     terminalModes.painted = true;
@@ -1613,20 +1612,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private shiftedRow(index: number, shift: number): string | undefined {
     const source = index + shift;
     return source >= 0 && source < this.alternatePrevious.length ? this.alternatePrevious[source] : undefined;
-  }
-
-
-
-  /** `hidden` keeps the cursor invisible -- it does not mean the cursor may be
-   * left anywhere. A terminal always has one, and a client that draws its own
-   * caret regardless of DECTCEM (phone SSH clients do) puts it wherever this
-   * code last left it. Parking a "hidden" cursor on the block's last row is
-   * therefore a caret sitting on the status line, under the composer, for as
-   * long as a turn runs. It is parked on the composer either way; only whether
-   * it is shown depends on the frame. */
-  private parkCursorAt(row: number, column: number, hidden = false): void {
-    if (this.closed || this.suspended) return;
-    output.write(`\u001b[${Math.max(1, row)};${Math.max(1, column)}H${hidden ? '' : '\u001b[?25h'}`);
   }
 
   /** Move the viewport through the transcript. Positive scrolls back, and the
@@ -1732,8 +1717,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.scrollPaintQueued = true;
     this.stopScrollBatch ??= onKeyBatchEnd(() => { if (this.scrollPaintQueued) draw(); });
   }
-
-
 
   /** True while the reader is looking at something other than the live end. */
   get scrolledBack(): boolean { return this.alternateScrollback > 0; }
@@ -1906,6 +1889,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * shell, a vendor CLI, a resize) decides that now. */
   private forgetScreenPosition(): void {
     this.alternatePrevious = [];
+    this.cursorShown = undefined;
   }
 
   private showTransientNotice(text: string, durationMs: number, redraw: () => void): void {
@@ -1954,15 +1938,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
     }
-    this.lastColumns = output.columns || 0;
-    // The shell printed its own rows while it had the terminal, so the row
-    // this block used to start on means nothing now.
+    // The shell may have resized the terminal while it had it.
+    this.rewrapIfWidthChanged();
     this.forgetScreenPosition();
     this.resumeInput?.();
     if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
     else this.repaint();
   };
-
 
   /** Remove a completed palette/picker as one frame. Painting an empty
    * composer here left its borders/status rows alive while the selected slash
@@ -2039,6 +2021,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         output.write(`${popReadModes()}\u001b[?25h`);
+        this.cursorShown = true;
         this.resumeInput = undefined;
         this.clearTransientNotice();
         if (answer) this.panelState = undefined;
@@ -2060,6 +2043,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         output.write(`${popReadModes()}\u001b[?25h`);
+        this.cursorShown = true;
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
       // Something other than the keyboard needs the screen: a turn this
@@ -2071,6 +2055,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         stopInput();
         output.write(`${popReadModes()}\u001b[?25h`);
+        this.cursorShown = true;
         this.resumeInput = undefined;
         if (value) this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${value}` : value;
         rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
@@ -2308,18 +2293,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     process.off('exit', restoreTerminal);
     setTerminalRawMode(false);
     input.pause();
-    // On the main screen the conversation stays in the terminal's scrollback
-    // where it can still be read and copied, and only this UI's own live
-    // region goes; on the alternate screen the whole thing is handed back and
-    // the shell's own screen returns untouched. The conversation is on disk
-    // either way -- `/resume` reopens it.
+    // The alternate screen is handed back and the shell's own screen returns
+    // untouched. The conversation is on disk -- `/resume` reopens it.
     output.write(
       `${popReadModes()}`
       + terminalTeardown(terminalModes.alternateScreen),
     );
     terminalModes.alternateScreen = false;
     terminalModes.painted = false;
-    terminalModes.leaveLiveRegion = undefined;
   }
 
   /** Hands the real terminal to a vendor CLI's own interactive flow (typically
@@ -2340,8 +2321,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
-    // bracketed paste off; this UI never uses the alternate screen) and the
-    // child process starting to read --
+    // bracketed paste off) and the child process starting to read --
     // both writes above are fire-and-forget from Node's side, with no way to
     // know when the terminal itself has caught up. A short settle window
     // before the caller spawns anything costs nothing on the success path
@@ -2351,19 +2331,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   resume(): void {
     if (this.closed) return;
-    // A vendor login can resize a mobile terminal while it owns the TTY.
-    // Re-seed the authoritative transcript at the new width when control
-    // returns; native scrollback remains available above the refreshed view.
+    // A vendor login can resize a mobile terminal while it owns the TTY; the
+    // transcript is written again at the new width when control returns.
     this.suspended = false;
     if (!terminalModes.alternateScreen) {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
     }
+    this.rewrapIfWidthChanged();
     this.forgetScreenPosition();
-    // Whatever the vendor printed stays in scrollback and the live region
-    // simply starts again below it: leaving the alternate screen left nothing
-    // UI's own on screen, so the next frame begins wherever the cursor is.
-    this.lastColumns = output.columns || 0;
     if (input.isTTY) input.resume();
     this.repaint({ keepPalette: false });
   }

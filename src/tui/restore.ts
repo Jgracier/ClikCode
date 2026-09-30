@@ -11,11 +11,8 @@ import { stdin as input, stdout as output } from 'node:process';
 export const terminalModes: {
   bracketedPaste: boolean;
   kittyKeyboard: boolean;
-  /** Focus reporting (`CSI ?1004h`): what an interactive application sets, and
-   * what a client reads to tell one from a shell. */
   /** Wheel reporting (`CSI ?1000h` + SGR), for reading the transcript back. */
   wheelReporting: boolean;
-  /** Theme-change notifications (`CSI ?2031h`), set for the same reason. */
   /** The UI is drawing on the alternate screen and owes the shell its own back. */
   alternateScreen: boolean;
   rawMode: boolean;
@@ -25,9 +22,6 @@ export const terminalModes: {
    * every mouse mode and the state a client latches, not only what a flag here
    * happened to record. A process that never drew writes nothing. */
   uiStarted: boolean;
-  /** Supplied by the live prompter: erases its composer and footer so whatever
-   * is printed next (a stack trace, the shell prompt) starts on a clean row. */
-  leaveLiveRegion?: () => string;
 } = { bracketedPaste: false, kittyKeyboard: false, wheelReporting: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false };
 
 /** The main screen's state, cleared before this program takes the alternate
@@ -83,7 +77,7 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
       return;
     }
     let sequence = '';
-    if (terminalModes.painted) sequence += `\x1b[?2026l${terminalModes.leaveLiveRegion?.() ?? ''}`;
+    if (terminalModes.painted) sequence += '\x1b[?2026l';
     if (terminalModes.kittyKeyboard) sequence += '\x1b[<u';
     // Unconditional from here, and deliberately more than was switched on.
     //
@@ -98,10 +92,8 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // of the four mouse modes, twice over. That is what a program does when it
     // knows a client latches state, and it is why running Claude Code once
     // makes the next program work -- measured here three times.
-    // Order transcribed from Claude Code's exit, captured from this user's
-    // phone, and the order is the point.
     //
-    // It clears the mouse modes on the ALTERNATE screen, then leaves it, then
+    // The order is the point too: it clears the mouse modes on the ALTERNATE screen, then leaves it, then
     // clears them AGAIN on the main screen -- twice. This cleared them once,
     // on the alternate screen, and left `?1049l` for last, so the main screen's
     // mouse state was never touched at all.
@@ -121,7 +113,6 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     terminalModes.wheelReporting = false;
     terminalModes.alternateScreen = false;
     terminalModes.rawMode = false;
-    terminalModes.leaveLiveRegion = undefined;
     if (sequence && output.isTTY) {
       // From a signal handler the process dies immediately after this, and a
       // queued stream write is simply lost -- measured, a SIGTERM produced no
