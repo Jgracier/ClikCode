@@ -2331,6 +2331,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
             // What was typed wins when it names a command outright: `/new`
             // must run /new even while a better-ranked row is highlighted.
             const command = exactPaletteCommand(value, commands) ?? options[selected].value;
+            const entry = commands.find((candidate) => candidate.value.toLowerCase() === command.toLowerCase());
+            // A command whose argument is chosen from a real list (model,
+            // effort, permissions, account, resume) opens that list instead
+            // of running with no argument -- choosing "/model" must show the
+            // models, not silently apply the current one and close the
+            // palette on a bare command name.
+            if (entry?.argValues) {
+              value = `${command} `;
+              cursor = value.length;
+              selected = 0;
+              return draw();
+            }
             // Deliberately NOT cleared here. Blanking the region on submit
             // leaves the screen empty for however long the command takes to
             // produce its first frame, which read as "the composer vanished".
@@ -2344,7 +2356,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           // A value fills in as it is, ready to run or to keep editing; a
           // command that takes an argument completes ready for it.
           value = completing ? options[selected].value
-            : `${options[selected].value}${options[selected].argHint ? ' ' : ''}`;
+            : `${options[selected].value}${options[selected].argHint || options[selected].argValues ? ' ' : ''}`;
           cursor = value.length;
           selected = 0;
           return draw();
@@ -2396,8 +2408,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           if (completing && cursor >= value.length) return finish(completedCommandLine(value, commands, selected));
           if (options.length && value.startsWith('/') && !value.includes(' ')) {
             // Right Arrow is deliberately identical to Enter, including the
-            // decision above not to blank the region while the command runs.
+            // decision above not to blank the region while the command runs,
+            // and the same exception for a command whose argument is chosen
+            // from a real list rather than typed free text.
             const command = options[selected].value;
+            if (options[selected].argValues) {
+              value = `${command} `;
+              cursor = value.length;
+              selected = 0;
+              return draw();
+            }
             return finish(command);
           }
           const paletteValue = composerRightArrowValue(value, options.length > 0, settings?.rightArrowPalette);
