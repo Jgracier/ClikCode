@@ -68,7 +68,9 @@ export interface HarnessPrompter {
   /** The full-page conversation board (tui/conversation-board.ts), where a
    * terminal can draw one. */
   board?(settings: import('../tui/conversation-board.js').ConversationBoardSettings): Promise<import('../tui/conversation-board.js').BoardResult | undefined>;
-  render?(session: HarnessSession, account?: string, notice?: string): void;
+  /** `journal`: whether something still runs the conversation's turn journal
+   * (`pendingTurn`). Unsaid, it may be running, and is never drawn as ended. */
+  render?(session: HarnessSession, account?: string, notice?: string, journal?: JournalState): void;
   /** The prompt this client has just submitted, or undefined for a synthetic
    * turn that shows none. Held until the turn ends: see
    * tui/render/pending-prompt.ts for why a snapshot cannot carry it. */
@@ -79,6 +81,11 @@ export interface HarnessPrompter {
   panel?(title: string, body: string): void;
   close(): void;
 }
+
+/** What a render knows of the turn journal (`pendingTurn`) it carries: a
+ * worker is still running it (with this prompt, when known), or nothing is
+ * and it is an interrupted turn. */
+export type JournalState = { running: false } | { running: true; prompt?: string };
 
 export type MessageBlock =
   | { kind: 'paragraph'; text: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean }

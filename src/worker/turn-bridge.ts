@@ -15,7 +15,8 @@ import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { WorkerClient } from './client.js';
-import type { WorkerEvent } from './protocol.js';
+import { isTranscriptActivity, type LiveActivity, type WorkerEvent } from './protocol.js';
+import type { PlanEntry } from '../tui/render/plan-block.js';
 import { withVendorTerminal } from '../commands/account.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -46,7 +47,11 @@ const SUBMISSION_ANSWER_MS = 8_000;
 interface WorkerTracker {
   running: boolean;
   prompt?: string;
+  /** The running turn as far as it has got -- text, tool rows, plan -- so a
+   * window that joins it, or comes back to it, draws all of it (showLive). */
   liveText: string;
+  activities: LiveActivity[];
+  plan: readonly PlanEntry[];
   wake?: (reason: 'turn' | 'queue') => void;
   /** Counts queue-changed events, so a change that lands between the loop
    * reading the queue and its prompt opening is not missed (workerQueueMark). */
@@ -62,13 +67,23 @@ const trackers = new WeakMap<WorkerClient, WorkerTracker>();
 const connecting = new Map<string, Promise<WorkerClient | undefined>>();
 
 function track(sessionId: string, client: WorkerClient): void {
-  const tracker: WorkerTracker = { running: false, liveText: '', driving: false, unanswered: [], queueVersion: 0 };
+  const tracker: WorkerTracker = { running: false, liveText: '', activities: [], plan: [], driving: false, unanswered: [], queueVersion: 0 };
   trackers.set(client, tracker);
+  // A worker older than this client names no prompt and sends text only; it
+  // still says a turn is live, and that is what matters most here.
+  const joinLive = (live: NonNullable<Extract<WorkerEvent, { type: 'snapshot' }>['live']>): void => {
+    Object.assign(tracker, {
+      running: true, prompt: live.prompt ?? tracker.prompt, liveText: live.text,
+      ...(live.activities ? { activities: [...live.activities] } : {}), ...(live.plan ? { plan: live.plan } : {}),
+    });
+  };
   const initial = client.initialEvent;
-  if (initial?.type === 'snapshot' && initial.live) Object.assign(tracker, { running: true, prompt: initial.live.prompt, liveText: initial.live.text });
+  if (initial?.type === 'snapshot' && initial.live) joinLive(initial.live);
+  // Registered before any turn's own listener (driveWorkerTurn), so that one
+  // always sees this record already up to date with the event it is handling.
   client.on('event', (event: WorkerEvent) => {
     if (event.type === 'waiting-start') {
-      Object.assign(tracker, { running: true, prompt: event.prompt, liveText: '' });
+      Object.assign(tracker, { running: true, prompt: event.prompt, liveText: '', activities: [], plan: [] });
       tracker.wake?.('turn');
     } else if (event.type === 'waiting-stop') {
       tracker.running = false;
@@ -76,11 +91,13 @@ function track(sessionId: string, client: WorkerClient): void {
     } else if (event.type === 'approval-request' || event.type === 'sign-in-request') {
       if (!tracker.driving) tracker.unanswered.push(event);
     } else if (event.type === 'snapshot') {
-      // A worker older than this client names no prompt; it still says a
-      // turn is live, and that is what matters here.
-      if (event.live) Object.assign(tracker, { running: true, prompt: event.live.prompt ?? tracker.prompt, liveText: event.live.text });
+      if (event.live) joinLive(event.live);
     } else if (event.type === 'delta') {
       tracker.liveText = event.mode === 'replace' ? event.text : tracker.liveText + event.text;
+    } else if (event.type === 'activity') {
+      if (tracker.running && isTranscriptActivity(event.event)) tracker.activities.push({ event: event.event, responseOffset: tracker.liveText.length });
+    } else if (event.type === 'plan') {
+      if (tracker.running) tracker.plan = event.entries;
     } else if (event.type === 'queue-changed') {
       tracker.queueVersion++;
       tracker.wake?.('queue');
@@ -191,11 +208,22 @@ export function workerQueueMark(sessionId: string): number | undefined {
   return client ? trackers.get(client)?.queueVersion : undefined;
 }
 
-/** The prompt of the turn this window's worker is running, when one is --
- * `{}` for a worker too old to name it -- so the loop follows that turn
- * instead of sending the queue's head into it. */
-export function workerRunningTurn(sessionId: string): { prompt?: string } | undefined {
-  const client = clients.get(sessionId);
+/** Draws the running turn as far as it has got. Safe to repeat: the text is
+ * replaced, an activity the window already shows is skipped by its index,
+ * and the plan is the latest. So a join, a return from the board and a
+ * mid-turn snapshot all come to the same screen, whatever order they came in. */
+function showLive(rl: TerminalHarnessPrompter, tracker: WorkerTracker): void {
+  if (tracker.liveText) rl.response(tracker.liveText, 'replace');
+  tracker.activities.forEach((item, index) => rl.activityEvent(item.event, { index, responseOffset: item.responseOffset }));
+  if (tracker.plan.length) rl.setPlan(tracker.plan);
+}
+
+/** Whether the conversation's worker is running a turn right now, and with
+ * what prompt (`{}` from a worker too old to name it) -- the worker's own
+ * answer. The journal alone cannot say: a crashed worker leaves one behind on
+ * purpose. Attaches to a running worker; never starts one. */
+export async function workerTurn(sessionId: string): Promise<{ prompt?: string } | undefined> {
+  const client = await connect(sessionId, false).catch(() => undefined);
   const tracker = client ? trackers.get(client) : undefined;
   if (!tracker?.running) return undefined;
   return tracker.prompt !== undefined ? { prompt: tracker.prompt } : {};
@@ -215,7 +243,7 @@ export async function followWorkerTurn(
   if (!client || !tracker?.running) return {};
   return driveWorkerTurn(sessionId, client, rl, () => {
     if (joined) rl.joinedWaiting(joined.startedAt, joined.activity);
-    if (tracker.liveText) rl.response(tracker.liveText, 'replace');
+    showLive(rl, tracker);
   }, () => tracker.running);
 }
 
@@ -224,8 +252,8 @@ async function driveWorkerTurn(
 ): Promise<{ notice?: string; left?: true }> {
   let notice: string | undefined;
   let left = false;
-  const tracker = trackers.get(client);
-  if (tracker) tracker.driving = true;
+  const tracker = trackers.get(client)!;
+  tracker.driving = true;
   try {
     await new Promise<void>((resolveTurn, rejectTurn) => {
       let settled = false;
@@ -249,17 +277,24 @@ async function driveWorkerTurn(
       const onEvent = (event: WorkerEvent): void => {
         switch (event.type) {
           case 'snapshot':
-            rl.render(event.session, event.account);
-            // The worker was already running this turn (a queued message it
-            // started first): what has streamed so far.
-            if (event.live?.text) rl.response(event.live.text, 'replace');
+            // `live` says the worker still runs this turn, so its journal is
+            // the live view's and is never drawn as ended; a snapshot without
+            // it (the one that closes a turn) holds an interrupted one.
+            rl.render(event.session, event.account, undefined, event.live ? { running: true, ...(event.live.prompt !== undefined ? { prompt: event.live.prompt } : {}) } : { running: false });
+            // The turn as far as it has got -- one this window did not start
+            // (a queued message it is behind) included.
+            if (event.live) showLive(rl, tracker);
             return;
           case 'delta':
             rl.response(event.text, event.mode);
             return;
-          case 'activity':
-            rl.activityEvent(event.event);
+          case 'activity': {
+            // Numbered as the tracker (updated first) recorded it.
+            const index = tracker.running && isTranscriptActivity(event.event) ? tracker.activities.length - 1 : -1;
+            const live = tracker.activities[index];
+            rl.activityEvent(event.event, live ? { index, responseOffset: live.responseOffset } : undefined);
             return;
+          }
           case 'note':
             rl.activity(event.message);
             return;
@@ -290,9 +325,8 @@ async function driveWorkerTurn(
             return;
           }
           case 'suspend':
-            // A worker has no terminal to actually hand over (see
-            // BroadcastObserver.suspend's own comment) -- reflecting the
-            // state visually is all a client can do with this.
+            // A worker has no terminal to hand over; the window shows that the
+            // turn is waiting on its own.
             void rl.suspend();
             return;
           case 'resume':
@@ -335,7 +369,7 @@ async function driveWorkerTurn(
             // queued again: a tight loop for the whole of the other turn, and
             // the turn itself never shown. A turn that already ended (its
             // waiting-stop came first) leaves nothing to follow.
-            if (tracker?.running) { rl.submitted?.(tracker.prompt); return; }
+            if (tracker.running) { rl.submitted?.(tracker.prompt); return; }
             finish(() => resolveTurn());
             return;
           case 'queue-changed':
@@ -388,17 +422,19 @@ async function driveWorkerTurn(
         () => { left = true; finish(() => resolveTurn()); },
       );
       begin();
-      for (const event of tracker?.unanswered.splice(0) ?? []) onEvent(event);
+      for (const event of tracker.unanswered.splice(0)) onEvent(event);
       // Following a turn that ended while this was being set up: its
       // waiting-stop has already gone by.
       if (stillRunning && !stillRunning()) finish(() => resolveTurn());
     });
   } finally {
-    if (tracker) tracker.driving = false;
+    tracker.driving = false;
     // Messages typed during the turn are placed before it is let go of, as
     // the in-process path does (interactive.ts).
     await rl.flushWaitingSubmissions?.();
-    rl.stopWaiting();
+    // Stepping away is not the turn's end: it goes on in the worker.
+    if (left) rl.leaveTurn();
+    else rl.stopWaiting();
   }
   return { ...(notice !== undefined ? { notice } : {}), ...(left ? { left: true as const } : {}) };
 }

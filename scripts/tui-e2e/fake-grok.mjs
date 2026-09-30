@@ -70,6 +70,19 @@ if (generic) {
   process.exit(0);
 }
 
+// `tools_first`: that many tool calls before any text -- a long agentic turn
+// whose journal holds only activities, which folds to "Interrupted turn
+// activity: ..." wherever it is drawn as if it had ended.
+for (let index = 0; index < (turn.tools_first ?? 0); index += 1) {
+  const id = `lead_${index}`;
+  out({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `npx vitest run part${index}` } }] } });
+  await sleep(Number(process.env.FAKE_TOOL_MS ?? 600));
+  out({ type: 'user', session_id: sessionId, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `part${index} ok` }] } });
+  // Reported again mid-turn, as a real CLI does: the worker then pushes a
+  // snapshot whose journal already holds these calls.
+  out({ type: 'system', subtype: 'init', session_id: sessionId, model: modelAt >= 0 ? argv[modelAt + 1] : 'grok-4' });
+}
+
 for (const [index, block] of turn.blocks.entries()) {
   await streamBlock(index * 2, block);
   if (index < turn.blocks.length - 1) {

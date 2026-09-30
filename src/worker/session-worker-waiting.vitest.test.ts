@@ -20,7 +20,7 @@ import { WorkerClient } from './client.js';
 import { readWorkerRecord, writeWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
-import { closeAllWorkerClients, followWorkerTurn, questionOrWorker, runTurnThroughWorker, workerQueueMark, workerRunningTurn } from './turn-bridge.js';
+import { closeAllWorkerClients, followWorkerTurn, questionOrWorker, runTurnThroughWorker, workerQueueMark, workerTurn } from './turn-bridge.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
@@ -54,7 +54,12 @@ afterEach(async () => {
   root = undefined;
 });
 
-interface TurnRequest { items: { type: string; role?: string; text?: string; name?: string }[]; respond: (frames: Record<string, unknown>[]) => void }
+interface TurnRequest {
+  items: { type: string; role?: string; text?: string; name?: string }[];
+  respond: (frames: Record<string, unknown>[]) => void;
+  /** The same, one frame every `everyMs`: a model still writing. */
+  respondSlowly: (frames: Record<string, unknown>[], everyMs: number) => Promise<void>;
+}
 
 /** The Gateway's OpenAI-compatible endpoint, one scripted answer per request, or held
  * until the test answers. Everything else it serves is a 404. */
@@ -87,6 +92,14 @@ class FakeGateway {
             for (const frame of frames) res.write(`data: ${JSON.stringify(frame)}\n\n`);
             res.end();
           },
+          respondSlowly: async (frames, everyMs) => {
+            res.writeHead(200, { 'content-type': 'text/event-stream' });
+            for (const frame of frames) {
+              res.write(`data: ${JSON.stringify(frame)}\n\n`);
+              await new Promise((resolve) => setTimeout(resolve, everyMs));
+            }
+            res.end();
+          },
         };
         self.requests.push(request);
         if (self.autoAnswer) { request.respond(self.autoAnswer); return; }
@@ -116,6 +129,11 @@ class FakeGateway {
 
 const text = (value: string): Record<string, unknown>[] => [
   { choices: [{ index: 0, delta: { content: value }, finish_reason: null }] },
+  { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+];
+/** One answer, streamed a word at a time. */
+const words = (value: string): Record<string, unknown>[] => [
+  ...(value.match(/\S+\s*/g) ?? []).map((piece) => ({ choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] })),
   { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
 ];
 const call = (name: string, args: Record<string, unknown>): Record<string, unknown>[] => [
@@ -465,12 +483,12 @@ describe('a message sent while another window\'s turn runs', () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(finished).toBe(false);
     expect(queueChanges).toBe(1);
-    expect(workerRunningTurn(session.id)).toEqual({ prompt: 'the other window asks' });
+    expect(await workerTurn(session.id)).toEqual({ prompt: 'the other window asks' });
     held.respond(text('the other answer'));
     expect(await sent).toEqual({ notice: 'Queued behind the turn already running' });
     expect(rl.calls).toContain('submitted("the other window asks")');
     expect(rl.calls.filter((entry) => entry.startsWith('response(')).join('')).toContain('the other answer');
-    expect(workerRunningTurn(session.id)).toBeUndefined();
+    expect(await workerTurn(session.id)).toBeUndefined();
 
     // The loop then sends the queued message, once, and it runs.
     const mine = runTurnThroughWorker(session.id, recordingPrompter(), 'my message', { echo: true, queuedTurnId: queued[0]!.id });
@@ -536,4 +554,41 @@ describe('a message typed as the turn ends', () => {
     }
     expect(lost).toBe(0);
   }, 120_000);
+});
+
+describe('a window joining a running turn', () => {
+  it('is sent every streamed word exactly once, and the tool rows and plan so far', async () => {
+    const session = await gatewaySession();
+    const starter = await attach(session.id);
+    const done = eventsUntil(starter, 'waiting-stop');
+    starter.send({ type: 'submit', text: 'look, then explain', echo: true });
+    (await gateway!.next()).respond(call('bash', { command: 'echo looked' }));
+    const answer = Array.from({ length: 120 }, (_, index) => `word${index}`).join(' ');
+    const streaming = (await gateway!.next()).respondSlowly(words(answer), 4);
+    // Windows join all through the answer. Each attach reads the conversation
+    // while words keep streaming: a window joined to the broadcast before that
+    // read was sent those words twice, once as deltas and once in the snapshot.
+    const joined: Array<{ client: WorkerClient; events: Promise<WorkerEvent[]> }> = [];
+    for (let index = 0; index < 6; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const client = await WorkerClient.attach(session.id);
+      clients.push(client);
+      joined.push({ client, events: eventsUntil(client, 'waiting-stop') });
+    }
+    await streaming;
+    await done;
+    for (const { client, events } of joined) {
+      const initial = client.initialEvent;
+      expect(initial?.type).toBe('snapshot');
+      const live = initial?.type === 'snapshot' ? initial.live : undefined;
+      if (!live) continue; // joined after the turn ended
+      let shown = live.text;
+      for (const event of await events) if (event.type === 'delta') shown = event.mode === 'replace' ? event.text : shown + event.text;
+      expect(shown.trim()).toBe(answer);
+      // The call made before the answer, with where in it it happened.
+      expect(live.activities?.map((item) => item.event.kind)).toEqual(expect.arrayContaining(['tool-start']));
+      expect(live.activities?.every((item) => item.responseOffset === 0)).toBe(true);
+    }
+    expect(joined.filter(({ client }) => client.initialEvent?.type === 'snapshot' && client.initialEvent.live).length).toBeGreaterThan(2);
+  }, 60_000);
 });
