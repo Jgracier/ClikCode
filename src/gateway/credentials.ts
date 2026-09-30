@@ -43,20 +43,28 @@ export function getApiUrl(config: Conf): string {
 
 /**
  * Resolve the stored API key for a platform URL (defaults to the current one).
- * Order: canonical auth file (when it has no URL or the same URL), then the
- * per-URL map in config, then the legacy single `apiKey`.
+ * Order: canonical auth file for the same URL, then the per-URL map in config,
+ * then the legacy single `apiKey`. A key is only ever sent to the URL it was
+ * issued for: one that names no URL (the legacy `apiKey`, a canonical record
+ * without `apiUrl`) goes only to the canonical gateway or the URL the user
+ * saved, never to wherever an environment variable points.
  */
 export function getApiKeyForUrl(config: Conf, url?: string): string | undefined {
   const normalized = normalizeApiUrl(url ?? getApiUrl(config));
+  const unscopedApplies = (): boolean => {
+    if (normalized === normalizeApiUrl(DEFAULT_GATEWAY_URL)) return true;
+    const saved = normalizeApiUrl(String((config.get(CONFIG_KEYS.API_URL) as string) || ''));
+    return Boolean(saved) && saved === normalized;
+  };
   const canonical = readCanonicalAuth();
   if (canonical?.apiKey) {
     const canonicalUrl = normalizeApiUrl(String(canonical.apiUrl || '').trim());
-    if (!canonicalUrl || canonicalUrl === normalized) return canonical.apiKey;
+    if (canonicalUrl ? canonicalUrl === normalized : unscopedApplies()) return canonical.apiKey;
   }
   const authByUrl = config.get(CONFIG_KEYS.AUTH_BY_URL) as AuthByUrl | undefined;
   const key = authByUrl?.[normalized]?.apiKey;
   if (key) return key;
-  return config.get(CONFIG_KEYS.API_KEY) as string | undefined;
+  return unscopedApplies() ? config.get(CONFIG_KEYS.API_KEY) as string | undefined : undefined;
 }
 
 /** Persist a verified credential exactly as AuthService.saveAuthForCurrentUrl does. */
