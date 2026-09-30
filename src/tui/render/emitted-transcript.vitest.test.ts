@@ -120,6 +120,15 @@ describe('what has already been written to scrollback', () => {
     expect(record.liveAssistantIndex).toBeUndefined();
   });
 
+  it('rewrites from the list when the row on screen is no longer in it', () => {
+    const record = new EmittedTranscript();
+    writeAll(record, [user('keep'), assistant('Interrupted turn activity: started inspect.')]);
+    const point = record.resume([user('keep')]);
+    expect(point.diverged).toBe(true);
+    expect(point.firstUnwritten).toBe(0);
+    expect(record.pendingReseed()).toBe('scroll-away');
+  });
+
   it('starts a fresh session already owing a reseed, before anything is written', () => {
     expect(new EmittedTranscript().pendingReseed()).toBe('first');
   });

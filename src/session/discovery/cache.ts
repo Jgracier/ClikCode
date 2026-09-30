@@ -41,10 +41,10 @@ interface DiscoveryCacheFile {
   v: 1;
   directories: Record<string, CachedDirectory>;
   listings?: Record<string, CachedListing>;
-  /** The last list each vendor CLI gave, shown the moment the conversation
-   * list opens while the CLI is asked again. Never used to skip that spawn:
-   * it is what the list looked like, not what it is. */
-  seen?: Record<string, { at: number; sessions: DiscoveredNativeSession[] }>;
+  /** The last list each vendor CLI gave. Fresh for SEEN_LISTING_TTL_MS, and
+   * used in place of spawning the CLI again. `build` is the binary that
+   * produced it, so an update is asked at once. */
+  seen?: Record<string, { at: number; sessions: DiscoveredNativeSession[]; build?: string }>;
 }
 
 /** Enough recent lists for every CLI, account and folder in use. */
@@ -54,6 +54,9 @@ const DISCOVERY_CACHE_MAX_SEEN = 60;
  * in another terminal shows up in the resume list within a few minutes,
  * long enough that opening /resume repeatedly costs one spawn, not six. */
 export const EMPTY_LISTING_TTL_MS = 5 * 60_000;
+/** How long a non-empty vendor listing is reused instead of spawning the CLI
+ * again. Opening the conversation list is a keystroke; the CLIs are not. */
+export const SEEN_LISTING_TTL_MS = 2 * 60_000;
 
 const DISCOVERY_CACHE_MAX_DIRECTORIES = 400;
 
@@ -104,6 +107,12 @@ export async function saveDiscoveryCache(): Promise<void> {
     }
   }
   const seen = discoveryCache.data.seen;
+  if (seen) {
+    const now = Date.now();
+    for (const [key, entry] of Object.entries(seen)) {
+      if (now - entry.at >= SEEN_LISTING_TTL_MS) delete seen[key];
+    }
+  }
   if (seen && Object.keys(seen).length > DISCOVERY_CACHE_MAX_SEEN) {
     discoveryCache.data.seen = Object.fromEntries(Object.entries(seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN));
   }
@@ -172,9 +181,9 @@ export async function rememberListing(
   discoveryCache!.dirty = true;
 }
 
-/** Keep what a vendor CLI listed, for showing next time before it is asked. */
+/** Keep what a vendor CLI listed. A fresh one stands in for the next spawn. */
 export async function rememberSeenListing(
-  command: string, workspace: string | undefined, profile: string | undefined, sessions: readonly DiscoveredNativeSession[], now = Date.now(),
+  command: string, workspace: string | undefined, profile: string | undefined, sessions: readonly DiscoveredNativeSession[], now = Date.now(), build?: string,
 ): Promise<void> {
   const cache = await loadDiscoveryCache();
   cache.seen ??= {};
@@ -183,8 +192,21 @@ export async function rememberSeenListing(
     if (cache.seen[key]) { delete cache.seen[key]; discoveryCache!.dirty = true; }
     return;
   }
-  cache.seen[key] = { at: now, sessions: [...sessions] };
+  cache.seen[key] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
   discoveryCache!.dirty = true;
+}
+
+/** Whether the last non-empty listing is recent enough to skip the CLI.
+ * An updated binary is asked again: a new build is when the list changes
+ * shape. */
+export async function seenListingFresh(
+  command: string, workspace: string | undefined, profile: string | undefined, now = Date.now(), build?: string,
+): Promise<boolean> {
+  const cache = await loadDiscoveryCache();
+  const entry = cache.seen?.[listingKey(command, workspace, profile)];
+  if (!entry || now - entry.at >= SEEN_LISTING_TTL_MS) return false;
+  if (build && entry.build && entry.build !== build) return false;
+  return true;
 }
 
 /** What a vendor CLI listed last time, or nothing when it never has. */

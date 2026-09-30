@@ -35,6 +35,9 @@ export interface BoardState {
   draft: string;
   /** A row of what is showing, or -1 for the composer. */
   selected: number;
+  /** Ctrl+F. Typing filters the list instead of starting a conversation. */
+  finding?: boolean;
+  query?: string;
 }
 
 export type BoardEffect =
@@ -52,9 +55,13 @@ export function boardShowsCommands(state: BoardState): boolean {
 export function boardRows(
   state: BoardState, conversations: readonly PickerOption<string>[], commands: readonly PickerOption<string>[],
 ): readonly PickerOption<string>[] {
-  if (!boardShowsCommands(state)) return conversations;
-  const typed = state.draft.trim().toLowerCase();
-  return commands.filter((command) => command.value.toLowerCase().startsWith(typed));
+  if (boardShowsCommands(state)) {
+    const typed = state.draft.trim().toLowerCase();
+    return commands.filter((command) => command.value.toLowerCase().startsWith(typed));
+  }
+  const query = state.finding ? (state.query ?? '').trim().toLowerCase() : '';
+  if (!query) return conversations;
+  return conversations.filter((row) => `${row.label} ${row.detail ?? ''}`.toLowerCase().includes(query));
 }
 
 const UP = '\u001b[A';
@@ -63,10 +70,39 @@ const RIGHT = '\u001b[C';
 const LEFT = '\u001b[D';
 
 /** What one key does to the board. Mutates `state`; says what else to do. */
+const FIND = '\u0006';
+
 export function boardKey(state: BoardState, key: string, rows: readonly PickerOption<string>[]): BoardEffect {
   const commandMode = boardShowsCommands(state);
   const row = state.selected >= 0 ? rows[state.selected] : undefined;
   if (key === '\u0003') return { kind: 'close' };
+  if (key === FIND && !commandMode) {
+    state.finding = !state.finding;
+    state.query = '';
+    if (state.finding) state.selected = rows.length ? 0 : -1;
+    return { kind: 'draw' };
+  }
+  if (state.finding && !commandMode) {
+    if (key === '\u001b') {
+      state.finding = false;
+      state.query = '';
+      return { kind: 'draw' };
+    }
+    if (key === UP) { state.selected = Math.max(0, state.selected - 1); return { kind: 'draw' }; }
+    if (key === DOWN) { state.selected = Math.min(Math.max(rows.length - 1, 0), state.selected + 1); return { kind: 'draw' }; }
+    if (key === '\r' || key === '\n' || key === RIGHT) return row ? { kind: 'finish', result: { open: row.value } } : { kind: 'none' };
+    if (key === '\u007f' || key === '\b') {
+      state.query = (state.query ?? '').slice(0, -1);
+      state.selected = 0;
+      return { kind: 'draw' };
+    }
+    if (!key.startsWith('\u001b') && [...key].every((character) => character >= ' ' )) {
+      state.query = `${state.query ?? ''}${key}`;
+      state.selected = 0;
+      return { kind: 'draw' };
+    }
+    return { kind: 'none' };
+  }
   if (key === '\u001b') {
     if (!state.draft) return { kind: 'close' };
     state.draft = '';
@@ -118,12 +154,18 @@ export function boardKey(state: BoardState, key: string, rows: readonly PickerOp
 }
 
 export function boardHint(state: BoardState, rows: readonly PickerOption<string>[]): string {
+  if (state.finding && !boardShowsCommands(state)) {
+    const query = state.query ?? '';
+    return rows.length
+      ? `find${query ? `: ${query}` : ''} · ↑↓ choose · Enter open · Esc clear`
+      : `find${query ? `: ${query}` : ''} · no conversation matches · Esc clear`;
+  }
   if (boardShowsCommands(state)) return rows.length ? '↑↓ choose · Enter open · Esc clear' : 'no command matches · Esc clear';
   const row = state.selected >= 0 ? rows[state.selected] : undefined;
   if (!row) {
     return state.draft
       ? 'Enter start a new conversation · Esc clear'
-      : 'type to start a new conversation · / provider and model · ↑↓ conversations · ← close';
+      : 'type to start a new conversation · Ctrl+F find · / provider and model · ↑↓ conversations · ← close';
   }
   const back = row.inner?.options.length ? `← ${row.inner.title.toLowerCase()}` : '← close';
   const tab = row.actions?.length ? ' · Tab options' : '';

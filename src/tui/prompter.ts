@@ -1389,22 +1389,32 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const renderLive = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
       renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage, true);
 
-    const reseeding = Boolean(this.emitted.pendingReseed());
-    if (this.emitted.pendingReseed() === 'scroll-away') {
-      finished.push(...Array.from({ length: targetHeight }, () => ''));
-      this.lastFinishedRow = '';
-    }
-    if (this.emitted.pendingReseed()) {
-      // The first frame of the process, of a newly opened session, or at a
-      // new width writes the conversation once -- ALL of it: the transcript
-      // is the only place it can be scrolled back through.
-      this.emitted.reseeded();
-      this.turnTranscript.reset();
-    }
+    let reseeding = Boolean(this.emitted.pendingReseed());
+    const applyReseed = (): void => {
+      if (this.emitted.pendingReseed() === 'scroll-away') {
+        finished.push(...Array.from({ length: targetHeight }, () => ''));
+        this.lastFinishedRow = '';
+      }
+      if (this.emitted.pendingReseed()) {
+        // The first frame of the process, of a newly opened session, or at a
+        // new width writes the conversation once -- ALL of it: the transcript
+        // is the only place it can be scrolled back through.
+        this.emitted.reseeded();
+        this.turnTranscript.reset();
+      }
+    };
+    applyReseed();
     // Where this list carries on from, whether the pending turn is already
     // in it, and where the live answer landed. All three are stated -- with
     // the failures each one prevents -- in render/transcript-seam.ts.
-    const resume = this.emitted.resume(persistedMessages);
+    // A list that no longer contains the row on screen is rewritten from
+    // the list. Matching that row's text is what duplicated a live turn.
+    let resume = this.emitted.resume(persistedMessages);
+    if (resume.diverged) {
+      reseeding = true;
+      applyReseed();
+      resume = this.emitted.resume(persistedMessages);
+    }
     const { firstUnwritten, materializedPendingTurn } = resume;
     // Cleared below once the live answer has been consumed, so it stays a let.
     let liveAssistant = resume.liveAssistant;

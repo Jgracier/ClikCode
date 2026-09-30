@@ -27,6 +27,9 @@ export type ResumePoint = {
   materializedPendingTurn: boolean;
   /** Where the answer that just streamed actually landed, if one did. */
   liveAssistant?: number;
+  /** The row on screen is not in this list. The caller rewrites the
+   * conversation from the list instead of matching text. */
+  diverged?: boolean;
 };
 
 export class EmittedTranscript {
@@ -42,6 +45,12 @@ export class EmittedTranscript {
 
   /** Everything the caller needs to know before it starts writing. */
   resume(persisted: readonly TranscriptMessage[]): ResumePoint {
+    if (this.lastMessage !== undefined && !persisted.some((message) => messageKey(message) === this.lastMessage)) {
+      // The last row painted is not in the journal. Continuing from a count
+      // would skip or repeat it. The list is the source: rewrite it.
+      this.requestReseed(this.messages > 0);
+      return { firstUnwritten: 0, materializedPendingTurn: false, diverged: true };
+    }
     const seam = firstUnwritten(persisted, this.messages, this.lastMessage);
     return {
       firstUnwritten: seam,

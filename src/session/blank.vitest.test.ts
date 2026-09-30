@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HarnessSession } from './model.js';
-import { chatNamed, isBlankConversation, sessionPickerOptions } from './options.js';
+import { chatNamed, conversationPreview, isBlankConversation, relativeTime, sessionPickerOptions } from './options.js';
 
 const now = new Date().toISOString();
 const chat = (extra: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -22,6 +22,7 @@ describe('a chat nothing happened in', () => {
       ['an attached file', { attachments: ['/tmp/shot.png'] }],
       ['a name the user gave it', { name: 'Keep me', nameSource: 'user' }],
       ['a vendor thread it was adopted from', { nativeSessionId: 'abc' }],
+      ['a shell command', { shellNotes: [{ command: 'ls', output: 'src', exitCode: 0, at: now }] }],
     ];
     for (const [what, extra] of cases) expect(isBlankConversation(chat(extra)), what).toBe(false);
   });
@@ -35,6 +36,18 @@ describe('a chat nothing happened in', () => {
     expect(listed).toContain('open');
     // One a killed process left behind is as invisible as one never made.
     expect(listed).not.toContain('stranded');
+  });
+
+  it('shows how long ago and the last thing asked, not a locale timestamp', () => {
+    const used = chat({
+      id: 'used', conversationId: 'used', updatedAt: new Date(Date.parse(now) - 5 * 60_000).toISOString(),
+      messages: [{ role: 'user', content: 'fix the scroll jump' }, { role: 'assistant', content: 'done' }],
+    });
+    const row = sessionPickerOptions([used], 'other', () => 'Claude', Date.parse(now))[0]!;
+    expect(row.detail).toContain('5m ago');
+    expect(row.detail).toContain('fix the scroll jump');
+    expect(relativeTime(used.updatedAt, Date.parse(now))).toBe('5m ago');
+    expect(conversationPreview(used)).toBe('fix the scroll jump');
   });
 });
 
