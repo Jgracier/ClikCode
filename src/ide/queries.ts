@@ -34,7 +34,7 @@ import { conversationIdFor, integrationLabel, optionForHarness, sessionPermissio
 import { sessionClaimIsLive } from '../session/claim.js';
 import { liveWorkerSessions, sessionActivity } from '../session/liveness.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
-import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
+import { sessionModelLabel } from '../harness/output.js';
 import { modelRow } from '../tui/pickers/model.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import type {
@@ -168,7 +168,7 @@ export async function conversationList(state: HarnessState, currentId: string | 
       id: latest.id,
       title: latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || messages.find((message) => message.role === 'user')?.content.replace(/\s+/g, ' ').trim().slice(0, 80) || 'Untitled chat',
       ...(latest.route === 'gateway' ? { provider: 'ClikDeploy Gateway' } : latest.route === 'clikcode-local' ? { provider: CLIKCODE_LOCAL_LABEL } : harness ? { provider: harness.displayName } : {}),
-      ...(latest.model ? { model: nativeModelLabel(latest.nativeHarness, latest.model) ?? latest.model } : {}),
+      ...(latest.model ? { model: sessionModelLabel(latest) ?? latest.model } : {}),
       ...(latest.workspace ? { workspace: latest.workspace } : {}),
       updatedAt: latest.updatedAt,
       messages: messages.length,

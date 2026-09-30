@@ -23,7 +23,7 @@ import { stdin as input } from 'node:process';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
 import { localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
-import { nativeModelCatalogForPicker, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
+import { harnessModelLabel, nativeModelCatalogForPicker, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
@@ -306,7 +306,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       return emitHarnessOutput({
         panel: 'models',
         models: catalog && harness
-          ? catalog.models.map((model) => ({ account: account?.label ?? 'automatic', provider: harness.provider, model }))
+          ? catalog.models.map((model) => ({ account: account?.label ?? 'automatic', provider: harness.provider, model, label: harnessModelLabel(harness, model) }))
           : modelChoicesFor({ ...session, provider: harness?.provider ?? session.provider }, state.accounts),
         selected: session.model,
       });
@@ -321,8 +321,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // Typed the way the picker shows it (`claude-code:sonnet`), stored the
     // way the harness takes it (`claude-code/sonnet`).
     const typed = normalizeModelWord(harness ? modelIdFromDisplay(harness, value) : value);
-    const requested = typed && harness?.command === 'hermes' ? hermesTurboFitModelId(typed) : typed;
-    if (requested && !trusted) await assertRealModel(harness, account, requested);
+    const asked = typed && harness?.command === 'hermes' ? hermesTurboFitModelId(typed) : typed;
+    const requested = asked && !trusted ? await assertRealModel(harness, account, asked) : asked;
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
     // A TurboFit model is running before it is chosen: if its setup fails,
@@ -444,8 +444,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
       if (!(harness?.modelArgvPrefix !== undefined || harness?.acp?.listsModels)) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
       const modelAccount = state.accounts.find((item) => item.id === session.accountId);
-      const requestedModel = normalizeModelWord(value);
-      if (requestedModel) await assertRealModel(harness, modelAccount, requestedModel);
+      const asked = normalizeModelWord(value);
+      const requestedModel = asked ? await assertRealModel(harness, modelAccount, asked) : asked;
       // Same rule as the /model handler above: clear-words resolve, never null.
       const resolvedModel = requestedModel ?? await resolveNativeModel(harness, modelAccount) ?? null;
       if (!resolvedModel) throw new Error(`${harness.displayName} does not publish any models to choose from.`);

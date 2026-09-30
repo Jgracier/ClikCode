@@ -11,6 +11,7 @@ import chalk from 'chalk';
 import { TERMINAL } from '../tui/active-terminal.js';
 import { compactPath, sessionProviderLabel } from './protocol/labels.js';
 import { nativeModelLabel } from './accounts/model-catalog.js';
+import { modelLabel } from './model-label.js';
 import { localModelLabel } from '../local-models/catalog.js';
 import type { HarnessSession } from '../session/model.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
@@ -21,8 +22,17 @@ export function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
 }
 
+/** A session's model as every screen names it: a ClikCode Local model by
+ * its catalog label, a Gateway model as chosen (its lab prefix says whose it
+ * is), a harness's model without the harness's own name (nativeModelLabel). */
+export function sessionModelLabel(session: HarnessSession, model: string | null | undefined = session.model): string | undefined {
+  if (session.route === 'clikcode-local') return localModelLabel(model);
+  if (session.route === 'gateway') return model ?? undefined;
+  return nativeModelLabel(session.nativeHarness, model);
+}
+
 function renderSessionCard(session: HarnessSession, account?: string): string {
-  const modelLabel = session.route === 'clikcode-local' ? localModelLabel(session.model) : nativeModelLabel(session.nativeHarness, session.model);
+  const shownModel = sessionModelLabel(session);
   return [
     chalk.bold.cyan('ClikCode'),
     ...(session.name ? [line('chat', session.name)] : []),
@@ -32,7 +42,7 @@ function renderSessionCard(session: HarnessSession, account?: string): string {
     // Omitted when there is no real model, never printed as a placeholder:
     // this card is also the JSON contract, and a fabricated model id there
     // would be consumed as if it were real.
-    ...(modelLabel ? [line('model', modelLabel)] : []),
+    ...(shownModel ? [line('model', shownModel)] : []),
     line('effort', session.route === 'gateway' ? gatewayEffort(session) ?? 'model default' : session.effort),
     ...(session.route === 'gateway' ? [line('speed', session.speed === 'fast' ? 'fast (fastest provider)' : 'default (cheapest provider)')] : []),
     // The Gateway route's agent runs on this machine and honours the approval setting.
@@ -130,7 +140,9 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
     write(`\n${chalk.bold('Models')}\n` + (models.length ? models.map((model) => {
       // A Gateway model shows its price; a local account's model, where it comes from.
       const note = 'price' in model ? (model.price ? `· ${model.price}` : '') : `(${model.provider ?? model.account})`;
-      return `  ${model.model}${note ? ` ${chalk.dim(String(note))}` : ''}`;
+      // Named as its row's provider shows it: `big-pickle`, not `opencode/big-pickle`.
+      const shown = typeof model.label === 'string' && !('fits' in model) ? model.label : modelLabel(String(model.model), typeof model.provider === 'string' ? model.provider : undefined);
+      return `  ${shown}${note ? ` ${chalk.dim(String(note))}` : ''}`;
     }).join('\n') : `  ${chalk.dim('Using the provider default. Set one with /model <name>.')}`) + '\n\n');
     return;
   }

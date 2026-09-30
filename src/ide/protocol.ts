@@ -93,8 +93,14 @@ export interface IdeProvider {
   choosesModel: boolean;
 }
 
+/** How the chat's model reads beside its provider (`big-pickle` for
+ * OpenCode's `opencode/big-pickle`), for the model it names: the session's
+ * reported model, else its chosen one. Display only; ids stay as they are. */
+export interface IdeModelLabel { model: string; label: string }
+
 export interface IdeModel {
   id: string;
+  /** How the model reads beside its provider; `id` is what is sent. */
   label: string;
   detail?: string;
   current: boolean;
@@ -116,6 +122,7 @@ export interface IdeConversation {
   id: string;
   title: string;
   provider?: string;
+  /** Its label beside `provider`, not the stored id. */
   model?: string;
   workspace?: string;
   updatedAt: string;
@@ -196,7 +203,7 @@ export type IdeEvent =
   | { type: 'ready'; version: string; protocol?: number; revision?: number; build?: string; pid: number }
   /** The conversation shown, from the state file: on open, on a switch, and
    * after anything that changed it outside a turn. */
-  | { type: 'session'; session: HarnessSession; account?: string }
+  | { type: 'session'; session: HarnessSession; account?: string; modelLabel?: IdeModelLabel }
   | { type: 'worker'; sessionId: string; event: WorkerEvent }
   /** This client submitted a turn; `prompt` is what to show as the user's
    * message until the worker's snapshot carries it (absent for synthetic

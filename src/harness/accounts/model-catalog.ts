@@ -20,6 +20,7 @@ import { expandAuthPath } from './auth-files.js';
 import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
 import { acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId } from '../../runtime/lazy-bridge.js';
+import { modelLabel } from '../model-label.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -33,15 +34,30 @@ export function nativeModelLabel(
   // From the installed Claude Code's own table (claude-models.ts), never a
   // constant: a constant is how the picker kept saying "Opus 5" after Claude
   // Code shipped Opus 5.5.
-  if (harnessCommand === 'claude') return claudeModelLabel(model) ?? model;
+  if (harnessCommand === 'claude') return modelLabel(claudeModelLabel(model) ?? model, harnessCommand);
   // A harness that drives other providers names them one way everywhere:
-  // `provider:model`, as the picker shows it.
+  // `provider:model`, as the picker shows it -- and never by its own name
+  // again, which is on screen beside it (`opencode:big-pickle` is `big-pickle`).
   try {
     const harness = harnessCommand ? localHarnessForCommand(harnessCommand) : undefined;
-    return harness ? modelDisplayId(harness, model) : model;
+    return harness ? harnessModelLabel(harness, model) : model;
   } catch {
     return model; // fail-open-ok: a label only; without the catalog the id is still the truth.
   }
+}
+
+/** One model of `harness` as its lists and status lines show it. */
+export function harnessModelLabel(harness: AiLocalHarnessDefinition, model: string): string {
+  return modelLabel(modelDisplayId(harness, model), harness.command, harness.provider);
+}
+
+/** The catalog id a model typed the way it is shown names: itself when the
+ * harness publishes it, else the one model whose label it is (`big-pickle`
+ * for OpenCode's `opencode/big-pickle`). */
+export function modelIdFromLabel(harness: AiLocalHarnessDefinition, models: readonly string[], typed: string): string {
+  if (models.includes(typed)) return typed;
+  const matches = models.filter((model) => harnessModelLabel(harness, model) === typed);
+  return matches.length === 1 ? matches[0]! : typed;
 }
 
 /** A catalog is cached for exactly as long as what it was derived from.
