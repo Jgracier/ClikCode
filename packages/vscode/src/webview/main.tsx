@@ -223,6 +223,7 @@ function App(): JSX.Element {
       case 'setDraft': composer.current?.setDraft(message.text); return;
       case 'insert': setScreen('chat'); composer.current?.insert(message.text); return;
       case 'mention': setScreen('chat'); requestAnimationFrame(() => composer.current?.mention(message.mention)); return;
+      case 'selection': composer.current?.selection(message.mention); return;
       case 'focus': requestAnimationFrame(() => composer.current?.focus()); return;
       case 'show': showScreen(message.screen); return;
       case 'ui-request': {

@@ -25,6 +25,8 @@ export type ToWebview =
   | { type: 'setDraft'; text: string }
   | { type: 'insert'; text: string }
   | { type: 'mention'; mention: Mention }
+  /** The active editor's selection, or none: offered with the next message. */
+  | { type: 'selection'; mention?: Mention }
   | { type: 'focus' }
   | { type: 'show'; screen: WebviewScreen }
   /** The answer to a `request`. */
