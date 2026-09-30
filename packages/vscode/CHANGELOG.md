@@ -18,7 +18,9 @@ ClikCode in VS Code, rebuilt as a finished product: everything ClikCode is, in t
   the models of the provider the chat is on, so it changes when the provider does.
 - **ACP sessions** for all 21 harnesses that declare an ACP entry point, with
   model and supported mode controls carried over the protocol. Existing CLI
-  conversations stay on their original transport.
+  conversations stay on their original transport. *Add ACP Harness* and
+  *Remove ACP Harness* register any other agent that speaks ACP.
+
 - **Effort and permissions** (Ask / Auto / Bypass, plan mode, Gateway fast mode) in the footer.
 - **Conversations**: search, resume, rename, fork, archive, delete, open in a new tab, or continue
   in the terminal (`clikcode sessions resume`) — the same list as the CLI, running ones first.

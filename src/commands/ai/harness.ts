@@ -26,6 +26,7 @@ import { hasAuthEvidence } from '../../harness/accounts/auth-files.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 import { turnBackendForAccount } from '../../turn/account-routing.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
+import { harnessCommand } from '../../session/state/paths.js';
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
  * it first if needed, and — only inside the interactive terminal session,
@@ -134,12 +135,17 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       // a plain /provider login deserves the real dedup-by-identity logic,
       // not a weaker "only rename if it still looks like a placeholder"
       // check that misses re-authenticating as a genuinely different real
-      // account entirely.
+      // account entirely. A provider whose every account was signed out has
+      // no accountId yet; the login still belongs to one of those accounts.
+      if (!account) account = state.accounts.find((item) => item.provider === harness.provider);
       if (account) {
         account = await syncAccountIdentityAfterLogin(harness, account, state);
         session.accountId = account.id;
       }
     }
+  }
+  if (!session.accountId && state.accounts.some((item) => item.provider === harness.provider)) {
+    throw new Error(`${harness.displayName} is not signed in. Run \`${harnessCommand()} accounts login ${harness.command}\`.`);
   }
   if (harness.turboFit) await ensureHermesTurboFit(harness, nativeProfileEnvironment(account?.nativeProfile));
   // Always a real model, never a placeholder -- see resolveNativeModel.
