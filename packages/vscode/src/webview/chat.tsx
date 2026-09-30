@@ -77,10 +77,28 @@ function ActivityLabel({ label, workspace }: { label: string; workspace?: string
   );
 }
 
-function ActivityRow({ activity, workspace }: { activity: Activity; workspace?: string }): JSX.Element {
+/** What the terminal shows after a call: a running one's clock, and a finished
+ * one's non-zero exit and a run of a second or more -- the exceptions, since
+ * every call exits 0 in under a second. */
+function activityOutcome(activity: Activity, now: number | undefined): { text: string; failed: boolean } | undefined {
+  if (activity.kind === 'tool-start') {
+    const elapsed = now !== undefined && activity.startedAt !== undefined ? now - activity.startedAt : 0;
+    return elapsed >= 1000 ? { text: duration(elapsed), failed: false } : undefined;
+  }
+  if (activity.kind === 'thinking') return undefined;
+  const failed = activity.exitCode !== undefined && activity.exitCode !== 0;
+  const parts = [
+    ...(failed ? [`exit ${activity.exitCode}`] : []),
+    ...(activity.durationMs !== undefined && activity.durationMs >= 1000 ? [duration(activity.durationMs)] : []),
+  ];
+  return parts.length ? { text: parts.join(' · '), failed } : undefined;
+}
+
+function ActivityRow({ activity, workspace, now }: { activity: Activity; workspace?: string; now?: number }): JSX.Element {
   const [open, setOpen] = useState(false);
   const status = activity.kind === 'tool-start' ? 'running' : activity.kind === 'tool-error' ? 'error' : 'done';
   const hasMore = Boolean(activity.output?.length || activity.diff);
+  const outcome = activityOutcome(activity, now);
   return (
     <div class={`activity ${status}`}>
       <div class="activity-line">
@@ -88,6 +106,7 @@ function ActivityRow({ activity, workspace }: { activity: Activity; workspace?: 
           {status === 'running' ? <Icon name="loading" spin /> : status === 'error' ? <Icon name="error" /> : <Icon name={activityIcon(activity)} />}
         </span>
         <ActivityLabel label={activity.label} workspace={workspace} />
+        {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{outcome.text}</span> : null}
         {hasMore ? (
           <button type="button" class="icon-button tiny" aria-expanded={open} aria-label={open ? 'Hide output' : 'Show output'} onClick={() => setOpen(!open)}>
             <Icon name={open ? 'chevron-up' : 'chevron-down'} />
@@ -181,7 +200,7 @@ const LiveTurn = memo(({ live, workspace, elsewhere }: { live: Live | undefined;
       {activities.length ? (
         <div class="activities">
           {hidden ? <button type="button" class="more-steps" onClick={() => setShowAll(true)}><Icon name="ellipsis" /> {hidden} earlier step{hidden === 1 ? '' : 's'}</button> : null}
-          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} />)}
+          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} now={now} />)}
         </div>
       ) : null}
       {live?.text ? <LiveMarkdown key={live.startedAt} text={live.text} /> : null}

@@ -56,6 +56,18 @@ describe('model patches', () => {
     expect(diffModel(first, again)?.set.messages).toBeUndefined();
   });
 
+  it('keeps a tool call\'s start, run time and exit code', () => {
+    const run = (events: IdeEvent[]): ChatModel => events.reduce(applyEvent, applyEvent(emptyModel(), { type: 'session', session: session() }));
+    const started = run([
+      worker({ type: 'waiting-start', message: 'thinking' }),
+      worker({ type: 'activity', event: { kind: 'tool-start', id: 't', label: '$ npm test' } }),
+    ]);
+    const startedAt = started.live!.activities[0]!.startedAt;
+    expect(startedAt).toEqual(expect.any(Number));
+    const done = applyEvent(started, worker({ type: 'activity', event: { kind: 'tool-error', id: 't', label: '$ npm test', durationMs: 4200, exitCode: 1 } }));
+    expect(done.live!.activities[0]).toMatchObject({ kind: 'tool-error', startedAt, durationMs: 4200, exitCode: 1 });
+  });
+
   it('keeps the latest thought until a tool starts', () => {
     const run = (events: IdeEvent[]): ChatModel => events.reduce(applyEvent, applyEvent(emptyModel(), { type: 'session', session: session() }));
     const thinking = run([
