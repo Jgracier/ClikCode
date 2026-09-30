@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
-import { parseNativeActivityEvent } from '../harness/protocol/activity-events';
+import { parseNativeActivityEventsFromValue } from '../harness/protocol/activity-events';
+import type { AiLocalHarnessDefinition } from '../harness/definition';
 import { addTurnUsage } from '../harness/protocol/turn-usage';
 import {
   createPendingWorkTracker, forgetToolPairingEvidence,
   MAX_PENDING_CONTINUATIONS, mayContinuePendingWork,
   PENDING_WORK_BUDGET_MS, pendingContinuationDelayMs,
 } from './pending-work';
+
+/** The first activity one stdout line describes. */
+const parseNativeActivityEvent = (harness: AiLocalHarnessDefinition, line: string) => parseNativeActivityEventsFromValue(harness, JSON.parse(line))[0];
 
 describe('pending work tracker', () => {
   beforeEach(() => { forgetToolPairingEvidence(); });

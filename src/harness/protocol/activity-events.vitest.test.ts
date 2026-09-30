@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { parseNativeActivityEvent } from './activity-events';
+import { parseNativeActivityEventsFromValue } from './activity-events';
+import type { AiLocalHarnessDefinition } from '../definition';
 import { renderActivityLine } from './activity-line';
 import { codex } from './vendor-fixtures.vitest';
+
+/** The first activity one stdout line describes. */
+const parseNativeActivityEvent = (harness: AiLocalHarnessDefinition, line: string) => parseNativeActivityEventsFromValue(harness, JSON.parse(line))[0];
 
 describe('incremental native tool activity', () => {
   it('retains Codex tool identity and bounded completion output', () => {

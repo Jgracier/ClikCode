@@ -156,23 +156,6 @@ export function parseNativeActivityEventsFromValue(harness: AiLocalHarnessDefini
   return single ? [single] : [];
 }
 
-function parseNativeActivityEvents(harness: AiLocalHarnessDefinition, lineText: string): NativeActivityEvent[] {
-  const candidate = lineText.trim();
-  if (candidate[0] !== '{') return [];
-  try {
-    return parseNativeActivityEventsFromValue(harness, JSON.parse(candidate));
-  } catch {
-    // fail-open-ok: plain-text harness output has no structured activity metadata to parse.
-    return [];
-  }
-}
-
-/** First activity on the line. Prefer parseNativeActivityEvents: a line can
- * describe several. */
-export function parseNativeActivityEvent(harness: AiLocalHarnessDefinition, lineText: string): NativeActivityEvent | undefined {
-  return parseNativeActivityEvents(harness, lineText)[0];
-}
-
 /** Claude Code stream-json (also Qwen Code). Returns undefined for records
  * this shape does not own, so the generic branches still get a look. */
 function claudeShapedActivity(value: JsonRecord, command: string): NativeActivityEvent[] | undefined {
