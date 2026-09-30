@@ -101,6 +101,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingSubmit?: (text: string) => Promise<LiveTurnInputResult>;
   /** Stop showing the running turn without stopping it (Left, empty draft). */
   private leaveWaiting?: () => void;
+  /** ← was pressed during a turn: the next stopWaiting is a step out, not
+   * the turn's end. */
+  private leavingTurn = false;
+  /** The turn this window stepped out of, still running in its worker.
+   *
+   * Stepping out is a pause of this window's view, not the end of the turn.
+   * Treated as an end, it settled the half-streamed answer into scrollback
+   * (a paragraph cut mid-word), and the view that followed the turn again
+   * started from nothing and replayed the whole answer beneath it: every
+   * trip to the board and back added another copy. So what the turn already
+   * wrote is remembered here, nothing more of it is drawn while away, and a
+   * return to the SAME turn carries on from where scrollback stops. A new
+   * conversation on screen or the turn's own end (its durable record) ends
+   * it. */
+  private steppedOut?: { sessionId: string; prompt?: string; anchor: number };
   /** `id` arrives with the answer to the submission, and is the same id its
    * durable copy (a queued turn, a recorded steer) is stored under. */
   private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command' }> = [];
@@ -243,6 +258,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Left with nothing typed steps away from the turn -- to the conversation
     // board -- and leaves it running: the worker owns it, not this window.
     if (key === '\u001b[D' && !this.waitingDraft && this.leaveWaiting) {
+      this.leavingTurn = true;
       this.leaveWaiting();
       return;
     }
@@ -533,6 +549,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // The previous conversation is scrolled up into scrollback -- preserved,
       // not erased -- so the new one starts on a clean viewport.
       this.emitted.requestReseed();
+      this.steppedOut = undefined;
+    }
+    // The turn stepped out of ended while this window was away: its durable
+    // record is here, and is matched against what streamed like any end.
+    if (this.steppedOut && !session.pendingTurn && (session.messages?.length ?? 0) > this.steppedOut.anchor) {
+      this.steppedOut = undefined;
     }
     // A snapshot that already holds this turn's durable record -- folded into
     // `messages`, its journal gone -- IS the end of the turn for the screen,
@@ -559,7 +581,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // that is not persisted yet. A setting applied mid-turn renders the status
     // line (see harness/output.ts), and clearing here would take the
     // half-written answer off the screen with it.
-    if (!this.waitingLabel) {
+    if (!this.waitingLabel && !this.steppedOut) {
       if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
       this.responsePaintTimer = undefined;
       this.liveResponse = '';
@@ -696,9 +718,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const submittedPrompt = this.submittedPrompt;
     this.stopWaiting(false);
     this.submittedPrompt = submittedPrompt;
+    // Following again the very turn this window stepped out of: what it wrote
+    // before is in scrollback, so it carries on from there (see steppedOut).
+    const out = this.steppedOut;
+    const rejoined = Boolean(out && this.currentSession?.id === out.sessionId && out.prompt === submittedPrompt
+      && (this.currentSession?.messages?.length ?? 0) === out.anchor);
+    this.steppedOut = undefined;
     // A new turn is the reader rejoining the conversation.
     this.alternateScrollback = 0;
-    this.liveResponse = '';
+    if (!rejoined) this.liveResponse = '';
     // A running turn always renders as stable messages, its submitted user
     // prompt, then one live assistant slot. Keep that slot fixed for the
     // whole turn: deriving it from sessionTranscriptMessages made the anchor
@@ -727,10 +755,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.panelState = undefined;
     // Whatever the previous turn retired belongs to the terminal now. This one
     // starts owing everything it produces, and nothing from before it.
-    this.turnTranscript.reset();
-    this.emitted.liveAnswerSettled();
-    this.emitted.turnSequenceFloor = this.timelineSequence;
-    this.streamingBlocks = createStreamingBlockParser();
+    if (rejoined) {
+      // A call still running when this window stepped out may have finished
+      // while it was away, which it never saw: kept, its row would spin until
+      // the turn ended and then settle below everything. It was never
+      // written, so dropping it loses nothing already on screen.
+      const floor = this.emitted.turnSequenceFloor;
+      this.activityEntries = this.activityEntries.filter((entry) => !(entry.anchor === this.activityAnchor
+        && (entry.sequence ?? 0) > floor && entry.event?.kind === 'tool-start'));
+    } else {
+      this.turnTranscript.reset();
+      this.emitted.liveAnswerSettled();
+      this.emitted.turnSequenceFloor = this.timelineSequence;
+      this.streamingBlocks = createStreamingBlockParser();
+    }
     if (input.isTTY) {
       const listen = (): void => {
         setTerminalRawMode(true);
@@ -764,6 +802,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   stopWaiting(refresh = true): void {
+    if (this.leavingTurn && this.waitingLabel && this.currentSession) {
+      this.steppedOut = { sessionId: this.currentSession.id, ...(this.submittedPrompt !== undefined ? { prompt: this.submittedPrompt } : {}), anchor: this.activityAnchor };
+    }
+    this.leavingTurn = false;
     if (this.waitingTimer) clearInterval(this.waitingTimer);
     this.waitingTimer = undefined;
     this.stopWaitingInput?.();
@@ -1047,7 +1089,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // anchor immediately; otherwise the tools remain invisible and then all
     // appear at once when the first sentence arrives.
     const settledMessage = pendingPrompt ? undefined : persistedMessages[persistedMessages.length - 1];
-    const hasTransientAssistant = transientAssistantRequired(
+    const hasTransientAssistant = !this.steppedOut && transientAssistantRequired(
       this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
       settledMessage?.role === 'assistant' ? settledMessage.content : undefined,
     ) || Boolean(pending?.steers?.length);
