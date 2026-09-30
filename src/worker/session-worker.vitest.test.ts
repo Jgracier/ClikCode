@@ -265,7 +265,15 @@ describe('session worker (real spawned process, real socket)', () => {
 
 describe('one worker per conversation', () => {
   const children: ChildProcess[] = [];
-  afterEach(() => { for (const child of children.splice(0)) if (child.exitCode === null) child.kill('SIGTERM'); });
+  // Waited out before the file's own afterEach removes the directory: a
+  // worker shutting down still writes its state there, and recreates it.
+  afterEach(async () => {
+    await Promise.all(children.splice(0).map((child) => {
+      if (child.exitCode !== null || child.signalCode !== null) return undefined;
+      child.kill('SIGTERM');
+      return new Promise((resolveExit) => child.once('exit', resolveExit));
+    }));
+  });
 
   /** A worker started directly, as two windows racing to spawn one do. */
   const startWorker = (sessionId: string): ChildProcess => {
