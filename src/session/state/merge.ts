@@ -80,7 +80,36 @@ export function splitSession(session: HarnessSession): { meta: SessionMeta; tran
 // Baseline
 // ---------------------------------------------------------------------------
 
-interface BaselineSession { meta: SessionMeta; transcript: SessionTranscript; claim?: HarnessSession['claim'] }
+interface BaselineSession {
+  meta: SessionMeta;
+  transcript: SessionTranscript;
+  claim?: HarnessSession['claim'];
+  /** The working array `transcript.messages` was copied from. */
+  messagesFrom?: ListSource<NonNullable<HarnessSession['messages']>[number]>;
+}
+
+/** Which working list a baseline copy was taken from, and how it looked. */
+interface ListSource<T> { list: readonly T[]; length: number; last: T | undefined }
+
+/** A deep copy of `working` for a baseline, reusing `kept` when nothing in
+ * it can have changed: the same array, as long as it was, ending in the same
+ * element with the same contents. That takes the cost of an unchanged list
+ * from its whole length to its last entry -- a conversation's history, or
+ * the invocation log, on every 250 ms checkpoint of a streaming turn. Lists
+ * here only ever grow or are replaced: nothing rewrites an entry in the
+ * middle of one in place. Any other change falls back to comparing the whole
+ * list, and a copy only when it really differs. */
+function baselineList<T>(
+  working: readonly T[] | undefined, kept: readonly T[] | undefined, from: ListSource<T> | undefined,
+): { copy: T[] | undefined; from: ListSource<T> | undefined } {
+  if (!working) return { copy: undefined, from: undefined };
+  const source = { list: working, length: working.length, last: working[working.length - 1] };
+  const unchanged = kept !== undefined && (
+    (from?.list === working && from.length === working.length && from.last === source.last
+      && sameData(kept[kept.length - 1], source.last))
+    || sameData(kept, working));
+  return { copy: unchanged ? kept as T[] : cloneData(working as T[]), from: source };
+}
 
 export interface StateBaselineData {
   installationId: string;
@@ -92,6 +121,8 @@ export interface StateBaselineData {
   globalSettings: HarnessDefaultSettings;
   providerSettings: HarnessState['providerSettings'];
   sessions: Map<string, BaselineSession>;
+  /** The working array `invocations` was copied from (baselineList). */
+  invocationsFrom?: ListSource<Invocation>;
 }
 
 /** The snapshot a state object was last known to agree with on disk. Writes
@@ -100,31 +131,41 @@ export const STATE_BASELINE = Symbol('clikcode.stateBaseline');
 
 export type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineData };
 
-/** `state` exactly as it is at this instant. A transcript equal to the one
- * `previous` holds is shared with it rather than copied, so a checkpoint's
- * cost follows what changed rather than total history -- and an unchanged
- * transcript is recognisable by identity (see writeState). */
+/** `state` exactly as it is at this instant. Whatever `previous` already
+ * holds unchanged is shared with it rather than copied: history that did not
+ * change is neither compared in full nor copied again, so a checkpoint's cost
+ * follows what changed (the pending turn) rather than total history -- and
+ * an unchanged transcript, or its unchanged history, is recognisable by
+ * identity (see writeState and writeSessionTranscript). */
 export function baselineOf(state: HarnessState, previous?: StateBaselineData): StateBaselineData {
   const sessions = new Map<string, BaselineSession>();
   for (const session of state.sessions ?? []) {
     const kept = previous?.sessions.get(session.id);
-    const { meta, transcript, claim } = splitSession(session);
+    const { meta, claim } = splitSession(session);
+    const messages = baselineList(session.messages, kept?.transcript.messages, kept?.messagesFrom);
+    const pendingTurn = kept && sameData(kept.transcript.pendingTurn, session.pendingTurn) ? kept.transcript.pendingTurn : cloneData(session.pendingTurn);
+    const transcript: SessionTranscript = kept && messages.copy === kept.transcript.messages && pendingTurn === kept.transcript.pendingTurn
+      ? kept.transcript
+      : { ...(messages.copy !== undefined ? { messages: messages.copy } : {}), ...(pendingTurn !== undefined ? { pendingTurn } : {}) };
     sessions.set(session.id, {
       meta: cloneData(meta),
-      transcript: kept && sameData(kept.transcript, transcript) ? kept.transcript : cloneData(transcript),
+      transcript,
       ...(claim ? { claim: cloneData(claim) } : {}),
+      ...(messages.from ? { messagesFrom: messages.from } : {}),
     });
   }
+  const invocations = baselineList(state.invocations ?? [], previous?.invocations, previous?.invocationsFrom);
   return {
     installationId: state.installationId,
     devicePublicKey: cloneData(state.devicePublicKey),
     localApiToken: state.localApiToken,
     devicePrivateKeyPem: state.devicePrivateKeyPem,
     accounts: cloneData(state.accounts ?? []),
-    invocations: cloneData(state.invocations ?? []),
+    invocations: invocations.copy ?? [],
     globalSettings: cloneData(state.globalSettings),
     providerSettings: cloneData(state.providerSettings),
     sessions,
+    ...(invocations.from ? { invocationsFrom: invocations.from } : {}),
   };
 }
 
