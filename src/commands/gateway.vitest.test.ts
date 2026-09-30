@@ -46,12 +46,24 @@ describe('gateway-credentials', () => {
   it('resolves keys: canonical for a matching or unscoped URL, then per-URL, then legacy', () => {
     const config = makeConfig({ authByUrl: { [DEFAULT_GATEWAY_URL]: { apiKey: 'per-url', user: {} } }, apiKey: 'legacy' });
     expect(getApiKeyForUrl(config)).toBe('per-url');
-    expect(getApiKeyForUrl(config, 'https://other.example')).toBe('legacy');
+    expect(getApiKeyForUrl(makeConfig({ apiKey: 'legacy' }))).toBe('legacy');
+    expect(getApiKeyForUrl(makeConfig({ apiKey: 'legacy', apiUrl: 'https://self.example/' }), 'https://self.example')).toBe('legacy');
     vi.mocked(readCanonicalAuth).mockReturnValue({ apiUrl: 'https://other.example', apiKey: 'canon', updatedAt: '' });
     expect(getApiKeyForUrl(config, 'https://other.example/')).toBe('canon');
     expect(getApiKeyForUrl(config)).toBe('per-url');
     vi.mocked(readCanonicalAuth).mockReturnValue({ apiUrl: '', apiKey: 'canon-any', updatedAt: '' });
     expect(getApiKeyForUrl(config)).toBe('canon-any');
+    vi.mocked(readCanonicalAuth).mockReturnValue(null);
+  });
+
+  it('never sends a key to a URL it was not issued for', () => {
+    const config = makeConfig({ authByUrl: { [DEFAULT_GATEWAY_URL]: { apiKey: 'per-url', user: {} } }, apiKey: 'legacy' });
+    process.env.CLIKCODE_GATEWAY_URL = 'https://attacker.example';
+    expect(getApiKeyForUrl(config)).toBeUndefined();
+    expect(getApiKeyForUrl(config, 'https://other.example')).toBeUndefined();
+    vi.mocked(readCanonicalAuth).mockReturnValue({ apiUrl: '', apiKey: 'canon-any', updatedAt: '' });
+    expect(getApiKeyForUrl(config)).toBeUndefined();
+    expect(getApiKeyForUrl(config, DEFAULT_GATEWAY_URL)).toBe('canon-any');
     vi.mocked(readCanonicalAuth).mockReturnValue(null);
   });
 });
