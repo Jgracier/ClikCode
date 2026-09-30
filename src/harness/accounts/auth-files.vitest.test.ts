@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { authEvidencePresent, expandAuthPath, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files';
 import type { AiLocalHarnessDefinition } from '../definition';
+import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 
 const harness = (fields: Partial<AiLocalHarnessDefinition>): AiLocalHarnessDefinition => ({
   command: 'x', provider: 'x', displayName: 'X', surface: 'terminal', localAuth: ['vendor-cli'], binary: 'x', ...fields,
@@ -82,5 +83,16 @@ describe('vendor credential files', () => {
     expect(harnessCanLogout(harness({ authFiles: [{ path: '~/.grok/auth.json' }] }))).toBe(true);
     expect(harnessCanLogout(harness({ authFiles: [{ path: '~/.continue/config.yaml', contains: 'apiKey:' }] }))).toBe(false);
     expect(harnessCanLogout(harness({}))).toBe(false);
+  });
+
+  it("Copilot is signed in while its config lists a logged-in user (copilot 1.0.88 has no status command)", async () => {
+    const copilot = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'copilot')!;
+    expect(copilot.statusArgv).toBeUndefined();
+    const write = (users: string) => writeFile(join(root, 'config.json'), `// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  "firstLaunchAt": "2026-09-22T15:11:02.952Z",\n  "lastLoggedInUser": {\n    "host": "https://github.com",\n    "login": "someone"\n  },\n  "loggedInUsers": ${users}\n}\n`);
+    await write('[\n    {\n      "host": "https://github.com",\n      "login": "someone"\n    }\n  ]');
+    expect(await authEvidencePresent(copilot, { COPILOT_HOME: root }, {})).toBe(true);
+    await write('[]');
+    expect(await authEvidencePresent(copilot, { COPILOT_HOME: root }, {})).toBe(false);
+    expect(removableAuthFiles(copilot)).toEqual([]);
   });
 });
