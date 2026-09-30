@@ -16,8 +16,8 @@ import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { mkdir, rename, rm, stat, statfs } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { get, type IncomingMessage } from 'node:http';
-import { get as getSecure } from 'node:https';
+import type { IncomingMessage } from 'node:http';
+import { nodeHttp, nodeHttps } from '../runtime/lazy-node.js';
 
 export interface DownloadProgress { bytes: number; totalBytes: number }
 
@@ -81,7 +81,7 @@ export async function isDownloaded(destination: string, sizeBytes: number): Prom
 function openRange(url: string, offset: number, signal: AbortSignal | undefined, hops = 0): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
-    const send = target.protocol === 'http:' ? get : getSecure;
+    const send = target.protocol === 'http:' ? nodeHttp().get : nodeHttps().get;
     const request = send(target, {
       headers: { 'user-agent': 'clikcode-local-models', ...(offset > 0 ? { range: `bytes=${offset}-` } : {}) },
       timeout: 60_000, ...(signal ? { signal } : {}),

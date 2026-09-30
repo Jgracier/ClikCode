@@ -40,7 +40,7 @@
  * workers spin between operations rather than yield. */
 
 import { createServer } from 'node:net';
-import { request } from 'node:http';
+import { nodeHttp } from '../runtime/lazy-node.js';
 import type { Fit, Placement } from './choose.js';
 import type { HardwareProfile } from './hardware.js';
 
@@ -145,7 +145,7 @@ export async function freePort(): Promise<number> {
 export function httpJson(port: number, method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = 10_000): Promise<{ status: number; json?: unknown; text: string }> {
   return new Promise((resolve) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
-    const req = request({
+    const req = nodeHttp().request({
       host: '127.0.0.1', port, method, path, timeout: timeoutMs,
       headers: payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {},
     }, (res) => {
