@@ -11,6 +11,8 @@
  * multi-provider harness routes to (Goose's `openrouter/…`, Hermes's
  * `copilot:…`). Only one segment is ever removed.
  *
+ * Other routed models use `provider/model` on every screen, regardless of
+ * whether their vendor writes `provider:model` or `provider/model`.
  * Display only. Stored and sent ids never change; this module has no imports
  * so the VS Code webview bundles the same code the terminal runs. */
 
@@ -58,6 +60,16 @@ function bare(value: string): string {
 const GROUPS: ReadonlyArray<ReadonlySet<string>> = Object.entries(MODEL_OWNER_NAMES)
   .map(([id, names]) => new Set([id, ...names].map(bare)));
 
+/** Only these harnesses use a provider before a colon in model ids. Other
+ * vendors can use a colon for a model tag, which must remain intact. */
+const ROUTED_HARNESSES = new Set(['opencode', 'goose', 'pi', 'hermes', 'openclaw', 'kilo']);
+const ROUTED_NAMES = new Set([...ROUTED_HARNESSES]
+  .flatMap((id) => [id, ...(MODEL_OWNER_NAMES[id] ?? [])].map(bare)));
+
+function routesModels(owners: ReadonlyArray<string | null | undefined>): boolean {
+  return owners.some((owner) => owner && ROUTED_NAMES.has(bare(owner)));
+}
+
 /** Every bare name the given owners go by. An owner the table does not know
  * still counts as itself. */
 function ownerNames(owners: ReadonlyArray<string | null | undefined>): Set<string> {
@@ -77,7 +89,7 @@ const BARE_TAG = /^(?:latest|free|beta|nightly|\d[\w.]*)$/i;
 
 /** `model` as it reads under `owners` (the provider id and/or its display
  * name): one leading `owner/` or `owner:` removed when it names one of them;
- * anything else unchanged. Empty in, empty out. */
+ * a different provider's `:` separator reads `/`. Empty in, empty out. */
 export function modelLabel(model: string, ...owners: ReadonlyArray<string | null | undefined>): string;
 export function modelLabel(model: string | null | undefined, ...owners: ReadonlyArray<string | null | undefined>): string | undefined;
 export function modelLabel(model: string | null | undefined, ...owners: ReadonlyArray<string | null | undefined>): string | undefined {
@@ -85,6 +97,7 @@ export function modelLabel(model: string | null | undefined, ...owners: Readonly
   const match = /^([^\s/:]+)([/:])(.+)$/.exec(model);
   if (!match) return model;
   const [, prefix, separator, rest] = match as unknown as [string, string, string, string];
-  if (separator === ':' && BARE_TAG.test(rest)) return model;
-  return ownerNames(owners).has(bare(prefix)) ? rest : model;
+  if (separator === ':' && (!routesModels(owners) || BARE_TAG.test(rest) || rest.startsWith('//'))) return model;
+  if (ownerNames(owners).has(bare(prefix))) return rest;
+  return separator === ':' ? `${prefix}/${rest}` : model;
 }

@@ -18,7 +18,7 @@ export type PaletteEntry = PickerOption<string> & {
    * chats -- so `/model op` lists the matching models instead of a hint and a
    * second picker. A function, read on every keystroke, because the lists
    * that come from a vendor arrive asynchronously and fill in as they do. */
-  argValues?: () => readonly { value: string; detail?: string }[];
+  argValues?: () => readonly { value: string; label?: string; detail?: string }[];
   /** Marks a row that completes an argument rather than names a command. */
   completes?: true;
 };
@@ -75,11 +75,12 @@ function argumentCompletions(command: string, typed: string, entry: PaletteEntry
     return undefined;
   };
   return values.flatMap((item, index) => {
-    const at = rank(item.value) ?? (item.detail && query.length >= 2 && item.detail.toLowerCase().includes(query) ? 5 : undefined);
+    const at = rank(item.label ?? item.value) ?? rank(item.value)
+      ?? (item.detail && query.length >= 2 && item.detail.toLowerCase().includes(query) ? 5 : undefined);
     return at === undefined ? [] : [{ item, at, index }];
   }).sort((left, right) => left.at - right.at || left.index - right.index)
     .map(({ item }) => ({
-      label: item.value, value: `${command} ${item.value}`,
+      label: item.label ?? item.value, value: `${command} ${item.value}`,
       ...(item.detail ? { detail: item.detail } : {}), completes: true as const,
     }));
 }
@@ -172,4 +173,3 @@ export function pickerConfirmsSelection(key: string): boolean {
 export function pickerDeletesSelection(key: string): boolean {
   return key === '\u001b[3~';
 }
-
