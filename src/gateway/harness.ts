@@ -108,7 +108,7 @@ export async function runGatewayHarnessSessionTurn(
       // row is coloured and animated by what it does exactly as a local
       // harness's row is. One standard, both routes.
       // The loop already stamps a category from the tool's class. The label
-      // is often the command itself (`git status`), which is not a tool name,
+      // is often the command itself (`$ git status`), which is not a tool name,
       // so classifying the label would miss the run — or worse, call `ls` a
       // search. Only fill in what the loop did not already know.
       const category = event.category ?? toolCategory(event.label, undefined, Boolean(event.diff), GATEWAY_HARNESS_COMMAND);
