@@ -18,7 +18,7 @@ import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
 import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPath } from './auth-files.js';
 import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
-import { acpSessionModels, queryAcp } from './acp-query.js';
+import { acpDiscoverySession, acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId } from '../../runtime/lazy-bridge.js';
 import { modelLabel } from '../model-label.js';
 import { atomicWriteFile } from '../../session/store/files.js';
@@ -532,7 +532,7 @@ async function nativeModelCatalogUncached(
   // own gateway, none of which ClikCode could offer before).
   if (harness.acp && harness.acp.listsModels !== false && harness.command !== 'hermes' && !harness.modelDiscoveryArgv) {
     const listed = await queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, nativeProfileEnvironment(account?.nativeProfile),
-      async (request) => acpSessionModels(await request('session/new', { cwd: homedir(), mcpServers: [] })), 30_000).catch(() => undefined);
+      async (request, capabilities) => acpSessionModels(await acpDiscoverySession(request, capabilities, cacheKey(harness, account))), 30_000).catch(() => undefined);
     if (listed?.models.length) {
       // A declared ACP model list is authoritative for ACP sessions. Keeping
       // persisted CLI ids alongside it can select an id this transport does

@@ -9,6 +9,7 @@ import { inspectNativeHarness } from '../../harness/transport/native/inspect.js'
 import { discoverNativeSessions, lastSeenNativeSessions } from '../../session/discovery/cli-listing.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../../session/discovery/registry.js';
 import { saveDiscoveryCache } from '../../session/discovery/cache.js';
+import { acpDiscoveryDirectory } from '../../harness/accounts/acp-query.js';
 import { type DiscoveredNativeSession } from '../../session/discovery/discovered-session.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
@@ -74,7 +75,10 @@ async function discoverAdoptableSessions(
     return [...unique.values()];
   };
   const discoverable = allLocalHarnesses().filter((harness) => harness.session?.discoverArgv);
+  // The session ClikCode reads a model list from is its own, not the user's.
+  const discovery = acpDiscoveryDirectory();
   const notAdopted = (found: AdoptableNativeSession[]): AdoptableNativeSession[] => found
+    .filter(({ item }) => item.workspace !== discovery)
     .filter(({ harness, item, accountId }) => !state.sessions.some((session) => session.nativeHarness === harness.command
       && session.nativeSessionId === item.nativeId && (!accountId || session.accountId === accountId)));
   const seen = (async () => (await Promise.all(discoverable.map(async (harness) => {
