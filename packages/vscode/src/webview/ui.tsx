@@ -129,9 +129,7 @@ export function Popover(props: { onClose: () => void; children: ComponentChildre
     const onDown = (event: MouseEvent): void => {
       if (ref.current && !ref.current.contains(event.target as Node) && !(event.target as HTMLElement).closest('[data-popover-anchor]')) props.onClose();
     };
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') { event.preventDefault(); props.onClose(); } };
     document.addEventListener('mousedown', onDown, true);
-    ref.current?.addEventListener('keydown', onKey);
     const focusable = ref.current?.querySelector<HTMLElement>('input, [role="listbox"], button');
     focusable?.focus();
     return () => {
@@ -139,7 +137,8 @@ export function Popover(props: { onClose: () => void; children: ComponentChildre
       if (previous && document.contains(previous)) previous.focus();
     };
   }, []);
-  return <div ref={ref} class={`popover${props.class ? ` ${props.class}` : ''}`} role="dialog" aria-label={props.label} id={props.id}>{props.children}</div>;
+  return <div ref={ref} class={`popover${props.class ? ` ${props.class}` : ''}`} role="dialog" aria-label={props.label} id={props.id}
+    onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onClose(); } }}>{props.children}</div>;
 }
 
 export function Meter({ usedPct, label }: { usedPct: number; label: string }): JSX.Element {

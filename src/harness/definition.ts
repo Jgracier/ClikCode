@@ -29,7 +29,10 @@ interface AiHarnessAcpDefinition {
   argv: readonly string[];
   binary?: string;
   optionPlacement?: 'before' | 'after';
-  experimental?: boolean;
+  inheritCliOptions?: boolean;
+  legacyCliSessions?: boolean;
+  effortConfigId?: string;
+  permissionModeIds?: Readonly<Partial<Record<AiHarnessPermissionMode, string>>>;
   effortArgvPrefix?: readonly string[];
   permissionArgv?: Readonly<Partial<Record<'bypass' | 'auto', readonly string[]>>>;
   listsModels?: boolean;
@@ -43,7 +46,6 @@ export interface AiHarnessAcpLaunch {
   modeArgv: string[];
   optionArgv: string[];
   optionPlacement: 'before' | 'after';
-  experimental: boolean;
 }
 
 export interface AiCustomAcpHarnessInput {
@@ -314,7 +316,7 @@ export interface AiRouterRuntime {
   modelDisplayId(harness: AiLocalHarnessDefinition, model: string): string;
   modelIdFromDisplay(harness: AiLocalHarnessDefinition, typed: string): string;
   harnessAcpLaunch(harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode }): AiHarnessAcpLaunch | undefined;
-  harnessTurnTransport(harness: AiLocalHarnessDefinition, input?: { hasImages?: boolean; allowExperimentalAcp?: boolean }): AiHarnessTransport;
+  harnessTurnTransport(harness: AiLocalHarnessDefinition, input?: { hasImages?: boolean }): AiHarnessTransport;
   harnessCanRunTurns(harness: AiLocalHarnessDefinition): boolean;
   harnessTierRank(harness: AiLocalHarnessDefinition): number;
   guardedPromptArgv(turn: Pick<AiHarnessTurnDefinition, 'promptGuard' | 'promptArgvPrefix'>, prompt: string): string[];

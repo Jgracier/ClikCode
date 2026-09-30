@@ -79,13 +79,24 @@ export async function runVendorSessionAttempt(input: {
     } else {
       const launch = harnessAcpLaunch(harness, { model, effort, permissionMode: session.permissionMode ?? 'ask' });
       if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
+      const optionArgv = declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId));
+      if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
+        throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
+      }
       const acpInput: AcpTurnInput = {
         binary: launch.binary, command: harness.command, prompt: turnText,
         argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
         ...(harness.acp?.usageTotals ? { usageTotals: harness.acp.usageTotals } : {}),
-        extraArgv: [...launch.optionArgv, ...declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId))],
+        extraArgv: [...launch.optionArgv, ...optionArgv],
         ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
+        modelRequiresProtocol: harness.acp?.inheritCliOptions === false,
+        // "medium" is ClikCode's generic initial value. Agents without an
+        // ACP effort control should use their own default instead of sending
+        // every ordinary turn through the CLI fallback.
+        effortRequiresProtocol: harness.acp?.inheritCliOptions === false && effort !== 'medium',
+        effortConfigId: harness.acp?.effortConfigId,
+        permissionModeIds: harness.acp?.permissionModeIds,
         environment, signal, images, onSessionId,
         ...sharedObserver,
       };
@@ -100,9 +111,20 @@ export async function runVendorSessionAttempt(input: {
         const usageAfter = usageFile && result.nativeSessionId ? await readAcpUsageFile(usageFile, result.nativeSessionId, environment) : undefined;
         if (usageAfter) sharedObserver.onUsage?.(turnShareOf(usageAfter, usageBefore));
       } catch (error) {
-        if (!(error as Error & { acpSafeToFallback?: boolean }).acpSafeToFallback || !harness.turn) throw error;
+        const unsupported = error as Error & { acpUnsupportedImages?: boolean; acpUnsupportedModel?: boolean; acpUnsupportedEffort?: boolean };
+        if (!(unsupported.acpUnsupportedImages || unsupported.acpUnsupportedModel || unsupported.acpUnsupportedEffort) || !harness.turn) throw error;
+        // An ACP session id is not guaranteed to identify the same vendor
+        // thread in the one-shot CLI. Only a new chat can safely switch
+        // transports for this turn.
+        if (session.nativeSessionId) throw error;
+        session.nativeTransport = harness.turn.output === 'text' ? 'text-cli' : 'structured-cli';
+        await checkpoint.persistNow();
         prompter?.phase('using structured CLI fallback');
-        result = await runCli();
+        try { result = await runCli(); }
+        catch (cliError) {
+          if (!session.nativeSessionId) delete session.nativeTransport;
+          throw cliError;
+        }
       }
     }
   } catch (error) {

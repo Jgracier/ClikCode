@@ -7,6 +7,7 @@ import type { HarnessSession } from './model.js';
 
 export function forgetNativeThread(session: HarnessSession): void {
   session.nativeSessionId = undefined;
+  delete session.nativeTransport;
   session.nativeStartedAt = undefined;
   delete session.nativeSessionPreallocated;
 }

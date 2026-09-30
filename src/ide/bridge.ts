@@ -24,7 +24,7 @@ import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { latestChat, chatNamed } from '../session/options.js';
 import { claimSession, releaseSession, SESSION_CLAIM_TTL_MS } from '../session/claim.js';
-import { discardIfBlank } from '../session/blank.js';
+import { discardIfBlank, ensureSessionOnDisk } from '../session/blank.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
 import { compactPath } from '../harness/protocol/labels.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
@@ -560,6 +560,9 @@ export class IdeBridge {
       this.channel.send({ type: 'busy', label: 'loading the local model…' });
       try { await ensureLocalModelForTurn(active); } finally { this.channel.send({ type: 'busy' }); }
     }
+    // Blank chats live only in this process. The worker is a separate process
+    // and must be able to read the chat before it can accept the first turn.
+    await ensureSessionOnDisk(targetId);
     await this.prepareRoute();
     const client = await this.workerFor(targetId);
     this.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
