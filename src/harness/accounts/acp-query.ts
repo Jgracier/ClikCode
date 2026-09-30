@@ -5,6 +5,10 @@
  * `session/new` result). One short-lived child answers them; nothing is
  * prompted, so no turn is spent. */
 
+import { mkdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { atomicWriteFile } from '../../session/store/files.js';
+import { stateDirectory } from '../../session/store/paths.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import { JsonRpcPeer } from '../transport/jsonrpc-peer.js';
 import { spawnPortable } from '../transport/spawn.js';
@@ -15,7 +19,7 @@ type Json = Record<string, any>;
  * Undefined when the binary is missing or the server never initializes. */
 export async function queryAcp<T>(
   binary: string, argv: readonly string[], environment: Readonly<Record<string, string>>,
-  ask: (request: (method: string, params?: Json) => Promise<Json>) => Promise<T>,
+  ask: (request: (method: string, params?: Json) => Promise<Json>, capabilities: Json) => Promise<T>,
   timeoutMs = 20_000,
 ): Promise<T | undefined> {
   const executable = await resolveBinaryPath(binary);
@@ -27,13 +31,49 @@ export async function queryAcp<T>(
   const peer = new JsonRpcPeer(child, { label: `${binary} ACP`, detached, forwardParentSignals: false });
   const request = (method: string, params: Json = {}): Promise<Json> => peer.request(method, params, { timeoutMs });
   try {
-    await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
-    return await ask(request);
+    const initialized = await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+    return await ask(request, (initialized.agentCapabilities as Json | undefined) ?? {});
   } catch {
     return undefined;
   } finally {
     await peer.shutdown({ graceMs: 500, killMs: 1000 }).catch(() => undefined);
   }
+}
+
+/** Where the model-list session runs. Not the user's home or any project, so
+ * no vendor files it under a folder the user works in, and ClikCode leaves
+ * chats from here out of its conversation list. */
+export function acpDiscoveryDirectory(): string {
+  return join(stateDirectory(), 'model-discovery');
+}
+
+function discoverySessionsFile(): string {
+  return join(stateDirectory(), 'cache', 'acp-discovery-sessions.json');
+}
+
+/** The session an agent offers its models on. Most agents store every
+ * `session/new` as a chat of the user's, even one never prompted, so asking
+ * again on each refresh left a new empty chat each time. The first session is
+ * kept and reopened after that; an agent that can neither resume nor load one
+ * gets a new session, in the same out-of-the-way folder. */
+export async function acpDiscoverySession(
+  request: (method: string, params?: Json) => Promise<Json>, capabilities: Json, key: string,
+): Promise<Json> {
+  const cwd = acpDiscoveryDirectory();
+  await mkdir(cwd, { recursive: true });
+  const file = discoverySessionsFile();
+  const kept: Record<string, string> = await readFile(file, 'utf8').then((text) => JSON.parse(text) as Record<string, string>).catch(() => ({}));
+  const previous = kept[key];
+  const reopen = capabilities.sessionCapabilities?.resume ? 'session/resume' : capabilities.loadSession ? 'session/load' : undefined;
+  if (previous && reopen) {
+    try { return await request(reopen, { sessionId: previous, cwd, mcpServers: [] }); } catch { /* gone: start another */ }
+  }
+  const started = await request('session/new', { cwd, mcpServers: [] });
+  if (reopen && typeof started.sessionId === 'string' && started.sessionId) {
+    await mkdir(join(stateDirectory(), 'cache'), { recursive: true });
+    await atomicWriteFile(file, JSON.stringify({ ...kept, [key]: started.sessionId }, null, 2)).catch(() => undefined);
+  }
+  return started;
 }
 
 /** The models an agent's `session/new` offers, with their display names. */
