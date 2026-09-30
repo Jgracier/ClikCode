@@ -33,6 +33,7 @@ interface AiHarnessAcpDefinition {
   effortArgvPrefix?: readonly string[];
   permissionArgv?: Readonly<Partial<Record<'bypass' | 'auto', readonly string[]>>>;
   listsModels?: boolean;
+  usageTotals?: 'session';
 }
 
 export interface AiHarnessAcpLaunch {

@@ -11,7 +11,7 @@ import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } f
 import { eventDiff } from '../../agent/line-diff.js';
 import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
-import { normalizeTurnUsage, turnStopReason } from '../protocol/turn-usage.js';
+import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
@@ -62,6 +62,9 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   /** Per-harness options. With `argv` these are the only options; without it
    * they are appended to the locally derived model/effort/permission flags. */
   extraArgv?: readonly string[];
+  /** The catalog's `acp.usageTotals`: the prompt response's usage is the
+   * session's running total, not the turn's. */
+  usageTotals?: 'session';
   /** Setup request timeout (initialize, session/new|resume|load). */
   setupTimeoutMs?: number;
   /** Override ACP_RATE_LIMIT_GRACE_MS. */
@@ -340,9 +343,10 @@ interface Stream {
    * is a run of `agent_thought_chunk`s that anything else ends. */
   thought?: { id: string; text: string };
   thoughts: number;
-  /** The session's cost when this turn began: `usage_update` reports the
-   * session's running cost, and a turn's is what it grew by. */
-  costBase: number;
+  /** The session's running totals when this turn's prompt was sent: agents
+   * report the session's cost (and some its tokens) so far, and a turn's
+   * share is what they grew by. */
+  base: TurnUsage;
   watchdog?: TurnWatchdog;
 }
 
@@ -383,8 +387,12 @@ class AcpSessionImpl implements AcpSession {
   private settling?: Promise<void>;
   private sessionId?: string;
   private lastCommand = 'agent';
-  /** The session's cost so far, as its last `usage_update` put it. */
-  private sessionCost = 0;
+  /** The live session's running totals as the agent last reported them
+   * (acpSessionTotals, and a prompt response for an agent declaring
+   * `usageTotals: 'session'`). Reset when a session is opened in this
+   * process: an agent that restores its totals on load says so before the
+   * prompt, and one that does not (Hermes) starts again from zero. */
+  private sessionTotals: TurnUsage = {};
   private isClosed = false;
   private readonly spawn: AcpSpawn;
   private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
@@ -410,7 +418,7 @@ class AcpSessionImpl implements AcpSession {
     const failure = new Promise<never>((_, reject) => { fail = reject; });
     failure.catch(() => undefined);
     const turn: ActiveTurn = {
-      input, observer: input, command: input.command, text: '', vibeMessageText: '', sawActivity: false, thoughts: 0, costBase: this.sessionCost, promptStarted: false, done: false, fail,
+      input, observer: input, command: input.command, text: '', vibeMessageText: '', sawActivity: false, thoughts: 0, base: {}, promptStarted: false, done: false, fail,
     };
     this.turn = turn;
     const onAbort = (): void => this.cancelTurn(turn);
@@ -505,7 +513,7 @@ class AcpSessionImpl implements AcpSession {
     if (!this.onBackgroundTurn || this.isClosed) return undefined;
     if (this.background && !this.background.channel.done) return this.background;
     const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
-    const run: BackgroundRun = { channel, observer: channel.observer, command: this.lastCommand, text: '', vibeMessageText: '', sawActivity: false, thoughts: 0, costBase: this.sessionCost };
+    const run: BackgroundRun = { channel, observer: channel.observer, command: this.lastCommand, text: '', vibeMessageText: '', sawActivity: false, thoughts: 0, base: { ...this.sessionTotals } };
     run.watchdog = this.watchdog(() => {
       if (this.background !== run) return;
       this.pendingTools.clear();
@@ -586,6 +594,7 @@ class AcpSessionImpl implements AcpSession {
         // session/load streams the whole history before it answers, so its
         // timeout is an idle window rather than a wall-clock limit.
         const loading = { ...setup, idleReset: true };
+        this.sessionTotals = {};
         if (capabilities.sessionCapabilities?.resume) loaded = await peer.request('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
         else if (capabilities.loadSession) loaded = await peer.request('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
         else throw new Error(`${input.command} ACP cannot load sessions`);
@@ -596,6 +605,7 @@ class AcpSessionImpl implements AcpSession {
       }
       turn.sessionId = wanted;
     } else {
+      this.sessionTotals = {};
       const started = await peer.request('session/new', { cwd: input.cwd, mcpServers: [] }, setup);
       stillRunning();
       const sessionId = String(started.sessionId ?? '');
@@ -623,6 +633,9 @@ class AcpSessionImpl implements AcpSession {
     }
     const blocks: Json[] = [{ type: 'text', text: input.prompt }, ...await Promise.all(images.map(acpImageBlock))];
     stillRunning();
+    // Taken now, not when the turn was created: a session/load above may have
+    // reported the totals this turn is measured from.
+    turn.base = { ...this.sessionTotals };
     turn.promptStarted = true;
     // The turn ends with the agent's answer to session/prompt. This is only
     // the ceiling for an agent that has stopped talking without answering.
@@ -632,7 +645,13 @@ class AcpSessionImpl implements AcpSession {
     if (completed.stopReason === 'cancelled') throw cancelledError();
     // `end_turn`, or the reason the agent stopped short (max_tokens,
     // max_turn_requests, refusal), beside whatever usage it counted.
-    const usage = normalizeTurnUsage(completed.usage ?? completed._meta?.usage);
+    // Gemini's ACP answers with `_meta.quota.token_count` {input_tokens,
+    // output_tokens}, the turn's, beside the standard field.
+    let usage = normalizeTurnUsage(completed.usage ?? completed._meta?.usage ?? completed._meta?.quota?.token_count);
+    if (usage && input.usageTotals === 'session') {
+      this.sessionTotals = { ...this.sessionTotals, ...turnShareOf(usage, {}) };
+      usage = { ...usage, ...turnShareOf(usage, turn.base) };
+    }
     const stopReason = turnStopReason(completed.stopReason);
     if (usage || stopReason) input.onUsage?.({ ...usage, ...(stopReason ? { stopReason } : {}) });
     const text = turn.text.trim();
@@ -655,6 +674,10 @@ class AcpSessionImpl implements AcpSession {
     const turn = this.turn && !this.turn.done ? this.turn : undefined;
     const expected = turn?.sessionId ?? this.sessionId;
     if (typeof params.sessionId === 'string' && expected && params.sessionId !== expected) return;
+    // Running totals are the session's, whoever is listening: taken during a
+    // session/load replay (the baseline) and after a prompt was answered.
+    const totals = acpSessionTotals(update);
+    if (totals) this.sessionTotals = { ...this.sessionTotals, ...totals };
     // session/load replays the old conversation as ordinary updates. Nothing
     // before our own prompt belongs to this turn -- but command palettes are
     // session state, and usually arrive right after session/new.
@@ -666,7 +689,7 @@ class AcpSessionImpl implements AcpSession {
     const target = this.targetFor(update);
     target?.watchdog?.activity();
     this.trackTool(target, update);
-    if (target) this.deliver(target, update);
+    if (target) this.deliver(target, update, totals);
     const run = this.background;
     if (run && target === run && this.pendingTools.size === 0) {
       // Event-driven end of a background turn: the last tool it was waiting
@@ -690,8 +713,13 @@ class AcpSessionImpl implements AcpSession {
     }
   }
 
-  private deliver(target: Stream, update: Json): void {
+  private deliver(target: Stream, update: Json, totals?: TurnUsage): void {
     const input = target.observer;
+    // Session totals (usage_update's cost; Vibe's and OpenHands' `_meta`
+    // tokens, which OpenHands puts on its message and tool updates) count
+    // for this turn by what they grew since it began.
+    const share = totals ? turnShareOf(this.sessionTotals, target.base) : undefined;
+    if (share && update.sessionUpdate !== 'usage_update') input.onUsage?.(share);
     const commands = acpAvailableCommands(update);
     if (commands) return input.onAvailableCommands?.(commands);
     const turn = target === this.turn ? this.turn : undefined;
@@ -728,12 +756,11 @@ class AcpSessionImpl implements AcpSession {
     // `usage_update` {used, size, cost}: the context the session occupies,
     // its window, and what it has cost -- live, while the turn runs.
     if (update.sessionUpdate === 'usage_update' || (update.usage && typeof update.usage === 'object')) {
-      const usage = normalizeTurnUsage(update.usage && typeof update.usage === 'object' ? update.usage : update);
-      if (usage?.costUsd !== undefined && update.sessionUpdate === 'usage_update') {
-        this.sessionCost = usage.costUsd;
-        usage.costUsd = Math.max(0, usage.costUsd - target.costBase);
-      }
-      if (usage) input.onUsage?.(usage);
+      const usage = normalizeTurnUsage(update.usage && typeof update.usage === 'object' ? update.usage : update) ?? {};
+      // Its cost is the session's; the turn's is its share.
+      if (update.sessionUpdate === 'usage_update') delete usage.costUsd;
+      Object.assign(usage, share);
+      if (Object.keys(usage).length) input.onUsage?.(usage);
     }
   }
 

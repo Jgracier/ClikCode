@@ -80,6 +80,7 @@ export async function runVendorSessionAttempt(input: {
       const acpInput: AcpTurnInput = {
         binary: launch.binary, command: harness.command, prompt: turnText,
         argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
+        ...(harness.acp?.usageTotals ? { usageTotals: harness.acp.usageTotals } : {}),
         extraArgv: [...launch.optionArgv, ...declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId))],
         ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
