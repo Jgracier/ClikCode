@@ -4,6 +4,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { realpathNearest } from './security.js';
 
 interface CheckpointEntry {
   path: string;
@@ -12,6 +13,10 @@ interface CheckpointEntry {
   /** sha256 of the pre-image; also the blob file name. */
   hash?: string;
   size?: number;
+  /** The file as the turn left it, recorded when the turn ends (seal). Undo
+   * refuses to overwrite a file that no longer matches it: that change came
+   * after the turn, and undoing the turn must not destroy it. */
+  after?: { existed: boolean; hash?: string };
 }
 
 interface CheckpointManifest {
@@ -36,7 +41,11 @@ interface UndoResult {
   text: string;
 }
 
-interface UndoOptions { roots?: readonly string[] }
+interface UndoOptions {
+  roots?: readonly string[];
+  /** Restore even files changed since the turn (the user said so). */
+  force?: boolean;
+}
 
 const BASH_UNDO_CAVEAT = 'Only changes made through the file tools were reverted. Anything a shell command changed (generated files, installs, git operations) was NOT tracked and is unchanged.';
 
@@ -47,6 +56,17 @@ function safeSegment(value: string): string {
   const cleaned = value.replace(/[^A-Za-z0-9._-]/g, '_');
   if (!cleaned || cleaned === '.' || cleaned === '..') throw new Error(`Invalid checkpoint identifier: ${value}`);
   return cleaned;
+}
+
+async function currentState(file: string): Promise<{ existed: boolean; hash?: string }> {
+  try {
+    const content = await fs.readFile(file);
+    return { existed: true, hash: createHash('sha256').update(content).digest('hex') };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { existed: false };
+    throw error;
+  }
 }
 
 export function newTurnId(now: Date = new Date()): string {
@@ -114,6 +134,19 @@ export class FileCheckpointStore {
     });
   }
 
+  /** Record how the turn left every file it snapshotted. Called once the
+   * turn ends, however it ends. */
+  seal(sessionId: string, turnId: string): Promise<void> {
+    return this.serial(async () => {
+      const manifest = await this.readManifest(sessionId, turnId);
+      if (!manifest?.entries.length) return;
+      for (const entry of manifest.entries) entry.after = await currentState(entry.path);
+      const manifestPath = path.join(this.turnDir(sessionId, turnId), 'manifest.json');
+      await fs.writeFile(`${manifestPath}.tmp`, JSON.stringify(manifest, null, 2), { mode: 0o600 });
+      await fs.rename(`${manifestPath}.tmp`, manifestPath);
+    });
+  }
+
   async listTurns(sessionId: string): Promise<CheckpointTurnSummary[]> {
     let names: string[];
     try { names = await fs.readdir(path.join(this.root, safeSegment(sessionId))); } catch (error) {
@@ -150,7 +183,7 @@ export class FileCheckpointStore {
         let clean = true;
         for (const entry of [...manifest.entries].reverse()) {
           try {
-            await this.restoreEntry(dir, entry, options.roots);
+            await this.restoreEntry(dir, entry, options);
             (entry.existed ? result.restored : result.deleted).push(entry.path);
           } catch (error) {
             clean = false;
@@ -171,16 +204,26 @@ export class FileCheckpointStore {
     });
   }
 
-  private async restoreEntry(dir: string, entry: CheckpointEntry, roots?: readonly string[]): Promise<void> {
+  private async restoreEntry(dir: string, entry: CheckpointEntry, options: UndoOptions): Promise<void> {
     // The manifest is data on disk; treat it as untrusted. Only an absolute,
     // normalized path that the manifest itself recorded is ever written, and a
     // blob name must be a bare sha256 so it cannot traverse out of `blobs/`.
     if (typeof entry.path !== 'string' || !path.isAbsolute(entry.path) || path.normalize(entry.path) !== entry.path) {
       throw new Error('refusing to restore a non-normalized path');
     }
-    const target = path.resolve(entry.path);
-    if (roots && !roots.some((root) => { const rel = path.relative(path.resolve(root), target); return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel); })) {
+    // Where a write lands NOW: a directory on the way may have become a
+    // symlink since the snapshot, and the path as written would follow it.
+    const target = realpathNearest(path.resolve(entry.path));
+    if (options.roots && !options.roots.some((root) => {
+      const rel = path.relative(realpathNearest(path.resolve(root)), target);
+      return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    })) {
       throw new Error('refusing to restore outside the allowed roots');
+    }
+    if (!options.force) {
+      if (!entry.after) throw new Error('the turn did not finish recording its changes; restore it only if you are sure');
+      const now = await currentState(target);
+      if (now.existed !== entry.after.existed || now.hash !== entry.after.hash) throw new Error('changed since that turn; not overwritten');
     }
     if (!entry.existed) {
       await fs.rm(target, { force: true });
