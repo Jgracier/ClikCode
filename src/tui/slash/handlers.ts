@@ -30,7 +30,8 @@ import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
 import { aiAccountLogin, aiAccountLogout, aiAccountRemove, aiDoctor } from '../../commands/account.js';
-import { aiSessionSend } from '../../turn/drive.js';
+import Conf from 'conf';
+import { sendScriptedTurn } from '../../worker/scripted-send.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { SELECTION_MODE, setSelectionMode } from '../modes.js';
 import { TERMINAL } from '../active-terminal.js';
@@ -126,10 +127,11 @@ const INTERACTIVE_ONLY = (name: string): HeadlessSlashHandler => async () => {
   throw new Error(`/${name} opens a picker and is only available in the interactive ClikCode session.`);
 };
 
-/** Indirection so the interactive loop and tests can observe/replace the turn. */
-const SLASH_TURN = { send: (id: string, prompt: string): Promise<void> => aiSessionSend(id, prompt) };
-
-const sendSessionTurn = (id: string, prompt: string): Promise<void> => SLASH_TURN.send(id, prompt);
+/** A turn a slash command sends, through the conversation's worker when one
+ * is running -- any route, the Gateway and ClikCode Local included. */
+const sendSessionTurn = (id: string, prompt: string): Promise<void> => (
+  sendScriptedTurn(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }), id, prompt)
+);
 
 /** Headless half of the slash registry. Typed by SlashHandlerKey, so a
  * registry entry without a handler here (or a handler without an entry) does

@@ -53,7 +53,7 @@ interface ConnectionState {
 }
 
 /** This conversation for this worker, or undefined when another worker has
- * it. A scripted turn running in-process (turn/scripted-send.ts) is waited
+ * it. A scripted turn running in-process (worker/scripted-send.ts) is waited
  * out: its conversation comes to a worker the moment it ends. */
 async function ownConversation(sessionId: string): Promise<ConversationHold | undefined> {
   for (;;) {
