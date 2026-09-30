@@ -4,6 +4,7 @@
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { auggieUsageLabel } from '../auggie-usage.js';
 import { grokUsageProbe, grokUsageReading } from './grok-usage.js';
+import { ampUsageProbe, copilotUsageProbe, copilotUsageReading, kiloUsageProbe, kimiUsageProbe, kimiUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -245,6 +246,11 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsagePro
   auggie: auggieUsageProbe,
   // Free: an ACP extension call, not a turn (grok-usage.ts).
   grok: grokUsageProbe,
+  // Free reads of the harness's own usage surface (cli-usage-probes.ts).
+  copilot: copilotUsageProbe,
+  kimi: kimiUsageProbe,
+  amp: ampUsageProbe,
+  kilo: kiloUsageProbe,
 };
 
 /** Probes that cost a model turn. Only an explicit ask (`/usage`, the account
@@ -261,4 +267,6 @@ export const NATIVE_USAGE_READING_PROBES: Readonly<Partial<Record<string, { labe
   codex: { label: codexUsageProbe, reading: codexUsageReading },
   claude: { label: claudeUsageProbe, reading: claudeUsageReading },
   grok: { label: grokUsageProbe, reading: grokUsageReading },
+  copilot: { label: copilotUsageProbe, reading: copilotUsageReading },
+  kimi: { label: kimiUsageProbe, reading: kimiUsageReading },
 };
