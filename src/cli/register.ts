@@ -7,7 +7,7 @@ import { untilStopped } from './stop-signal.js';
 import type { Command } from 'commander';
 import { mcpAdd, mcpTargets } from '../commands/mcp.js';
 import type Conf from 'conf';
-import { aiGatewaySessionSend } from '../turn/drive.js';
+import { sendScriptedTurn } from '../worker/scripted-send.js';
 import { aiPermissions } from '../tui/pickers/permissions.js';
 import { aiSessionInteractive, aiSessionResume } from '../commands/ai/interactive.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
@@ -79,7 +79,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--permissions <mode>', 'ask, auto, or bypass for this chat (default: your global setting)')
     .action(async (prompt: string[], options: { harness?: string; chat?: string; model?: string; permissions?: string }) => {
       const id = await startOrResumeChat(options);
-      await untilStopped((signal) => aiGatewaySessionSend(config, id, prompt.join(' '), signal));
+      await untilStopped((signal) => sendScriptedTurn(config, id, prompt.join(' '), signal));
     });
   // One MCP server, added once, written into every harness that takes one.
   const mcp = program.command('mcp').description('Share an MCP server with every harness that supports one');
@@ -113,7 +113,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action(async (chat: string, prompt: string[]) => {
       const id = await resolveChat(chat);
       await ensureChatReady(id);
-      await untilStopped((signal) => aiGatewaySessionSend(config, id, prompt.join(' '), signal));
+      await untilStopped((signal) => sendScriptedTurn(config, id, prompt.join(' '), signal));
     });
   sessions.command('command <id> <slash...>').alias('slash').description('Run /claude, /accounts, or another session slash command')
     .action(async (id, slash: string[]) => { await aiSessionCommand(id, slash.join(' ')); });
