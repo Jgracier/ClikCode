@@ -37,7 +37,7 @@ function expandHome(input: string, homeDir: string): string {
  * re-attached. This is what makes a symlinked directory inside the workspace
  * that points outside it resolve to its true, outside location even when the
  * final file does not exist yet. */
-function realpathNearest(absolute: string): string {
+export function realpathNearest(absolute: string): string {
   let current = absolute;
   const tail: string[] = [];
   for (;;) {

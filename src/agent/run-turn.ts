@@ -541,6 +541,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   } finally {
     steerOpen = false;
     input.onSteerReady?.(undefined);
+    await checkpoints.seal(input.sessionId, turnId).catch(() => undefined);
     await checkpoints.prune(input.sessionId).catch(() => undefined);
   }
 }
