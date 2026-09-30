@@ -265,7 +265,7 @@ export interface AiHarnessTurnDefinition {
  * variable (LOCALAPPDATA, ProgramFiles). */
 export type AiHarnessInstallStep =
   | { kind: 'script'; url: string; args?: readonly string[]; env?: Readonly<Record<string, string>>; binDirs: readonly string[] }
-  | { kind: 'uv-tool'; package: string; python?: string; binDirs: readonly string[] };
+  | { kind: 'uv-tool'; package: string; python?: string; with?: readonly string[]; binDirs: readonly string[] };
 
 /** How to install a vendor CLI that is not an npm package. */
 export interface AiHarnessInstaller {
@@ -580,6 +580,28 @@ const HARNESS_INSTALLERS = {
     windows: { kind: 'script', url: 'https://antigravity.google/cli/install.ps1', binDirs: ['${LOCALAPPDATA}/agy/bin'] },
     docs: 'https://antigravity.google/docs/cli/install/',
   },
+  // The ACP adapter is a separate Python extra, so installing only
+  // deepagents-code would leave `dcode --acp` unusable.
+  dcode: {
+    posix: { kind: 'uv-tool', package: 'deepagents-code', with: ['deepagents-acp'], binDirs: [LOCAL_BIN] },
+    windows: { kind: 'uv-tool', package: 'deepagents-code', with: ['deepagents-acp'], binDirs: [LOCAL_BIN] },
+    docs: 'https://github.com/langchain-ai/deepagents/blob/main/libs/acp/README.md',
+  },
+  devin: {
+    posix: { kind: 'script', url: 'https://cli.devin.ai/install.sh', binDirs: [LOCAL_BIN] },
+    windows: { kind: 'script', url: 'https://static.devin.ai/cli/setup.ps1', binDirs: ['${LOCALAPPDATA}/devin/cli/bin'] },
+    docs: 'https://docs.devin.ai/cli',
+  },
+  junie: {
+    posix: { kind: 'script', url: 'https://junie.jetbrains.com/install.sh', binDirs: [LOCAL_BIN] },
+    windows: { kind: 'script', url: 'https://junie.jetbrains.com/install.ps1', binDirs: [LOCAL_BIN] },
+    docs: 'https://junie.jetbrains.com/docs/junie-cli.html',
+  },
+  mcode: {
+    posix: { kind: 'script', url: 'https://filecdn.minimax.chat/public/install.sh', binDirs: ['~/.minimax-code/bin'] },
+    windows: { kind: 'script', url: 'https://filecdn.minimax.chat/public/install.ps1', binDirs: ['~/.minimax-code'] },
+    docs: 'https://github.com/MiniMax-AI/minimax-code',
+  },
 } as const satisfies Readonly<Record<string, AiHarnessInstaller>>;
 
 const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
@@ -798,6 +820,12 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // output takes is not, and a parser declared against an unverified shape
   // fails at the one moment it matters.
   { command: 'cn', provider: 'continue', displayName: 'Continue', surface: 'terminal', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cn', npmPackage: '@continuedev/cli', loginArgv: [], loginHint: 'enter an API key when it asks', authFiles: [{ path: '${CONTINUE_GLOBAL_DIR:-~/.continue}/config.yaml', contains: 'apiKey:' }], authEnv: ['ANTHROPIC_API_KEY'], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--readonly'] }, bypass: { argv: ['--auto'] } }, turn: { startArgv: [], promptArgvPrefix: ['-p'], output: 'text' } },
+  // Official ACP entrypoints, source-checked but awaiting authenticated live
+  // turns. Keep them in the experimental picker tier until those probes pass.
+  { command: 'dcode', provider: 'deepagents-code', displayName: 'Deep Agents Code', surface: 'terminal', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp'], optionPlacement: 'after' }, localAuth: ['api-key', 'vendor-cli'], binary: 'dcode', installer: HARNESS_INSTALLERS.dcode, loginArgv: [], loginHint: 'choose or enter a model provider credential in Deep Agents Code', authEnv: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY'], modelArgvPrefix: ['--model'] },
+  { command: 'devin', provider: 'devin', displayName: 'Devin CLI', surface: 'terminal', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['acp'], optionPlacement: 'after' }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'devin', installer: HARNESS_INSTALLERS.devin, loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], authEnv: ['WINDSURF_API_KEY'], modelArgvPrefix: ['--model'] },
+  { command: 'junie', provider: 'junie', displayName: 'Junie CLI', surface: 'terminal', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'] }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', installer: HARNESS_INSTALLERS.junie, loginArgv: [], loginHint: 'choose JetBrains account or an API key on the Junie welcome screen', authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
+  { command: 'mcode', provider: 'minimax-code', displayName: 'MiniMax Code', surface: 'terminal', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['acp'] }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'mcode', installer: HARNESS_INSTALLERS.mcode, loginArgv: ['login', '--region', 'global'], logoutArgv: ['logout'], authEnv: ['MCODE_PROVIDER_API_KEY'] },
 ];
 
 /** Every native-login account gets its own vendor configuration root by

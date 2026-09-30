@@ -39,7 +39,7 @@ async function seeded(): Promise<{ state: Awaited<ReturnType<typeof readState>>;
   const session = {
     id: 'direct-1', conversationId: 'direct-1', route: 'local', accountId: 'first', provider: 'anthropic', model: 'claude-test',
     effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted', createdAt: now, updatedAt: now, status: 'active',
-    name: 'named', messages: [],
+    name: 'named', nameSource: 'user', messages: [],
   } as HarnessSession;
   state.accounts.push(account('first'), account('second'), account('third'));
   state.sessions.push(session);

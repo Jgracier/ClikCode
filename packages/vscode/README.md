@@ -1,7 +1,7 @@
 # ClikCode for VS Code
 
 Every coding agent in one chat. [ClikCode](https://github.com/Jgracier/ClikCode) signs in Claude Code,
-Codex, Gemini CLI, GitHub Copilot, OpenCode, Cursor, Amp, Qwen and 17 more — plus ClikDeploy Gateway
+Codex, Gemini CLI, GitHub Copilot, OpenCode, Cursor, Amp, Qwen and other supported agents — plus ClikDeploy Gateway
 and models on your own machine with ClikCode Local — and keeps one conversation you can move between
 them. This extension is ClikCode in VS Code: the same conversations, accounts and settings as the
 `clikcode` terminal, in a panel beside your code.

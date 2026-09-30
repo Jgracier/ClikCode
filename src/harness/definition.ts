@@ -58,7 +58,7 @@ export interface AiCustomAcpHarnessInput {
 /** Mirrors the catalog's AiHarnessInstallStep / AiHarnessInstaller. */
 export type AiHarnessInstallStep =
   | { kind: 'script'; url: string; args?: readonly string[]; env?: Readonly<Record<string, string>>; binDirs: readonly string[] }
-  | { kind: 'uv-tool'; package: string; python?: string; binDirs: readonly string[] };
+  | { kind: 'uv-tool'; package: string; python?: string; with?: readonly string[]; binDirs: readonly string[] };
 
 export interface AiHarnessInstaller {
   posix?: AiHarnessInstallStep;

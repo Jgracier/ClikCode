@@ -8,7 +8,8 @@ sign-in, its own idea of where your conversations live. None of them know the
 others exist, so picking one up means learning it again and leaving your work
 behind in the last one.
 
-ClikCode sits in front of 25 of them. One sign-in, one list of conversations, one
+ClikCode sits in front of 29 of them, including four newer ACP agents under
+experimental support. One sign-in, one list of conversations, one
 set of controls, the same keystrokes whichever tool answers. It replaces
 nothing — your tools stay yours, the logins you already had keep working — and
 what it adds is this:
@@ -50,6 +51,11 @@ Requires **Node.js 22.12 or newer**. Nothing to configure. You do not need any
 of the coding tools installed first: choose one — to sign in, or as the tool for
 a conversation — and ClikCode installs it for you, with the vendor's own npm
 package or installer.
+
+Deep Agents Code, Devin CLI, Junie CLI and MiniMax Code are experimental ACP
+integrations. Their official install and launch commands are wired, but
+authenticated turns and installs on Windows and macOS have not been verified
+live. Sign-in still runs through each vendor's CLI.
 
 ## Your first five minutes
 

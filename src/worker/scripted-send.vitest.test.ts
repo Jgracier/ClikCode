@@ -114,7 +114,7 @@ async function gatewaySession(): Promise<HarnessSession> {
   const session = {
     id: randomUUID(), conversationId: randomUUID(), route: 'gateway', accountId: null, provider: 'gateway', model: null,
     effort: 'platform-managed', permissionMode: 'bypass', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
-    workspace, title: 'test conversation', gatewayConfirmed: true,
+    workspace, title: 'test conversation', nameSource: 'user', gatewayConfirmed: true,
   } as HarnessSession;
   state.sessions.push(session);
   await writeState(state);

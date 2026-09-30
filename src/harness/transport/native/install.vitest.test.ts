@@ -71,6 +71,7 @@ describe('the route for one harness', () => {
       .toBe("curl -fsSL 'https://hermes-agent.nousresearch.com/install.sh' | bash -s -- --non-interactive");
     expect(manualInstallCommand(harnessInstallRoute(byCommand('cursor'), 'win32'), 'win32')).toBe("irm 'https://cursor.com/install?win32=true' | iex");
     expect(manualInstallCommand(harnessInstallRoute(byCommand('openhands'), 'win32'), 'win32')).toBe('uv tool install --python 3.12 openhands');
+    expect(manualInstallCommand(harnessInstallRoute(byCommand('dcode'), 'linux'), 'linux')).toBe('uv tool install deepagents-code --with deepagents-acp');
   });
 });
 

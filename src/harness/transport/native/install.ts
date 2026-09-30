@@ -347,8 +347,10 @@ async function installUvTool(step: Extract<AiHarnessInstallStep, { kind: 'uv-too
     });
     if (!await resolveBinaryPath('uv')) throw new Error('uv was installed but cannot be found in ~/.local/bin');
   }
-  const result = await runInstallCommand('uv', ['tool', 'install', ...(step.python ? ['--python', step.python] : []), step.package]);
-  if (result.code !== 0) throw commandFailure(`uv tool install ${step.package}`, result);
+  const installArgv = ['tool', 'install', ...(step.python ? ['--python', step.python] : []), step.package,
+    ...(step.with ?? []).flatMap((name) => ['--with', name])];
+  const result = await runInstallCommand('uv', installArgv);
+  if (result.code !== 0) throw commandFailure(`uv ${installArgv.join(' ')}`, result);
   const bin = await runInstallCommand('uv', ['tool', 'dir', '--bin'], { timeoutMs: 60_000 }).catch(() => undefined);
   const dir = bin?.code === 0 ? bin.output.trim().split(/\r?\n/).pop()?.trim() : undefined;
   if (dir) addToProcessPath([dir]);
