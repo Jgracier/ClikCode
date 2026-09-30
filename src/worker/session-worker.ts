@@ -11,13 +11,14 @@
 import { createServer, type Socket } from 'node:net';
 import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
-import { aiGatewaySessionSend } from '../turn/drive.js';
+import { runSessionTurn } from '../turn/session-turn.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
 import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
-import { closePersistentTransport, discardInterruptedTurn, preserveInterruptedTurn, setVendorBackgroundTurnHandler } from '../turn/runtime.js';
+import { closePersistentTransport, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
+import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
 import { decodeFrames, encodeFrame, type ClientCommand } from './protocol.js';
@@ -313,7 +314,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     activeLiveInput = liveInput;
     activeSubmissions = submissions;
     // startWaiting/stopWaiting bracket the call the same way interactive.ts's
-    // own runInteractiveTurn does today -- drive.ts itself never calls
+    // own runInteractiveTurn does today -- the turn itself never calls
     // either, by design (see turn/observer.ts): they are the ORCHESTRATOR
     // signalling "a turn is in flight", not something a turn declares about
     // itself. In the worker model the worker is that orchestrator now, and
@@ -325,7 +326,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // A background turn's record still being saved: this turn's checkpoint
       // would read the conversation without it and then write it back whole.
       await vendorBackground.settled();
-      await aiGatewaySessionSend(config, sessionId, command.text, controller.signal, {
+      await runSessionTurn(config, sessionId, command.text, controller.signal, {
         persistentTransports: true,
         prompter: observer,
         liveInput,

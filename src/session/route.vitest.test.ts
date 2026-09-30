@@ -13,7 +13,7 @@ import { capabilitiesText } from '../tui/slash/capabilities-text';
 import { contextUsageText } from '../tui/slash/cost';
 import { modelClientForSession } from '../agent/models/for-session';
 import { OpenAIModelClient } from '../agent/models/openai-client';
-import { aiGatewaySessionSend } from '../turn/drive';
+import { runSessionTurn } from '../turn/session-turn';
 import { readState } from './state/read';
 import { writeState } from './state/write';
 import type { HarnessSession, HarnessState } from './model';
@@ -185,7 +185,7 @@ describe('the model-client seam', () => {
       await writeState(state);
       // Not "no account selected": that would mean it went down the vendor
       // harness path. Not a Gateway sign-in error either.
-      await expect(aiGatewaySessionSend(config, 's1', 'hello')).rejects.toThrow('the local model did not start');
+      await expect(runSessionTurn(config, 's1', 'hello')).rejects.toThrow('the local model did not start');
       const after = (await readState()).sessions.find((item) => item.id === 's1')!;
       expect(after.messages ?? []).toEqual([]);
       expect(after.pendingTurn).toBeUndefined();

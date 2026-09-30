@@ -24,7 +24,7 @@ describe('durable turn checkpoints', () => {
     const previous = process.env.CLIKCODE_HOME;
     process.env.CLIKCODE_HOME = home;
     try {
-      const { completeTurnCheckpoint, startTurnCheckpoint } = await import('./runtime.js');
+      const { completeTurnCheckpoint, startTurnCheckpoint } = await import('./turn-journal.js');
       const target = { ...session(), id: randomUUID(), attachments: ['/tmp/example.png'], shellNotes: [] };
       const state = { v: 1, sessions: [target], accounts: [] } as never;
       const checkpoint = await startTurnCheckpoint(state, target, 'Fix the parser', {});
@@ -167,7 +167,7 @@ describe('a live submission is queued or it is not', () => {
     const previous = process.env.CLIKCODE_HOME;
     process.env.CLIKCODE_HOME = home;
     try {
-      const { DurableTurnCheckpoint } = await import('./runtime.js');
+      const { DurableTurnCheckpoint } = await import('./turn-journal.js');
       const session = {
         id: randomUUID(), conversationId: randomUUID(), route: 'local', status: 'active',
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messages: [],

@@ -9,7 +9,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { aiGatewaySessionSend } from './drive';
+import { runSessionTurn } from './session-turn';
 import { LiveTurnInputBroker } from './live-input';
 import { readState } from '../session/state/read';
 import { writeState } from '../session/state/write';
@@ -80,7 +80,7 @@ describe('a message typed during a ClikCode agent turn', () => {
 
   it('is steered into the running turn and answered before the turn ends', async () => {
     const liveInput = new LiveTurnInputBroker();
-    const turn = aiGatewaySessionSend(config, 's1', 'first question', undefined, { liveInput });
+    const turn = runSessionTurn(config, 's1', 'first question', undefined, { liveInput });
     const first = await model.next();
     // Before the fix this never settled while the turn ran: nothing had bound the queue.
     const typed = await liveInput.submit('and also this', 'typed-1');
@@ -98,7 +98,7 @@ describe('a message typed during a ClikCode agent turn', () => {
 
   it('typed after the loop has finished is queued durably for the next turn, not dropped', async () => {
     const liveInput = new LiveTurnInputBroker();
-    const turn = aiGatewaySessionSend(config, 's1', 'first question', undefined, { liveInput });
+    const turn = runSessionTurn(config, 's1', 'first question', undefined, { liveInput });
     (await model.next()).respond('done');
     await turn;
     const late = await liveInput.submit('one more', 'typed-2');

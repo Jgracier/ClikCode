@@ -3,7 +3,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AccountFailureKind } from './failover.js';
 import { noteStoredQuota } from './account-switch.js';
-import { nextUsableFailoverAccount, providerHasAccountForTurn } from './runtime.js';
+import { nextUsableFailoverAccount, providerHasAccountForTurn } from './account-routing.js';
 import { accountAfterFailure, initialAccountChoice, matchesDirectTurnModel, terminalFailoverError, turnBackendForAccount, type FailoverTally } from './account-routing.js';
 
 vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({

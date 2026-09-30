@@ -5,7 +5,7 @@ import { isClikCodeAgent } from '../../session/route.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
-import { sessionNativeCommands } from '../../turn/runtime.js';
+import { sessionNativeCommands } from '../../turn/vendor-process.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
 import { type SlashExtras, type SlashRouteContext } from './registry.js';
 import { discoverCustomCommands, type CustomCommand } from '../../session/custom-commands.js';

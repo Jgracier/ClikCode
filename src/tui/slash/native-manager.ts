@@ -4,7 +4,7 @@ import { open } from 'node:fs/promises';
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
-import { turnEnvironment } from '../../turn/runtime.js';
+import { turnEnvironment } from '../../turn/turn-environment.js';
 import { sessionHarness } from './context.js';
 
 export async function nativeManagerListing(state: HarnessState, session: HarnessSession, name: string): Promise<{ label: string; text: string }> {

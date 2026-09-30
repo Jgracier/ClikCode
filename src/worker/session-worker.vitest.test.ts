@@ -228,7 +228,7 @@ describe('session worker (real spawned process, real socket)', () => {
   });
 
   it('a submit that fails immediately still completes the waiting-start/stop lifecycle', async () => {
-    // No account configured on this session, so aiGatewaySessionSend rejects
+    // No account configured on this session, so runSessionTurn rejects
     // right away ("local AI session has no account selected") -- exercises
     // the real failure path (not a happy-path mock): the worker must still
     // bracket it with waiting-start/waiting-stop and report a turn-error,

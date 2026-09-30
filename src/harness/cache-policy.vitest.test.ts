@@ -9,7 +9,7 @@ import { chmod, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectNativeHarness, inspectNativeHarnessForPicker } from './transport/native/inspect.js';
-import { rememberFallbackTurn, usesFallbackTurn } from '../turn/runtime.js';
+import { rememberFallbackTurn, usesFallbackTurn } from '../turn/vendor-process.js';
 import { nativeModelCatalog, nativeModelLabel, nativeModelCatalogForPicker, resetModelCatalogMemo } from './accounts/model-catalog.js';
 import { clearLoginStatusCache, harnessNeedsLogin } from '../commands/account.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';

@@ -6,7 +6,7 @@ import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
 import { writeState } from '../../session/state/write.js';
-import { closePersistentTransport } from '../../turn/runtime.js';
+import { closePersistentTransport } from '../../turn/vendor-process.js';
 import { decodeAttachmentPath, expandHomePath } from '../../session/attachments.js';
 import { optionForControl } from '../../session/options.js';
 import { sessionHarness } from './context.js';

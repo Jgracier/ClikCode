@@ -7,7 +7,7 @@
  * permission: exactly as if they had typed it at a normal prompt. What IS
  * ClikCode's concern is that the output is durable and delivered: the note is
  * written into the session transcript, and re-injected into the NEXT turn the
- * same way an attachment is (see shellContextBlock and drive.ts), because a
+ * same way an attachment is (see shellContextBlock and turn/session-turn.ts), because a
  * resumed native session never replays ClikCode's own transcript.
  */
 

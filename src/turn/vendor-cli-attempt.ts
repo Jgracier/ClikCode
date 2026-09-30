@@ -8,7 +8,7 @@ import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { HarnessSession } from '../session/model.js';
 import type { DurableTurnCheckpoint } from './turn-journal.js';
-import type { TurnRunOptions } from './turn-options.js';
+import type { TurnRunOptions } from './session-turn.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { nativeTurnResult } from '../harness/protocol/turn-result.js';
 import { nativeTurnUsage } from '../harness/protocol/turn-usage.js';

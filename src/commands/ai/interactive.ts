@@ -36,8 +36,11 @@ import { aiHarnessSelect } from './harness.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
-import { closePersistentTransport, discardInterruptedTurn, nativeAvailableCommands, persistentTransports, preserveInterruptedTurn, synchronizeNativeTranscript, turnEnvironment } from '../../turn/runtime.js';
-import { aiGatewaySessionSend } from '../../turn/drive.js';
+import { closePersistentTransport, nativeAvailableCommands, persistentTransports } from '../../turn/vendor-process.js';
+import { discardInterruptedTurn, preserveInterruptedTurn } from '../../turn/turn-journal.js';
+import { synchronizeNativeTranscript } from '../../turn/handoff.js';
+import { turnEnvironment } from '../../turn/turn-environment.js';
+import { runSessionTurn } from '../../turn/session-turn.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput, line } from '../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../tui/prompter.js';
@@ -494,7 +497,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             interruptedSubmission!.restoreOnEscape = restoreDraft && turn.echo;
             turnController.abort();
           }, (text) => liveInput.submit(text), (text) => commandDuringTurn(targetId, text));
-          try { await aiGatewaySessionSend(config, targetId, promptText, turnController.signal, { ...run, liveInput }); }
+          try { await runSessionTurn(config, targetId, promptText, turnController.signal, { ...run, liveInput }); }
           finally {
             liveInput.close();
             await TERMINAL.active?.flushWaitingSubmissions();
@@ -503,7 +506,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           return;
         }
         output.write(`${chalk.dim(`${active ? sessionProviderLabel(active) : 'Provider'} · working…`)}\n`);
-        try { await aiGatewaySessionSend(config, targetId, promptText, undefined, run); }
+        try { await runSessionTurn(config, targetId, promptText, undefined, run); }
         finally { TERMINAL.active?.stopWaiting(); }
       };
       /** A subprocess the user has to wait for gets the same waiting indicator a turn does. */
@@ -535,7 +538,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // terminal. Its output becomes a transcript message (so the model sees
         // it next turn) and a shell note (so even a resumed native-harness
         // thread -- which never replays ClikCode's transcript -- still sees it;
-        // see shellContextBlock in drive.ts). No approval, no model, no
+        // see shellContextBlock in turn/session-turn.ts). No approval, no model, no
         // parsing: exactly what was typed, in the workspace, with the user's
         // environment.
         if (isShellCommandLine(line)) {

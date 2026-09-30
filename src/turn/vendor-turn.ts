@@ -26,7 +26,11 @@ import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider 
 import { writeState } from '../session/state/write.js';
 import { syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
-import { closePersistentTransport, completeTurnCheckpoint, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, startTurnCheckpoint, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
+import { closePersistentTransport, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands } from './vendor-process.js';
+import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
+import { synchronizeNativeTranscript } from './handoff.js';
+import { turnEnvironment } from './turn-environment.js';
+import type { TurnRunOptions } from './session-turn.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
 import { runVendorSessionAttempt } from './vendor-session-attempt.js';
 import { emitHarnessOutput } from '../harness/output.js';

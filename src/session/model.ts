@@ -96,7 +96,7 @@ export interface HarnessSession {
   attachments?: string[];
   /** Output the user's `!<command>` runs produced between turns. Injected into
    * the next turn the way attachments are (see shellContextBlock and
-   * drive.ts), then cleared at the same sites as `attachments`. Kept separate
+   * turn/session-turn.ts), then cleared at the same sites as `attachments`. Kept separate
    * from `messages` so a resumed native-harness thread -- which never replays
    * ClikCode's own transcript -- still learns what the shell printed. */
   shellNotes?: ShellNote[];

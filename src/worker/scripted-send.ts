@@ -12,21 +12,20 @@ import { stdout as output } from 'node:process';
 import { WorkerClient } from './client.js';
 import { takeConversation } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
-import { aiGatewaySessionSend } from '../turn/drive.js';
+import { runSessionTurn } from '../turn/session-turn.js';
 import { consumeSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
-
-const cancelled = (): Error => Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+import { turnCancelledError } from '../agent/cancellation.js';
 
 export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: string, signal?: AbortSignal): Promise<void> {
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
   for (;;) {
-    if (signal?.aborted) throw cancelled();
+    if (signal?.aborted) throw turnCancelledError();
     const client = await WorkerClient.attachExisting(sessionId).catch(() => undefined);
     if (client) {
       try {
@@ -39,7 +38,7 @@ export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: 
     }
     const taken = await takeConversation(sessionId, 'turn');
     if ('hold' in taken) {
-      try { return await aiGatewaySessionSend(config, sessionId, text, signal); } finally { await taken.hold.release(); }
+      try { return await runSessionTurn(config, sessionId, text, signal); } finally { await taken.hold.release(); }
     }
     // A worker is coming up (it answers in a moment), or another scripted
     // turn is running here (this one goes after it).
@@ -89,7 +88,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
     };
     const done = async (): Promise<void> => {
       if (failure) { finish(() => rejectTurn(failure)); return; }
-      if (stopping) { finish(() => rejectTurn(cancelled())); return; }
+      if (stopping) { finish(() => rejectTurn(turnCancelledError())); return; }
       const state = await readState();
       const session = state.sessions.find((item) => item.id === sessionId);
       const answer = session ? sessionTranscriptMessages(session).at(-1) : undefined;
@@ -142,7 +141,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
     const onAbort = (): void => {
       stopping = true;
       if (ours) { client.send({ type: 'cancel', restoreDraft: false }); return; }
-      void dequeue().then(() => finish(() => rejectTurn(cancelled())), (error: unknown) => finish(() => rejectTurn(error)));
+      void dequeue().then(() => finish(() => rejectTurn(turnCancelledError())), (error: unknown) => finish(() => rejectTurn(error)));
     };
     client.on('event', onEvent);
     client.on('close', onGone);

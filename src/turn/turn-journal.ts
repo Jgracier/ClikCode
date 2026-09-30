@@ -3,7 +3,7 @@ import { extractSessionTitle, normalizeSessionTitle } from '../session/title.js'
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { LiveTurnSubmission } from './live-input.js';
-import type { TurnRunOptions } from './turn-options.js';
+import type { TurnRunOptions } from './session-turn.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer, updatePendingResponse } from './checkpoint.js';

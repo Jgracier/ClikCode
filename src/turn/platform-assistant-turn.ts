@@ -9,7 +9,8 @@ import { isJsonDefaultMode } from '../cli/output-mode.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
-import { completeTurnCheckpoint, type DurableTurnCheckpoint, type TurnRunOptions } from './runtime.js';
+import { completeTurnCheckpoint, type DurableTurnCheckpoint } from './turn-journal.js';
+import type { TurnRunOptions } from './session-turn.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { StreamingTitle } from '../session/title.js';
 

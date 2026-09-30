@@ -3,7 +3,7 @@
  *
  * TerminalHarnessPrompter satisfies this structurally, with no `implements`
  * needed: TypeScript checks the shape, not the declaration. That is
- * deliberate. drive.ts must never import the concrete class (a real TUI
+ * deliberate. The turn code must never import the concrete class (a real TUI
  * renderer, ANSI painting and all) merely to type its own parameter -- a
  * worker's own broadcaster to attached remote clients satisfies the exact
  * same interface without being a terminal at all, or importing one.

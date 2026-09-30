@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEffortRefusal } from './drive';
+import { isEffortRefusal } from './vendor-turn';
 
 describe('a vendor refusing the reasoning level', () => {
   it('is recognized in the words the CLIs use', () => {
