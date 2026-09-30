@@ -114,9 +114,12 @@ export function toChatMessages(system: string, items: readonly ConversationItem[
   return out;
 }
 
-function toolsBody(tools: readonly ToolSpec[]): Record<string, unknown> {
+function toolsBody(tools: readonly ToolSpec[], toolChoice?: 'none'): { tools?: unknown[]; tool_choice?: 'none' } {
   if (!tools.length) return {};
-  return { tools: tools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } })) };
+  return {
+    tools: tools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } })),
+    ...(toolChoice ? { tool_choice: toolChoice } : {}),
+  };
 }
 
 /** Models emit arguments wrapped in a code fence, or with a trailing comma,
@@ -181,9 +184,9 @@ export class OpenAIModelClient implements ModelClient {
     const { options } = this;
     const doFetch = options.fetchImpl ?? fetch;
     const messages = toChatMessages(request.system, request.items, this.acceptsImages);
-    const tools = toolsBody(request.tools);
+    const tools = toolsBody(request.tools, request.toolChoice);
     if (options.beforeRequest) {
-      try { await options.beforeRequest({ messages, ...(tools.tools ? { tools: tools.tools as unknown[] } : {}) }, request.signal); } catch (error) {
+      try { await options.beforeRequest({ messages, ...(tools.tools ? { tools: tools.tools } : {}) }, request.signal); } catch (error) {
         if (request.signal?.aborted) throw turnCancelledError();
         // fail-open-ok: preparation only saves time; the request reads what it has to
         void error;
@@ -275,7 +278,9 @@ export class OpenAIModelClient implements ModelClient {
             if (index !== undefined) byIndex.set(index, call);
           }
           if (id && !call.id) call.id = id;
-          if (typeof fn.name === 'string') call.name += fn.name;
+          // The name is sent once; a server that repeats it in every fragment
+          // (or sends it whole each time) must not have it concatenated.
+          if (typeof fn.name === 'string' && fn.name && call.name !== fn.name) call.name = call.name && !fn.name.startsWith(call.name) ? `${call.name}${fn.name}` : fn.name;
           if (typeof fn.arguments === 'string') call.arguments += fn.arguments;
           else if (fn.arguments && typeof fn.arguments === 'object' && !Array.isArray(fn.arguments)) call.argsObject = fn.arguments as Record<string, unknown>;
         }
