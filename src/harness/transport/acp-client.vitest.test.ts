@@ -2,6 +2,28 @@ import { describe, expect, it } from 'vitest';
 import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, runAcpTurn } from './acp-client.js';
 
 describe('shared ACP adapter contract', () => {
+  it.each(['session/new', 'session/prompt'])('authenticates once over ACP when %s requires it', async (authAt) => {
+    const agent = `
+      const authAt = ${JSON.stringify(authAt)};
+      const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+      const calls = []; let signedIn = false; let buf = '';
+      process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
+        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1); calls.push(m.method);
+        if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [{ id: 'browser', name: 'Browser sign-in' }] } });
+        else if (m.method === 'authenticate') { signedIn = true; send({ id: m.id, result: {} }); }
+        else if (m.method === authAt && !signedIn) send({ id: m.id, error: { code: -32000, message: 'Authentication is required before this operation can be performed.' } });
+        else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1' } });
+        else if (m.method === 'session/prompt') {
+          send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(calls) } } } });
+          send({ id: m.id, result: { stopReason: 'end_turn' } });
+        }
+      } });
+    `;
+    const result = await runAcpTurn({ binary: process.execPath, command: 'agent', argv: ['-e', agent], cwd: process.cwd(),
+      prompt: 'check', environment: {}, permissionMode: 'ask', allowAgentAuth: true });
+    expect(JSON.parse(result.text)).toEqual(['initialize', 'session/new', ...(authAt === 'session/new' ? ['authenticate', 'session/new', 'session/prompt'] : ['session/prompt', 'authenticate', 'session/prompt'])]);
+  });
+
   it('sets model, permission mode, and effort over ACP before prompting', async () => {
     const agent = `
       const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
@@ -12,11 +34,17 @@ describe('shared ACP adapter contract', () => {
         if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
         else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1',
           configOptions: [
+            { id: 'provider', currentValue: 'openrouter', options: [{ value: 'openrouter' }, { value: 'codex' }] },
             { id: 'model', currentValue: 'old', options: [{ value: 'old' }, { value: 'new' }] },
             { id: 'thinking_effort', currentValue: 'off', options: [{ value: 'off' }, { value: 'high' }] }
           ], modes: { currentModeId: 'auto', availableModes: [{ id: 'auto' }, { id: 'approve' }] } } });
         else if (m.method === 'session/set_config_option' || m.method === 'session/set_mode') {
-          calls.push([m.method, m.params]); send({ id: m.id, result: {} });
+          calls.push([m.method, m.params]);
+          send({ id: m.id, result: m.params.configId === 'provider' ? { configOptions: [
+            { id: 'provider', currentValue: 'codex', options: [{ value: 'openrouter' }, { value: 'codex' }] },
+            { id: 'model', currentValue: 'old', options: [{ value: 'old' }, { value: 'new' }] },
+            { id: 'thinking_effort', currentValue: 'off', options: [{ value: 'off' }, { value: 'high' }] }
+          ] } : {} });
         } else if (m.method === 'session/prompt') {
           send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(calls) } } } });
           send({ id: m.id, result: { stopReason: 'end_turn' } });
@@ -25,11 +53,13 @@ describe('shared ACP adapter contract', () => {
     `;
     const result = await runAcpTurn({
       binary: process.execPath, command: 'goose', argv: ['-e', agent], cwd: process.cwd(),
-      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'new', effort: 'high',
+      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'codex/new', effort: 'high',
       modelRequiresProtocol: true, effortRequiresProtocol: true, effortConfigId: 'thinking_effort',
+      providerConfigId: 'provider', modelProviderSeparator: '/',
       permissionModeIds: { ask: 'approve' },
     });
     expect(JSON.parse(result.text)).toEqual([
+      ['session/set_config_option', { sessionId: 's1', configId: 'provider', value: 'codex' }],
       ['session/set_config_option', { sessionId: 's1', configId: 'model', value: 'new' }],
       ['session/set_mode', { sessionId: 's1', modeId: 'approve' }],
       ['session/set_config_option', { sessionId: 's1', configId: 'thinking_effort', value: 'high' }],

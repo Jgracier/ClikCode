@@ -119,10 +119,11 @@ describe('an ineligible account is named as such, not as a generic failure', () 
 
   it('classifies the vendor eligibility refusal', () => {
     expect(classifyAccountFailure(new Error(ELIGIBILITY), { isResultError: true })).toBe('account-ineligible');
+    expect(classifyAccountFailure(new Error('Authentication required: 403 Your current subscription does not have access to Kimi Code right now. Upgrade your plan to keep coding with Kimi Code.'))).toBe('account-ineligible');
+    expect(classifyAccountFailure(new Error('This client is no longer supported for Gemini Code Assist for individuals.'))).toBe('account-ineligible');
   });
 
-  it('still prefers a real quota or auth signal over it', () => {
-    // These can mention verification too; the account-level signals win.
+  it('still recognizes a separate real quota or auth signal', () => {
     expect(classifyAccountFailure(new Error('usage balance exhausted'), { isResultError: true })).toBe('quota-exhausted');
     expect(classifyAccountFailure(new Error('oauth token has expired'), { isResultError: true })).toBe('authentication-required');
   });

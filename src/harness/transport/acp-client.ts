@@ -12,6 +12,7 @@ import { eventDiff } from '../../agent/line-diff.js';
 import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
+import { classifyAccountFailure } from '../../turn/failover.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
@@ -53,6 +54,11 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   modelRequiresProtocol?: boolean;
   effortRequiresProtocol?: boolean;
   effortConfigId?: string;
+  providerConfigId?: string;
+  modelProviderSeparator?: string;
+  /** An interactive client can let a single advertised agent-auth method
+   * finish its OAuth flow over ACP when the vendor asks for sign-in. */
+  allowAgentAuth?: boolean;
   permissionModeIds?: Readonly<Partial<Record<AiHarnessPermissionMode, string>>>;
   /** Local image paths, sent as ACP image blocks when the agent advertises
    * `promptCapabilities.image`. Otherwise the turn fails before the prompt
@@ -335,6 +341,7 @@ interface LiveAgent {
   /** The loaded session's model state (`currentModelId`, `availableModels`). */
   models?: Json;
   modes?: Json;
+  authMethods?: Json[];
   configOptions?: Json[];
 }
 
@@ -584,8 +591,22 @@ class AcpSessionImpl implements AcpSession {
         clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' },
       }, setup);
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
+      live.authMethods = Array.isArray(initialized.authMethods) ? initialized.authMethods : [];
       stillRunning();
     }
+    const requestWithAuth = async (method: string, params: Json, options = setup): Promise<Json> => {
+      try { return await peer.request(method, params, options); }
+      catch (error) {
+        const choices = (live.authMethods ?? []).filter((candidate) =>
+          typeof candidate.id === 'string' && (candidate.type ?? candidate._meta?.type ?? 'agent') === 'agent');
+        if (!input.allowAgentAuth || choices.length !== 1 || classifyAccountFailure(error) !== 'authentication-required'
+          || (method === 'session/prompt' && (turn.sawActivity || turn.text))) throw error;
+        input.onPhase?.(`signing in to ${input.command}…`);
+        await peer.request('authenticate', { methodId: choices[0]!.id }, { timeoutMs: 300_000 });
+        stillRunning();
+        return await peer.request(method, params, options);
+      }
+    };
     const capabilities = live.capabilities;
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
@@ -600,8 +621,8 @@ class AcpSessionImpl implements AcpSession {
         // timeout is an idle window rather than a wall-clock limit.
         const loading = { ...setup, idleReset: true };
         this.sessionTotals = {};
-        if (capabilities.sessionCapabilities?.resume) loaded = await peer.request('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
-        else if (capabilities.loadSession) loaded = await peer.request('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
+        if (capabilities.sessionCapabilities?.resume) loaded = await requestWithAuth('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
+        else if (capabilities.loadSession) loaded = await requestWithAuth('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
         else throw new Error(`${input.command} ACP cannot load sessions`);
         stillRunning();
         live.sessionId = wanted;
@@ -612,7 +633,7 @@ class AcpSessionImpl implements AcpSession {
       turn.sessionId = wanted;
     } else {
       this.sessionTotals = {};
-      const started = await peer.request('session/new', { cwd: input.cwd, mcpServers: [] }, setup);
+      const started = await requestWithAuth('session/new', { cwd: input.cwd, mcpServers: [] }, setup);
       stillRunning();
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
@@ -625,7 +646,28 @@ class AcpSessionImpl implements AcpSession {
     // Agents that publish a model list take the choice over the protocol; a
     // launch flag is not guaranteed to reach the session (`hermes acp` ignores
     // `--model`, and would silently run its configured default).
-    const modelId = input.model ? acpModelChoice(live.models, input.model) : undefined;
+    let requestedModel = input.model;
+    if (requestedModel && input.providerConfigId && input.modelProviderSeparator && requestedModel.includes(input.modelProviderSeparator)) {
+      const boundary = requestedModel.indexOf(input.modelProviderSeparator);
+      const providerId = requestedModel.slice(0, boundary);
+      requestedModel = requestedModel.slice(boundary + input.modelProviderSeparator.length);
+      const providerOption = live.configOptions?.find((option) => (option.id ?? option.configId) === input.providerConfigId);
+      const choices: Json[] = Array.isArray(providerOption?.options) ? providerOption.options : [];
+      if (!choices.some((option) => option.value === providerId)) {
+        throw Object.assign(new Error(`${input.command} ACP does not offer provider ${providerId}`), { acpUnsupportedModel: true });
+      }
+      if (providerOption?.currentValue !== providerId) {
+        const updated = await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: input.providerConfigId, value: providerId }, setup);
+        stillRunning();
+        live.configOptions = Array.isArray(updated?.configOptions)
+          ? updated.configOptions
+          : live.configOptions?.map((option) => option === providerOption ? { ...option, currentValue: providerId } : option);
+        live.models = { configOptions: live.configOptions };
+      }
+    }
+    const modelId = requestedModel ? acpModelChoice(live.models, requestedModel)
+      ?? (input.providerConfigId && live.configOptions?.some((option) => (option.id ?? option.configId) === 'model') ? requestedModel : undefined)
+      : undefined;
     if (input.model && !modelId && input.modelRequiresProtocol) {
       throw Object.assign(new Error(`${input.command} ACP does not list model ${input.model}`), { acpUnsupportedModel: true });
     }
@@ -671,7 +713,7 @@ class AcpSessionImpl implements AcpSession {
     // The turn ends with the agent's answer to session/prompt. This is only
     // the ceiling for an agent that has stopped talking without answering.
     turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError(input.command, afterMs)));
-    turn.prompt = peer.request('session/prompt', { sessionId: turn.sessionId, prompt: blocks });
+    turn.prompt = requestWithAuth('session/prompt', { sessionId: turn.sessionId, prompt: blocks });
     const completed = await turn.prompt as Json;
     if (completed.stopReason === 'cancelled') throw cancelledError();
     // `end_turn`, or the reason the agent stopped short (max_tokens,

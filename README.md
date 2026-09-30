@@ -57,9 +57,16 @@ a conversation — and ClikCode installs it for you, with the vendor's own npm
 package or installer.
 
 Deep Agents Code, Devin CLI, Junie CLI and MiniMax Code are experimental ACP
-integrations. Their official install and launch commands are wired, but
-authenticated turns and installs on Windows and macOS have not been verified
-live. Sign-in still runs through each vendor's CLI.
+integrations. Their official install and launch commands are wired. Devin,
+Junie and MiniMax Code installed and answered ACP initialization on Linux;
+authenticated turns remain unverified without usable vendor accounts. When an
+agent offers one browser sign-in method over ACP, an interactive ClikCode turn
+uses it; terminal sign-in methods still run through the vendor's CLI. See the
+[per-harness verification record](https://github.com/Jgracier/ClikCode/blob/main/docs/ACP_OAUTH_VERIFICATION.md).
+
+Google [ended Gemini CLI access for individual accounts](https://github.com/google-gemini/gemini-cli/discussions/28017).
+Gemini Code Assist enterprise licenses and API key access remain supported by
+the vendor; ClikCode cannot restore individual-account access.
 
 ## Your first five minutes
 

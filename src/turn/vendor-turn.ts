@@ -327,7 +327,7 @@ export async function sendVendorTurn(input: {
     // A route that keeps no history: forget the session, so the next turn
     // opens a fresh one and carries ClikCode's own transcript (the fresh-
     // thread replay above) instead of resuming into an empty memory.
-    const statelessProvider = Boolean(model && harness.turn?.statelessProviders?.includes(modelProvider(harness, model) ?? ''));
+    const statelessProvider = Boolean(session.nativeTransport !== 'acp' && model && harness.turn?.statelessProviders?.includes(modelProvider(harness, model) ?? ''));
     if (!result.isError && (result.nativeSessionStateless || statelessProvider)) forgetNativeThread(session);
     // A non-zero exit code alone is not treated as failure here: by this
     // point nativeTurnResult has already thrown if it found neither assistant

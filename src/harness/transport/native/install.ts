@@ -118,7 +118,14 @@ async function installOnce(spec: InstallSpec, route: Exclude<HarnessInstallRoute
       // Another process may have installed it while this one waited.
       if (!(await missingBinaries(spec)).length) return false;
       show(label);
-      await runRoute(spec, route);
+      try {
+        await runRoute(spec, route);
+      } catch (error) {
+        // Some official installers launch an optional sign-in immediately
+        // after putting the binary in place. Cancelling that sign-in exits the
+        // script nonzero, but the installation itself is complete.
+        if (route.kind !== 'script' || (await missingBinaries(spec)).length) throw error;
+      }
       const missing = await missingBinaries(spec);
       if (missing.length) {
         throw new Error(`the installer finished, but \`${missing.join('`, `')}\` is not on PATH or in ${searchedDirs(route).join(', ') || 'any directory it declares'}`);

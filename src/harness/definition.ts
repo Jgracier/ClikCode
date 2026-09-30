@@ -32,6 +32,7 @@ interface AiHarnessAcpDefinition {
   inheritCliOptions?: boolean;
   legacyCliSessions?: boolean;
   effortConfigId?: string;
+  providerConfigId?: string;
   permissionModeIds?: Readonly<Partial<Record<AiHarnessPermissionMode, string>>>;
   effortArgvPrefix?: readonly string[];
   permissionArgv?: Readonly<Partial<Record<'bypass' | 'auto', readonly string[]>>>;
