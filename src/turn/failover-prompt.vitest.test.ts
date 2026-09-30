@@ -92,3 +92,18 @@ describe('the transcript never carries a rehydration prompt', () => {
     expect(conversationTitle(prompt)).toBe('what servers are connected?');
   });
 });
+
+describe('a retry on a fresh thread retells the whole request', () => {
+  it('keeps the attached files and the `!` output the interrupted request carried', () => {
+    const session = {
+      messages: [...history, { role: 'user', content: '!git status\n\nOn branch main\n\nexit 0' }],
+      pendingTurn: { prompt: 'fix the failing test', startedAt: '', updatedAt: '', outputStarted: true },
+    } as unknown as HarnessSession;
+    const attachment = '\n\n<clikcode_attachment path="spec.md">\nThe add function must round.\n</clikcode_attachment>';
+    const prompt = interruptedTurnFailoverPrompt(session, { requestContext: attachment });
+    expect(prompt).toContain('The add function must round.');
+    expect(prompt).toContain('On branch main');
+    expect(prompt.indexOf('fix the failing test')).toBeLessThan(prompt.indexOf('The add function must round.'));
+    expect(failoverPromptRequest(prompt)).toBe(INTERRUPTED_TURN_REQUEST);
+  });
+});

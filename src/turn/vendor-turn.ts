@@ -2,16 +2,15 @@
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { randomUUID } from 'node:crypto';
-import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice } from './failover.js';
+import { accountSwitchNotice, accountSwitchPhase } from './failover.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { addTurnUsage, createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
-import { recordQuotaRefusal, recordSuccessfulAccountTurn } from './account-outcome.js';
-import { initialAccountChoice, terminalFailoverError, turnBackendForAccount } from './account-routing.js';
+import { recordSuccessfulAccountTurn } from './account-outcome.js';
+import { accountAfterFailure, initialAccountChoice, turnBackendForAccount, type FailoverTally } from './account-routing.js';
 import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
 import { failoverPrompt, INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { interruptedTurnFailoverPrompt } from './interrupted-turn-prompt.js';
@@ -27,7 +26,7 @@ import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider 
 import { writeState } from '../session/state/write.js';
 import { syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
-import { closePersistentTransport, completeTurnCheckpoint, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, nextUsableFailoverAccount, startTurnCheckpoint, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
+import { closePersistentTransport, completeTurnCheckpoint, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands, startTurnCheckpoint, synchronizeNativeTranscript, turnEnvironment, type TurnRunOptions } from './runtime.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
 import { runVendorSessionAttempt } from './vendor-session-attempt.js';
 import { emitHarnessOutput } from '../harness/output.js';
@@ -113,9 +112,15 @@ export async function sendVendorTurn(input: {
   if (titleRequest) turnText = titleRequest.prompt;
   const supportsImages = harnessSupportsImages(harness);
   const images = supportsImages ? prepared.images : [];
-  if (prepared.images.length && !supportsImages) {
-    turnText += `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`;
-  }
+  const imageNote = prepared.images.length && !supportsImages
+    ? `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`
+    : '';
+  turnText += imageNote;
+  /** What the request carried besides its words. A retry on a fresh thread
+   * retells the conversation from ClikCode's copy, which holds only what was
+   * typed -- without this the attached files were silently gone from it. (`!`
+   * output needs nothing: it is its own message in that copy.) */
+  const requestContext = `${prepared.textContext}${imageNote}`;
   session.nativeHarness = harness.command;
   session.provider = harness.provider;
   session.workspace ??= process.cwd();
@@ -124,13 +129,16 @@ export async function sendVendorTurn(input: {
   let switchedFrom: string | undefined;
   /** Why the turn left that account: the failure it met there. */
   let switchReason: AccountFailureKind = 'quota-exhausted';
-  /** Whether any account actually ran out, as opposed to failing some other
-   * way. Decides whether "Usage Exhausted" is the truth at the end. */
-  let exhaustedAnyAccount = false;
-  /** The last failure that was not running out, for when running out is
-   * not the whole story. */
-  let lastOtherFailure: unknown;
-  const attemptedAccounts = new Set<string>();
+  const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
+  const onVendorBackend = (item: AiHarnessAccount): boolean => turnBackendForAccount(item) === 'vendor';
+  /** The vendor's own thread, carried into the account taking over, so it
+   * resumes with everything it actually said and did rather than a retelling
+   * of it. Undefined where that cannot be done -- a harness whose transcript
+   * layout is not known, a file that is not on disk. */
+  const carryThread = (from: AiHarnessAccount, to: AiHarnessAccount) => carryNativeSession({
+    harness, nativeId: session.nativeSessionId, workspace: session.workspace,
+    from: turnEnvironment(harness, from), to: turnEnvironment(harness, to),
+  });
   /** The two edits a retry makes to the answer, in the saved turn and on
    * screen alike: clear it, or start a new paragraph after it. Only these --
    * the model's own words reach the screen through emitResponseDelta alone. */
@@ -150,13 +158,13 @@ export async function sendVendorTurn(input: {
     session.accountId = to.id;
   };
   try {
-  const initial = initialAccountChoice(
-    state, account, session.accountFailover, (item) => turnBackendForAccount(item) === 'vendor', attemptedAccounts,
-  );
+  const initial = initialAccountChoice(state, account, session.accountFailover, onVendorBackend, tally.attempted);
   if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
   if (initial.kind === 'switch') {
+    // The thread goes with the conversation, as on a switch mid-turn; only
+    // one that cannot be carried starts afresh.
+    if (!await carryThread(account, initial.account)) forgetNativeThread(session);
     await switchAccount(initial.account, 'quota-exhausted');
-    forgetNativeThread(session);
     await checkpoint.persistNow();
   }
   // A fresh native thread (no nativeSessionId yet) with prior ClikCode
@@ -401,77 +409,17 @@ export async function sendVendorTurn(input: {
         nativeThreadRetried = true;
         await closePersistentTransport(session.id);
         forgetNativeThread(session);
-        turnText = interruptedTurnFailoverPrompt(session);
+        turnText = interruptedTurnFailoverPrompt(session, { requestContext });
         editAnswer('clear');
         continue;
       }
-      // A rejected REQUEST is not an account problem, and trying the next
-      // account cannot fix it -- the same argv gets refused identically
-      // every time. This is exactly what made a single bad flag look like
-      // "every account failed": ClikCode sent --effort to Antigravity,
-      // which encodes effort in the model id, and then walked all seven
-      // accounts collecting the same refusal, paying a 60-second
-      // interactive-auth timeout on the one that was not signed in.
-      // Surface the vendor's own complaint instead, which names the
-      // problem.
-      if (failureKind === 'request-invalid') throw failure;
-      // Failover is about finding an account that can still work, so it is
-      // not gated on the failure being a quota refusal. A turn that died
-      // for any other reason still moves to the next account that has usage
-      // -- bounded by attemptedAccounts, so each is tried at most once and a
-      // genuinely broken harness cannot cycle forever.
-      //
-      // Only a quota refusal marks the account spent, though: a crash says
-      // nothing about how much allowance is left.
-      if (failureKind === 'quota-exhausted') {
-        recordQuotaRefusal(state, account, failure);
-        exhaustedAnyAccount = true;
-      }
-      else lastOtherFailure = failure;
-      attemptedAccounts.add(account.id);
-      await checkpoint.persistNow();
-      // Same-provider failover for the native-CLI path: switching accounts means
-      // switching vendor config roots, so the in-flight native conversation can't
-      // continue under the old identity — start a fresh one under the fallback.
-      // Running out reads the same whether or not failover is on. With it
-      // off there is simply nowhere to switch to, which is the same outcome
-      // as having switched everywhere and found nothing -- so it says the
-      // same thing rather than leaking whatever the vendor happened to call
-      // it ("Payment Required", "usage balance exhausted").
-      if (session.accountFailover !== 'on-quota-exhausted') {
-        if (!exhaustedAnyAccount) throw failure;
-        throw new Error(usageExhaustedMessage(account ? [account] : []));
-      }
-      const fallback = await nextUsableFailoverAccount(
-        state, account, (item) => turnBackendForAccount(item) === 'vendor', attemptedAccounts,
-      );
-      if (!fallback) {
-        await checkpoint.persistNow();
-        throw terminalFailoverError({
-          state, current: account, attempted: attemptedAccounts,
-          matchesBackend: (item) => turnBackendForAccount(item) === 'vendor',
-          exhaustedAny: exhaustedAnyAccount, lastFailure: failure, lastOtherFailure,
-        });
-      }
-      // The vendor's own thread is carried into the account taking over, so
-      // it resumes with everything it actually said and did rather than a
-      // retelling of it. Only where that cannot be done -- a harness whose
-      // transcript layout is not known, a file that is not on disk -- does
-      // the turn fall back to a fresh thread seeded from ClikCode's copy.
-      const carriedThread = await carryNativeSession({
-        harness,
-        nativeId: session.nativeSessionId,
-        workspace: session.workspace,
-        from: turnEnvironment(harness, account),
-        to: turnEnvironment(harness, fallback),
+      const fallback = await accountAfterFailure({
+        state, session, account, failure, kind: failureKind, signal, matchesBackend: onVendorBackend, tally,
+        persist: () => checkpoint.persistNow(),
+        notice: (message) => prompter?.activity(chalk.yellow(message)),
       });
+      const carriedThread = await carryThread(account, fallback);
       switchReason = failureKind;
-      const verification = failureKind === 'account-ineligible' ? accountVerification(failure) : undefined;
-      if (verification) {
-        account.verification = { ...verification, at: new Date().toISOString() };
-        await checkpoint.persistNow();
-        prompter?.activity(chalk.yellow(verificationNotice(verification)));
-      }
       await switchAccount(fallback, failureKind);
       nativeThreadRetried = false;
       if (carriedThread) {
@@ -499,7 +447,7 @@ export async function sendVendorTurn(input: {
         // because a fresh thread answers the whole request again and keeping
         // the old half would show it twice (the direct-API path does the
         // same).
-        turnText = interruptedTurnFailoverPrompt(session);
+        turnText = interruptedTurnFailoverPrompt(session, { requestContext });
         editAnswer('clear');
       }
       continue;

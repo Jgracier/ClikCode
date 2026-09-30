@@ -5,6 +5,9 @@ import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { usageExhaustedMessage } from './usage-exhausted.js';
+import { accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
+import { recordQuotaRefusal } from './account-outcome.js';
+import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 
 /** Credentials do not select a transport by themselves: tool-style providers
  * use their CLI even when the account supplies an API key. */
@@ -85,4 +88,80 @@ export function terminalFailoverError(input: {
   return new Error(usageExhaustedMessage(
     state.accounts.filter((candidate) => attempted.has(candidate.id) || candidate.id === current.id),
   ));
+}
+
+/** Where a turn stands across its failed attempts. */
+export interface FailoverTally {
+  /** Accounts already tried, each at most once, so a broken harness cannot cycle. */
+  attempted: Set<string>;
+  /** Whether any account actually ran out, as opposed to failing some other
+   * way. Decides whether "Usage Exhausted" is the truth at the end. */
+  exhaustedAny: boolean;
+  /** The last failure that was not running out, for when running out is not
+   * the whole story. */
+  lastOtherFailure?: unknown;
+}
+
+/** The one failover step, after an attempt failed on `account`: the account
+ * that takes the turn next, or the error that ends it.
+ *
+ * Shared by both account backends (vendor-turn.ts, direct-turn.ts), because
+ * two copies drifted: the direct copy had no cancel guard, so Esc aborted the
+ * request, the abort was classed "other", and the turn retried on the next
+ * account with the already-aborted signal -- until every account had been
+ * walked.
+ *
+ * Failover is about finding an account that can still work, so it is not
+ * gated on a quota refusal: a turn that died any other way still moves on.
+ * Only a quota refusal marks the account spent, though -- a crash says nothing
+ * about how much allowance is left. A rejected REQUEST is not an account
+ * problem at all: every account refuses the same argv the same way (ClikCode
+ * once sent --effort to Antigravity, then walked seven accounts collecting
+ * the same refusal), so it is surfaced as the vendor worded it. */
+export async function accountAfterFailure(input: {
+  state: HarnessState;
+  session: HarnessSession;
+  account: AiHarnessAccount;
+  failure: unknown;
+  kind: AccountFailureKind;
+  signal?: AbortSignal;
+  matchesBackend: (candidate: AiHarnessAccount) => boolean;
+  tally: FailoverTally;
+  /** Saves what this step recorded on the account. */
+  persist: () => Promise<void>;
+  notice?: (message: string) => void;
+}): Promise<AiHarnessAccount> {
+  const { state, session, account, failure, kind, tally } = input;
+  // Stopped, not failed: whatever the attempt died of, it died because it was
+  // cancelled, and no other account is owed the request.
+  if (input.signal?.aborted || isTurnCancelled(failure) || (failure as Error | undefined)?.name === 'AbortError') {
+    throw isTurnCancelled(failure) ? failure : turnCancelledError();
+  }
+  if (kind === 'authentication-required') account.status = 'needs_login';
+  if (kind === 'request-invalid') { await input.persist(); throw failure; }
+  if (kind === 'quota-exhausted') {
+    recordQuotaRefusal(state, account, failure);
+    tally.exhaustedAny = true;
+  } else tally.lastOtherFailure = failure;
+  tally.attempted.add(account.id);
+  const verification = kind === 'account-ineligible' ? accountVerification(failure) : undefined;
+  if (verification) {
+    account.verification = { ...verification, at: new Date().toISOString() };
+    input.notice?.(verificationNotice(verification));
+  }
+  await input.persist();
+  // Running out reads the same whether or not failover is on. With it off
+  // there is simply nowhere to switch to, which is the same outcome as having
+  // switched everywhere and found nothing -- so it says the same thing rather
+  // than whatever the vendor happened to call it ("Payment Required").
+  if (session.accountFailover !== 'on-quota-exhausted') {
+    if (!tally.exhaustedAny) throw failure;
+    throw new Error(usageExhaustedMessage([account]));
+  }
+  const fallback = nextUsableFailoverAccount(state, account, input.matchesBackend, tally.attempted);
+  if (fallback) return fallback;
+  throw terminalFailoverError({
+    state, current: account, attempted: tally.attempted, matchesBackend: input.matchesBackend,
+    exhaustedAny: tally.exhaustedAny, lastFailure: failure, lastOtherFailure: tally.lastOtherFailure,
+  });
 }
