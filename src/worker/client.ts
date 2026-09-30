@@ -12,7 +12,10 @@ import { readState } from '../session/state/read.js';
 import { decodeFrames, encodeFrame, type ClientCommand, type WorkerEvent } from './protocol.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
-const SPAWN_POLL_MS = 50;
+/** A new worker is looked for this often: the first message of a
+ * conversation waits on it, and a look is one small file read. At 50 ms the
+ * wait past the moment the worker was listening averaged 25 ms. */
+const SPAWN_POLL_MS = 10;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
