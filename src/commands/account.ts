@@ -15,7 +15,7 @@ import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { accountVerification, verificationNotice } from '../turn/failover.js';
-import { localHarnessForCommand, localHarnessForProvider, localRouter } from '../runtime/lazy-bridge.js';
+import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
 import { harnessStatePath } from '../session/state/paths.js';
 import { readState } from '../session/state/read.js';
@@ -64,7 +64,7 @@ export async function aiAccountsList(): Promise<void> {
 
 /** Lists the normalized local account surfaces without probing provider credentials. */
 export async function aiAccountProviders(): Promise<void> {
-  emitResult({ harnesses: localRouter().AI_LOCAL_HARNESSES });
+  emitResult({ harnesses: builtInHarnesses() });
 }
 
 /** Read-only compatibility report for every catalog entry. */
@@ -84,7 +84,7 @@ export async function aiDoctor(): Promise<void> {
   // One write for the whole sweep: every harness inspected here contributes a
   // version memo, and flushing per harness would be 24 writes for one answer.
   const flush = async (): Promise<void> => { await saveVersionMemo().catch(() => undefined); };
-  const harnesses = await Promise.all(localRouter().AI_LOCAL_HARNESSES.map(async (harness) => {
+  const harnesses = await Promise.all(builtInHarnesses().map(async (harness) => {
     const inspection = await inspectNativeHarness(harness);
     return {
       command: harness.command,
@@ -92,7 +92,7 @@ export async function aiDoctor(): Promise<void> {
       provider: harness.provider,
       surface: harness.surface,
       binary: harness.binary,
-      integration: localRouter().harnessIntegrationLevel(harness),
+      integration: harnessIntegrationLevel(harness),
       install: installSummary(harness),
       ...inspection,
       capabilities: {
@@ -117,7 +117,7 @@ export async function aiDoctor(): Promise<void> {
     };
   }));
   await flush();
-  emitResult({ adapterVersion: localRouter().AI_LOCAL_HARNESS_ADAPTER_VERSION, harnesses });
+  emitResult({ adapterVersion: harnessAdapterVersion(), harnesses });
 }
 
 /**

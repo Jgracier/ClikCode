@@ -138,7 +138,7 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
         const model = account.models[0];
         if (!model) throw new Error('local account has no configured model');
         const startedAt = Date.now();
-        const turn = await streamLocalAiTurn({ provider: account.provider, model, apiKey: localApiKey(account), credentialSource: 'env', messages: body.messages as Array<{ role: 'user' | 'assistant'; content: string }>, ...(typeof body.effort === 'string' ? { reasoningEffort: body.effort as never } : {}) });
+        const turn = await streamLocalAiTurn({ provider: account.provider, model, apiKey: localApiKey(account), messages: body.messages as Array<{ role: 'user' | 'assistant'; content: string }>, ...(typeof body.effort === 'string' ? { reasoningEffort: body.effort } : {}) });
         const invocation = { id: randomUUID(), accountId: account.id, provider: account.provider, model, at: new Date().toISOString(), inputTokens: turn.usage.inputTokens, outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt };
         // The turn above can run for minutes, and the interactive CLI writes
         // real conversation state throughout. `state` is the pre-turn snapshot

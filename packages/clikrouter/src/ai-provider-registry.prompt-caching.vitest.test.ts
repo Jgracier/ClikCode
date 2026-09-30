@@ -14,7 +14,7 @@
 // load-bearing, not documentation.
 
 import { describe, expect, it } from 'vitest';
-import { AI_PROVIDERS, getAiProvider, type AiProviderSpec } from './ai-provider-registry';
+import { AI_PROVIDERS, getAiProvider, type AiProviderSpec } from './ai-provider-registry-public';
 
 describe('promptCaching', () => {
   it('marks Anthropic explicit — the only kind this platform can ask for', () => {

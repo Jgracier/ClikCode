@@ -8,41 +8,32 @@ import { augmentProcessPath } from '../harness/transport/native/install-location
 import type { AiHarnessAcpLaunch, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition, AiRouterRuntime } from '../harness/definition.js';
 
 const require = createRequire(import.meta.url);
-let routerRuntime: AiRouterRuntime | undefined;
 
-export function localRouter(): AiRouterRuntime {
-  if (!routerRuntime) {
-    try {
-      routerRuntime = require('../ai-router-runtime.cjs') as AiRouterRuntime;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
-      routerRuntime = require(fileURLToPath(new URL('./ai-router-runtime.cjs', import.meta.url))) as AiRouterRuntime;
-    }
-    augmentProcessPath(routerRuntime.allLocalHarnesses());
+/** A bundle beside this one: `../x` from source (dist/ is the repo's), `./x`
+ * from the bundle itself. */
+function sibling<T>(name: string): T {
+  try {
+    return require(`../${name}`) as T;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
+    return require(fileURLToPath(new URL(`./${name}`, import.meta.url))) as T;
   }
-  return routerRuntime;
 }
+
+/** The direct API-key route's turn (dist/ai-router-runtime.cjs: `ai` and the
+ * @ai-sdk providers, 3 MB), loaded by the first such turn and nothing else. */
+let routerRuntime: Pick<AiRouterRuntime, 'streamAiChatTurn'> | undefined;
+const localRouter = (): Pick<AiRouterRuntime, 'streamAiChatTurn'> => (routerRuntime ??= sibling<Pick<AiRouterRuntime, 'streamAiChatTurn'>>('ai-router-runtime.cjs'));
 
 type HarnessCatalogRuntime = Omit<AiRouterRuntime, 'streamAiChatTurn'>;
 let catalogRuntime: HarnessCatalogRuntime | undefined;
 
 /** The dependency-free catalog bundle (dist/harness-catalog.cjs). Every
  * catalog call goes through this ONE bundle: registerCustomHarnesses() keeps
- * module state, and a second copy inside ai-router-runtime.cjs would not see
- * it. Falls back to the full router runtime where only that was built. */
+ * module state that a second copy would not see. */
 function localCatalog(): HarnessCatalogRuntime {
   if (!catalogRuntime) {
-    try {
-      catalogRuntime = require('../harness-catalog.cjs') as HarnessCatalogRuntime;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
-      try {
-        catalogRuntime = require(fileURLToPath(new URL('./harness-catalog.cjs', import.meta.url))) as HarnessCatalogRuntime;
-      } catch (inner) {
-        if ((inner as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw inner;
-        catalogRuntime = localRouter();
-      }
-    }
+    catalogRuntime = sibling<HarnessCatalogRuntime>('harness-catalog.cjs');
     // Every harness spawn reads the catalog first, so this is the one place
     // that sees them all before any: the directories vendor installers (and
     // ClikCode's own npm prefix) put binaries in go on the end of PATH.
@@ -73,6 +64,9 @@ export const harnessSupportsEffort = (harness: AiLocalHarnessDefinition): boolea
 export const harnessSupportsPermissionMode = (harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean => localCatalog().harnessSupportsPermissionMode(harness, mode);
 export const harnessSupportsImages = (harness: AiLocalHarnessDefinition): boolean => localCatalog().harnessSupportsImages(harness);
 
+/** The built-in catalog alone, and the adapter version it declares. */
+export const builtInHarnesses = (): readonly AiLocalHarnessDefinition[] => localCatalog().AI_LOCAL_HARNESSES;
+export const harnessAdapterVersion = (): number => localCatalog().AI_LOCAL_HARNESS_ADAPTER_VERSION;
 /** Built-in catalog plus any registered custom ACP harnesses. */
 export const allLocalHarnesses = (): readonly AiLocalHarnessDefinition[] => localCatalog().allLocalHarnesses();
 export const harnessAcpLaunch = (
