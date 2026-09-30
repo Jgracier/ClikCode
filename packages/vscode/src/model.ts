@@ -22,6 +22,11 @@ export interface Activity {
   category?: string;
   output?: string[];
   diff?: { removed: string[]; added: string[] };
+  /** When this window first saw the call: a running call's clock. */
+  startedAt?: number;
+  /** How long it ran, and a command's exit code, where the harness reports them. */
+  durationMs?: number;
+  exitCode?: number;
 }
 
 export interface Note {
@@ -205,13 +210,15 @@ function upsertActivity(activities: Activity[], event: HarnessActivityEvent): Ac
     ...(event.category ? { category: event.category } : {}),
     ...(event.output?.length ? { output: event.output.map(stripAnsi) } : {}),
     ...(event.diff ? { diff: { removed: [...event.diff.removed], added: [...event.diff.added] } } : {}),
+    ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+    ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
   };
   if (event.parentId) return activities;
   if (event.id) {
     const index = activities.findIndex((item) => item.key === event.id);
     if (index >= 0) return activities.map((item, position) => (position === index ? { ...item, ...activity, label: activity.label || item.label } : item));
   }
-  return [...activities, activity].slice(-MAX_ACTIVITIES);
+  return [...activities, { ...activity, startedAt: Date.now() }].slice(-MAX_ACTIVITIES);
 }
 
 function freshLive(waitingLabel: string): LiveTurn {

@@ -30,7 +30,7 @@ describe('chat model', () => {
     expect(during.running).toBe(true);
     expect(during.pendingPrompt).toBe('hi');
     expect(during.live?.text).toBe('Hello');
-    expect(during.live?.activities).toEqual([{ key: 't1', kind: 'tool-done', label: 'read a.ts' }]);
+    expect(during.live?.activities).toEqual([{ key: 't1', kind: 'tool-done', label: 'read a.ts', startedAt: expect.any(Number) }]);
     expect(during.plan).toEqual([{ content: 'step', status: 'in_progress' }]);
     const after = run([
       worker({ type: 'snapshot', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello' }] }), live: { text: 'Hello', waitingLabel: 'thinking' } }),
