@@ -3,6 +3,7 @@
 
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { auggieUsageLabel } from '../auggie-usage.js';
+import { grokUsageProbe, grokUsageReading } from './grok-usage.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -240,6 +241,8 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsagePro
   codex: codexUsageProbe,
   claude: claudeUsageProbe,
   auggie: auggieUsageProbe,
+  // Free: an ACP extension call, not a turn (grok-usage.ts).
+  grok: grokUsageProbe,
 };
 
 type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
@@ -250,4 +253,5 @@ type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<R
 export const NATIVE_USAGE_READING_PROBES: Readonly<Partial<Record<string, { label: NativeUsageProbe; reading: NativeUsageReadingProbe }>>> = {
   codex: { label: codexUsageProbe, reading: codexUsageReading },
   claude: { label: claudeUsageProbe, reading: claudeUsageReading },
+  grok: { label: grokUsageProbe, reading: grokUsageReading },
 };
