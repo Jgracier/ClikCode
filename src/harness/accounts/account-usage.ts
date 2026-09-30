@@ -6,7 +6,7 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES, NATIVE_USAGE_READING_PROBES } from './usage-probes.js';
+import { BILLED_USAGE_PROBES, NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES, NATIVE_USAGE_READING_PROBES } from './usage-probes.js';
 import { learnedUsageReading } from './usage-learning.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, quotaMarkExpiresAt, quotaMarkedAt, settleQuotaMark, usageCacheKey, usageReadingIsCurrent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
@@ -67,19 +67,27 @@ export async function nativeUsageReading(
   if (entry?.failed && Number.isFinite(entry.at) && Date.now() - entry.at < NATIVE_USAGE_FAILURE_TTL_MS && !options.network) {
     return entry.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
-  const reusable = entry && !entry.failed && (entry.windows?.length ?? 0) > 0 && usageReadingIsCurrent(entry)
+  // A harness that reports only through its probe cannot refresh the figure
+  // itself, so a turn STARTED on the account since the reading makes it old
+  // news. Started, not ended: a reading a turn published about itself (Codex's
+  // rate-limit notification) is taken after its start and stays current.
+  const turnSinceReading = entry !== undefined && !reportsOnStream && account !== undefined
+    && state.invocations.some((invocation) => invocation.accountId === account.id
+      && Date.parse(invocation.at) - invocation.latencyMs > entry.at);
+  const reusable = entry && !entry.failed && (entry.windows?.length ?? 0) > 0 && usageReadingIsCurrent(entry) && !turnSinceReading
     ? entry
     : undefined;
   if (reusable && !options.network) {
     nativeUsageCache.set(cacheKey, reusable);
     return { windows: reusable.windows ?? [], ...(reusable.label === undefined ? {} : { label: reusable.label }) };
   }
-  // Only an explicit ask runs the probe. For Claude Code it is a real turn
-  // (usage-probes.ts), and a passive paint -- opening a chat, the status
-  // line's timer, the editor's footer -- used to run one whenever no current
-  // reading existed: on every start with a fresh home, and again each minute
-  // while it failed. A paint shows what the last real turn reported, or none.
-  if (!options.network) return undefined;
+  // A probe that is a real turn (Claude Code's) runs only on an explicit ask.
+  // A passive paint -- opening a chat, the status line's timer, the editor's
+  // footer -- used to run one whenever no current reading existed: on every
+  // start with a fresh home, and again each minute while it failed. Free
+  // probes (Codex, Auggie, Grok) still run here, held off by the failure
+  // backoff above and by a current reading.
+  if (!options.network && BILLED_USAGE_PROBES.has(session.nativeHarness ?? '')) return undefined;
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const structured = session.nativeHarness ? NATIVE_USAGE_READING_PROBES[session.nativeHarness] : undefined;
   const reading: UsageReading | undefined = !probe
