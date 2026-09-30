@@ -30,7 +30,8 @@ import {
 import { localModelChoices } from '../local-models/index.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
-import { conversationIdFor, integrationLabel, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
+import { conversationPreview, transcriptWasLoaded } from '../session/list-facts.js';
+import { conversationIdFor, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
 import { sessionClaimIsLive } from '../session/claim.js';
 import { liveWorkerSessions, sessionActivity } from '../session/liveness.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
@@ -147,7 +148,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
 export async function conversationList(state: HarnessState, currentId: string | undefined): Promise<IdeConversation[]> {
   const sessions = state.sessions
     .filter((session) => session.status !== 'archived' || session.id === currentId)
-    .filter((session) => session.id === currentId || sessionTranscriptMessages(session).length > 0 || Boolean(session.nativeSessionId));
+    .filter((session) => session.id === currentId || !isBlankConversation(session));
   const live = await liveWorkerSessions(sessions);
   const now = Date.now();
   const byRoot = new Map<string, HarnessSession[]>();
@@ -160,18 +161,22 @@ export async function conversationList(state: HarnessState, currentId: string | 
     const latest = [...group].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]!;
     const activity = group.map((session) => sessionActivity(session, live, now)).find((value) => value === 'working')
       ?? group.map((session) => sessionActivity(session, live, now)).find(Boolean);
-    const messages = sessionTranscriptMessages(latest);
-    const last = messages.at(-1)?.content.replace(/\s+/g, ' ').trim();
+    const opened = transcriptWasLoaded(latest) || latest.messages !== undefined || latest.pendingTurn !== undefined;
+    const messages = opened ? sessionTranscriptMessages(latest) : [];
+    const last = opened ? messages.at(-1)?.content.replace(/\s+/g, ' ').trim() : conversationPreview(latest, 140);
+    const titled = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim()
+      || (opened ? messages.find((message) => message.role === 'user')?.content.replace(/\s+/g, ' ').trim().slice(0, 80) : latest.listPreview)
+      || 'Untitled chat';
     const harness = latest.nativeHarness ? localHarnessForCommand(latest.nativeHarness) : undefined;
     const isCurrent = group.some((session) => session.id === currentId);
     rows.push({
       id: latest.id,
-      title: latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || messages.find((message) => message.role === 'user')?.content.replace(/\s+/g, ' ').trim().slice(0, 80) || 'Untitled chat',
+      title: titled,
       ...(latest.route === 'gateway' ? { provider: 'ClikDeploy Gateway' } : latest.route === 'clikcode-local' ? { provider: CLIKCODE_LOCAL_LABEL } : harness ? { provider: harness.displayName } : {}),
       ...(latest.model ? { model: sessionModelLabel(latest) ?? latest.model } : {}),
       ...(latest.workspace ? { workspace: latest.workspace } : {}),
       updatedAt: latest.updatedAt,
-      messages: messages.length,
+      messages: opened ? messages.length : (latest.listMessageCount ?? 0),
       ...(last ? { preview: last.slice(0, 140) } : {}),
       ...(activity ?? (isCurrent ? 'idle' : undefined) ? { activity: activity ?? 'idle' } : {}),
       current: isCurrent,

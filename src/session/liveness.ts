@@ -88,5 +88,7 @@ export function sessionActivity(
   host = hostname(),
 ): 'working' | 'idle' | undefined {
   if (!sessionIsLive(session, workerIsLive, now, host)) return undefined;
-  return session.pendingTurn ? 'working' : 'idle';
+  // `listTurn` is the same journal, kept on the index so the list did not
+  // have to open the transcript. A dead worker still returns above.
+  return session.pendingTurn || session.listTurn ? 'working' : 'idle';
 }

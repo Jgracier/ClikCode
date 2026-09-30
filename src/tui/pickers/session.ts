@@ -3,6 +3,7 @@
 
 import { compactPath } from '../../harness/protocol/labels.js';
 import { newConversation } from '../../commands/ai/conversations.js';
+import { stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { discoverNativeSessions, lastSeenNativeSessions } from '../../session/discovery/cli-listing.js';
@@ -14,6 +15,10 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { backfillListFacts } from '../../session/list-backfill.js';
+import { listedPending } from '../../session/list-facts.js';
+
+import { sessionFilePath } from '../../session/store/paths.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
@@ -21,8 +26,7 @@ import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
 import { sessionClaimIsLive } from '../../session/claim.js';
 import { liveWorkerSessions, sessionActivity } from '../../session/liveness.js';
 import { activityGlyph, subagentOptions, turnPace, workingDetail } from './conversation-activity.js';
-import { conversationIdFor, sessionPickerOptions } from '../../session/options.js';
-import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
+import { conversationIdFor, isBlankConversation, sessionPickerOptions } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 
@@ -189,7 +193,9 @@ export async function interactiveSessionPicker(
   boardCommands?: readonly PickerOption<string>[],
 ): Promise<{ id: string } | { new: true } | { compose: string } | { command: string } | undefined> {
   const onBoard = Boolean(boardCommands && rl.board);
-  const state = await readState();
+  // Titles, previews and dates live on the index. The transcript is read
+  // when the chat is opened, not to draw this list.
+  const state = await readState({ transcripts: [] });
   const current = state.sessions.find((item) => item.id === currentId);
   // A session with no turns yet has nothing to resume into — showing it here is
   // indistinguishable from a real conversation until you're already inside it,
@@ -216,7 +222,7 @@ export async function interactiveSessionPicker(
     // On the board the composer is how a chat starts, so the empty one this
     // window just opened is not listed: on a phone that has just connected it
     // sat above the conversation being switched to, under the same name.
-    .filter((session) => (session.id === currentId && !onBoard) || sessionTranscriptMessages(session).length > 0 || Boolean(session.nativeSessionId))
+    .filter((session) => (session.id === currentId && !onBoard) || !isBlankConversation(session))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const workspace = current?.workspace ?? process.cwd();
   // Read once, as the list opens: whether a worker is behind each chat is one
@@ -226,14 +232,31 @@ export async function interactiveSessionPicker(
   // chat's worker running for a while, and it is still this conversation.
   const openedAt = Date.now();
   const activityByRoot = new Map<string, { activity: 'working' | 'idle'; pending?: NonNullable<HarnessSession['pendingTurn']> }>();
-  for (const session of sessions) {
-    const root = conversationIdFor(session);
-    // The chat open here is active by definition; a claim only says whether
-    // someone ELSE holds it, so it would not show up by liveness alone.
-    const activity = sessionActivity(session, workerIsLive, openedAt) ?? (session.id === currentId ? 'idle' : undefined);
-    if (!activity || activityByRoot.get(root)?.activity === 'working') continue;
-    activityByRoot.set(root, activity === 'working' ? { activity, pending: session.pendingTurn } : { activity });
-  }
+  // The index turn has no `updatedAt` (that changes on every token). The
+  // transcript file's mtime is the same clock the live journal uses.
+  const paceAt = new Map<string, string>();
+  const notePace = async (list: readonly HarnessSession[]): Promise<void> => {
+    await Promise.all(list.filter((session) => session.listTurn && !session.pendingTurn && !paceAt.has(session.id)).map(async (session) => {
+      try {
+        const info = await stat(sessionFilePath(session.id));
+        paceAt.set(session.id, info.mtime.toISOString());
+      } catch { /* the journal's own start time is enough */ }
+    }));
+  };
+  const fillActivity = (): void => {
+    activityByRoot.clear();
+    for (const session of sessions) {
+      const root = conversationIdFor(session);
+      // The chat open here is active by definition; a claim only says whether
+      // someone ELSE holds it, so it would not show up by liveness alone.
+      const activity = sessionActivity(session, workerIsLive, openedAt) ?? (session.id === currentId ? 'idle' : undefined);
+      if (!activity || activityByRoot.get(root)?.activity === 'working') continue;
+      const pending = listedPending(session, paceAt.get(session.id));
+      activityByRoot.set(root, activity === 'working' ? { activity, ...(pending ? { pending } : {}) } : { activity });
+    }
+  };
+  await notePace(sessions);
+  fillActivity();
 
   // ClikCode's own conversations are already in hand and are what /resume is
   // almost always for, so the picker opens on them immediately. Vendor
@@ -253,6 +276,34 @@ export async function interactiveSessionPicker(
     .then((found) => { discovered = found; })
     .finally(() => { discovering = false; earlyLanded(); });
   const refreshes = [early, discovery];
+  let listRevision = 0;
+  let built: { discovering: boolean; discovered: AdoptableNativeSession[]; revision: number; options: PickerOption<string>[] } | undefined;
+  // Conversations written before the summary existed get one after the list
+  // is already up. The redraw copies the new previews onto the rows it holds.
+  refreshes.push(backfillListFacts().then(async () => {
+    const fresh = await readState({ transcripts: [] });
+    const byId = new Map(fresh.sessions.map((session) => [session.id, session]));
+    for (const session of sessions) {
+      const next = byId.get(session.id);
+      if (!next) continue;
+      if (next.listPreview) session.listPreview = next.listPreview;
+      else delete session.listPreview;
+      if (next.listTurn) session.listTurn = next.listTurn;
+      else delete session.listTurn;
+      if (next.listMessageCount !== undefined) session.listMessageCount = next.listMessageCount;
+      else delete session.listMessageCount;
+      if (next.listChecked) session.listChecked = true;
+      else delete session.listChecked;
+    }
+    for (let index = sessions.length - 1; index >= 0; index -= 1) {
+      const session = sessions[index]!;
+      if ((session.id !== currentId || onBoard) && isBlankConversation(session)) sessions.splice(index, 1);
+    }
+    await notePace(sessions);
+    fillActivity();
+    listRevision += 1;
+    built = undefined;
+  }).catch(() => undefined));
 
   const histories = new Map<string, PickerOption<string>[]>();
   const buildFresh = (): PickerOption<string>[] => {
@@ -339,10 +390,9 @@ export async function interactiveSessionPicker(
   // rows each time). Nothing it reads changes between keys except discovery
   // landing, so the rows are rebuilt only then -- not all five hundred of
   // them per arrow press.
-  let built: { discovering: boolean; discovered: AdoptableNativeSession[]; options: PickerOption<string>[] } | undefined;
   const buildOptions = (): PickerOption<string>[] => {
-    if (built && built.discovering === discovering && built.discovered === discovered) return built.options;
-    built = { discovering, discovered, options: buildFresh() };
+    if (built && built.discovering === discovering && built.discovered === discovered && built.revision === listRevision) return built.options;
+    built = { discovering, discovered, revision: listRevision, options: buildFresh() };
     return built.options;
   };
 

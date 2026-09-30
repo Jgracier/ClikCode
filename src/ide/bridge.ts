@@ -17,6 +17,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type Conf from 'conf';
 import { CLIKCODE_VERSION } from '../version.js';
+import { backfillListFacts } from '../session/list-backfill.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
@@ -199,7 +200,7 @@ export class IdeBridge {
   }
 
   private async current(id = this.requireSession()): Promise<{ session: HarnessSession; account?: string }> {
-    const state = await readState();
+    const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
     if (!session) throw new Error(`AI session "${id}" was not found`);
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
@@ -215,7 +216,7 @@ export class IdeBridge {
   // ---- conversations -------------------------------------------------------
 
   private async open(workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string): Promise<void> {
-    const state = await readState();
+    const state = await readState({ transcripts: ref ? [ref] : [] });
     let session: HarnessSession | undefined;
     if (mode === 'resume') {
       if (!ref) throw new Error('resume needs a conversation id');
@@ -242,14 +243,22 @@ export class IdeBridge {
     // or /provider asks.
     if (!session.nativeHarness && !isClikCodeAgent(session)) await autoSelectSessionHarness(id).catch(() => false);
     await this.resolveModel(id);
-    const synced = await readState();
-    const syncing = synced.sessions.find((item) => item.id === id);
-    if (syncing && await synchronizeNativeTranscript(synced, syncing)) await writeState(synced);
     await this.switchTo(id);
+    void this.synchronizeOpened(id);
+  }
+
+  /** Vendor transcripts are folded in after the editor is already showing the
+   * chat. The open itself only reads that one conversation. */
+  private async synchronizeOpened(id: string): Promise<void> {
+    const synced = await readState({ transcripts: [id] });
+    const syncing = synced.sessions.find((item) => item.id === id);
+    if (!syncing || !await synchronizeNativeTranscript(synced, syncing)) return;
+    await writeState(synced);
+    if (this.sessionId === id) await this.emitSession();
   }
 
   private async resolveModel(id: string): Promise<void> {
-    const state = await readState();
+    const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
     if (!session || session.model) return;
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
@@ -286,7 +295,7 @@ export class IdeBridge {
   /** This client stops showing a conversation: its claim goes, and one that
    * was never started is not kept. */
   private async leave(id: string): Promise<void> {
-    const state = await readState();
+    const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
     if (session?.claim?.pid === process.pid) {
       releaseSession(session);
@@ -297,7 +306,7 @@ export class IdeBridge {
 
   private async refreshClaim(): Promise<void> {
     if (!this.sessionId) return;
-    const state = await readState();
+    const state = await readState({ transcripts: [this.sessionId] });
     const session = state.sessions.find((item) => item.id === this.sessionId);
     if (!session) return;
     claimSession(session);
@@ -306,7 +315,7 @@ export class IdeBridge {
 
   private async refreshUsage(): Promise<void> {
     if (!this.sessionId) return;
-    const state = await readState();
+    const state = await readState({ transcripts: [] });
     const session = state.sessions.find((item) => item.id === this.sessionId);
     if (!session) return;
     const reading = await nativeUsageReading(session, state);
@@ -471,7 +480,7 @@ export class IdeBridge {
    * interactive loop does at the top of every pass. */
   private async drainQueue(): Promise<void> {
     for (let guard = 0; guard < 100 && !this.closed && this.sessionId; guard += 1) {
-      const state = await readState();
+      const state = await readState({ transcripts: [this.sessionId!] });
       const session = state.sessions.find((item) => item.id === this.sessionId);
       const queued = session?.queuedTurns?.[0];
       if (!session || !queued) return;
@@ -538,7 +547,7 @@ export class IdeBridge {
    * around it: a TurboFit or ClikCode Local model is up first, held by this
    * client rather than the worker. */
   private async runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
-    const state = await readState();
+    const state = await readState({ transcripts: [targetId] });
     const active = state.sessions.find((item) => item.id === targetId);
     const harness = active?.nativeHarness ? localHarnessForCommand(active.nativeHarness) : undefined;
     if (active && harness) {
@@ -586,7 +595,7 @@ export class IdeBridge {
     }
     const attachment = await resolveStandaloneAttachment(line, workspace);
     if (attachment) {
-      const state = await readState();
+      const state = await readState({ transcripts: [id] });
       const target = state.sessions.find((item) => item.id === id);
       if (!target) throw new Error(`AI session "${id}" was not found`);
       await queueAttachment(target, attachment);
@@ -768,7 +777,7 @@ export class IdeBridge {
   }
 
   private async hasHarness(id: string): Promise<boolean> {
-    const state = await readState();
+    const state = await readState({ transcripts: [] });
     const session = state.sessions.find((item) => item.id === id);
     return Boolean(session && (session.nativeHarness || isClikCodeAgent(session)));
   }
@@ -778,7 +787,7 @@ export class IdeBridge {
   private async query(requestId: string, query: IdeQueryName, options: { provider?: string; network?: boolean }): Promise<void> {
     const answer = (data: unknown): void => this.channel.send({ type: 'result', requestId, ok: true, data });
     try {
-      const state = await readState();
+      const state = await readState(query === 'conversations' ? { transcripts: [] } : undefined);
       const session = this.sessionId ? state.sessions.find((item) => item.id === this.sessionId) : undefined;
       switch (query) {
         case 'slash-commands': {
@@ -793,7 +802,10 @@ export class IdeBridge {
           if (!options.provider) throw new Error('models needs a provider');
           answer(await modelList(this.config, state, session, options.provider));
           return;
-        case 'conversations': answer(await conversationList(state, this.sessionId)); return;
+        case 'conversations':
+          if (state.sessions.some((item) => !item.listChecked)) void backfillListFacts();
+          answer(await conversationList(state, this.sessionId));
+          return;
         case 'accounts': answer(await accountList(state, session, Boolean(options.network))); return;
         case 'chat-settings': answer(session ? await chatSettings(state, session) : {}); return;
         case 'gateway': answer(await gatewayStatus(this.config)); return;

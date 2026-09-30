@@ -4,6 +4,7 @@
 import { hostname } from 'node:os';
 import type { HarnessSession, HarnessState } from '../model.js';
 import { dropEphemeral, ephemeralSessions, holdEphemeral, sessionForceStored } from '../ephemeral.js';
+import { stampListFacts } from '../list-facts.js';
 import { isBlankConversation } from '../options.js';
 import { sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
@@ -69,6 +70,9 @@ export async function writeState(state: HarnessState): Promise<void> {
     // message queued mid-write. Remembering the object as it was at the END
     // recorded that change as already on disk, so the write made for it
     // found nothing to store, and the queued message was lost.
+    // Summarize onto the index before the snapshot, and only for a transcript
+    // this caller actually opened. A light read leaves the summary alone.
+    for (const session of state.sessions ?? []) stampListFacts(session);
     const taken = baselineOf(state, baseline);
     const sessions = [...(state.sessions ?? [])];
     const diskIds = new Set((disk?.sessions ?? []).map((session) => session.id));
