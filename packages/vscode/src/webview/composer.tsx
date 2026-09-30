@@ -8,8 +8,8 @@ import type { IdeSlashCommand } from '../protocol';
 import type { Mention } from '../webview-protocol';
 import { selectionBlock } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
-import { titleCase } from './format';
-import { EffortMenu, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
+import { modelLabel, titleCase } from './format';
+import { EffortMenu, effortLabel, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
 import { UsageBars } from './screens';
 import { Icon, KeyList, type ListRow } from './ui';
 
@@ -213,7 +213,7 @@ export function Composer(props: {
   };
 
   const providerName = providerDisplayName(model, knownProviders()) ?? 'Choose provider';
-  const modelName = model.model ? model.model.replace(/^[\w-]+\//, '') : undefined;
+  const modelName = model.model ? modelLabel(model.model, model.providerId, providerName)!.replace(/^[\w-]+\//, '') : undefined;
   const effort = model.chatSettings?.effort;
   const showSuggestions = suggestions.length > 0 && !menu;
   const account = model.currentAccount;
@@ -276,11 +276,11 @@ export function Composer(props: {
           onClick={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
           onKeyDown={onKeyDown} onPaste={onPaste} />
         <div class="composer-footer">
-          {structured ? footerButton('provider', <><Icon name={model.providerId === 'gateway' ? 'cloud' : model.providerId === 'clikcode-local' ? 'vm' : 'hubot'} /><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></>, 'Choose provider', 'provider-button')
-            : <button type="button" class="chip-button" disabled={!connected} onClick={() => post({ type: 'send', text: '/provider', id: uid() })}><Icon name="hubot" /><span class="chip-text">{providerName}</span></button>}
-          {structured && providerChoosesModel(model.providerId) ? footerButton('model', <><Icon name="symbol-namespace" /><span class="chip-text">{modelName ?? 'Default model'}</span><Icon name="chevron-down" /></>, 'Choose model', 'model-button') : null}
-          {structured && effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current ? titleCase(effort.current) : 'Default'}</span></>, 'Reasoning effort', 'effort-button') : null}
-          {structured && model.chatSettings?.permissions ? footerButton('mode', <><Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} /><span class="chip-text">{model.chatSettings.plan ? 'Plan' : permissionLabel(model.permissions)}</span></>, 'Permissions and plan mode', 'mode-button') : null}
+          {structured ? footerButton('provider', <><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></>, `Provider: ${providerName}`, 'provider-button')
+            : <button type="button" class="chip-button" disabled={!connected} onClick={() => post({ type: 'send', text: '/provider', id: uid() })}><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></button>}
+          {structured && providerChoosesModel(model.providerId) ? footerButton('model', <><span class="chip-text">{modelName ?? 'Default model'}</span><Icon name="chevron-down" /></>, `Model: ${modelName ?? 'default'}`, 'model-button') : null}
+          {structured && effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current && effort.current !== 'default' ? effortLabel(effort.current) : 'Effort'}</span></>, `Reasoning effort: ${effortLabel(effort.current)}`, 'effort-button') : null}
+          {structured && model.chatSettings?.permissions ? footerButton('mode', <><Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} /><span class="chip-text">{model.chatSettings.plan ? 'Plan' : permissionLabel(model.permissions)}</span></>, `Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`, 'mode-button') : null}
           <span class="spacer" />
           <button type="button" class="icon-button" aria-label="Mention a file" title="Mention a file (@)" disabled={!connected}
             onClick={() => { const spacer = text && !/\s$/.test(text) ? ' ' : ''; update(`${text}${spacer}@`); }}><Icon name="mention" /></button>
@@ -295,15 +295,15 @@ export function Composer(props: {
         </div>
       </div>
       <div class="composer-status">
-        {account ? (
-          <button type="button" class="status-account" title="Accounts and usage" onClick={() => props.onOpenScreen('accounts')}>
-            <Icon name={account.problem ? 'warning' : 'account'} /><span class="status-label">{account.label}</span>
+        {account && (account.problem || account.usage?.windows?.length || account.usage?.label || account.label.toLowerCase() !== providerName.toLowerCase()) ? (
+          <button type="button" class="status-account" title={`${account.label}: accounts and usage`} onClick={() => props.onOpenScreen('accounts')}>
+            <Icon name={account.problem ? 'warning' : 'account'} />{account.label.toLowerCase() !== providerName.toLowerCase() ? <span class="status-label">{account.label}</span> : null}
             <UsageBars account={account} compact />
           </button>
         ) : model.accountUsage ? <span class="muted">{model.accountUsage}</span> : null}
         <span class="spacer" />
         {busy && !installing ? <span class="muted busy"><Icon name="loading" spin /> {busy}</span> : null}
-        {tokens ? <span class="muted">{tokens}</span> : null}
+        {tokens ? <span class="muted" title="Tokens used by the last turn">{tokens}</span> : null}
       </div>
     </div>
   );

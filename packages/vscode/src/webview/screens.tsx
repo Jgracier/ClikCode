@@ -4,17 +4,17 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { IdeAccount, IdeAccounts, IdeConversation, IdeGateway } from '../protocol';
 import { post, request } from './bus';
-import { homeRelative, relativeTime, resetIn } from './format';
+import { homeRelative, modelLabel, relativeTime, resetIn } from './format';
 import { choose } from './picker';
 import { Icon, IconButton, KeyList, Meter, Switch, type ListRow } from './ui';
 
 function ScreenHead(props: { title: string; onBack: () => void; children?: JSX.Element | JSX.Element[] | null }): JSX.Element {
   return (
-    <div class="screen-head">
-      <IconButton icon="arrow-left" label="Back to chat" onClick={props.onBack} />
+    <header class="topbar screen-head">
+      <IconButton id="back-button" icon="arrow-left" label="Back to chat (Esc)" onClick={props.onBack} />
       <h2 class="screen-title">{props.title}</h2>
       <div class="screen-tools">{props.children}</div>
-    </div>
+    </header>
   );
 }
 
@@ -73,7 +73,7 @@ export function HistoryScreen(props: { model: ChatModel; onBack: () => void; onE
                   </form>
                 ) : <div class="conversation-title">{row.title}{row.current ? <span class="badge">this chat</span> : null}{row.elsewhere ? <span class="badge muted-badge">open elsewhere</span> : null}</div>}
                 <div class="conversation-meta" title={row.workspace ? homeRelative(row.workspace) : undefined}>
-                  {[row.provider, row.model, relativeTime(row.updatedAt), row.workspace ? row.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : undefined, row.history > 1 ? `${row.history} branches` : undefined].filter(Boolean).join(' · ')}
+                  {[row.provider, modelLabel(row.model, row.provider), relativeTime(row.updatedAt), row.workspace ? row.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : undefined, row.history > 1 ? `${row.history} branches` : undefined].filter(Boolean).join(' · ')}
                 </div>
                 {row.preview ? <div class="conversation-preview">{row.preview}</div> : null}
               </div>
@@ -202,7 +202,8 @@ export function AccountsScreen(props: { model: ChatModel; onBack: () => void; on
     request<IdeAccounts>({ method: 'query', query: 'accounts', network }).then((result) => { setData(result); setRefreshing(false); },
       (failure: Error) => { setRefreshing(false); props.onError(failure.message); });
   };
-  useEffect(() => { load(false); load(true); }, []);
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => { load(false); load(true); section.current?.focus(); }, []);
   const act = (account: IdeAccount, action: IdeAccount['actions'][number]): void => {
     setConfirming(undefined);
     choose({ kind: 'account-action', accountId: account.id, action }).then(() => load(false), (failure: Error) => props.onError(failure.message));
@@ -229,7 +230,8 @@ export function AccountsScreen(props: { model: ChatModel; onBack: () => void; on
   }));
 
   return (
-    <section class="screen" aria-label="Accounts and usage">
+    <section class="screen" aria-label="Accounts and usage" tabIndex={-1} ref={section}
+      onKeyDown={(event) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); props.onBack(); } }}>
       <ScreenHead title="Accounts & usage" onBack={props.onBack}>
         <IconButton icon="refresh" label="Refresh usage" onClick={() => load(true)} class={refreshing ? 'spinning' : ''} />
         <IconButton icon="add" label="Add account" onClick={() => setAdding(!adding)} active={adding} />

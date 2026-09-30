@@ -9,7 +9,7 @@ import type { ToWebview, WebviewScreen } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, Transcript } from './chat';
 import { Composer, type ComposerHandle } from './composer';
-import { homeRelative, relativeTime } from './format';
+import { homeRelative, modelLabel, relativeTime } from './format';
 import { choose } from './picker';
 import { AccountsScreen, HistoryScreen } from './screens';
 import { inlineStep, Sheet, type InlineTarget, type OpenQuestion } from './sheet';
@@ -30,7 +30,7 @@ function Banner({ model }: { model: ChatModel }): JSX.Element | null {
         <div class="banner-actions">
           {model.remedy ? <button type="button" class="primary" onClick={() => command(REMEDY[model.remedy!].command)}>{REMEDY[model.remedy].label}</button> : null}
           <button type="button" class={model.remedy ? 'secondary' : 'primary'} onClick={() => command('clikcode.restart')}>Retry</button>
-          <button type="button" class="secondary" onClick={() => command('clikcode.configure')}>Settings</button>
+          <button type="button" class="secondary" onClick={() => command('clikcode.configure')}>Extension settings</button>
           <button type="button" class="link" onClick={() => command('clikcode.showLog')}>Show log</button>
         </div>
       </div>
@@ -62,7 +62,7 @@ function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (t
         <Logo size={44} />
         <h1>What should we build?</h1>
         <p class="muted">
-          {provider ? <>{provider.name}{model.model ? <> · {model.model.replace(/^[\w-]+\//, '')}</> : null}</> : 'ClikCode'}
+          {provider ? <>{provider.name}{model.model ? <> · {modelLabel(model.model, model.providerId, provider.name)?.replace(/^[\w-]+\//, '')}</> : null}</> : 'ClikCode'}
           {folder ? <> · <span title={homeRelative(model.workspace)}>{folder}</span></> : null}
         </p>
       </div>
@@ -100,21 +100,31 @@ function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (t
   );
 }
 
+const MAC = /Mac/i.test(navigator.platform);
+/** A keyboard shortcut as this platform writes it: `shortcut('N')` is Ctrl+N, or ⌘N on macOS. */
+export function shortcut(keys: string): string {
+  return MAC ? `⌘${keys.replace(/Shift\+/g, '⇧').replace(/Esc/g, 'Esc')}` : `Ctrl+${keys}`;
+}
+
 function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () => void; onScreen: (screen: WebviewScreen) => void }): JSX.Element {
   const item = (key: string, icon: string, label: string, run: () => void, hint?: string): ListRow => ({
     key, onSelect: () => { onClose(); run(); },
     render: () => <div class="row"><span class="row-check"><Icon name={icon} /></span><span class="row-main"><span class="row-label">{label}</span></span>{hint ? <span class="row-end muted">{hint}</span> : null}</div>,
   });
+  const heading = (title: string): ListRow => ({ key: `h:${title}`, heading: true, render: () => <>{title}</> });
   const rows: ListRow[] = [
+    heading('Chat'),
     item('accounts', 'account', 'Accounts & usage', () => onScreen('accounts')),
     item('settings', 'settings-gear', 'Chat settings', () => onScreen('settings')),
     ...(model.route === 'local' && model.harness
       ? [item('tools', 'plug', 'MCP servers & tools', () => post({ type: 'send', text: '/settings tools', id: uid() }))] : []),
-    item('tab', 'link-external', 'Open in new tab', () => command('clikcode.openInNewTab')),
+    item('commands', 'symbol-namespace', 'All commands', () => post({ type: 'send', text: '/help', id: uid() }), '/'),
+    heading('Open'),
+    item('tab', 'link-external', 'Open in new tab', () => command('clikcode.openInNewTab'), shortcut('Shift+Esc')),
     item('window', 'empty-window', 'Open in new window', () => command('clikcode.openInNewWindow')),
-    item('commands', 'symbol-namespace', 'All commands', () => post({ type: 'send', text: '/help', id: uid() })),
-    item('doctor', 'pulse', 'Check harnesses', () => post({ type: 'send', text: '/doctor', id: uid() })),
-    item('walkthrough', 'book', 'Getting started', () => command('workbench.action.openWalkthrough', 'clikcode.clikcode#clikcode.start', false)),
+    heading('Help'),
+    item('walkthrough', 'book', 'Get started', () => command('clikcode.openWalkthrough')),
+    item('doctor', 'pulse', 'Check providers', () => post({ type: 'send', text: '/doctor', id: uid() })),
     item('options', 'gear', 'Extension settings', () => command('clikcode.configure')),
     item('log', 'output', 'Show log', () => command('clikcode.showLog')),
   ];
@@ -133,9 +143,9 @@ function Header({ model, screen, onScreen }: { model: ChatModel; screen: Webview
       <button type="button" class="title-button" title="Conversations" onClick={() => onScreen(screen === 'history' ? 'chat' : 'history')}>
         <span class="title-text">{title}</span><Icon name="chevron-down" />
       </button>
-      {model.running ? <span class="running-dot" title="Working" aria-label="Working" /> : null}
+      {model.running ? <span class="running-indicator" title="Working…"><Icon name="loading" spin label="Working" /></span> : null}
       <span class="spacer" />
-      <IconButton id="new-chat" icon="add" label="New chat (Ctrl+N)" onClick={() => { onScreen('chat'); void request({ method: 'open', mode: 'new' }); }} />
+      <IconButton id="new-chat" icon="add" label={`New chat (${shortcut('N')})`} onClick={() => { onScreen('chat'); void request({ method: 'open', mode: 'new' }); }} />
       <IconButton id="history-button" icon="history" label="Conversations" active={screen === 'history'} onClick={() => onScreen(screen === 'history' ? 'chat' : 'history')} />
       <span data-popover-anchor><IconButton id="more-button" icon="ellipsis" label="More" active={more} onClick={() => setMore(!more)} /></span>
       {more ? <MoreMenu model={model} onClose={() => setMore(false)} onScreen={onScreen} /> : null}
@@ -314,7 +324,7 @@ function App(): JSX.Element {
 
   return (
     <div class="app" data-screen={screen}>
-      <Header model={model} screen={screen} onScreen={showScreen} />
+      {screen === 'chat' ? <Header model={model} screen={screen} onScreen={showScreen} /> : null}
       {screen === 'history' ? <HistoryScreen model={model} onBack={() => showScreen('chat')} onError={setError} /> : null}
       {screen === 'accounts' ? <AccountsScreen model={model} onBack={() => showScreen('chat')} onError={setError} /> : null}
       <main class="chat" hidden={screen !== 'chat'}>
