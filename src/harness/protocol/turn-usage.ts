@@ -377,3 +377,47 @@ export function nativeSelfReportFromValue(value: unknown): NativeSelfReport | un
   }
   return Object.keys(report).length ? report : undefined;
 }
+
+const COUNTED: ReadonlyArray<keyof TurnUsage> = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens', 'costUsd'];
+
+/** The SESSION's running totals an ACP update carries, when it carries any.
+ *
+ * ACP's own `usage_update.cost` is the session's cost so far. Two agents
+ * also put the session's token totals in the update's `_meta`: Vibe on its
+ * `usage_update` (`{promptTokens, completionTokens, cachedTokens,
+ * totalTokens}`), OpenHands on every update under a namespaced key
+ * (`{"openhands.dev/metrics": {input_tokens, output_tokens,
+ * cache_read_tokens, reasoning_tokens, cost}}`, its conversation's
+ * accumulated usage). Read by shape: the `_meta` itself or one object inside
+ * it that holds token counts. */
+export function acpSessionTotals(update: JsonRecord): TurnUsage | undefined {
+  const totals: TurnUsage = {};
+  const meta = asRecord(update._meta);
+  const candidates = meta ? [meta, ...Object.values(meta).flatMap((value) => asRecord(value) ? [asRecord(value)!] : [])] : [];
+  for (const candidate of candidates) {
+    const counts = countsOf(candidate);
+    if (counts.input === undefined && counts.output === undefined) continue;
+    Object.assign(totals, counts);
+    const cost = finiteNumber(candidate.cost);
+    if (cost !== undefined) totals.costUsd = cost;
+    break;
+  }
+  if (update.sessionUpdate === 'usage_update') {
+    const cost = asRecord(update.cost);
+    const currency = typeof cost?.currency === 'string' ? cost.currency.toUpperCase() : 'USD';
+    const amount = currency === 'USD' ? finiteNumber(cost?.amount) : undefined;
+    if (amount !== undefined) totals.costUsd = amount;
+  }
+  return Object.keys(totals).length ? totals : undefined;
+}
+
+/** This turn's share of a running total: what each count grew by since
+ * `base`, the total when the turn began. Only fields the total has. */
+export function turnShareOf(total: TurnUsage, base: TurnUsage): TurnUsage {
+  const share: TurnUsage = {};
+  for (const key of COUNTED) {
+    const value = total[key];
+    if (value !== undefined) (share as Record<string, number>)[key] = Math.max(0, (value as number) - ((base[key] as number | undefined) ?? 0));
+  }
+  return share;
+}
