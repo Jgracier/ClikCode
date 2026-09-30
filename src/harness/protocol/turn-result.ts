@@ -4,7 +4,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 import { parseNativeActivityEventsFromValue } from './activity-events.js';
 import { nativeSessionIdsFromValues } from './session-ids.js';
 import { claudeShaped, JsonRecord, asRecord, parseJsonDocument, parseJsonLines } from './json-lines.js';
-import { NativeTurnUsage, nativeTurnUsage } from './turn-usage.js';
+import { nativeTurnUsage, type TurnUsage } from './turn-usage.js';
 import { firstUsefulLine } from './stderr-line.js';
 
 export interface NativeTurnResult {
@@ -20,7 +20,7 @@ export interface NativeTurnResult {
   errorKind?: string;
   /** Latest `rate_limit_event` status, e.g. 'allowed' | 'allowed_warning' | 'rejected'. */
   rateLimitStatus?: string;
-  usage?: NativeTurnUsage;
+  usage?: TurnUsage;
   /** The turn ran on a route that keeps no history (see
    * `turn.statelessRoute`); its session must not be resumed as if it did. */
   nativeSessionStateless?: boolean;

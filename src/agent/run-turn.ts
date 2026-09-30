@@ -16,6 +16,7 @@ import { isTurnCancelled, turnCancelledError } from './cancellation.js';
 import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind, type ModelStepResult, type ModelToolCall, type TokenUsage } from './model-client.js';
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
 import type { ToolCategory } from '../harness/prompter.js';
+import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { emptyLedger, recordUsage } from './usage.js';
 import { resolveContextProfile } from './context-profile.js';
 import { readImageInputs } from './images.js';
@@ -219,7 +220,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   let stalledCall: ModelToolCall | undefined;
   let stepRetries = 0;
   let compactedForSize = false;
-  let lastContext: { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile: typeof profile.name } = { contextProfile: profile.name };
+  let lastContext: { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile: typeof profile.name; stopReason?: string } = { contextProfile: profile.name };
 
   // One prompt at a time: parallel reads, and parallel sub-agents, must not stack dialogs.
   // The mode as the user has it NOW (input.currentPermissionMode reads it back
@@ -417,7 +418,12 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
             input.onResponseDelta?.(text, 'append');
             input.onPhase?.('generating response');
           },
-          onReasoningDelta: (text) => { reasoning = `${reasoning}${text}`.slice(0, 4000); },
+          // The whole thought so far, under one id per step, so each delta
+          // replaces the last rather than adding a row.
+          onReasoningDelta: (text) => {
+            reasoning = `${reasoning}${text}`.slice(-4000);
+            if (reasoning.trim()) input.onActivity?.({ kind: 'thinking', label: thoughtLabel(reasoning), id: `${turnId}:reasoning:${steps}` });
+          },
         }), signal);
       } catch (error) {
         if (isTurnCancelled(error) || signal?.aborted) throw turnCancelledError();
@@ -461,7 +467,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         input.onResponseDelta?.(step.text.slice(streamedThisStep.length), 'append');
       }
       const stepText = step.text || streamedThisStep;
-      if (reasoning.trim()) input.onActivity?.({ kind: 'thinking', label: reasoning.replace(/\s+/g, ' ').trim().slice(0, 140) });
+      if (reasoning.trim()) input.onActivity?.({ kind: 'thinking', label: thoughtLabel(reasoning), id: `${turnId}:reasoning:${steps - 1}` });
 
       const calls = finalOnly ? [] : withUniqueIds(step.toolCalls);
       const produced: ConversationItem[] = [];
@@ -479,6 +485,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         contextTokens: estimateContextTokens(system, items, step.usage),
         contextWindow: contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW,
         ...(servedModel ? { servedModel } : {}),
+        stopReason: step.stopReason,
       };
       input.onUsage?.({ ...ledger.total, ...lastContext });
 

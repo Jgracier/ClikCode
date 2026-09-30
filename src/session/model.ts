@@ -3,6 +3,7 @@
 
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute } from '../harness/definition.js';
 import type { ShellNote } from '../commands/ai/shell-run.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 
 export interface HarnessSession {
   id: string;
@@ -67,7 +68,7 @@ export interface HarnessSession {
   nativeStartedAt?: string;
   workspace?: string;
   /** Latest token/context reading reported by the transport for this chat. */
-  lastUsage?: { at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; contextWindow?: number };
+  lastUsage?: TurnUsage & { at: string };
   /** What the harness said about itself on its own stream, rather than what it
    * was asked for. `model` is the model it actually ran -- a session set to
    * `automatic`, or one whose vendor silently substituted, showed the request

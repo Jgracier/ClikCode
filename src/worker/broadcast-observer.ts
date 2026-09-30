@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessSession } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
@@ -118,7 +119,7 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'plan', entries });
   }
 
-  setTurnUsage(usage: { inputTokens?: number; outputTokens?: number }): void {
+  setTurnUsage(usage: TurnUsage): void {
     this.broadcast({ type: 'usage', usage });
   }
 

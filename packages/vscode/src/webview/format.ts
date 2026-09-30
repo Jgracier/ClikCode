@@ -65,3 +65,7 @@ export function titleCase(value: string): string {
 /** A model id as people read it beside its provider: ClikCode's own rule,
  * bundled from its source so the panel and the terminal cannot disagree. */
 export { modelLabel } from '../../../../src/harness/model-label.js';
+
+/** The running turn's tokens, cache hits, context and cost: the terminal's
+ * own line, bundled from its source for the same reason. */
+export { formatTurnUsage } from '../../../../src/tui/render/usage-line.js';

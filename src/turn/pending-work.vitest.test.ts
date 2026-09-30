@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { parseNativeActivityEvent } from '../harness/protocol/activity-events';
+import { addTurnUsage } from '../harness/protocol/turn-usage';
 import {
-  addTurnUsage, createPendingWorkTracker, forgetToolPairingEvidence,
+  createPendingWorkTracker, forgetToolPairingEvidence,
   MAX_PENDING_CONTINUATIONS, mayContinuePendingWork,
   PENDING_WORK_BUDGET_MS, pendingContinuationDelayMs,
 } from './pending-work';
@@ -143,33 +144,40 @@ describe('pending work tracker', () => {
     // same account as part of one turn. Left alone it undercounted, and
     // usage-learning fits its learned limits from these invocation records.
     it('sums counts across attempts', () => {
-      expect(addTurnUsage({ inputTokens: 100, outputTokens: 10 }, { inputTokens: 250, outputTokens: 40 }))
-        .toEqual({ inputTokens: 350, outputTokens: 50 });
+      expect(addTurnUsage({ input: 100, output: 10 }, { input: 250, output: 40 }))
+        .toEqual({ input: 350, output: 50 });
     });
 
     it('treats contextWindow as a capacity, not a count', () => {
       // Two attempts do not add up to a bigger window.
-      expect(addTurnUsage({ inputTokens: 1, contextWindow: 200_000 }, { inputTokens: 2, contextWindow: 200_000 }))
-        .toEqual({ inputTokens: 3, contextWindow: 200_000 });
+      expect(addTurnUsage({ input: 1, contextWindow: 200_000 }, { input: 2, contextWindow: 200_000 }))
+        .toEqual({ input: 3, contextWindow: 200_000 });
+    });
+
+    it('takes the latest context position and stop reason, and sums cost', () => {
+      expect(addTurnUsage(
+        { input: 1, contextUsed: 900, stopReason: 'completed', costUsd: 0.25 },
+        { input: 2, contextUsed: 1_400, stopReason: 'max-tokens', costUsd: 0.5 },
+      )).toEqual({ input: 3, contextUsed: 1_400, stopReason: 'max-tokens', costUsd: 0.75 });
     });
 
     it('never invents an unreported count as a zero', () => {
-      expect(addTurnUsage({ inputTokens: 5 }, { outputTokens: 7 })).toEqual({ inputTokens: 5, outputTokens: 7 });
-      expect(addTurnUsage({ inputTokens: 5 }, {})).toEqual({ inputTokens: 5 });
+      expect(addTurnUsage({ input: 5 }, { output: 7 })).toEqual({ input: 5, output: 7 });
+      expect(addTurnUsage({ input: 5 }, {})).toEqual({ input: 5 });
     });
 
     it('passes either side through when the other is absent', () => {
-      expect(addTurnUsage(undefined, { inputTokens: 9 })).toEqual({ inputTokens: 9 });
-      expect(addTurnUsage({ inputTokens: 9 }, undefined)).toEqual({ inputTokens: 9 });
+      expect(addTurnUsage(undefined, { input: 9 })).toEqual({ input: 9 });
+      expect(addTurnUsage({ input: 9 }, undefined)).toEqual({ input: 9 });
       expect(addTurnUsage(undefined, undefined)).toBeUndefined();
     });
 
     it('accumulates over the whole continuation budget', () => {
-      let carried: { inputTokens?: number } | undefined;
+      let carried: { input?: number } | undefined;
       for (let attempt = 0; attempt < MAX_PENDING_CONTINUATIONS; attempt += 1) {
-        carried = addTurnUsage(carried, { inputTokens: 1_000 });
+        carried = addTurnUsage(carried, { input: 1_000 });
       }
-      expect(carried).toEqual({ inputTokens: 1_000 * MAX_PENDING_CONTINUATIONS });
+      expect(carried).toEqual({ input: 1_000 * MAX_PENDING_CONTINUATIONS });
     });
   });
 });

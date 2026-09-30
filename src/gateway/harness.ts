@@ -17,7 +17,8 @@ import { ModelClientError } from '../agent/models/gateway-client.js';
 import { runGatewayHarnessTurn } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
 import { hooksForWorkspace, toolHooksFrom } from '../agent/hooks.js';
-import type { GatewayHarnessTurnResult, ModelClient } from '../agent/model-client.js';
+import type { GatewayHarnessTurnResult, ModelClient, TokenUsage, UsageReport } from '../agent/model-client.js';
+import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -50,6 +51,24 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   /** Whatever supplies the model step: the Gateway or ClikCode Local, as
    * modelClientForSession (agent/models/for-session.ts) chose for the route. */
   modelClient: ModelClient;
+}
+
+/** The agent loop's usage in the shape every harness reports. Cost arrives
+ * in micro-dollars; the context estimate is the loop's own, taken the way it
+ * decides when to compact. */
+export function agentTurnUsage(report: TokenUsage & Partial<UsageReport>): TurnUsage {
+  const usage: TurnUsage = {};
+  if (report.input !== undefined) usage.input = report.input;
+  if (report.output !== undefined) usage.output = report.output;
+  if (report.cached !== undefined) usage.cacheRead = report.cached;
+  if (report.cacheWrite !== undefined) usage.cacheWrite = report.cacheWrite;
+  if (report.reasoning !== undefined) usage.reasoning = report.reasoning;
+  if (report.costMicroUsd !== undefined) usage.costUsd = report.costMicroUsd / 1_000_000;
+  if (report.contextWindow !== undefined) usage.contextWindow = report.contextWindow;
+  if (report.contextTokens !== undefined) usage.contextUsed = report.contextTokens;
+  const stopReason = turnStopReason(report.stopReason);
+  if (stopReason) usage.stopReason = stopReason;
+  return usage;
 }
 
 /** One turn of ClikCode's own coding agent, run on this machine. Named for
@@ -122,6 +141,13 @@ export async function runGatewayHarnessSessionTurn(
       prompter?.phase(phase);
     },
     onPlan: (entries) => prompter?.setPlan(entries),
+    // Per model step, as it happens: the loop's running total and where the
+    // context stands, in the shape every harness reports.
+    onUsage: (report) => {
+      const usage = agentTurnUsage(report);
+      input.onUsage?.(usage);
+      prompter?.setTurnUsage(usage);
+    },
     // No prompter means a headless run: no approver is attached, so what
     // would ask is refused -- and the model is told no one could be asked,
     // not that the user said no. Told "the user declined", a model stops to

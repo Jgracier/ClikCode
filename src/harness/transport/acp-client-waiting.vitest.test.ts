@@ -5,8 +5,9 @@ import { describe, expect, it } from 'vitest';
 import { createAcpSession } from './acp-client.js';
 import type { VendorBackgroundTurn } from './background-turn.js';
 import type { HarnessActivityEvent } from '../prompter.js';
+import type { TurnUsage } from '../protocol/turn-usage.js';
 
-type Step = { after?: number; update?: Record<string, unknown>; answer?: true; permission?: true };
+type Step = { after?: number; update?: Record<string, unknown>; answer?: true | Record<string, unknown>; permission?: true };
 
 /** `prompts[n]` is what the agent does for the nth session/prompt. */
 function agent(prompts: Step[][]): string {
@@ -19,7 +20,7 @@ function agent(prompts: Step[][]): string {
         if (step.after) await new Promise((r) => setTimeout(r, step.after));
         if (step.update) send({ method: 'session/update', params: { sessionId: 's1', update: step.update } });
         if (step.permission) send({ id: 500 + n, method: 'session/request_permission', params: { sessionId: 's1', toolCall: { toolCallId: 't', title: 'Run make', kind: 'execute' }, options: [{ optionId: 'y', kind: 'allow_once' }, { optionId: 'n', kind: 'reject_once' }] } });
-        if (step.answer) send({ id, result: { stopReason: 'end_turn' } });
+        if (step.answer) send({ id, result: step.answer === true ? { stopReason: 'end_turn' } : step.answer });
       }
     };
     process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
@@ -131,5 +132,39 @@ describe('updates an ACP agent sends between prompts', () => {
       expect(await turns[0]!.finished).toEqual({ text: '', ended: 'superseded' });
       expect(activity.map((event) => `${event.kind} ${event.id}`)).toEqual(['tool-done bg']);
     } finally { await session.close(); }
+  });
+});
+
+describe('what an ACP turn reports as it runs', () => {
+  const thought = (text: string) => ({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } });
+  const usageUpdate = (used: number, cost: number) => ({ sessionUpdate: 'usage_update', used, size: 200_000, cost: { amount: cost, currency: 'USD' } });
+
+  it('shows one growing thought per run of fragments, live usage, and why it stopped', async () => {
+    const session = createAcpSession();
+    const thoughts: Array<[string, string | undefined]> = [];
+    const usage: TurnUsage[] = [];
+    const observe = { onThought: (text: string, id?: string) => thoughts.push([text, id]), onUsage: (reading: TurnUsage) => usage.push(reading) };
+    try {
+      const prompts: Step[][] = [
+        // A session that had already cost $0.50 before this turn.
+        [{ update: usageUpdate(1_000, 0.5) }, { update: chunk('ok') }, { answer: true }],
+        [
+          { update: thought('Reading') }, { update: thought(' the file') }, { update: usageUpdate(12_000, 0.6) },
+          { update: thought(' first.') }, { update: chunk('Here') }, { update: thought('Now') }, { update: chunk(' it is') },
+          { answer: { stopReason: 'max_tokens', usage: { inputTokens: 900, outputTokens: 40, thoughtTokens: 12, cachedReadTokens: 300, totalTokens: 940 } } },
+        ],
+      ];
+      await session.runTurn(input(prompts, observe));
+      usage.length = 0;
+      const result = await session.runTurn(input(prompts, observe));
+      expect(result.text).toBe('Here it is');
+    } finally { await session.close(); }
+    // The fragments of a run are one thought; anything else ends it.
+    expect(thoughts).toEqual([
+      ['Reading', 'thought-1'], ['Reading the file', 'thought-1'], ['Reading the file first.', 'thought-1'], ['Now', 'thought-2'],
+    ]);
+    // `used`/`size` are the context, and the cost is this turn's share of the session's.
+    expect(usage[0]).toEqual({ contextUsed: 12_000, contextWindow: 200_000, costUsd: expect.closeTo(0.1, 6) });
+    expect(usage.at(-1)).toEqual({ input: 900, output: 40, reasoning: 12, cacheRead: 300, totalTokens: 940, stopReason: 'max-tokens' });
   });
 });

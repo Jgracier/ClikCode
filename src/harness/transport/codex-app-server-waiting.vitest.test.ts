@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { createCodexSession } from './codex-app-server.js';
 import type { VendorBackgroundTurn } from './background-turn.js';
 import type { HarnessActivityEvent } from '../prompter.js';
+import type { TurnUsage } from '../protocol/turn-usage.js';
 
 type Step = { after?: number; send?: Record<string, unknown>; approve?: string };
 
@@ -184,5 +185,61 @@ describe('work a Codex turn leaves running', () => {
     await codex.runTurn(input());
     await codex.close();
     expect(await turns[0]!.finished).toEqual({ text: '', ended: 'closed' });
+  });
+});
+
+describe('what a Codex turn reports as it runs', () => {
+  const notify = (method: string, params: Record<string, unknown>) => ({ send: { method, params: { threadId: 'T', turnId: '{{turn}}', ...params } } });
+  const breakdown = (input: number, cached: number, output: number) => ({
+    totalTokens: input + output, inputTokens: input, cachedInputTokens: cached, cacheWriteInputTokens: 0, outputTokens: output, reasoningOutputTokens: 0,
+  });
+  const tokenUsage = (total: ReturnType<typeof breakdown>, last: ReturnType<typeof breakdown>) =>
+    notify('thread/tokenUsage/updated', { tokenUsage: { total, last, modelContextWindow: 258_000 } });
+  const diff = [
+    'diff --git a/src/a.ts b/src/a.ts', '--- a/src/a.ts', '+++ b/src/a.ts', '@@ -1 +1 @@', '-old line', '+new line',
+  ].join('\n');
+
+  it('counts the turn, not the thread, and reports thoughts, notices and progress', async () => {
+    const codex = session([[
+      // A resumed thread: 5,000 tokens were spent before this turn began.
+      tokenUsage(breakdown(6_000, 4_000, 100), breakdown(1_000, 800, 100)),
+      notify('item/reasoning/summaryTextDelta', { itemId: 'r1', delta: 'Plan', summaryIndex: 0 }),
+      notify('item/reasoning/summaryTextDelta', { itemId: 'r1', delta: ' the fix', summaryIndex: 0 }),
+      notify('model/rerouted', { fromModel: 'gpt-5.5', toModel: 'gpt-5.5-mini', reason: 'highRiskCyberActivity' }),
+      notify('thread/compacted', {}),
+      notify('item/completed', { item: { type: 'contextCompaction', id: 'c1' } }),
+      notify('item/started', { item: { type: 'mcpToolCall', id: 'm1', server: 'docs', tool: 'search', status: 'inProgress', arguments: {} } }),
+      notify('item/mcpToolCall/progress', { itemId: 'm1', message: 'fetching page 2' }),
+      notify('item/completed', { item: { type: 'mcpToolCall', id: 'm1', server: 'docs', tool: 'search', status: 'completed', arguments: {} } }),
+      notify('turn/diff/updated', { diff }),
+      tokenUsage(breakdown(7_500, 5_000, 250), breakdown(1_500, 1_000, 150)),
+      // Sent again beside a rate-limit update: the same reading, not more work.
+      tokenUsage(breakdown(7_500, 5_000, 250), breakdown(1_500, 1_000, 150)),
+      { send: agentMessage('T', '{{turn}}', 'Fixed.') },
+      { send: turnCompleted('T', '{{turn}}') },
+    ]]);
+    const activity: HarnessActivityEvent[] = [];
+    const thoughts: Array<[string, string | undefined]> = [];
+    const notices: string[] = [];
+    const usage: TurnUsage[] = [];
+    try {
+      await codex.runTurn(input(activity, {
+        onThought: (text: string, id?: string) => thoughts.push([text, id]),
+        onNotice: (message: string) => notices.push(message),
+        onUsage: (reading: TurnUsage) => usage.push(reading),
+      }));
+    } finally { await codex.close(); }
+    expect(usage[0]).toEqual({ input: 1_000, cacheRead: 800, cacheWrite: 0, output: 100, reasoning: 0, totalTokens: 1_100, contextWindow: 258_000, contextUsed: 1_100 });
+    expect(usage[1]).toMatchObject({ input: 2_500, cacheRead: 1_800, output: 250, totalTokens: 2_750, contextUsed: 1_650 });
+    expect(usage[2]).toEqual(usage[1]);
+    expect(usage.at(-1)).toEqual({ stopReason: 'completed' });
+    expect(thoughts).toEqual([['Plan', 'r1'], ['Plan the fix', 'r1']]);
+    expect(notices).toEqual([
+      'Codex moved this turn from gpt-5.5 to gpt-5.5-mini (highRiskCyberActivity)',
+      'Codex compacted the conversation to fit its context window',
+    ]);
+    expect(activity.find((event) => event.id === 'm1' && event.output)).toMatchObject({ kind: 'tool-start', label: 'docs › search', output: ['fetching page 2'] });
+    // The aggregated turn diff adds no row: each file change shows its own.
+    expect(activity.filter((event) => !event.id || !['m1'].includes(event.id))).toEqual([]);
   });
 });

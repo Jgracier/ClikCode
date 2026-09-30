@@ -103,7 +103,7 @@ export interface ChatModel {
   turnUserIndex?: number;
   traces: TurnTrace[];
   plan: Array<{ content: string; status?: string }>;
-  turnUsage?: { inputTokens?: number; outputTokens?: number };
+  turnUsage?: Extract<WorkerEvent, { type: 'usage' }>['usage'];
   approvals: Approval[];
   busy?: string;
   /** A message typed during the turn and what became of it. */
@@ -251,6 +251,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return {
         ...model, running: true, turnUserIndex: model.messages.length,
         live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
+        turnUsage: undefined,
       };
     case 'waiting-stop':
       return { ...endTurn(model), pendingPrompt: undefined, approvals: [], submissions: [] };

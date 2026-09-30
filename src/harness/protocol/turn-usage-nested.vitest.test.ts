@@ -28,22 +28,19 @@ describe('usage inside a nested terminal envelope', () => {
       },
     });
     expect(usage).toMatchObject({
-      inputTokens: 13826, outputTokens: 38, totalTokens: 13864,
-      cacheReadTokens: 0, thinkingTokens: 0, numTurns: 1,
+      input: 13826, output: 38, totalTokens: 13864, cacheRead: 0, reasoning: 0,
     });
-    // duration_seconds -> ms, because every other harness reports milliseconds
-    expect(usage?.durationMs).toBeCloseTo(2683.84, 0);
   });
 
   it('still reads the flat shape every other harness uses', () => {
     expect(nativeUsageFromValue({
       type: 'result', usage: { input_tokens: 10, output_tokens: 2 }, total_cost_usd: 0.5,
-    })).toMatchObject({ inputTokens: 10, outputTokens: 2, totalCostUsd: 0.5 });
+    })).toMatchObject({ input: 10, output: 2, costUsd: 0.5 });
   });
 
   it('counts reasoning tokens, which are billed and quota-consuming', () => {
     expect(nativeUsageFromValue({ type: 'result', usage: { reasoning_tokens: 4096 } }))
-      .toMatchObject({ thinkingTokens: 4096 });
+      .toMatchObject({ reasoning: 4096 });
   });
 
   it('does not treat a mid-turn record as the terminal one', () => {

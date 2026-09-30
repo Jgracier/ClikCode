@@ -20,6 +20,7 @@
  * genuinely differs.
  */
 import type { HarnessActivityEvent } from '../prompter.js';
+import type { TurnUsage } from '../protocol/turn-usage.js';
 
 /** One step of an agent's plan. Codex publishes `{content, status}`, ACP adds
  * a `priority`; the UI reads content and status and ignores the rest. */
@@ -50,15 +51,18 @@ export interface HarnessTurnObserver {
   /** Tools starting, finishing and failing, and thinking markers. */
   onActivity?: (event: HarnessActivityEvent) => void;
   /** Reasoning as it streams, where the harness publishes it separately from
-   * the answer. */
-  onThought?: (text: string) => void;
+   * the answer: the WHOLE thought so far for reasoning item `id`, each call
+   * replacing the last one for that id. Without an id, one standalone thought. */
+  onThought?: (text: string, id?: string) => void;
+  /** Something about the turn the user should be told beside the answer: the
+   * vendor substituting another model, compacting the conversation. */
+  onNotice?: (message: string) => void;
   /** The agent's plan, republished whole each time it changes. */
   onPlan?: (entries: readonly HarnessPlanEntry[], explanation?: string) => void;
-  /** Token usage, as the harness published it. Deliberately `unknown`: one
-   * transport reports a raw payload and another a shape its own parser has
-   * already normalised, and the caller normalises either way. Narrowing this
-   * would only push a cast to every call site. */
-  onUsage?: (usage: unknown) => void;
+  /** The turn's usage so far. Each transport normalises what its harness
+   * publishes before calling this; a later call's fields replace earlier ones
+   * (the readings are cumulative within one attempt). */
+  onUsage?: (usage: TurnUsage) => void;
   /** A tool or command needing a yes or no before it runs. */
   onApproval?: (title: string, detail?: string) => Promise<boolean>;
   /** Coarse progress ("generating response", "retrying"), for the waiting line. */

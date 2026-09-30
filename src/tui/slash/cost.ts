@@ -14,15 +14,15 @@ export function contextUsageText(session: HarnessSession): string {
   const usage = session.lastUsage;
   const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : sessionHarness(session)?.displayName ?? 'The provider';
   if (!usage) return `${who} has not reported token usage for this conversation yet. It appears here after a turn on a harness that publishes usage events.`;
-  const used = usage.totalTokens ?? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || undefined);
+  const used = usage.contextUsed ?? usage.totalTokens ?? ((usage.input ?? 0) + (usage.output ?? 0) || undefined);
   const window = usage.contextWindow;
   return [
     `Context usage (as of ${usage.at})`,
     window && used !== undefined ? `  window     ${formatTokens(used)} / ${formatTokens(window)} tokens (${Math.min(100, Math.round((used / window) * 100))}%)` : `  window     not reported by ${who}`,
-    `  input      ${formatTokens(usage.inputTokens)}`,
-    `  cached     ${formatTokens(usage.cacheReadTokens)}`,
-    `  output     ${formatTokens(usage.outputTokens)}`,
-    `  total      ${formatTokens(used)}`,
+    `  input      ${formatTokens(usage.input)}`,
+    `  cached     ${formatTokens(usage.cacheRead)}`,
+    `  output     ${formatTokens(usage.output)}`,
+    `  total      ${formatTokens(usage.totalTokens ?? used)}`,
     `  messages   ${sessionTranscriptMessages(session).length}`,
   ].join('\n');
 }

@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
-import { nativeResponseUpdate } from './adapters';
+import { createStreamState, nativeResponseUpdate } from './adapters';
 import { StreamingTitle } from '../../session/title';
 
 const harnessFor = (command: string) => allLocalHarnesses().find((item) => item.command === command)!;
@@ -21,6 +21,7 @@ const harnessFor = (command: string) => allLocalHarnesses().find((item) => item.
  *  again as a completed message. */
 function streamOneBlock(command: string, session: string, text: string): string[] {
   const harness = harnessFor(command);
+  const turn = createStreamState();
   const lines = [
     JSON.stringify({ type: 'system', subtype: 'init', session_id: session }),
     ...text.split(' ').map((word, index) => JSON.stringify({
@@ -30,7 +31,7 @@ function streamOneBlock(command: string, session: string, text: string): string[
     JSON.stringify({ type: 'assistant', session_id: session, message: { role: 'assistant', content: [{ type: 'text', text }] } }),
   ];
   return lines.flatMap((line) => {
-    const update = nativeResponseUpdate(harness, line);
+    const update = nativeResponseUpdate(harness, line, turn);
     return update?.text ? [update.text] : [];
   });
 }
@@ -57,18 +58,20 @@ describe('every harness that speaks claude-stream-json', () => {
     // The other half of the sawDeltas guard: without deltas the completed
     // message is the only carrier, and dropping it would print nothing.
     const harness = harnessFor('grok');
-    nativeResponseUpdate(harness, JSON.stringify({ type: 'system', subtype: 'init', session_id: 'no-deltas' }));
+    const turn = createStreamState();
+    nativeResponseUpdate(harness, JSON.stringify({ type: 'system', subtype: 'init', session_id: 'no-deltas' }), turn);
     const update = nativeResponseUpdate(harness, JSON.stringify({
       type: 'assistant', session_id: 'no-deltas',
       message: { role: 'assistant', content: [{ type: 'text', text: 'only the whole thing' }] },
-    }));
+    }), turn);
     expect(update?.text).toBe('only the whole thing');
   });
 
   it('keeps a paragraph break between blocks split by a tool call', () => {
     const harness = harnessFor('grok');
     const session = 'two-blocks';
-    const emit = (record: unknown) => nativeResponseUpdate(harness, JSON.stringify(record))?.text ?? '';
+    const turn = createStreamState();
+    const emit = (record: unknown) => nativeResponseUpdate(harness, JSON.stringify(record), turn)?.text ?? '';
     emit({ type: 'system', subtype: 'init', session_id: session });
     let out = emit({ type: 'stream_event', session_id: session, event: { type: 'content_block_delta', delta: { text: 'Let me check.' } } });
     emit({ type: 'stream_event', session_id: session, event: { type: 'content_block_start', content_block: { type: 'text' } } });
@@ -92,9 +95,10 @@ describe('every harness that speaks claude-stream-json', () => {
     const harness = harnessFor('grok');
     const title = new StreamingTitle();
     const session = 'three-symptoms';
+    const turn = createStreamState();
     let shown = '';
     const feed = (record: unknown) => {
-      const update = nativeResponseUpdate(harness, JSON.stringify(record));
+      const update = nativeResponseUpdate(harness, JSON.stringify(record), turn);
       if (!update?.text) return;
       const visible = title.push(update.text, update.mode);
       if (visible !== undefined) shown += visible;

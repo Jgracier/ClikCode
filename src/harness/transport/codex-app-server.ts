@@ -4,8 +4,10 @@ import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
-import { commandOutcome, fileChangeActivity } from '../protocol/activity-events.js';
+import { commandOutcome, fileChangeActivity, thoughtLabel } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, toolLabel } from '../protocol/tools.js';
+import { asRecord } from '../protocol/json-lines.js';
+import { countsOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
 import { createTurnWatchdog, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 
@@ -124,10 +126,46 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
   }
   if (type === 'webSearch') return { kind: completed ? completedKind : 'tool-start', label: formatToolRow('web_search', typeof item.query === 'string' ? item.query : undefined, 'fetch'), category: 'fetch', ...(id ? { id } : {}) };
   if (type === 'reasoning' && completed) {
-    const summary = Array.isArray(item.summary) ? item.summary.filter((part): part is string => typeof part === 'string').join(' ') : '';
-    if (summary) return { kind: 'thinking', label: summary.replace(/\s+/g, ' ').slice(0, 140) };
+    // The item's id, so the finished summary replaces the thought that
+    // streamed for it rather than adding a second one.
+    const summary = Array.isArray(item.summary) ? item.summary.filter((part): part is string => typeof part === 'string').join('\n\n') : '';
+    if (summary) return { kind: 'thinking', label: thoughtLabel(summary), ...(id ? { id } : {}) };
   }
   return undefined;
+}
+
+type Counts = Omit<TurnUsage, 'contextWindow' | 'contextUsed' | 'stopReason' | 'costUsd'>;
+const COUNTED = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens'] as const;
+
+function subtractCounts(from: Counts, less: Counts): Counts {
+  const result: Counts = {};
+  for (const key of COUNTED) if (from[key] !== undefined) result[key] = Math.max(0, from[key]! - (less[key] ?? 0));
+  return result;
+}
+
+/** One turn's usage from Codex's thread-level reading
+ * (`thread/tokenUsage/updated`: `{total, last, modelContextWindow}`).
+ *
+ * `total` is the whole THREAD's, so a resumed conversation's first turn
+ * reported everything the thread had ever used as that turn's usage; `last`
+ * is the latest model CALL's, one of the several a turn with tools makes. The
+ * turn is what the total grew by since the turn began: the total at the
+ * turn's first reading less that reading's own call. That also holds when a
+ * reading is sent twice, as Codex does alongside rate-limit updates. `start`
+ * is the baseline the first reading set, handed back for the next one. */
+export function codexTurnUsage(reading: JsonObject, start?: Counts): { usage: TurnUsage; start: Counts } | undefined {
+  const total = asRecord(reading.total) ?? asRecord(reading.total_token_usage);
+  if (!total) return undefined;
+  const last = asRecord(reading.last) ?? asRecord(reading.last_token_usage);
+  const totalCounts = countsOf(total);
+  const lastCounts = countsOf(last);
+  const baseline = start ?? subtractCounts(totalCounts, lastCounts);
+  const usage: TurnUsage = subtractCounts(totalCounts, baseline);
+  const window = reading.modelContextWindow ?? reading.model_context_window;
+  if (typeof window === 'number' && window > 0) usage.contextWindow = window;
+  // The latest call read the whole conversation and wrote on top of it.
+  if (lastCounts.totalTokens) usage.contextUsed = lastCounts.totalTokens;
+  return { usage, start: baseline };
 }
 
 export function codexPermissionSettings(mode: AiHarnessPermissionMode): {
@@ -212,6 +250,12 @@ interface Stream {
   lastError?: JsonObject;
   items: Map<string, JsonObject>;
   output: Map<string, { text: string; emittedAt: number }>;
+  /** Reasoning streamed so far, per reasoning item (and per raw/summary). */
+  thoughts: Map<string, string>;
+  /** The thread's usage when this turn began (codexTurnUsage). */
+  usageStart?: Counts;
+  /** Compaction is announced twice (an item, and a deprecated notification). */
+  compacted?: boolean;
   watchdog?: TurnWatchdog;
 }
 
@@ -270,7 +314,7 @@ class CodexSessionImpl implements CodexSession {
     completion.catch(() => undefined);
     const turn: ActiveTurn = {
       input, observer: input, done: false, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
-      items: new Map(), output: new Map(), complete, fail,
+      items: new Map(), output: new Map(), thoughts: new Map(), complete, fail,
     };
     this.turn = turn;
     const onAbort = (): void => this.cancelTurn(turn);
@@ -376,7 +420,7 @@ class CodexSessionImpl implements CodexSession {
     const channel = new BackgroundTurnChannel('codex-app-server', reason);
     const run: BackgroundRun = {
       channel, observer: channel.observer, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
-      items: new Map([...(items ?? [])].filter(([id]) => this.pendingWork.has(`item:${id}`))), output: new Map(),
+      items: new Map([...(items ?? [])].filter(([id]) => this.pendingWork.has(`item:${id}`))), output: new Map(), thoughts: new Map(),
       ...(vendorTurnId ? { vendorTurnId } : {}),
     };
     run.watchdog = this.watchdog(() => {
@@ -623,8 +667,14 @@ class CodexSessionImpl implements CodexSession {
       const item = (params.item as JsonObject) ?? {};
       if (typeof item.id === 'string') {
         if (method === 'item/started') target.items.set(item.id, item);
-        else { target.items.delete(item.id); target.output.delete(item.id); }
+        else {
+          target.items.delete(item.id);
+          target.output.delete(item.id);
+          target.thoughts.delete(item.id);
+          target.thoughts.delete(`${item.id}:raw`);
+        }
       }
+      if (item.type === 'contextCompaction' && method === 'item/completed') this.compacted(target);
       if (item.type === 'agentMessage' && method === 'item/started') {
         if (target.streamedMessage) observer.onResponseDelta?.('\n\n');
         target.streamedMessage = '';
@@ -647,12 +697,36 @@ class CodexSessionImpl implements CodexSession {
     } else if (/^item\/(commandExecution|fileChange)\/outputDelta$/.test(method) && typeof params.delta === 'string') {
       this.outputDelta(target, String(params.itemId ?? ''), params.delta);
     } else if (/^item\/reasoning\/(summaryTextDelta|textDelta)$/.test(method) && typeof params.delta === 'string') {
-      observer.onThought?.(params.delta);
+      // Each delta is a fragment; the thought is all of them, per item.
+      const id = `${String(params.itemId ?? '')}${method.endsWith('/textDelta') ? ':raw' : ''}`;
+      const thought = `${target.thoughts.get(id) ?? ''}${params.delta}`;
+      target.thoughts.set(id, thought);
+      observer.onThought?.(thought, id);
+    } else if (method === 'item/reasoning/summaryPartAdded') {
+      // A new section of the same summary.
+      const id = String(params.itemId ?? '');
+      const thought = target.thoughts.get(id);
+      if (thought) target.thoughts.set(id, `${thought}\n\n`);
+    } else if (method === 'item/mcpToolCall/progress' && typeof params.message === 'string') {
+      this.progress(target, String(params.itemId ?? ''), [params.message]);
+    } else if (method === 'turn/diff/updated') {
+      // Deliberately not shown: it is the turn's changes aggregated, and every
+      // fileChange item already shows its own paths and diff on its own row.
+    } else if (method === 'model/rerouted') {
+      // A different model is answering than the one asked for.
+      const reason = typeof params.reason === 'string' ? ` (${params.reason})` : '';
+      observer.onNotice?.(`Codex moved this turn from ${String(params.fromModel ?? 'the chosen model')} to ${String(params.toModel ?? 'another model')}${reason}`);
+    } else if (method === 'thread/compacted') {
+      this.compacted(target);
     } else if (method === 'turn/plan/updated') {
       observer.onPlan?.(codexPlanEntries(params), typeof params.explanation === 'string' ? params.explanation : undefined);
     } else if (/token_?usage|token_count/i.test(method)) {
-      const usage = params.tokenUsage ?? params.token_usage ?? params.usage ?? params.info ?? params;
-      if (usage && typeof usage === 'object') observer.onUsage?.(usage as Record<string, unknown>);
+      const reading = asRecord(params.tokenUsage) ?? asRecord(params.token_usage) ?? asRecord(params.info);
+      const turnUsage = reading ? codexTurnUsage(reading, target.usageStart) : undefined;
+      if (turnUsage) {
+        target.usageStart = turnUsage.start;
+        observer.onUsage?.(turnUsage.usage);
+      }
     } else if (method === 'account/rateLimits/updated') {
       observer.onRateLimits?.(params.rateLimits);
     } else if (method === 'turn/completed') {
@@ -671,6 +745,8 @@ class CodexSessionImpl implements CodexSession {
         return turn.complete(Object.assign(new Error(String(error?.message ?? 'Codex turn failed')), { codexTurnFailed: true }));
       }
       if (completedTurn.status === 'interrupted') return turn.complete(cancelledError());
+      const stopReason = turnStopReason(completedTurn.status);
+      if (stopReason) observer.onUsage?.({ stopReason });
       turn.complete();
     } else if (method === 'error') {
       const error = (params.error as JsonObject) ?? {};
@@ -689,15 +765,28 @@ class CodexSessionImpl implements CodexSession {
     const now = Date.now();
     if (now - entry.emittedAt < OUTPUT_EMIT_INTERVAL_MS) return;
     entry.emittedAt = now;
+    this.progress(target, itemId, outputTail(entry.text));
+  }
+
+  /** What a running item has to show so far, on its own row. */
+  private progress(target: Stream, itemId: string, output: string[]): void {
+    if (!itemId) return;
     const item = target.items.get(itemId);
     const activity = item ? codexActivityForItem(item, false) : undefined;
-    const label = activity?.label ?? 'command';
     target.sawActivity = true;
     target.observer.onActivity?.({
-      kind: 'tool-start', label, id: itemId, output: outputTail(entry.text),
+      kind: 'tool-start', label: activity?.label ?? 'command', id: itemId, output,
       ...(activity?.category ? { category: activity.category } : {}),
       ...(activity?.agent ? { agent: activity.agent } : {}),
     });
+  }
+
+  /** The conversation was compacted to fit the model's window: the model now
+   * works from a summary of what came before. Said once per turn. */
+  private compacted(target: Stream): void {
+    if (target.compacted) return;
+    target.compacted = true;
+    target.observer.onNotice?.('Codex compacted the conversation to fit its context window');
   }
 }
 

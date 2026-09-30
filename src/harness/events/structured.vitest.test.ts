@@ -7,6 +7,7 @@
  * transport, which made it the largest gap in what the UI could rely on. */
 import { describe, expect, it } from 'vitest';
 import { reportStructuredLine } from './structured';
+import { createStreamState } from './adapters';
 import type { HarnessTurnObserver } from './turn-observer';
 import type { AiLocalHarnessDefinition } from '../types';
 
@@ -31,14 +32,14 @@ describe('a structured CLI line', () => {
   it('reports an answer through the observer', () => {
     const { calls, observer } = record();
     const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'hello' }] } });
-    const outcome = reportStructuredLine(harness, line, observer);
+    const outcome = reportStructuredLine(harness, line, observer, createStreamState());
     expect(calls, 'the answer never reached the observer').toContain('text:hello');
     expect(outcome.live, 'an answer should confirm the session is live').toBe(true);
   });
 
   it('says nothing for a line it does not recognise', () => {
     const { calls, observer } = record();
-    const outcome = reportStructuredLine(harness, 'not json at all', observer);
+    const outcome = reportStructuredLine(harness, 'not json at all', observer, createStreamState());
     expect(calls).toEqual([]);
     expect(outcome.live).toBe(false);
   });
@@ -55,12 +56,12 @@ describe('a structured CLI line', () => {
   it('says when the vendor closed its turn, and how', () => {
     const { observer } = record();
     // Captured from claude 2.1.281, Amp and Antigravity (trimmed).
-    expect(reportStructuredLine(harness, '{"type":"result","subtype":"success","is_error":false,"result":"started"}', observer).result).toBe('success');
-    expect(reportStructuredLine(harness, '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["402"]}', observer).result).toBe('error');
+    expect(reportStructuredLine(harness, '{"type":"result","subtype":"success","is_error":false,"result":"started"}', observer, createStreamState()).result).toBe('success');
+    expect(reportStructuredLine(harness, '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["402"]}', observer, createStreamState()).result).toBe('error');
     const agy = { command: 'antigravity', parser: 'antigravity' } as unknown as AiLocalHarnessDefinition;
-    expect(reportStructuredLine(agy, '{"event":"result","result":{"status":"SUCCESS","response":"started"}}', observer).result).toBe('success');
-    expect(reportStructuredLine(agy, '{"event":"result","result":{"status":"ERROR","error":"API error"}}', observer).result).toBe('error');
-    expect(reportStructuredLine(harness, '{"type":"assistant","message":{"content":[]}}', observer).result).toBeUndefined();
+    expect(reportStructuredLine(agy, '{"event":"result","result":{"status":"SUCCESS","response":"started"}}', observer, createStreamState()).result).toBe('success');
+    expect(reportStructuredLine(agy, '{"event":"result","result":{"status":"ERROR","error":"API error"}}', observer, createStreamState()).result).toBe('error');
+    expect(reportStructuredLine(harness, '{"type":"assistant","message":{"content":[]}}', observer, createStreamState()).result).toBeUndefined();
   });
 });
 
@@ -74,8 +75,8 @@ describe('a structured CLI\'s todo list', () => {
       message: { content: [{ type: 'tool_use', id: 't', name: 'TodoWrite', input: { todos: [{ content: 'step', status: 'in_progress' }] } }] },
     });
     const harness = { command: 'claude', parser: 'claude-stream-json', turn: { output: 'json-lines' } } as never;
-    reportStructuredLine(harness, line(null), observer);
-    reportStructuredLine(harness, line('toolu_parent'), observer);
+    reportStructuredLine(harness, line(null), observer, createStreamState());
+    reportStructuredLine(harness, line('toolu_parent'), observer, createStreamState());
     expect(plans).toEqual([[{ content: 'step', status: 'in_progress' }]]);
   });
 });
