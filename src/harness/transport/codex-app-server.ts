@@ -1,6 +1,7 @@
 import { activityOutput } from '../protocol/activity-events.js';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawnPortable } from './spawn.js';
+import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
@@ -239,8 +240,6 @@ function codexPlanEntries(params: JsonObject): HarnessPlanEntry[] {
 const INTERRUPT_SETTLE_MS = 2000;
 const OUTPUT_EMIT_INTERVAL_MS = 150;
 const OUTPUT_BUFFER_LIMIT = 4000;
-const cancelledError = (): Error => Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-const isCancelled = (error: unknown): boolean => (error as NodeJS.ErrnoException | undefined)?.code === 'ERR_TURN_CANCELLED';
 
 /** Notifications that carry the vendor's work (and so can open a background
  * turn). Status, usage and server bookkeeping never do. */
@@ -341,7 +340,7 @@ class CodexSessionImpl implements CodexSession {
     let succeeded = false;
     try {
       if (this.settling) await this.settling;
-      if (input.signal?.aborted) throw cancelledError();
+      if (input.signal?.aborted) throw turnCancelledError();
       const flow = this.flow(turn, completion);
       flow.catch(() => undefined);
       const result = await Promise.race([flow, failure]);
@@ -349,7 +348,7 @@ class CodexSessionImpl implements CodexSession {
       return result;
     } catch (error) {
       const failureError = error instanceof Error ? error : new Error(String(error));
-      if (!isCancelled(failureError)) {
+      if (!isTurnCancelled(failureError)) {
         // Prefer the server's structured error over the transport's message.
         Object.assign(failureError, codexErrorKind(turn.lastError ?? failureError));
         // A failed *turn* leaves a healthy server; anything else is unknown.
@@ -403,14 +402,14 @@ class CodexSessionImpl implements CodexSession {
       // Let Codex unwind and persist the interrupted turn: up to two seconds
       // for turn/completed before the process is terminated.
       this.settling = new Promise<void>((resolve) => {
-        const timer = setTimeout(() => { this.turnCompletedWaiter = undefined; if (this.live === live) this.dropLive(cancelledError()); resolve(); }, INTERRUPT_SETTLE_MS);
+        const timer = setTimeout(() => { this.turnCompletedWaiter = undefined; if (this.live === live) this.dropLive(turnCancelledError()); resolve(); }, INTERRUPT_SETTLE_MS);
         this.turnCompletedWaiter = () => { clearTimeout(timer); this.turnCompletedWaiter = undefined; resolve(); };
       }).finally(() => { this.settling = undefined; });
       live.peer.request('turn/interrupt', { threadId: turn.threadId, turnId: turn.turnId }, { timeoutMs: INTERRUPT_SETTLE_MS }).catch(() => undefined);
     } else if (live) {
-      this.dropLive(cancelledError());
+      this.dropLive(turnCancelledError());
     }
-    turn.fail(cancelledError());
+    turn.fail(turnCancelledError());
   }
 
   private dropLive(error: Error): void {
@@ -521,7 +520,7 @@ class CodexSessionImpl implements CodexSession {
     const live = this.ensureLive(input, JSON.stringify([settings, overrides]));
     const { peer } = live;
     const setup = { timeoutMs: input.setupTimeoutMs ?? JSONRPC_SETUP_TIMEOUT_MS };
-    const stillRunning = (): void => { if (turn.done) throw cancelledError(); };
+    const stillRunning = (): void => { if (turn.done) throw turnCancelledError(); };
     if (!live.initialized) {
       await peer.request('initialize', { clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' }, capabilities: { experimentalApi: false, requestAttestation: false } }, setup);
       peer.notify('initialized');
@@ -776,7 +775,7 @@ class CodexSessionImpl implements CodexSession {
         if (error) turn.lastError = error;
         return turn.complete(Object.assign(new Error(String(error?.message ?? 'Codex turn failed')), { codexTurnFailed: true }));
       }
-      if (completedTurn.status === 'interrupted') return turn.complete(cancelledError());
+      if (completedTurn.status === 'interrupted') return turn.complete(turnCancelledError());
       const stopReason = turnStopReason(completedTurn.status);
       if (stopReason) observer.onUsage?.({ stopReason });
       turn.complete();

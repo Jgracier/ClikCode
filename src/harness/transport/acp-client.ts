@@ -16,6 +16,7 @@ import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { activityOutput, editDiffFromInput } from '../protocol/activity-events.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
 import { spawnPortable } from './spawn.js';
+import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
 import { createTurnWatchdog, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
@@ -345,8 +346,6 @@ async function acpImageBlock(path: string): Promise<Json> {
   return { type: 'image', mimeType: IMAGE_MIME[extname(path).toLowerCase()] ?? 'image/png', data: data.toString('base64') };
 }
 
-const cancelledError = (): Error => Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
-const isCancelled = (error: unknown): boolean => (error as NodeJS.ErrnoException | undefined)?.code === 'ERR_TURN_CANCELLED';
 
 interface LiveAgent {
   peer: JsonRpcPeer;
@@ -469,7 +468,7 @@ class AcpSessionImpl implements AcpSession {
     input.signal?.addEventListener('abort', onAbort, { once: true });
     try {
       if (this.settling) await this.settling;
-      if (input.signal?.aborted) throw cancelledError();
+      if (input.signal?.aborted) throw turnCancelledError();
       const flow = this.flow(turn, argv);
       flow.catch(() => undefined);
       return await Promise.race([flow, failure]);
@@ -477,7 +476,7 @@ class AcpSessionImpl implements AcpSession {
       const failureError = error instanceof Error ? error : new Error(String(error));
       // After a failure the child's protocol state is unknown. Drop it; the
       // next turn respawns and resumes. Cancellation settles on its own path.
-      if (!isCancelled(failureError)) this.dropLive(failureError);
+      if (!isTurnCancelled(failureError)) this.dropLive(failureError);
       throw failureError;
     } finally {
       turn.done = true;
@@ -521,14 +520,14 @@ class AcpSessionImpl implements AcpSession {
       live.peer.notify('session/cancel', { sessionId: turn.sessionId });
       const prompt = turn.prompt;
       this.settling = new Promise<void>((resolve) => {
-        const timer = setTimeout(() => { if (this.live === live) this.dropLive(cancelledError()); resolve(); }, CANCEL_SETTLE_MS);
+        const timer = setTimeout(() => { if (this.live === live) this.dropLive(turnCancelledError()); resolve(); }, CANCEL_SETTLE_MS);
         void prompt.then(() => undefined, () => undefined).then(() => { clearTimeout(timer); resolve(); });
       }).finally(() => { this.settling = undefined; });
     } else if (live) {
       // Mid-setup there is nothing to cancel politely.
-      this.dropLive(cancelledError());
+      this.dropLive(turnCancelledError());
     }
-    turn.fail(cancelledError());
+    turn.fail(turnCancelledError());
   }
 
   private dropLive(error: Error): void {
@@ -614,7 +613,7 @@ class AcpSessionImpl implements AcpSession {
     const live = this.ensureLive(input, argv);
     const { peer } = live;
     const setup = { timeoutMs: input.setupTimeoutMs ?? JSONRPC_SETUP_TIMEOUT_MS };
-    const stillRunning = (): void => { if (turn.done) throw cancelledError(); };
+    const stillRunning = (): void => { if (turn.done) throw turnCancelledError(); };
     if (!live.capabilities) {
       const initialized = await peer.request('initialize', {
         protocolVersion: 1,
@@ -748,7 +747,7 @@ class AcpSessionImpl implements AcpSession {
     // idle watchdog above is its only ceiling.
     turn.prompt = requestWithAuth('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
     const completed = await turn.prompt as Json;
-    if (completed.stopReason === 'cancelled') throw cancelledError();
+    if (completed.stopReason === 'cancelled') throw turnCancelledError();
     // `end_turn`, or the reason the agent stopped short (max_tokens,
     // max_turn_requests, refusal), beside whatever usage it counted.
     // Gemini's ACP answers with `_meta.quota.token_count` {input_tokens,

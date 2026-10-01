@@ -8,6 +8,7 @@ import { capHeadTail } from '../security.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, looksBinary, resolveForRead, throwIfAborted, walkFiles } from './fs-helpers.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
+import { turnCancelledError } from '../cancellation.js';
 
 interface GrepArgs {
   pattern: string;
@@ -71,7 +72,7 @@ async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolConte
     child.once('error', reject);
     child.once('close', (code) => {
       ctx.signal?.removeEventListener('abort', abort);
-      if (ctx.signal?.aborted) return reject(Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' }));
+      if (ctx.signal?.aborted) return reject(turnCancelledError());
       if (code === 2 && !stdout) return resolve({ output: `Search failed: ${stderr.trim() || 'invalid pattern'}`, isError: true });
       const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
       const relativeRoot = path.relative(ctx.cwd, root);

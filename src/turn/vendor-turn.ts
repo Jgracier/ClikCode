@@ -45,6 +45,7 @@ import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
@@ -322,7 +323,7 @@ export async function sendVendorTurn(input: {
         });
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError') throw error;
+      if (isTurnCancelled(error) || (error as Error).name === 'AbortError') throw error;
       if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') throw error;
       caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
     }
@@ -488,7 +489,7 @@ export async function sendVendorTurn(input: {
       pendingContinuations += 1;
       prompter?.phase('waiting on background command');
       await new Promise((resolve) => setTimeout(resolve, waited));
-      if (signal?.aborted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+      if (signal?.aborted) throw turnCancelledError();
       prompter?.activity(chalk.dim('continuing after background command'));
       carriedPendingUsage = addTurnUsage(carriedPendingUsage, turnUsage);
       turnText = PENDING_CONTINUATION_PROMPT;
