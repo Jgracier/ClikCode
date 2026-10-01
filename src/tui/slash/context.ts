@@ -4,7 +4,7 @@
 import { isClikCodeAgent } from '../../session/route.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
-import { localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { sessionNativeCommands } from '../../turn/vendor-process.js';
 import { allLocalHarnesses, harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { compareProviders } from '../../session/options.js';
@@ -14,6 +14,13 @@ import { discoverCustomCommands, type CustomCommand } from '../../session/custom
 /** Shared slash-command grammar for a future TTY client and the headless CLI. */
 export function sessionHarness(session: HarnessSession | undefined): AiLocalHarnessDefinition | undefined {
   return !isClikCodeAgent(session) && session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+}
+
+/** The harness a session runs on, or failing that its provider's. Unlike
+ * sessionHarness, ClikCode's own agent is not left out. */
+export function sessionOrProviderHarness(session: Pick<HarnessSession, 'nativeHarness' | 'provider'>): AiLocalHarnessDefinition | undefined {
+  return session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
+    : session.provider ? localHarnessForProvider(session.provider) : undefined;
 }
 
 export function customCommandsFor(session: HarnessSession, harness: AiLocalHarnessDefinition | undefined): CustomCommand[] {
