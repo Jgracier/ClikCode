@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyEvent, chatModelLabel, emptyModel, type ChatModel } from '../../src/model';
 import { formatOutput } from '../../src/format';
-import { diffSides, stripAnsi } from '../../src/text';
+import { stripAnsi } from '../../src/text';
 import { renderMarkdown } from '../../src/webview/markdown';
 import { questionWithSelection } from '../../src/editor-context';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
@@ -112,10 +112,6 @@ describe('output formatting', () => {
 describe('text', () => {
   it('strips colour, OSC links and control characters', () => {
     expect(stripAnsi('\u001b[31mred\u001b[0m \u001b]8;;http://x\u0007link\u001b]8;;\u0007\u0007')).toBe('red link');
-  });
-  it('splits unified and two-sided diffs into before and after', () => {
-    expect(diffSides(['--- a/x', '+++ b/x', '@@ -1,2 +1,2 @@', ' same', '-old', '+new'])).toEqual({ before: 'same\nold', after: 'same\nnew' });
-    expect(diffSides({ removed: ['a'], added: ['b', 'c'] })).toEqual({ before: 'a', after: 'b\nc' });
   });
 });
 

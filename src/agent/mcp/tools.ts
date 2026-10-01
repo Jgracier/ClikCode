@@ -98,7 +98,7 @@ export function mcpToolDefinition(server: string, info: McpToolInfo, name: strin
     class: info.annotations?.readOnlyHint === true ? 'read' : 'exec',
     mcp: { server, tool: info.name, ...(core ? { core: true as const } : {}) },
     label: (args) => formatToolRow(`mcp__${server}__${info.name}`, argumentSummary(args)),
-    preview: async (args) => {
+    describe: async (args) => {
       const json = JSON.stringify(args, null, 2);
       return [`MCP server: ${server}`, `tool: ${info.name}`, 'arguments:',
         json.length > MAX_PREVIEW_ARGS ? `${json.slice(0, MAX_PREVIEW_ARGS)}\n… truncated` : json].join('\n');

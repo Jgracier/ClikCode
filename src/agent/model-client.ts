@@ -144,7 +144,7 @@ export interface GatewayHarnessTurnInput {
   /** Answering 'always' means "and remember this": the caller offered `rule`
    *  and the agent persists it before proceeding. Returning a plain boolean
    *  stays valid, so an approver that cannot remember anything is unchanged. */
-  onApproval?: (title: string, detail?: string, rule?: string) => Promise<boolean | 'always'>;
+  onApproval?: (title: string, detail?: string, rule?: string, preview?: import('../tui/render/approval-block.js').ApprovalPreview) => Promise<boolean | 'always'>;
   onSteerReady?: (handler?: (text: string) => Promise<void>) => void;
   onUsage?: (usage: UsageReport) => void;
   onPlan?: (entries: PlanEntry[]) => void;

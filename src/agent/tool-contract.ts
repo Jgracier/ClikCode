@@ -51,7 +51,12 @@ export interface ToolDefinition<A = Record<string, unknown>> {
   /** Filesystem paths this call touches; drives confinement and deny checks. */
   paths?(args: A): string[];
   /** Human-readable preview (diff) shown in the approval prompt. Must not mutate. */
-  preview?(args: A, ctx: ToolContext): Promise<string | undefined>;
+  /** What the call would change, for its approval: the same file hunks its
+   * result reports, with the real path and line numbers. */
+  preview?(args: A, ctx: ToolContext): Promise<import('./line-diff.js').FileDiff[] | undefined>;
+  /** What the call would do, in words, for its approval (an MCP call's
+   * server, tool and arguments). */
+  describe?(args: A): Promise<string>;
   run(args: A, ctx: ToolContext): Promise<ToolRunResult>;
 }
 

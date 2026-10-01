@@ -590,7 +590,8 @@ class CodexSessionImpl implements CodexSession {
       // Codex is waiting on the user, not wedged.
       const resume = stream.watchdog?.pause();
       try {
-        const accepted = await stream.observer.onApproval?.(fileChange ? 'Approve file changes' : 'Approve command', codexApprovalDetail(params, item)) === true;
+        const diff = fileChange ? fileChangeActivity(params.changes ?? params.fileChanges ?? item?.changes).diff : undefined;
+        const accepted = await stream.observer.onApproval?.(fileChange ? 'Approve file changes' : 'Approve command', codexApprovalDetail(params, item), diff?.length ? { diff } : undefined) === true;
         return turn?.done ? answer(false, true) : answer(accepted);
       } finally {
         resume?.();

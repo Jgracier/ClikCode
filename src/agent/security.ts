@@ -195,8 +195,6 @@ export const OUTPUT_CAPS = {
   /** Lines of output attached to an activity event. */
   eventOutputLines: 8,
   eventLineChars: 240,
-  /** Approval detail strings. */
-  approvalDetailChars: 6000,
   readFileLines: 2000,
   readFileLineChars: 2000,
   webFetchBytes: 10 * 1024 * 1024,

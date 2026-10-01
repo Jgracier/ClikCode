@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { homedir, tmpdir } from 'node:os';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
@@ -13,7 +13,7 @@ import { answeredApproval, applyEvent, emptyModel, localNote, typedDuringTurn, t
 import type { IdeAccounts, IdeChatSettings, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
-import { applyHunks, diffInDetail, diffSides } from './text';
+import { applyHunks, fileHunks } from './text';
 import { readFile } from 'node:fs/promises';
 import { BridgeQuestion, DiffDocuments, fileNameIn, runInTerminal } from './ui';
 import type { FromWebview, ToWebview, WebviewRequest } from './webview-protocol';
@@ -447,7 +447,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   private onWorkerEvent(event: WorkerEvent): void {
     if (event.type === 'approval-request') {
-      if (event.preview?.diff || diffInDetail(event.detail)) {
+      if (event.preview?.diff?.length) {
         this.previews.set(event.id, event);
         if (vscode.workspace.getConfiguration('clikcode').get<boolean>('openDiffOnApproval', true)) void this.viewDiff(event.id);
       }
@@ -473,22 +473,18 @@ export class ClikCodeController implements vscode.Disposable {
   async viewDiff(id: string): Promise<void> {
     const request = this.previews.get(id);
     if (!request) return;
-    const diff = request.preview?.diff;
-    if (diff) {
-      const { before, after } = diffSides(diff);
-      await this.host.diffs.show(id, request.title, before, after, fileNameIn(request.title, request.detail));
-      return;
-    }
-    // ClikCode's own agent says what it will change in the approval's text:
-    // applied to the file as it is on disk, that is the whole file before and
-    // after; when a hunk does not apply cleanly, the hunks themselves.
-    const described = diffInDetail(request.detail);
-    if (!described) return;
-    const current = described.path ? await readFile(described.path, 'utf8').catch(() => undefined) : undefined;
-    const whole = current !== undefined && !described.truncated ? applyHunks(current, described.hunks) : undefined;
-    const before = whole !== undefined ? current! : described.hunks.map((hunk) => hunk.before.join('\n')).join('\n⋮\n');
-    const after = whole ?? described.hunks.map((hunk) => hunk.after.join('\n')).join('\n⋮\n');
-    await this.host.diffs.show(id, request.title, before, after, described.path?.split(/[\\/]/).pop() ?? fileNameIn(request.title, request.detail));
+    // The (first) file it would change. Applied to the file as it is on
+    // disk, its hunks give the whole file before and after; when one does not
+    // apply cleanly, or the diff was cut short, the hunks themselves.
+    const file = request.preview?.diff?.[0];
+    if (!file) return;
+    const hunks = fileHunks(file);
+    const target = file.path ? (isAbsolute(file.path) ? file.path : join(this.model.workspace ?? this.workspaceFolder() ?? '', file.path)) : undefined;
+    const current = target ? await readFile(target, 'utf8').catch(() => undefined) : undefined;
+    const whole = current !== undefined && !file.omitted ? applyHunks(current, hunks) : undefined;
+    const before = whole !== undefined ? current! : hunks.map((hunk) => hunk.before.join('\n')).join('\n⋮\n');
+    const after = whole ?? hunks.map((hunk) => hunk.after.join('\n')).join('\n⋮\n');
+    await this.host.diffs.show(id, request.title, before, after, file.path?.split(/[\\/]/).pop() ?? fileNameIn(request.title, request.detail));
   }
 
   // ---- what the user does --------------------------------------------------------

@@ -125,12 +125,6 @@ function acpThoughtDelta(update: Json): string | undefined {
     ? update.content.text : undefined;
 }
 
-function cappedLines(text: string, cap: number): string[] {
-  if (!text) return [];
-  const lines = text.replace(/\r?\n$/, '').split(/\r?\n/);
-  return lines.length > cap ? [...lines.slice(0, cap), `... ${lines.length - cap} more lines`] : lines;
-}
-
 /** The tool call a sub-agent's update belongs to: claude-agent-acp's
  * `_meta.claudeCode.parentToolUseId` (stamped on the sub-agent's tool calls,
  * prose and thinking). */
@@ -244,13 +238,6 @@ export function acpApprovalDetail(toolCall: Json | undefined): string | undefine
   const content: Json[] = Array.isArray(toolCall.content) ? toolCall.content : [];
   for (const entry of content) if (entry?.type === 'diff' && typeof entry.path === 'string') paths.add(entry.path);
   for (const path of paths) lines.push(path);
-  for (const entry of content) {
-    if (entry?.type !== 'diff') continue;
-    const removed = cappedLines(String(entry.oldText ?? ''), 4).map((line) => `- ${line}`);
-    const added = cappedLines(String(entry.newText ?? ''), 6).map((line) => `+ ${line}`);
-    lines.push(...removed, ...added);
-    break;
-  }
   if (!lines.length) return undefined;
   return lines.length > DETAIL_LINE_CAP ? [...lines.slice(0, DETAIL_LINE_CAP), '...'].join('\n') : lines.join('\n');
 }
@@ -978,7 +965,8 @@ class AcpSessionImpl implements AcpSession {
       // The agent is waiting on the user, not wedged.
       const resume = stream.watchdog?.pause();
       try {
-        accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail) === true;
+        const diff = acpActivityEvent({ ...params.toolCall, sessionUpdate: 'tool_call' })?.diff;
+        accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail, diff?.length ? { diff } : undefined) === true;
       } finally {
         resume?.();
       }

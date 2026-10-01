@@ -1,4 +1,4 @@
-import { eventDiff, renderDiffPreview } from '../line-diff.js';
+import { eventDiff } from '../line-diff.js';
 import { defineTool } from '../tool-contract.js';
 import { commitEdit, prepareEdits, type EditOperation } from './edit-file.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
@@ -26,7 +26,7 @@ export const multiEditTool = defineTool<MultiEditArgs>({
   paths: (args) => [args.path],
   async preview(args, ctx) {
     const prepared = await prepareEdits(args.path, args.edits, ctx, false);
-    return renderDiffPreview(prepared.before, prepared.after);
+    return eventDiff(prepared.before, prepared.after, { path: prepared.real, numbered: true });
   },
   async run(args, ctx) {
     // All edits are computed in memory first; the single write below is the

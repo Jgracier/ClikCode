@@ -332,14 +332,17 @@ describe('runGatewayHarnessTurn', () => {
 
   it('asks before writes in ask mode, reports refusals to the model, and denies with no approver', async () => {
     const write = { name: 'write_file', args: { path: 'new.txt', content: 'x\n' } };
-    const prompts: { title: string; detail?: string }[] = [];
+    const prompts: { title: string; detail?: string; added?: string[] }[] = [];
     const declined = harness([{ toolCalls: [write] }, { text: 'ok' }], {
-      permissionMode: 'ask', onApproval: async (title, detail) => { prompts.push({ title, detail }); return false; },
+      permissionMode: 'ask', onApproval: async (title, detail, _rule, preview) => {
+        prompts.push({ title, detail, added: preview?.diff?.[0]?.lines.filter((line) => line.kind === 'added').map((line) => line.text) });
+        return false;
+      },
     });
     await runGatewayHarnessTurn(declined.input);
     expect(prompts).toHaveLength(1);
     expect(prompts[0].detail).toContain(path.join(cwd, 'new.txt'));
-    expect(prompts[0].detail).toContain('+ x');
+    expect(prompts[0].added).toEqual(['x']);
     await expect(fs.access(path.join(cwd, 'new.txt'))).rejects.toThrow();
     const refusal = declined.client.requests[1].items.at(-1);
     expect(refusal?.type === 'tool_result' && refusal.output).toMatch(/user declined/);

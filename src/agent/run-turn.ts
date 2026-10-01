@@ -316,7 +316,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         if (now.decision === 'allow') return true;
         const prompt = await buildApprovalPrompt(tool, call.args, ctx, verdict.reason);
         input.onPhase?.('waiting for approval');
-        return input.onApproval!(prompt.title, prompt.detail, rule);
+        return input.onApproval!(prompt.title, prompt.detail, rule, prompt.diff ? { diff: prompt.diff } : undefined);
       });
       const approved = await abortable(ask, signal);
       if (!approved) return finish({ output: 'The user declined this action. Do not retry it; ask what they would prefer or take a different approach.', isError: true });

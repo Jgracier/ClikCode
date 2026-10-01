@@ -68,7 +68,7 @@ export interface HarnessTurnObserver {
    * Code's rate-limit windows, over its stream or ACP). */
   onQuotaReading?: (reading: UsageReading) => void;
   /** A tool or command needing a yes or no before it runs. */
-  onApproval?: (title: string, detail?: string) => Promise<boolean>;
+  onApproval?: (title: string, detail?: string, preview?: import('../../tui/render/approval-block.js').ApprovalPreview) => Promise<boolean>;
   /** Coarse progress ("generating response", "retrying"), for the waiting line. */
   onPhase?: (phase: string) => void;
   /** A model step of a multi-step agent turn is starting: the next response
