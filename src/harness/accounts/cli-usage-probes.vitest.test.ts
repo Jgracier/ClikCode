@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ampUsageLabel, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint } from './cli-usage-probes.js';
+import { ampUsageLabel, commandCodeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
 
 const NOW = Date.parse('2026-09-30T04:42:49.300Z');
 
@@ -72,5 +72,36 @@ describe('Cursor plan usage', () => {
   });
   it('has nothing to say without plan usage', () => {
     expect(cursorQuotaReading({ displayMessage: 'x' })).toBeUndefined();
+  });
+});
+
+describe('Kiro /usage over ACP', () => {
+  // `_kiro.dev/commands/execute` usage, kiro-cli 2.23.1, KIRO FREE.
+  const data = {
+    planName: 'KIRO FREE', billingCycleReset: '2026-11-01', overagesEnabled: false,
+    usageBreakdowns: [{ resourceType: 'CREDIT', displayName: 'Credits', used: 0.14, limit: 50, percentage: 0.28, hasLimit: true }],
+  };
+  it('reads plan credits as a monthly window resetting with the billing cycle', () => {
+    const reading = kiroQuotaReading(data);
+    expect(reading?.label).toBe('Monthly 100% left');
+    expect(reading?.windows[0]).toEqual({ name: 'monthly', usedPct: 0.28, resetsAt: '2026-11-01T00:00:00.000Z' });
+  });
+  it('has nothing to say without a credit limit', () => {
+    expect(kiroQuotaReading({ usageBreakdowns: [] })).toBeUndefined();
+  });
+});
+
+describe('Command Code /alpha/billing/credits', () => {
+  it('reads the plan windows when it has them', () => {
+    const reading = commandCodeQuotaReading({
+      credits: { monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 },
+      windowLimits: { limited: true, fiveHour: { used: 30, cap: 120, resetAt: '2026-10-01T03:00:00Z' }, weekly: { used: 600, cap: 1000, resetAt: '2026-10-05T00:00:00Z' } },
+    });
+    expect(reading?.label).toBe('5h 75% left · Weekly 40% left');
+  });
+  it('falls back to the credit balance, and says nothing for an empty free account', () => {
+    expect(commandCodeQuotaReading({ credits: { monthlyCredits: 10, purchasedCredits: 2.5, freeCredits: 0 }, windowLimits: { limited: false } })?.label).toBe('12.50 credits left');
+    // The real answer for this machine's free account, 2026-09-30.
+    expect(commandCodeQuotaReading({ credits: { belowThreshold: false, creditThreshold: 0, monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: false, exceeded: null, fiveHour: null, weekly: null } })).toBeUndefined();
   });
 });
