@@ -62,7 +62,7 @@ describe('chat model', () => {
   it('settles the thought once answer text arrives', () => {
     const model = turn(activity({ kind: 'thinking', id: 'r1', label: 'Considering' }), worker({ type: 'delta', text: 'Answer', mode: 'append' }));
     expect(model.live?.thought).toBeUndefined();
-    expect(model.live?.reasoning).toEqual(['Considering']);
+    expect(model.live?.reasoning).toEqual([{ text: 'Considering', offset: 0, ms: expect.any(Number) }]);
   });
 
   it('puts a note from the running turn after its prompt, not before it', () => {
@@ -78,6 +78,30 @@ describe('chat model', () => {
     })], run([{ type: 'session', session: session() }]));
     expect(joined.live?.startedAt).toBe(Date.parse(startedAt));
     expect(joined.live?.steers).toEqual([{ text: 'also this', offset: 2 }]);
+  });
+
+  it("counts a sub-agent's tool uses on its parent row, and keeps the count when it finishes", () => {
+    const working = turn(
+      activity({ kind: 'tool-start', id: 'agent', label: 'Task explore', agent: true }),
+      activity({ kind: 'tool-start', id: 'c1', parentId: 'agent', label: 'grep TODO' }),
+      activity({ kind: 'tool-done', id: 'c1', parentId: 'agent', label: 'grep TODO' }),
+      activity({ kind: 'tool-start', id: 'c2', parentId: 'agent', label: 'Read(a.ts)' }),
+      activity({ kind: 'tool-done', id: 'agent', label: 'Task explore' }),
+    );
+    expect(working.live!.activities[0]).toMatchObject({ kind: 'tool-done', childTools: 2 });
+  });
+
+  it('keeps where each call and thought came, for the finished turn', () => {
+    const model = turn(
+      activity({ kind: 'thinking', id: 'r1', label: 'Plan it' }),
+      worker({ type: 'delta', text: 'Looking. ', mode: 'append' }),
+      activity({ kind: 'tool-start', id: 'b', label: 'Bash(npm test)', category: 'run' }),
+      worker({ type: 'waiting-stop' }),
+    );
+    const trace = model.traces.at(-1)!;
+    expect(trace.text).toBe('Looking. ');
+    expect(trace.reasoning?.[0]?.offset).toBe(0);
+    expect(trace.activities[0]?.offset).toBe(9);
   });
 
   it('keeps a finished plan with its turn, and a new turn starts without one', () => {
@@ -102,7 +126,7 @@ describe('chat model', () => {
     );
     expect(model.live!.thought?.text).toBe('Reading the config');
     const next = run([activity({ kind: 'thinking', id: 'r2', label: 'Now the tests' }), worker({ type: 'waiting-stop' })], model);
-    expect(next.traces.at(-1)?.reasoning).toEqual(['Reading the config', 'Now the tests']);
+    expect(next.traces.at(-1)?.reasoning?.map((entry) => entry.text)).toEqual(['Reading the config', 'Now the tests']);
   });
 
   it('says nothing when an idle worker retires, but reports a cut-off turn', () => {

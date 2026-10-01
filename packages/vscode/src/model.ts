@@ -11,7 +11,7 @@
  */
 import { composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { asFileDiffs } from '../../../src/agent/line-diff';
-import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
+import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, withChildTool, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
@@ -22,7 +22,7 @@ import type { Remedy } from './compat';
  * event fields (cleaned of escapes), merged frame by frame with the CLI's
  * rules (activity-view.ts). */
 export interface Activity extends Pick<HarnessActivityEvent,
-  'id' | 'kind' | 'label' | 'category' | 'agent' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode'> {
+  'id' | 'kind' | 'label' | 'category' | 'agent' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode' | 'childTools'> {
   /** The call's id, or its position for a harness that sends none. */
   key: string;
   /** Each file the call changed, as hunks (see src/agent/line-diff.ts). */
@@ -61,22 +61,33 @@ export interface TurnTrace {
   /** Index in `messages` of the prompt the turn answered. */
   userIndex: number;
   activities: Activity[];
-  /** The turn's reasoning, one entry per thought, oldest first. */
-  reasoning?: string[];
+  /** The turn's reasoning, one entry per thought, where it happened. */
+  reasoning?: ThoughtEntry[];
+  /** Messages sent into the turn while it ran, where they landed. */
+  steers?: LiveTurn['steers'];
+  /** The answer as it streamed: rows and thoughts are placed in the saved
+   * answer only where it still reads the same up to their place. */
+  text: string;
   /** The plan the turn worked through, as it stood at the end. */
   plan?: ChatModel['plan'];
   startedAt: number;
   endedAt: number;
 }
 
+/** One settled thought: what it said, where in the answer it came, and for
+ * how long it went on ("Thought for 4s", as Claude Code and Codex say). */
+export interface ThoughtEntry { text: string; offset: number; ms: number }
+
 export interface LiveTurn {
   text: string;
   waitingLabel: string;
   phase?: string;
-  /** The thought being had now, accumulated as the terminal does. */
+  /** The thought being had now, accumulated as the terminal does, and where
+   * and when it began. */
   thought?: Thought;
-  /** Earlier thoughts of this turn, kept for its trace. */
-  reasoning: string[];
+  thoughtStart?: { offset: number; at: number };
+  /** Earlier thoughts of this turn, each where it happened. */
+  reasoning: ThoughtEntry[];
   activities: Activity[];
   /** Rows made so far: the key of a call that came without an id. */
   seen: number;
@@ -279,9 +290,10 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
     if (index < 0) return live;
     const parent = live.activities[index]!;
     const child = childActivity(parent.child, event);
-    if (child === parent.child) return live;
+    const counted = withChildTool(parent, event);
+    if (child === parent.child && counted === parent) return live;
     const activities = [...live.activities];
-    activities[index] = { ...parent, ...(child ? { child } : { child: undefined }) };
+    activities[index] = { ...counted, ...(child ? { child } : { child: undefined }) };
     return { ...live, activities };
   }
   for (let index = live.activities.length - 1; index >= 0; index -= 1) {
@@ -306,16 +318,21 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
  * reasoning. */
 function withThought(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
   if (event.parentId) return live;
-  if (event.kind === 'tool-start') return live.thought ? { ...live, thought: undefined, reasoning: settle(live.reasoning, live.thought) } : live;
+  if (event.kind === 'tool-start') return settled(live);
   if (event.kind !== 'thinking') return live;
   const next = appendThought(live.thought, stripAnsi(event.label), event.id);
   if (!next || next === live.thought) return live;
-  const replaced = live.thought && live.thought.id !== next.id;
-  return { ...live, thought: next, ...(replaced ? { reasoning: settle(live.reasoning, live.thought!) } : {}) };
+  const fresh = !live.thought || live.thought.id !== next.id;
+  const before = fresh ? settled(live) : live;
+  return { ...before, thought: next, ...(fresh ? { thoughtStart: { offset: live.text.length, at: Date.now() } } : {}) };
 }
 
-function settle(reasoning: string[], thought: Thought): string[] {
-  return [...reasoning, thought.text];
+/** The thought being had, settled in its place: a tool started, the answer
+ * began, or a new reasoning item took over. */
+function settled(live: LiveTurn): LiveTurn {
+  if (!live.thought) return live;
+  const start = live.thoughtStart ?? { offset: live.text.length, at: Date.now() };
+  return { ...live, thought: undefined, thoughtStart: undefined, reasoning: [...live.reasoning, { text: live.thought.text, offset: start.offset, ms: Date.now() - start.at }] };
 }
 
 /** The status line follows the work, as in the terminal: the newest open
@@ -344,14 +361,15 @@ function rebaseOffsets<T extends { offset?: number }>(items: T[], previous: stri
 
 /** A turn's reasoning for its trace: every thought, the newest kept when
  * there is more than a trace holds. */
-function turnReasoning(live: LiveTurn | undefined): string[] | undefined {
+function turnReasoning(live: LiveTurn | undefined): ThoughtEntry[] | undefined {
   if (!live) return undefined;
-  const all = live.thought ? settle(live.reasoning, live.thought) : live.reasoning;
-  const kept: string[] = [];
+  const all = settled(live).reasoning;
+  const kept: ThoughtEntry[] = [];
   let room = MAX_REASONING;
   for (let index = all.length - 1; index >= 0 && room > 0; index -= 1) {
-    const text = all[index]!.length > room ? `…${all[index]!.slice(-room)}` : all[index]!;
-    kept.unshift(text);
+    const entry = all[index]!;
+    const text = entry.text.length > room ? `…${entry.text.slice(-room)}` : entry.text;
+    kept.unshift({ ...entry, text });
     room -= text.length;
   }
   return kept.length ? kept : undefined;
@@ -372,7 +390,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const base = next.live ?? freshLive('', startedAt);
       const replayed = event.live.activities
         ? event.live.activities.reduce<LiveTurn>((live, item) => applyActivity(live, item.event, item.responseOffset),
-          { ...base, activities: [], reasoning: [], thought: undefined, seen: 0, openTools: [], toolPhase: undefined })
+          { ...base, activities: [], reasoning: [], thought: undefined, thoughtStart: undefined, seen: 0, openTools: [], toolPhase: undefined })
         : base;
       // Steers are the turn's own record, so every window shows them.
       const steers = (event.session.pendingTurn?.steers ?? []).map((steer) => ({ text: steer.text, offset: steer.responseOffset ?? event.live!.text.length }));
@@ -399,9 +417,12 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const live = model.live ?? freshLive('thinking');
       const text = event.mode === 'replace' ? event.text : live.text + event.text;
       // The thought led to this text; once the answer arrives it is settled.
-      const thought = event.text && live.thought ? { thought: undefined, reasoning: settle(live.reasoning, live.thought) } : {};
-      const placed = event.mode === 'replace' ? { activities: rebaseOffsets(live.activities, live.text, text), steers: rebaseOffsets(live.steers, live.text, text) } : {};
-      return { ...model, live: { ...live, ...thought, ...placed, text, lastEventAt: Date.now() } };
+      const after = event.text ? settled(live) : live;
+      const placed = event.mode === 'replace' ? {
+        activities: rebaseOffsets(after.activities, live.text, text), steers: rebaseOffsets(after.steers, live.text, text),
+        reasoning: rebaseOffsets(after.reasoning, live.text, text),
+      } : {};
+      return { ...model, live: { ...after, ...placed, text, lastEventAt: Date.now() } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
@@ -459,6 +480,7 @@ function endTurn(model: ChatModel): ChatModel {
   const traces = (activities.length || reasoning || plan) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
       userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan } : {}),
+      ...(model.live?.steers.length ? { steers: model.live.steers } : {}), text: model.live?.text ?? '',
       startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
     }].slice(-MAX_TRACES)
     : model.traces;
