@@ -99,12 +99,14 @@ describe('shared ACP adapter contract', () => {
     })).toMatchObject({ diff: { removed: [], added: ['a', 'b'] } });
     const big = (tag: string) => Array.from({ length: 500 }, (_, index) => `${tag} ${index}`).join('\n');
     const event = acpActivityEvent({ sessionUpdate: 'tool_call', status: 'pending', content: [{ type: 'diff', oldText: big('old'), newText: big('new') }] })!;
-    expect(event.diff!.added).toHaveLength(201);
-    expect(event.diff!.removed).toHaveLength(201);
-    expect(event.diff!.added.at(-1)).toBe('… 300 more lines');
+    // The file's diff is bounded and counts the rest; no marker line.
+    const file = event.diff!.files![0]!;
+    expect(file).toMatchObject({ additions: 500, removals: 500 });
+    expect(file.lines.length + file.omitted!).toBe(1000);
+    expect(event.diff!.added.some((line) => line.includes('more lines'))).toBe(false);
     // Only what changed: the lines both texts share are not repeated.
     expect(acpActivityEvent({ sessionUpdate: 'tool_call', status: 'pending', content: [{ type: 'diff', oldText: 'a\nb\nc', newText: 'a\nB\nc' }] })!.diff)
-      .toEqual({ removed: ['b'], added: ['B'] });
+      .toMatchObject({ removed: ['b'], added: ['B'] });
   });
 
   it('carries bounded tool output', () => {

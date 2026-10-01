@@ -151,7 +151,7 @@ export const notebookEditTool = defineTool<NotebookEditArgs>({
     await rememberWritten(resolved.real, ctx);
     return {
       output: `${edited.summary} ${displayPath(resolved.absolute, ctx)} now has ${edited.notebook.cells.length} cells.`,
-      diff: eventDiff(renderNotebook(notebook), renderNotebook(edited.notebook)),
+      diff: eventDiff(renderNotebook(notebook), renderNotebook(edited.notebook), undefined, { numbered: true }),
     };
   },
 });

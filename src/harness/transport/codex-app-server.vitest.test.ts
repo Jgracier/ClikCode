@@ -20,7 +20,13 @@ describe('Codex app-server protocol mapping', () => {
     expect(codexActivityForItem({
       type: 'fileChange', id: 'fc', status: 'completed',
       changes: [{ path: 'src/a.ts', kind: { type: 'update' }, diff: '@@ -1 +1 @@\n-const a = 1;\n+const a = 2;\n' }],
-    }, true)).toEqual({ kind: 'tool-done', label: 'Edit src/a.ts', category: 'edit', id: 'fc', diff: { removed: ['const a = 1;'], added: ['const a = 2;'] } });
+    }, true)).toMatchObject({ kind: 'tool-done', label: 'Edit src/a.ts', category: 'edit', id: 'fc', diff: {
+      removed: ['const a = 1;'], added: ['const a = 2;'],
+      // Its own file, numbered from the hunk header, with Codex's kind.
+      files: [{ path: 'src/a.ts', change: 'update', additions: 1, removals: 1, lines: [
+        { kind: 'removed', text: 'const a = 1;', line: 1 }, { kind: 'added', text: 'const a = 2;', line: 1 },
+      ] }],
+    } });
   });
 
   it('names an MCP call by server and tool with a short argument summary', () => {

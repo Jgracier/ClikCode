@@ -51,7 +51,7 @@ it("keeps a sub-agent's work under its Agent row and out of the answer, and neve
   // The late diff settles into the finished edit.
   const late = events.filter((event) => event.id === 'edit1');
   expect(late.map((event) => event.kind)).toEqual(['tool-start', 'tool-done', 'tool-done']);
-  expect(late[2]!.diff).toEqual({ removed: ['x = 1'], added: ['x = 2'] });
+  expect(late[2]!.diff).toMatchObject({ removed: ['x = 1'], added: ['x = 2'], files: [{ path: 'a.ts', additions: 1, removals: 1 }] });
 
   // One row for the edit, finished, carrying the diff.
   let entries = upsertActivityEvent([], 0, 0, late[0]!, 1);

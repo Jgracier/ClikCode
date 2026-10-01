@@ -71,7 +71,9 @@ describe('runGatewayHarnessTurn', () => {
 
     expect(h.events.map((event) => `${event.kind}:${event.id}`)).toEqual(['tool-start:c1', 'tool-done:c1', 'tool-start:c2', 'tool-done:c2']);
     expect(h.events[1].output?.join('\n')).toContain('hello');
-    expect(h.events[3].diff).toEqual({ removed: ['world'], added: ['there'] });
+    expect(h.events[3].diff).toMatchObject({ removed: ['world'], added: ['there'] });
+    // The whole file was diffed, so its lines are numbered.
+    expect(h.events[3].diff!.files![0]!.lines.find((line) => line.kind === 'added')).toEqual({ kind: 'added', text: 'there', line: 2 });
     // A blank line separates prose segments that had tool work between them.
     expect(h.deltas.join('')).toBe('Looking.\n\nDone.');
 

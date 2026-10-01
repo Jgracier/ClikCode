@@ -33,6 +33,6 @@ export const multiEditTool = defineTool<MultiEditArgs>({
     // only mutation, which is what makes the batch all-or-nothing.
     const prepared = await prepareEdits(args.path, args.edits, ctx);
     await commitEdit(prepared, ctx);
-    return { output: `Applied ${args.edits.length} edit(s) to ${prepared.shown}.`, diff: eventDiff(prepared.before, prepared.after) };
+    return { output: `Applied ${args.edits.length} edit(s) to ${prepared.shown}.`, diff: eventDiff(prepared.before, prepared.after, undefined, { path: prepared.shown, numbered: true }) };
   },
 });

@@ -159,10 +159,11 @@ describe('glob, diff, schema', () => {
 
   it('diffs lines', () => {
     expect(diffLines('a\nb\nc\n', 'a\nB\nc\nd\n').map((op) => `${op.kind[0]}${op.line}`)).toEqual(['sa', 'rb', 'aB', 'sc', 'ad']);
-    expect(eventDiff('', 'x\ny')).toEqual({ removed: [], added: ['x', 'y'] });
+    expect(eventDiff('', 'x\ny')).toMatchObject({ removed: [], added: ['x', 'y'] });
+    // Capped with no marker line in the list: the count is the file's own.
     const capped = eventDiff('', Array.from({ length: 30 }, (_, index) => `l${index}`).join('\n'), 5);
-    expect(capped.added).toHaveLength(6);
-    expect(capped.added[5]).toBe('… 25 more lines');
+    expect(capped.added).toHaveLength(5);
+    expect(capped.files![0]).toMatchObject({ additions: 30, removals: 0, change: 'add' });
     expect(renderDiffPreview('a\nb\nc', 'a\nX\nc')).toBe('  a\n- b\n+ X\n  c');
     expect(renderDiffPreview('same', 'same')).toBe('(no changes)');
   });
