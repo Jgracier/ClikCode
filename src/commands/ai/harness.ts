@@ -14,7 +14,7 @@ import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/l
 import { readState } from '../../session/state/read.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
-import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
+import { modelIdFromLabel, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withVendorTerminal } from '../account.js';
 import { deriveAccountLabel, nameAccount } from '../../harness/accounts/labels.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
@@ -250,8 +250,8 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
     const session = state.sessions.find((item) => item.id === id);
     const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (session && harness) {
-      const { modelIdFromDisplay } = await import('../../runtime/lazy-bridge.js');
-      session.model = modelIdFromDisplay(harness, options.model);
+      // Typed as the lists show it; no catalog is consulted here.
+      session.model = modelIdFromLabel(harness, [], options.model);
       await writeState(state);
     }
   }

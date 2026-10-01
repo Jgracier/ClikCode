@@ -19,7 +19,7 @@ import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseMode
 import { expandAuthPath } from './auth-files.js';
 import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
 import { acpDiscoverySession, acpSessionModels, queryAcp } from './acp-query.js';
-import { localHarnessForCommand, modelDisplayId } from '../../runtime/lazy-bridge.js';
+import { localHarnessForCommand, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { modelLabel } from '../model-label.js';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
@@ -84,11 +84,15 @@ export function harnessModelLabel(harness: AiLocalHarnessDefinition, model: stri
 
 /** The catalog id a model typed the way it is shown names: itself when the
  * harness publishes it, else the one model whose label it is (`big-pickle`
- * for OpenCode's `opencode/big-pickle`). */
+ * for OpenCode's `opencode/big-pickle`), else the harness's own spelling of
+ * the display form (`claude-code:sonnet` is Goose's `claude-code/sonnet`).
+ * With no catalog in hand (`models` empty) it is that spelling alone. */
 export function modelIdFromLabel(harness: AiLocalHarnessDefinition, models: readonly string[], typed: string): string {
   if (models.includes(typed)) return typed;
+  const spelled = modelIdFromDisplay(harness, typed);
+  if (models.includes(spelled)) return spelled;
   const matches = models.filter((model) => harnessModelLabel(harness, model) === typed || modelDisplayId(harness, model) === typed);
-  return matches.length === 1 ? matches[0]! : typed;
+  return matches.length === 1 ? matches[0]! : spelled;
 }
 
 /** A catalog is cached for exactly as long as what it was derived from.
