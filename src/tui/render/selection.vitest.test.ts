@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { highlightSelection, selectedText, selectionAction, selectionIsEmpty } from './selection.js';
+import { highlightSelection, lineAtRow, lineText, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow } from './selection.js';
 
 const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
 const rows = [
@@ -84,5 +84,39 @@ describe('a selection kept in conversation lines', () => {
     expect(out[2]).toBe('charlie');
     // Blank rows above a short transcript show no line.
     expect(highlightSelectionAt(['', 'x'], [Number.NEGATIVE_INFINITY, 0], { anchor: { row: 0, col: 0 }, head: { row: 0, col: 0 } })[0]).toBe('');
+  });
+});
+
+describe('screen rows and conversation lines', () => {
+  it('numbers a row by the line it shows, scrolled, trimmed, short, or live', () => {
+    // 10 kept rows (5 trimmed before them), 4 rows of transcript on screen.
+    const view = { length: 10, trimmed: 5, above: 4, scrollback: 0 };
+    expect([0, 3, 4, 5].map((row) => lineAtRow(view, row))).toEqual([11, 14, 15, 16]);
+    expect(lineAtRow({ ...view, scrollback: 3 }, 0)).toBe(8);
+    // A transcript shorter than its rows sits at the bottom, blanks above.
+    expect(lineAtRow({ length: 2, trimmed: 0, above: 4, scrollback: 0 }, 1)).toBe(Number.NEGATIVE_INFINITY);
+    expect(lineAtRow({ length: 2, trimmed: 0, above: 4, scrollback: 0 }, 2)).toBe(0);
+  });
+
+  it('reads a line from the transcript or the live rows, and nothing once trimmed', () => {
+    const transcript = ['a', 'b'];
+    expect([4, 5, 6, 7, 9].map((line) => lineText(line, transcript, 5, ['live']))).toEqual(['', 'a', 'b', 'live', '']);
+  });
+});
+
+describe('a scroll as a shift', () => {
+  const before = ['1', '2', '3', '4', '5', '6', 'composer'];
+
+  it('finds how far the transcript moved, either way', () => {
+    expect(scrollShift(before, ['3', '4', '5', '6', '7', '8', 'composer'], 6)).toBe(2);
+    expect(scrollShift(before, ['x', 'y', 'z', '1', '2', '3', 'composer'], 6)).toBe(-3);
+    expect(shiftedRow(before, 0, 2)).toBe('3');
+    expect(shiftedRow(before, 0, -1)).toBeUndefined();
+  });
+
+  it('sees no shift in a keystroke, a short transcript or a resize', () => {
+    expect(scrollShift(before, ['1', '2', '3', '4', '5', 'X', 'composer'], 6)).toBe(0);
+    expect(scrollShift(before.slice(0, 4), ['2', '3', '4', 'x'], 3)).toBe(0);
+    expect(scrollShift(before, before.slice(1), 6)).toBe(0);
   });
 });

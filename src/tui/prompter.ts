@@ -39,7 +39,7 @@ import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
-import { highlightSelectionAt, orderedRange, selectedText, selectionAction, selectionIsEmpty, type MouseAction, type Selection } from './render/selection.js';
+import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
 import { copyToClipboard } from '../session/attachments.js';
 import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
@@ -1617,7 +1617,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     let rows = [...shownTranscript, ...shownLive];
     while (rows.length < height) rows.unshift('');
     this.frameLayout = { live: [...live] };
-    if (this.selection) rows = highlightSelectionAt(rows, rows.map((_, row) => this.lineAtRow(row)), this.selection);
+    if (this.selection) rows = highlightSelectionAt(rows, rows.map((_, row) => this.lineAtScreenRow(row)), this.selection);
     // Only what changed. A keystroke changes the composer's row and nothing
     // else, and rewriting the whole screen for it costs kilobytes per key on
     // a phone link -- long enough for a client's own prediction popup to
@@ -1646,7 +1646,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // out and those are not rows this code can redraw from its own transcript.
     const scrolling = this.paintingScroll;
     this.paintingScroll = false;
-    const shift = full || !scrolling ? 0 : this.scrollShift(rows, above);
+    const shift = full || !scrolling ? 0 : scrollShift(this.alternatePrevious, rows, above);
     const updates: string[] = [];
     // Rows the shift already drew, so the diff below does not draw them twice
     // -- a frame carrying the same row twice is a duplicated prompt on screen.
@@ -1669,7 +1669,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     for (const [index, row] of rows.entries()) {
       if (!full && this.alternatePrevious[index] === row) continue;
       if (index >= exposedFrom && index < exposedTo) continue;
-      if (shift !== 0 && index < above && this.shiftedRow(index, shift) === row) continue;
+      if (shift !== 0 && index < above && shiftedRow(this.alternatePrevious, index, shift) === row) continue;
       updates.push(`\u001b[${index + 1};1H${row}\u001b[K`);
     }
     this.alternatePrevious = rows;
@@ -1713,41 +1713,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.frameInFlight = false;
       if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
     });
-  }
-
-  /** How far the previous screen would have to move to become this one, or
-   * zero when it is not a clean shift. Positive means content moved up. */
-  private scrollShift(rows: readonly string[], above: number): number {
-    const previous = this.alternatePrevious;
-    // Only the transcript moves. The live region below it is drawn, not
-    // scrolled, so a whole-screen comparison never sees a clean shift.
-    if (previous.length !== rows.length || above < 4) return 0;
-    // Only when the transcript has actually moved. A keystroke changes one
-    // row, and a transcript padded with blank rows matches any shift you care
-    // to test -- so without this a keystroke looked like a scroll and redrew
-    // the screen, which is the opposite of the point.
-    let changed = 0;
-    for (let index = 0; index < above; index += 1) if (previous[index] !== rows[index]) changed += 1;
-    if (changed * 2 < above) return 0;
-    for (let shift = 2; shift < above; shift += 1) {
-      let up = true;
-      let down = true;
-      for (let index = 0; index + shift < above; index += 1) {
-        if (up && previous[index + shift] !== rows[index]) up = false;
-        if (down && previous[index] !== rows[index + shift]) down = false;
-        if (!up && !down) break;
-      }
-      if (up) return shift;
-      if (down) return -shift;
-    }
-    return 0;
-  }
-
-  /** What a row would hold after the shift, so the diff below can skip the
-   * rows the terminal has already moved into place. */
-  private shiftedRow(index: number, shift: number): string | undefined {
-    const source = index + shift;
-    return source >= 0 && source < this.alternatePrevious.length ? this.alternatePrevious[source] : undefined;
   }
 
   /** Move the viewport through the transcript. Positive scrolls back, and the
@@ -1897,8 +1862,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // next line, which the edge scroll brings up, not for the chrome.
     const intoChrome = this.alternateScrollback > 0 && action.kind !== 'press' && action.at.row >= this.alternateAbove;
     const at = intoChrome
-      ? { row: this.lineAtRow(Math.max(0, this.alternateAbove - 1)), col: Number.MAX_SAFE_INTEGER }
-      : { row: this.lineAtRow(action.at.row), col: action.at.col };
+      ? { row: this.lineAtScreenRow(Math.max(0, this.alternateAbove - 1)), col: Number.MAX_SAFE_INTEGER }
+      : { row: this.lineAtScreenRow(action.at.row), col: action.at.col };
     if (action.kind === 'press') {
       this.stopSelectionScroll();
       if (!Number.isFinite(at.row)) return;
@@ -1925,30 +1890,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
   }
 
-  /** The conversation line screen row `row` shows: a transcript row's number
-   * (stable while the view scrolls and old rows are trimmed), or, below the
-   * transcript, a live row numbered after the transcript's end. -Infinity for
-   * the blank rows above a short transcript. */
-  private lineAtRow(row: number): number {
-    // From where the view is now, not from the last frame drawn: a scroll's
-    // repaint lands a moment after the scroll, and a release in between was
-    // placed by the old layout -- the selection snapped back to where the
-    // drag reached the edge.
-    const length = this.alternateTranscript.length;
-    const first = Math.max(0, length - this.alternateAbove - this.alternateScrollback);
-    const shown = Math.max(0, length - this.alternateScrollback - first);
-    const pad = Math.max(0, this.alternateAbove - shown);
-    if (row < pad) return Number.NEGATIVE_INFINITY;
-    if (row < pad + shown) return this.alternateTrimmed + first + (row - pad);
-    return this.alternateTrimmed + this.alternateTranscript.length + (row - pad - shown);
-  }
-
-  /** The text of one conversation line, on screen or not. */
-  private lineText(line: number): string {
-    const end = this.alternateTrimmed + this.alternateTranscript.length;
-    if (line < this.alternateTrimmed) return '';
-    if (line < end) return this.alternateTranscript[line - this.alternateTrimmed] ?? '';
-    return this.frameLayout.live[line - end] ?? '';
+  /** The conversation line screen row `row` shows (see render/selection.ts),
+   * from where the view is now, not from the last frame drawn: a scroll's
+   * repaint lands a moment after the scroll, and a release in between was
+   * placed by the old layout -- the selection snapped back to where the drag
+   * reached the edge. */
+  private lineAtScreenRow(row: number): number {
+    return lineAtRow({
+      length: this.alternateTranscript.length, trimmed: this.alternateTrimmed,
+      above: this.alternateAbove, scrollback: this.alternateScrollback,
+    }, row);
   }
 
   /** What a selection copies, read from the conversation itself -- all of it,
@@ -1956,7 +1907,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private selectionText(selection: Selection): string {
     const range = orderedRange(selection);
     const rows: string[] = [];
-    for (let line = range.start.row; line <= range.end.row; line += 1) rows.push(this.lineText(line));
+    for (let line = range.start.row; line <= range.end.row; line += 1) {
+      rows.push(lineText(line, this.alternateTranscript, this.alternateTrimmed, this.frameLayout.live));
+    }
     const shift = (cell: { row: number; col: number }) => ({ row: cell.row - range.start.row, col: cell.col });
     return selectedText(rows, { anchor: shift(selection.anchor), head: shift(selection.head) });
   }

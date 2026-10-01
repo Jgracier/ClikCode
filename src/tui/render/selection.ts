@@ -139,3 +139,64 @@ export function selectedText(rows: readonly string[], selection: Selection): str
   while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop();
   return lines.join('\n');
 }
+
+/** Where the transcript is on screen: `length` rows kept after `trimmed`
+ * older ones were dropped, `above` screen rows given to it over the live
+ * region, and the view held `scrollback` rows back from its end. */
+export type TranscriptView = { length: number; trimmed: number; above: number; scrollback: number };
+
+/** The conversation line screen row `row` shows: a transcript row's number
+ * (stable while the view scrolls and old rows are trimmed), or, below the
+ * transcript, a live row numbered after the transcript's end. -Infinity for
+ * the blank rows above a short transcript. */
+export function lineAtRow(view: TranscriptView, row: number): number {
+  const first = Math.max(0, view.length - view.above - view.scrollback);
+  const shown = Math.max(0, view.length - view.scrollback - first);
+  const pad = Math.max(0, view.above - shown);
+  if (row < pad) return Number.NEGATIVE_INFINITY;
+  if (row < pad + shown) return view.trimmed + first + (row - pad);
+  return view.trimmed + view.length + (row - pad - shown);
+}
+
+/** The text of one conversation line, on screen or not: a kept transcript
+ * row, a live row after them, or nothing for a line trimmed away. */
+export function lineText(line: number, transcript: readonly string[], trimmed: number, live: readonly string[]): string {
+  const end = trimmed + transcript.length;
+  if (line < trimmed) return '';
+  if (line < end) return transcript[line - trimmed] ?? '';
+  return live[line - end] ?? '';
+}
+
+/** How far the previous screen's transcript rows (the first `above`) would
+ * have to move to become these, or zero when it is not a clean shift.
+ * Positive means content moved up. Only the transcript moves: the live
+ * region below it is drawn, not scrolled. */
+export function scrollShift(previous: readonly string[], rows: readonly string[], above: number): number {
+  if (previous.length !== rows.length || above < 4) return 0;
+  // Only when the transcript has actually moved. A keystroke changes one
+  // row, and a transcript padded with blank rows matches any shift you care
+  // to test -- so without this a keystroke looked like a scroll and redrew
+  // the screen, which is the opposite of the point.
+  let changed = 0;
+  for (let index = 0; index < above; index += 1) if (previous[index] !== rows[index]) changed += 1;
+  if (changed * 2 < above) return 0;
+  for (let shift = 2; shift < above; shift += 1) {
+    let up = true;
+    let down = true;
+    for (let index = 0; index + shift < above; index += 1) {
+      if (up && previous[index + shift] !== rows[index]) up = false;
+      if (down && previous[index] !== rows[index + shift]) down = false;
+      if (!up && !down) break;
+    }
+    if (up) return shift;
+    if (down) return -shift;
+  }
+  return 0;
+}
+
+/** What row `index` holds once the terminal has shifted the previous screen
+ * by `shift`, so a diff can skip the rows already moved into place. */
+export function shiftedRow(previous: readonly string[], index: number, shift: number): string | undefined {
+  const source = index + shift;
+  return source >= 0 && source < previous.length ? previous[source] : undefined;
+}
