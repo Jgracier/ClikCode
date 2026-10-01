@@ -5,6 +5,7 @@ import { mentionScore } from '../../src/text';
 import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../../src/webview/composer';
 import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { noticeLevel } from '../../src/text';
+import { conversationState } from '../../src/conversation-state';
 import { inlineStep } from '../../src/webview/sheet';
 import { pathIn, relativeTime, resetIn } from '../../src/webview/format';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
@@ -173,5 +174,15 @@ describe('editor context', () => {
     const selected = composeMessage('why', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'a.ts', startLine: 3, endLine: 3, text: 'x', languageId: 'typescript', problems } }]);
     expect(selected).toContain('`a.ts` line 3:');
     expect(selected).toContain('VS Code reports this problem');
+  });
+});
+
+describe('conversation list', () => {
+  const chat = (patch: Partial<{ sessionId: string; approvals: number; running: boolean; unread: boolean }>) => ({ sessionId: 'a', approvals: 0, running: false, unread: false, ...patch });
+  it('puts a waiting approval first, then work, then an unseen finish', () => {
+    expect(conversationState({ id: 'a', activity: 'working' }, [chat({ approvals: 1 })])).toBe('needs-input');
+    expect(conversationState({ id: 'a', activity: 'working' }, [])).toBe('working');
+    expect(conversationState({ id: 'a', activity: 'idle' }, [chat({ unread: true })])).toBe('unread');
+    expect(conversationState({ id: 'a', activity: 'idle' }, [chat({ sessionId: 'b', approvals: 1 })])).toBe('idle');
   });
 });

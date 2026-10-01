@@ -171,6 +171,9 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 }
 .attachment.with-thumb { padding-left: 2px; }
 .attachment-thumb { width: 22px; height: 22px; object-fit: cover; border-radius: 3px; display: block; }
+.message.assistant { position: relative; }
+.message-actions { display: flex; justify-content: flex-end; opacity: 0; transition: opacity 0.12s; margin-top: 2px; }
+.message.assistant:hover .message-actions, .message-actions:focus-within { opacity: 1; }
 .context-meter { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0 2px; color: var(--muted); font-size: 0.9em; font-variant-numeric: tabular-nums; }
 .context-meter:hover { color: var(--vscode-foreground); }
 .context-track { fill: none; stroke: var(--border); stroke-width: 2; }
