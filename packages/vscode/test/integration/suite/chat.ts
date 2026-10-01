@@ -18,10 +18,9 @@ export function chatSuite(): void {
       api = await activate();
     });
 
-    it('opens from the editor title button into the secondary side bar', async () => {
+    it('opens into the secondary side bar', async () => {
       const extension = vscode.extensions.all.find((item) => item.packageJSON?.name === 'clikcode')!;
       const contributes = extension.packageJSON.contributes;
-      assert.ok((contributes.menus['editor/title'] as Array<{ command: string }>).some((item) => item.command === 'clikcode.open'), 'the editor title bar has the button');
       assert.ok(contributes.viewsContainers.secondarySidebar.some((item: { id: string }) => item.id === 'clikcode-secondary'), 'the chat is a secondary side bar view');
       const [folder] = vscode.workspace.workspaceFolders ?? [];
       await vscode.window.showTextDocument(vscode.Uri.joinPath(folder!.uri, 'hello.ts'));
@@ -143,10 +142,12 @@ export function chatSuite(): void {
       assert.strictEqual(tab.connection, 'ready');
       assert.ok(tab.sessionId && tab.sessionId !== sidebarSession, 'the tab has its own conversation');
       assert.strictEqual(api.state.sessionId, sidebarSession, 'the side bar kept its own');
-      // As many as wanted: from the chat's own header button, and again from
-      // a tab, each a tab of its own in the same group.
-      await click(api, '#new-tab-button');
-      await vscode.commands.executeCommand('clikcode.openInNewTab');
+      // As many as wanted: the ClikCode button in the editor's tab bar opens
+      // another each time, from a text editor or from a ClikCode tab.
+      const menu = vscode.extensions.all.find((item) => item.packageJSON?.name === 'clikcode')!.packageJSON.contributes.menus['editor/title'] as Array<{ command: string }>;
+      assert.ok(menu.some((item) => item.command === 'clikcode.newChatTab'), 'the ClikCode button is in the editor tab bar');
+      await vscode.commands.executeCommand('clikcode.newChatTab');
+      await vscode.commands.executeCommand('clikcode.newChatTab');
       assert.strictEqual(api.tabs, 3, 'three chat tabs');
       const groups = new Set(vscode.window.tabGroups.all.filter((group) => group.tabs.some((item) => item.input instanceof vscode.TabInputWebview && item.input.viewType.endsWith('clikcode.chatEditor'))).map((group) => group.viewColumn));
       assert.strictEqual(groups.size, 1, 'the chat tabs share one editor group');
