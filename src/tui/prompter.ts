@@ -227,6 +227,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * resolving the extras false meant silently denying a tool the user was
    * never shown. */
   private approvalQueue: ApprovalRequest[] = [];
+  /** Approvals answered since the last time none was waiting: this one is
+   * number answered + 1 of answered + 1 + queued. */
+  private approvalsAnswered = 0;
+  /** "Tell it instead" is being typed; the draft the composer held before. */
+  private tellingInstead?: { draft: string; cursor: number };
   private approvalRestoreLabel?: string;
   private readonly onWaitingKey = (key: string): void => {
     // The terminal can lose cells during a mobile resize or a remote redraw.
@@ -255,22 +260,48 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return;
     }
     if (this.pendingApproval) {
-      // The draft is never edited from here: every key is either an answer or
-      // dropped, so the composer is exactly as the user left it afterwards.
       const pending = this.pendingApproval;
-      const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused, Boolean(pending.rule));
+      // "No, and tell it what to do instead": the composer is where it is
+      // typed, on its own -- whatever draft was there waits aside -- and
+      // Enter denies the call and sends the text into the turn as a steer.
+      const telling = this.tellingInstead;
+      if (telling) {
+        if (key === '\r') {
+          const text = this.waitingDraft.trim();
+          if (!text) return;
+          this.answerApproval(pending, false);
+          // After the denial is on its way: the answer's own send is queued
+          // behind this resolve, and the steer must not overtake it.
+          setImmediate(() => this.submitWaiting(text, false));
+          return;
+        }
+        if (key === '\u001b' || key === '\u0003') {
+          this.restoreTellingDraft();
+          if (key === '\u0003') this.answerApproval(pending, false);
+          else this.updateWaiting();
+          return;
+        }
+        const edited = editWaitingComposer(this.waitingDraft, this.waitingCursor, key);
+        if (edited.changed) {
+          this.waitingDraft = edited.value;
+          this.waitingCursor = edited.cursor;
+          this.updateWaiting();
+        }
+        return;
+      }
+      // Otherwise the draft is never edited from here: every key is either an
+      // answer or dropped, so the composer is exactly as the user left it.
+      const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused, Boolean(pending.rule), Boolean(this.waitingSubmit));
       if (action === 'focus') {
         pending.focused = true;
         this.updateWaiting();
+      } else if (action === 'tell') {
+        this.tellingInstead = { draft: this.waitingDraft, cursor: this.waitingCursor };
+        this.waitingDraft = '';
+        this.waitingCursor = 0;
+        this.updateWaiting();
       } else if (action === 'allow' || action === 'always' || action === 'deny') {
-        this.pendingApproval = undefined;
-        pending.resolve(action === 'deny' ? false : action === 'always' ? 'always' : true);
-        if (!this.presentNextApproval()) {
-          this.waitingLabel = this.approvalRestoreLabel || 'thinking';
-          this.approvalRestoreLabel = undefined;
-          this.resumeClock();
-          this.updateWaiting();
-        }
+        this.answerApproval(pending, action === 'deny' ? false : action === 'always' ? 'always' : true);
       }
       return;
     }
@@ -299,46 +330,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       const text = this.waitingDraft.trim();
       if (!text || !this.waitingSubmit) return;
-      // A slash line is ClikCode's own command and never text for the model.
-      // Handed to the caller to route (see waiting-slash.ts and slash/queue.ts);
-      // a line the router decides is really conversation comes back 'queued'.
-      const asCommand = Boolean(commandLineTypedDuringTurn(text)) && Boolean(this.waitingCommand);
-      const submit = asCommand ? this.waitingCommand! : this.waitingSubmit;
-      // No selection mid-turn -- the arrows scroll the answer -- so a partly
-      // typed value means the best match: `/model op` applies opus.
-      const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
       this.waitingDraft = '';
       this.waitingCursor = 0;
-      const localId = ++this.waitingSubmissionId;
-      // A message gets a row, because the user needs to know where their words
-      // went. A command gets none: it either applies (and the status line it
-      // changed already shows that) or it runs at the turn boundary. A row
-      // saying so would be the announcement this is meant not to make.
-      if (!asCommand) {
-        this.waitingSubmissions.push({
-          localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
-        });
-      }
-      this.updateWaiting();
-      const write = submit(line).then((result) => {
-        const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
-        if (item) {
-          item.state = result.disposition;
-          item.id = result.submission.id;
-        }
-        this.updateWaiting();
-      }).catch(() => {
-        const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
-        if (item) item.state = 'error';
-        if (!this.waitingDraft) {
-          this.waitingDraft = text;
-          this.waitingCursor = text.length;
-        }
-        this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
-        this.updateWaiting();
-      });
-      this.waitingSubmissionWrites.add(write);
-      void write.finally(() => this.waitingSubmissionWrites.delete(write));
+      this.submitWaiting(text);
     } else if (this.waitingSubmit) {
       const edited = editWaitingComposer(this.waitingDraft, this.waitingCursor, key);
       if (edited.changed) {
@@ -348,6 +342,77 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
     }
   };
+
+  /** A message typed during the turn, sent: steered into it or queued
+   * behind it (the harness decides; its row says which), or a slash line,
+   * which is ClikCode's own command. */
+  private submitWaiting(text: string, allowCommand = true): void {
+    if (!this.waitingSubmit) {
+      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
+      return;
+    }
+    // A slash line is ClikCode's own command and never text for the model.
+    // Handed to the caller to route (see waiting-slash.ts and slash/queue.ts);
+    // a line the router decides is really conversation comes back 'queued'.
+    const asCommand = allowCommand && Boolean(commandLineTypedDuringTurn(text)) && Boolean(this.waitingCommand);
+    const submit = asCommand ? this.waitingCommand! : this.waitingSubmit;
+    // No selection mid-turn -- the arrows scroll the answer -- so a partly
+    // typed value means the best match: `/model op` applies opus.
+    const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
+    const localId = ++this.waitingSubmissionId;
+    // A message gets a row, because the user needs to know where their words
+    // went. A command gets none: it either applies (and the status line it
+    // changed already shows that) or it runs at the turn boundary. A row
+    // saying so would be the announcement this is meant not to make.
+    if (!asCommand) {
+      this.waitingSubmissions.push({
+        localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
+      });
+    }
+    this.updateWaiting();
+    const write = submit(line).then((result) => {
+      const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
+      if (item) {
+        item.state = result.disposition;
+        item.id = result.submission.id;
+      }
+      this.updateWaiting();
+    }).catch(() => {
+      const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
+      if (item) item.state = 'error';
+      if (!this.waitingDraft) {
+        this.waitingDraft = text;
+        this.waitingCursor = text.length;
+      }
+      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
+      this.updateWaiting();
+    });
+    this.waitingSubmissionWrites.add(write);
+    void write.finally(() => this.waitingSubmissionWrites.delete(write));
+  }
+
+  /** An approval answered: the next one waiting comes up, or the band goes
+   * back to what the turn was doing. */
+  private answerApproval(pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always'): void {
+    this.pendingApproval = undefined;
+    this.approvalsAnswered += 1;
+    pending.resolve(answer);
+    if (!this.presentNextApproval()) {
+      this.waitingLabel = this.approvalRestoreLabel || 'thinking';
+      this.approvalRestoreLabel = undefined;
+      this.resumeClock();
+      this.updateWaiting();
+    }
+  }
+
+  /** The draft set aside for "tell it instead", back in the composer. */
+  private restoreTellingDraft(): void {
+    const telling = this.tellingInstead;
+    if (!telling) return;
+    this.tellingInstead = undefined;
+    this.waitingDraft = telling.draft;
+    this.waitingCursor = telling.cursor;
+  }
   private readonly onResize = (): void => {
     if (!this.closed) {
       // The settled repaint redraws everything at the new size, and a change
@@ -930,8 +995,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Returns false when nothing was waiting, so the caller knows to restore
    * the turn's own label instead of leaving a stale prompt on screen. */
   private presentNextApproval(): boolean {
+    this.restoreTellingDraft();
     const next = this.approvalQueue.shift();
-    if (!next) return false;
+    if (!next) { this.approvalsAnswered = 0; return false; }
     // Each approval gets its own guard window and its own focus requirement:
     // answering the first of two must not let the same keypress, or the next
     // character of a sentence, answer the second.
@@ -957,6 +1023,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.pendingApproval = undefined;
     this.approvalQueue = [];
     this.approvalRestoreLabel = undefined;
+    this.approvalsAnswered = 0;
+    this.restoreTellingDraft();
     this.resumeClock();
     for (const item of outstanding) item?.resolve(false);
   }
@@ -1226,7 +1294,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const approvalRows = approval && optionalRows - paletteRows >= 2
       ? approvalBlockRows(approval, width, Math.min(optionalRows - paletteRows, Math.max(6, Math.floor(targetHeight * 0.6))), {
         guarded: Date.now() - approval.shownAt < APPROVAL_GUARD_MS,
-        needsFocus: approval.needsFocus, focused: approval.focused, queued: this.approvalQueue.length,
+        needsFocus: approval.needsFocus, focused: approval.focused,
+        position: this.approvalsAnswered + 1, total: this.approvalsAnswered + 1 + this.approvalQueue.length,
+        canTell: Boolean(this.waitingSubmit), telling: Boolean(this.tellingInstead),
       })
       : [];
     let liveBandBudget = Math.max(0, optionalRows - paletteRows - approvalRows.length - 2);

@@ -33,11 +33,21 @@ const APPROVAL_DIFF_PREVIEW_LINES = 8;
  * from the middle and the count of hidden rows is stated. */
 export function approvalBlockRows(
   request: { title: string; detail?: string; preview?: ApprovalPreview; rule?: string }, width: number, maxRows: number,
-  state: { guarded: boolean; needsFocus: boolean; focused: boolean; queued: number },
+  state: {
+    guarded: boolean; needsFocus: boolean; focused: boolean;
+    /** Which of the approvals waiting together this is, and how many there
+     * are: "Approval 1 of 3". Nothing is said about a lone one. */
+    position?: number; total?: number;
+    /** The [t] key is offered: the caller can send an instruction instead. */
+    canTell?: boolean;
+    /** [t] was pressed: the instruction is being typed in the composer. */
+    telling?: boolean;
+  },
 ): string[] {
   const inner = Math.max(8, width - 4);
   const clean = (text: string): string => sanitizeTerminalText(text);
-  const title = wrapWords(`${clean(request.title).replace(/\s+/g, ' ').trim()}${state.queued ? `  (+${state.queued} waiting)` : ''}`, inner - 2)
+  const count = state.total && state.total > 1 ? `Approval ${state.position ?? 1} of ${state.total} · ` : '';
+  const title = wrapWords(`${count}${clean(request.title).replace(/\s+/g, ' ').trim()}`, inner - 2)
     .map((line, index) => `  ${index === 0 ? chalk.yellow('?') : ' '} ${chalk.bold(line)}`);
   const detail = request.detail === undefined ? []
     : clean(request.detail).split('\n').flatMap((line) => wrapCodeLine(line, inner - 2)).map((line) => `    ${line}`);
@@ -46,13 +56,18 @@ export function approvalBlockRows(
   // The "always" key is offered only when a rule came with the request, and
   // the rule itself is shown: "always" has to say what it will remember, or
   // the user is agreeing to something unstated.
+  // "No, and tell it what to do instead" (Claude Code's third answer) where
+  // the text can be sent: typed in the composer, sent as a steer.
+  const tell = state.canTell ? 18 : 0;
   const keys = request.rule
-    ? (width >= 60 ? '[y] once  [a] always  [n] no  [esc] deny' : '[y] [a] [n] [esc]')
-    : (width >= 46 ? '[y] yes  [n] no  [esc] deny' : '[y] [n] [esc]');
-  const lead = request.rule && width >= 60 ? `Allow? ${chalk.dim(`always = ${request.rule}`)} ` : 'Allow once? ';
-  const question = state.needsFocus && !state.focused
-    ? (width >= 72 ? `Draft kept. Press [tab] to answer, then ${keys}` : `[tab] to answer · ${keys}`)
-    : `${lead}${keys}`;
+    ? (width >= 60 + tell ? `[y] once  [a] always  [n] no${tell ? '  [t] tell it instead' : ''}  [esc] deny` : `[y] [a] [n]${tell ? ' [t]' : ''} [esc]`)
+    : (width >= 46 + tell ? `[y] yes  [n] no${tell ? '  [t] tell it instead' : ''}  [esc] deny` : `[y] [n]${tell ? ' [t]' : ''} [esc]`);
+  const lead = request.rule && width >= 60 + tell ? `Allow? ${chalk.dim(`always = ${request.rule}`)} ` : 'Allow once? ';
+  const question = state.telling
+    ? (width >= 72 ? 'No — type what it should do instead below · [enter] send · [esc] back' : 'Type it below · [enter] send · [esc] back')
+    : state.needsFocus && !state.focused
+      ? (width >= 72 ? `Draft kept. Press [tab] to answer, then ${keys}` : `[tab] to answer · ${keys}`)
+      : `${lead}${keys}`;
   const answer = `  ${state.guarded ? chalk.dim(question) : chalk.bold(question)}`;
   const body = [...detail, ...shownDiff];
   const room = Math.max(0, maxRows - title.length - 1);

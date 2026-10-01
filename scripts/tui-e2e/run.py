@@ -252,6 +252,20 @@ SCENARIOS = {
         'final_once': ['Read 2 files, searched 1 pattern', 'build step 1 of 30', 'build step 30 of 30', '25 lines hidden'],
         'never': ['build step 15 of 30'],
     },
+    # Two approvals at once say which is which; the second is answered "no,
+    # and do this instead": the call is denied and the words go to the turn.
+    'approval-tell-instead': {
+        'turns': [{'permissions': ['make clean', 'make release'], 'blocks': ['Answers: {answers}.']},
+                  {'blocks': ['Releasing with pnpm now.']}],
+        'steps': [
+            ('type', 'clean and release'), ('wait_for', 'Approval 1 of 2', 30), ('settle', 0.6),
+            ('keys', 'n'), ('wait_for', 'Approval 2 of 2', 10), ('settle', 0.6),
+            ('keys', 't'), ('wait_for', 'type what it should do instead', 5),
+            ('keys', 'use pnpm instead'), ('keys', '\r'),
+            ('wait_for', 'Releasing with pnpm now.', 40), ('settle', 3),
+        ],
+        'watch': ['clean and release', 'Answers: reject, reject.', 'use pnpm instead', 'Releasing with pnpm now.'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],

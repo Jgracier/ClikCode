@@ -45,7 +45,7 @@ describe('an approval with a change to review', () => {
     const { eventDiff } = await import('../../agent/line-diff.js');
     const rows = plain(approvalBlockRows(
       { title: 'Approve Edit a.ts', detail: '/w/a.ts', preview: { diff: eventDiff('one\ntwo\nthree\n', 'one\nTWO\nthree\n', { path: '/w/a.ts', numbered: true }) } },
-      80, 20, { guarded: false, needsFocus: false, focused: true, queued: 0 },
+      80, 20, { guarded: false, needsFocus: false, focused: true },
     ));
     expect(rows).toEqual(expect.arrayContaining(['1   one', '2 - two', '2 + TWO', '3   three']));
   });
