@@ -15,7 +15,6 @@ import { writeState } from '../../session/state/write.js';
 import { accountUsageLabel, cachedAccountUsageLabel } from '../../harness/accounts/account-usage.js';
 import { NATIVE_USAGE_PROBES } from '../../harness/accounts/usage-probes.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountRemove, signOutAccount, syncAccountIdentityAfterLogin, withVendorTerminal } from '../../commands/account.js';
-import { refreshPlaceholderAccountLabels } from '../../harness/accounts/labels.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { accountPickerOptions, type ProviderAccountChoice } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
@@ -45,10 +44,6 @@ export async function interactiveAccountPicker(
       rl.panel?.('Accounts', 'Choose a local provider before switching accounts.');
       return undefined;
     }
-    // Accounts named before their harness had identity derivation still carry
-    // the invented label. Opening /account is the one moment the user is
-    // looking at those names, so it is where they get corrected.
-    if (await refreshPlaceholderAccountLabels(state)) await writeState(state);
     const providerAccounts = state.accounts.filter((account) => account.provider === harness.provider);
     if (!providerAccounts.length) {
       // Nothing to list: connecting one is the only thing to do here, so do

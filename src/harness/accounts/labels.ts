@@ -1,18 +1,16 @@
-/** What an account is called. A vendor rarely says, so the label is derived
- * -- sometimes by asking the harness itself, which is why a placeholder can
- * outlive a login and has to be refreshed later. */
+/** What an account is called: the email its sign-in reveals, read once, when
+ * it signs in. Nothing renames an account afterwards -- opening a list of
+ * accounts never does. A harness that reveals no email keeps a numbered
+ * placeholder ("Kiro CLI 1") or the name the user gave. */
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
-import { inspectNativeHarness } from '../transport/native/inspect.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
-import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { mistralVibeAccountEmail } from './mistral-vibe-identity.js';
 import { vendorAccountEmail } from './vendor-identity.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
-import type { HarnessState } from '../../session/model.js';
 
 /** Reads real account info out of a harness's own credential storage right
  * after login -- verified so far only for Claude Code, whose
@@ -24,63 +22,6 @@ import type { HarnessState } from '../../session/model.js';
  * every harness without a confirmed credential shape to read, which is
  * every other one right now; the numbered placeholder below covers those.
  */
-/** Whether a label is one ClikCode invented because it could not read a real
- * identity -- the harness's own name, with the old " default" suffix, or with
- * the number firstUnusedAccountLabel gives a second login. A real label is an
- * email or something the user typed. */
-export function isPlaceholderAccountLabel(label: string, harness: AiLocalHarnessDefinition): boolean {
-  const name = harness.displayName.toLowerCase();
-  const text = label.trim().toLowerCase();
-  return text === name || text === `${name} default` || (text.startsWith(`${name} `) && /^\d+$/.test(text.slice(name.length + 1)));
-}
-
-/** Give placeholder-labelled accounts their real names, where the harness can
- * now say what they are. Identity derivation has grown to cover harnesses
- * that had none when their account record was first written, and nothing
- * re-reads it: an account created before its harness was supported keeps the
- * invented name forever otherwise. Returns true when anything changed.
- *
- * Bounded to accounts that still carry a placeholder, so this costs nothing
- * for a state where every account already shows a real identity. */
-export async function refreshPlaceholderAccountLabels(state: HarnessState): Promise<boolean> {
-  const candidates = state.accounts
-    .map((account) => ({ account, harness: localHarnessForProvider(account.provider) }))
-    .filter((item): item is { account: AiHarnessAccount; harness: AiLocalHarnessDefinition } =>
-      Boolean(item.harness) && isPlaceholderAccountLabel(item.account.label, item.harness!));
-  if (!candidates.length) return false;
-  // Never install anything to answer a naming question. deriveAccountLabel
-  // asks some harnesses (Claude) by running them, and captureNativeHarnessOutput
-  // installs a missing binary on the way -- so without this, opening /account
-  // could npm-install a harness the user has an old account record for but
-  // has not chosen. Installing is for choosing a provider, nothing else.
-  const installed = await Promise.all(candidates.map(({ harness }) =>
-    inspectNativeHarness(harness, 800).then((item) => item.installed).catch(() => false)));
-  const derived = await Promise.all(candidates.map(({ account, harness }, index) =>
-    installed[index] ? deriveAccountLabel(harness, account.nativeProfile?.path).catch(() => undefined) : undefined));
-  let changed = false;
-  for (const [index, { account, harness }] of candidates.entries()) {
-    const label = derived[index];
-    // Never rename onto a label another account of the SAME provider holds:
-    // that would be two records for one identity. Across providers the same
-    // email is expected -- one person signs in to Claude and Codex with it --
-    // and syncAccountIdentityAfterLogin scopes its own check the same way.
-    if (!label || state.accounts.some((item) =>
-      item.id !== account.id && item.provider === account.provider && item.label.toLowerCase() === label.toLowerCase())) {
-      // Nothing derivable (OpenCode, Copilot, Hermes, Pi and Droid keep no
-      // email anywhere ClikCode can read; see vendor-identity.ts). Drop the
-      // old " default" suffix anyway: this IS that harness's account, and the
-      // suffix made a real connected account read as a placeholder row.
-      // A numbered placeholder keeps its number: two unnamed logins must stay
-      // two names.
-      if (account.label.trim().toLowerCase() === `${harness.displayName.toLowerCase()} default`) { account.label = harness.displayName; changed = true; }
-      continue;
-    }
-    account.label = label;
-    changed = true;
-  }
-  return changed;
-}
-
 export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
   if (harness.command === 'vibe') return mistralVibeAccountEmail(profilePath);
   const vendorEmail = await vendorAccountEmail(harness, profilePath);
