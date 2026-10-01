@@ -266,6 +266,62 @@ export function liveWaitKind(event: Pick<HarnessActivityEvent, 'kind' | 'agent' 
  * reads as a stall, not as work. */
 export const STALL_MS = 15_000;
 
+/** A running turn's clock, as data: when it began, when anything last
+ * arrived, and the time spent waiting on the user (an approval), which the
+ * clock leaves out -- `pausedAt` while one is up. */
+export type TurnClock = { startedAt: number; lastDataAt: number; pausedMs: number; pausedAt?: number };
+
+export function startTurnClock(now: number): TurnClock {
+  return { startedAt: now, lastDataAt: now, pausedMs: 0 };
+}
+
+/** A turn joined mid-way counts from when it really started. */
+export function joinTurnClock(clock: TurnClock, startedAt: number): TurnClock {
+  return startedAt < clock.startedAt ? { ...clock, startedAt } : clock;
+}
+
+/** An approval is up: the clock stops until it is answered. */
+export function pauseTurnClock(clock: TurnClock, now: number): TurnClock {
+  return clock.pausedAt === undefined ? { ...clock, pausedAt: now } : clock;
+}
+
+/** An approval was answered (or the turn ended under one): the clock runs
+ * again, and the time spent reading it is not a stall. */
+export function resumeTurnClock(clock: TurnClock, now: number): TurnClock {
+  if (clock.pausedAt === undefined) return clock;
+  return { startedAt: clock.startedAt, lastDataAt: now, pausedMs: clock.pausedMs + now - clock.pausedAt };
+}
+
+/** The turn's running time, less any spent waiting on an approval. */
+export function turnElapsedMs(clock: TurnClock, now: number): number {
+  return Math.max(0, now - clock.startedAt - clock.pausedMs - (clock.pausedAt === undefined ? 0 : now - clock.pausedAt));
+}
+
+/** What the turn is waiting on besides the model: a call still running, or
+ * an approval on screen. Silence then is expected, not a stall. */
+export type TurnWaits = { toolsRunning: boolean; approval: boolean };
+
+/** How long nothing has arrived, once that is long enough (STALL_MS) to say
+ * so; zero otherwise, and zero while a call runs or an approval is up. */
+export function turnStalledMs(clock: TurnClock, now: number, waits: TurnWaits): number {
+  if (waits.approval || waits.toolsRunning) return 0;
+  const quiet = now - clock.lastDataAt;
+  return quiet >= STALL_MS ? quiet : 0;
+}
+
+/** Whether the band ticks at the spinner's rate: something is moving -- a
+ * call running, or data within STALL_MS -- and no approval is waiting on the
+ * user. Otherwise it ticks once a second, for the clock. */
+export function turnAnimating(clock: TurnClock, now: number, waits: TurnWaits): boolean {
+  return !waits.approval && (waits.toolsRunning || now - clock.lastDataAt < STALL_MS);
+}
+
+/** How long until the band next ticks: the spinner's step while animating,
+ * otherwise just past the clock's next whole second. */
+export function nextTurnTickMs(clock: TurnClock, now: number, animating: boolean): number {
+  return animating ? SPIN_MS : 1000 - (turnElapsedMs(clock, now) % 1000) + 5;
+}
+
 /** `42s`, then `3m 5s`: the waiting band's clock and a running call's. */
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));

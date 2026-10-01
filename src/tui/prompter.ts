@@ -27,7 +27,7 @@ import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock,
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows } from '../harness/protocol/activity-line.js';
-import { SPIN_MS, STALL_MS } from '../harness/protocol/activity-view.js';
+import { joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
@@ -99,14 +99,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private stopWaitingInput?: () => void;
   private waitingFrame = 0;
   private waitingLabel = '';
-  private waitingStartedAt = 0;
+  /** The turn in flight's clock: elapsed less approvals, and the last delta
+   * or event, which is what "stalled" means (see activity-view.ts). */
+  private clock: TurnClock = startTurnClock(0);
   /** Whether the pending tick is the spinner's (true) or the clock's. */
   private waitingTickFast = false;
-  /** The last delta or event of the turn in flight: what "stalled" means. */
-  private lastDataAt = 0;
-  /** Time spent waiting on the user (an approval), which the clock leaves out. */
-  private pausedMs = 0;
-  private pausedAt?: number;
   /** Characters of answer and reasoning streamed this turn, and how many of
    * them the vendor's last output-token count already covers. */
   private streamedChars = 0;
@@ -712,7 +709,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * and say what it is running, instead of "thinking (0s)". */
   joinedWaiting(startedAt?: number, activity?: string): void {
     if (!this.waitingLabel) return;
-    if (startedAt !== undefined && startedAt < this.waitingStartedAt) this.waitingStartedAt = startedAt;
+    if (startedAt !== undefined) this.clock = joinTurnClock(this.clock, startedAt);
     if (activity) this.waitingLabel = activity;
     this.updateWaiting();
   }
@@ -764,10 +761,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingSubmissions = [];
     this.waitingCancelled = false;
     this.waitingFrame = 0;
-    this.waitingStartedAt = Date.now();
-    this.lastDataAt = this.waitingStartedAt;
-    this.pausedMs = 0;
-    this.pausedAt = undefined;
+    this.clock = startTurnClock(Date.now());
     this.streamedChars = 0;
     this.usageCharsCounted = 0;
     this.turnUsage = undefined;
@@ -797,12 +791,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.scheduleWaitingTick();
   }
 
-  /** The band ticks at the spinner's rate only while something is moving --
-   * data arriving, a call running -- and otherwise once a second, on the
-   * second, for the clock. Reduced motion never animates. */
-  private animating(now = Date.now()): boolean {
-    return !this.reducedMotion && !this.pendingApproval
-      && (this.activeTools.size > 0 || now - this.lastDataAt < STALL_MS);
+  /** What the turn waits on besides the model, for the clock's decisions. */
+  private turnWaits(): TurnWaits {
+    return { toolsRunning: this.activeTools.size > 0, approval: Boolean(this.pendingApproval) };
   }
 
   private scheduleWaitingTick(): void {
@@ -810,8 +801,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingTimer = undefined;
     if (!this.waitingLabel || this.closed) return;
     const now = Date.now();
-    this.waitingTickFast = this.animating(now);
-    const delay = this.waitingTickFast ? SPIN_MS : 1000 - (this.elapsedMs(now) % 1000) + 5;
+    // Reduced motion never animates: the band ticks for the clock alone.
+    this.waitingTickFast = !this.reducedMotion && turnAnimating(this.clock, now, this.turnWaits());
+    const delay = nextTurnTickMs(this.clock, now, this.waitingTickFast);
     this.waitingTimer = setTimeout(() => {
       this.waitingTimer = undefined;
       if (!this.waitingLabel || this.closed) return;
@@ -827,32 +819,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** A delta or an event arrived: the turn is not stalled, and if the band
    * had slowed to the clock it picks the spinner back up at once. */
   private noteData(): void {
-    this.lastDataAt = Date.now();
+    this.clock = { ...this.clock, lastDataAt: Date.now() };
     if (this.waitingLabel && !this.waitingTickFast) this.scheduleWaitingTick();
   }
 
-  /** The turn's running time, less any spent waiting on an approval. */
-  private elapsedMs(now = Date.now()): number {
-    return Math.max(0, now - this.waitingStartedAt - this.pausedMs - (this.pausedAt === undefined ? 0 : now - this.pausedAt));
-  }
-
-  /** An approval has been answered (or the turn ended under one): the clock
-   * runs again, and the time spent reading it is not a stall. */
+  /** An approval has been answered (or the turn ended under one). */
   private resumeClock(): void {
-    if (this.pausedAt === undefined) return;
-    const now = Date.now();
-    this.pausedMs += now - this.pausedAt;
-    this.pausedAt = undefined;
-    this.lastDataAt = now;
+    if (this.clock.pausedAt === undefined) return;
+    this.clock = resumeTurnClock(this.clock, Date.now());
     if (this.waitingTimer) this.scheduleWaitingTick();
-  }
-
-  /** How long nothing has arrived, once that is long enough to say so. A
-   * running call or an approval is not a stall: nothing is expected. */
-  private stalledMs(now = Date.now()): number {
-    if (this.pendingApproval || this.activeTools.size) return 0;
-    const quiet = now - this.lastDataAt;
-    return quiet >= STALL_MS ? quiet : 0;
   }
 
   /** What the next prompt's composer opens with: a message that never
@@ -937,7 +912,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.pendingApproval = { ...next, shownAt: Date.now(), needsFocus: this.waitingDraft.length > 0, focused: false };
     this.waitingLabel = 'waiting for approval';
     // The clock stops while the turn waits on the user, not on the agent.
-    this.pausedAt ??= Date.now();
+    this.clock = pauseTurnClock(this.clock, Date.now());
     if (this.approvalGuardTimer) clearTimeout(this.approvalGuardTimer);
     // Repaint when the guard lifts so the answer row visibly becomes live.
     this.approvalGuardTimer = setTimeout(() => { this.approvalGuardTimer = undefined; this.updateWaiting(); }, APPROVAL_GUARD_MS);
@@ -1013,9 +988,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * reports its own, and a turn that has sent nothing for a while says so. */
   private waitingLine(): string {
     const now = Date.now();
-    const elapsed = formatElapsed(this.elapsedMs(now));
+    const elapsed = formatElapsed(turnElapsedMs(this.clock, now));
     const tokens = formatTurnUsage(this.turnUsage, estimatedTokens(this.streamedChars - this.usageCharsCounted));
-    const stalled = this.stalledMs(now);
+    const stalled = turnStalledMs(this.clock, now, this.turnWaits());
     const status = this.pendingApproval || this.waitingCancelled ? this.waitingLabel : this.toolPhase || this.waitingLabel;
     // "send", not "steer or queue": which of the two happens depends on the
     // harness, and each submission's own row says which it was.
