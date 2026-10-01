@@ -71,9 +71,50 @@ describe('the conversation list', () => {
       ],
     });
     const rows = await conversationList(await readState(), 'other');
-    expect(rows.map((row) => row.id)).toEqual(['other', 'handoff']);
-    expect(rows[0]).toMatchObject({ current: true, activity: 'idle', title: 'write tests for the parser', provider: 'Codex' });
-    expect(rows[1]).toMatchObject({ title: 'Login bug', history: 2, messages: 2, preview: 'Done.', current: false });
+    // Both are older than 24 hours, so Past by recency: handoff (Sep 5) then other (Sep 4).
+    expect(rows.map((row) => row.id)).toEqual(['handoff', 'other']);
+    expect(rows[0]).toMatchObject({ title: 'Login bug', history: 2, messages: 2, preview: 'Done.', current: false });
+    expect(rows[1]).toMatchObject({ current: true, activity: 'idle', title: 'write tests for the parser', provider: 'Codex' });
+  });
+
+  it('puts generating first, then Active (24h), then Past', async () => {
+    const now = Date.now();
+    await home({
+      sessions: [
+        session('past', {
+          conversationId: 'p', status: 'active',
+          updatedAt: new Date(now - 48 * 60 * 60 * 1000).toISOString(),
+          messages: [{ role: 'user', content: 'old' }],
+        }),
+        session('active', {
+          conversationId: 'a', status: 'active',
+          updatedAt: new Date(now - 60 * 60 * 1000).toISOString(),
+          messages: [{ role: 'user', content: 'recent' }],
+        }),
+      ],
+    });
+    const rows = await conversationList(await readState(), undefined);
+    expect(rows.map((row) => row.id)).toEqual(['active', 'past']);
+  });
+
+  it('scrubs a stale index turn so a finished chat is not marked generating', async () => {
+    await home({
+      sessions: [
+        session('done', {
+          status: 'active',
+          updatedAt: new Date().toISOString(),
+          listTurn: { startedAt: '2026-09-01T00:00:00.000Z', prompt: 'go' },
+          listPreview: 'go',
+          listMessageCount: 1,
+          listChecked: true,
+          messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'done' }],
+        }),
+      ],
+    });
+    const state = await readState();
+    const rows = await conversationList(state, 'done');
+    expect(rows[0]?.activity).not.toBe('working');
+    expect(state.sessions[0]?.listTurn).toBeUndefined();
   });
 });
 

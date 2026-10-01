@@ -31,6 +31,12 @@ export function HistoryScreen(props: { model: ChatModel; onBack: () => void; onE
   };
   useEffect(() => { load(); input.current?.focus(); }, []);
   useEffect(() => { if (rows) load(); }, [props.model.sessionId, props.model.title]);
+  // While a chat is generating, re-query so the pulse stops when it finishes.
+  useEffect(() => {
+    if (!rows?.some((row) => row.activity === 'working')) return;
+    const timer = setInterval(load, 2_000);
+    return () => clearInterval(timer);
+  }, [rows]);
 
   const open = (row: IdeConversation): void => {
     props.onBack();
@@ -44,10 +50,18 @@ export function HistoryScreen(props: { model: ChatModel; onBack: () => void; onE
   const query = search.trim().toLowerCase();
   const listRows = useMemo((): ListRow[] => {
     const matching = (rows ?? []).filter((row) => !query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''} ${row.model ?? ''} ${row.workspace ?? ''}`.toLowerCase().includes(query));
+    const now = Date.now();
+    const activeWithinMs = 24 * 60 * 60 * 1000;
+    const isActive = (row: IdeConversation): boolean => {
+      const at = Date.parse(row.updatedAt);
+      return !Number.isNaN(at) && now - at < activeWithinMs;
+    };
+    // Working = generating (animated). Active = touched in the last 24 hours.
+    // Past = older. An idle worker on an old chat is Past, not Active.
     const sections: Array<[string, IdeConversation[]]> = [
-      ['Running', matching.filter((row) => row.activity === 'working')],
-      ['Open', matching.filter((row) => row.activity === 'idle')],
-      ['Recent', matching.filter((row) => !row.activity)],
+      ['Working', matching.filter((row) => row.activity === 'working')],
+      ['Active', matching.filter((row) => row.activity !== 'working' && isActive(row))],
+      ['Past', matching.filter((row) => row.activity !== 'working' && !isActive(row))],
     ];
     const result: ListRow[] = [];
     for (const [title, items] of sections) {
@@ -59,7 +73,7 @@ export function HistoryScreen(props: { model: ChatModel; onBack: () => void; onE
           onSelect: () => (renaming === row.id ? undefined : open(row)),
           render: () => (
             <div class={`conversation${row.current ? ' current' : ''}`}>
-              <span class={`conversation-dot ${row.activity ?? ''}`} aria-hidden="true" />
+              <span class={`conversation-dot ${row.activity === 'working' ? 'working' : row.activity === 'idle' ? 'idle' : ''}`} aria-hidden="true" />
               <div class="conversation-main">
                 {renaming === row.id ? (
                   <form data-row-action onSubmit={(event) => {

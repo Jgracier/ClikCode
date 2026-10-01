@@ -206,10 +206,16 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     let frame = 0;
     /** A second screen is up (sub-agents, options): the board is not drawn. */
     let aside = false;
+    /** Last spin tick saw a generating row -- one more draw after the last
+     * one finishes, otherwise the spinner stays on screen. */
+    let wasWorking = false;
     // No spinner at all under reduced motion: the glyph is the same each frame.
     const spin = reducedMotion() ? undefined : setInterval(() => {
-      if (finished || aside || !rows().some((row) => row.working)) return;
-      frame += 1;
+      if (finished || aside) return;
+      const anyWorking = rows().some((row) => row.working);
+      if (!anyWorking && !wasWorking) return;
+      wasWorking = anyWorking;
+      if (anyWorking) frame += 1;
       draw();
     }, SPIN_MS);
     spin?.unref();

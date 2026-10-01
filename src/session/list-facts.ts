@@ -106,4 +106,32 @@ export function listedPending(session: HarnessSession, activityAt?: string): Har
   };
 }
 
+/** Drop index `listTurn` rows that are not a turn still running.
+ *
+ * The index keeps a short copy so the board can show a spinner without
+ * opening every transcript. When a turn ends, that copy is cleared -- but a
+ * crash, or a worker that stayed up between turns after a write missed the
+ * clear, leaves it behind. The board then animates a chat that is idle.
+ * `workerIsLive` is the process check; the transcript is the journal. */
+export async function reconcileListTurns(
+  sessions: readonly HarnessSession[],
+  workerIsLive: (sessionId: string) => boolean,
+  readPending: (sessionId: string) => Promise<HarnessSession['pendingTurn'] | undefined>,
+): Promise<boolean> {
+  let changed = false;
+  await Promise.all(sessions.map(async (session) => {
+    if (session.pendingTurn || !session.listTurn) return;
+    if (!workerIsLive(session.id)) {
+      delete session.listTurn;
+      changed = true;
+      return;
+    }
+    const pending = await readPending(session.id).catch(() => undefined);
+    if (pending) return;
+    delete session.listTurn;
+    changed = true;
+  }));
+  return changed;
+}
+
 
