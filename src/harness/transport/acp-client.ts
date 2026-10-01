@@ -13,7 +13,7 @@ import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
-import { activityOutput } from '../protocol/activity-events.js';
+import { activityOutput, mergedDiff } from '../protocol/activity-events.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
@@ -145,12 +145,15 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   const status = String(update.status);
   const completed = ['completed', 'failed'].includes(status);
   const content: Json[] = Array.isArray(update.content) ? update.content : [];
-  const diffEntry = content.find((entry) => entry?.type === 'diff');
+  const diffEntries = content.filter((entry) => entry?.type === 'diff');
   // A new file has no old text. Rendering `removed: ['']` would show a phantom
   // deleted blank line, so an absent side is an empty list.
   // The changed lines, through the same line diff ClikCode's own agent
   // uses -- not both texts whole.
-  const diff = diffEntry ? eventDiff(String(diffEntry.oldText ?? ''), String(diffEntry.newText ?? ''), DIFF_LINE_CAP) : undefined;
+  // Every file the call changed, each its own (a fragment's lines are not
+  // numbered: ACP sends the replaced text, not the file).
+  const diff = diffEntries.length ? mergedDiff(diffEntries.map((entry) => eventDiff(String(entry.oldText ?? ''), String(entry.newText ?? ''), DIFF_LINE_CAP,
+    typeof entry.path === 'string' && entry.path ? { path: entry.path } : {}))) : undefined;
   const outputText = content
     .flatMap((entry) => entry?.type === 'content' && entry.content?.type === 'text' && typeof entry.content.text === 'string' ? [entry.content.text as string] : [])
     .join('\n');

@@ -87,13 +87,31 @@ export function commandOutcome(record: Record<string, unknown> | undefined): { e
 
 /** A file change (Codex's `fileChange`/`file_change`): the paths as the
  * row's label, and -- where the vendor sends the unified diff -- its lines. */
-export function fileChangeActivity(changes: unknown): { label: string; category: 'edit'; diff?: { removed: string[]; added: string[] } } {
+export function fileChangeActivity(changes: unknown): { label: string; category: 'edit'; diff?: HarnessActivityEvent['diff'] } {
   const list: JsonRecord[] = Array.isArray(changes) ? changes.map((change) => asRecord(change)).filter((change): change is JsonRecord => Boolean(change))
     : asRecord(changes) ? Object.entries(asRecord(changes)!).map(([file, change]): JsonRecord => ({ path: file, ...asRecord(change) })) : [];
   const paths = list.flatMap((change) => typeof change.path === 'string' && change.path ? [change.path] : []);
   const label = formatToolRow('edit', paths.length > 3 ? `${paths.slice(0, 3).join(', ')} +${paths.length - 3} more` : paths.join(', ') || 'files', 'edit');
-  const diffs = list.flatMap((change) => typeof change.diff === 'string' ? [change.diff] : typeof change.unified_diff === 'string' ? [change.unified_diff] : []);
-  return { label, category: 'edit', ...(diffs.length ? { diff: unifiedEventDiff(diffs.join('\n'), DIFF_CAPTURE_LINES) } : {}) };
+  // Each file on its own, numbered from its hunks, with the kind of change
+  // (Codex's add / delete / update / move) -- not one merged list.
+  const parts = list.flatMap((change) => {
+    const text = typeof change.diff === 'string' ? change.diff : typeof change.unified_diff === 'string' ? change.unified_diff : undefined;
+    if (text === undefined) return [];
+    const kind = String(asRecord(change.kind)?.type ?? change.kind ?? '');
+    const changeKind = (['add', 'delete', 'update', 'move'] as const).find((value) => value === kind);
+    return [unifiedEventDiff(text, DIFF_CAPTURE_LINES, { ...(typeof change.path === 'string' ? { path: change.path } : {}), ...(changeKind ? { change: changeKind } : {}) })];
+  });
+  return { label, category: 'edit', ...(parts.length ? { diff: mergedDiff(parts) } : {}) };
+}
+
+/** Several files' diffs as one event diff: every file kept, the flat
+ * removed/added lists (what older readers use) capped as before. */
+export function mergedDiff(parts: ReadonlyArray<NonNullable<HarnessActivityEvent['diff']>>): NonNullable<HarnessActivityEvent['diff']> {
+  return {
+    removed: parts.flatMap((part) => part.removed).slice(0, DIFF_CAPTURE_LINES),
+    added: parts.flatMap((part) => part.added).slice(0, DIFF_CAPTURE_LINES),
+    files: parts.flatMap((part) => part.files ?? []),
+  };
 }
 
 /** HarnessActivityEvent plus the id of the tool call that spawned it, when the
@@ -138,13 +156,14 @@ export function claudeToolStart(tool: JsonRecord, command: string): NativeActivi
   if (name === 'Edit' && typeof input?.old_string === 'string' && typeof input?.new_string === 'string') {
     return {
       kind: 'tool-start', label: toolLabel(name, input, 'edit'), category: toolCategory(name, input, true), ...identity,
-      diff: eventDiff(input.old_string, input.new_string, DIFF_CAPTURE_LINES),
+      // A fragment of the file: its lines are not numbered.
+      diff: eventDiff(input.old_string, input.new_string, DIFF_CAPTURE_LINES, typeof input.file_path === 'string' ? { path: input.file_path } : {}),
     };
   }
   if (name === 'Write' && typeof input?.content === 'string') {
     return {
       kind: 'tool-start', label: toolLabel(name, input, 'edit'), category: toolCategory(name, input, true), ...identity,
-      diff: eventDiff('', input.content, DIFF_CAPTURE_LINES),
+      diff: eventDiff('', input.content, DIFF_CAPTURE_LINES, { numbered: true, ...(typeof input.file_path === 'string' ? { path: input.file_path } : {}) }),
     };
   }
   const classified = categoryOf(name, input, command);

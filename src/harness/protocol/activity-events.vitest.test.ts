@@ -86,7 +86,8 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'edit-2', type: 'file_change', changes: [{ path: 'src/a.ts', diff: '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old line\n+new line\n' }, { path: 'src/b.ts' }] },
     }));
-    expect(event).toEqual({ kind: 'tool-done', label: 'Edit src/a.ts, src/b.ts', category: 'edit', id: 'edit-2', diff: { removed: ['old line'], added: ['new line'] } });
+    expect(event).toMatchObject({ kind: 'tool-done', label: 'Edit src/a.ts, src/b.ts', category: 'edit', id: 'edit-2', diff: { removed: ['old line'], added: ['new line'] } });
+    expect(event!.diff!.files).toEqual([{ path: 'src/a.ts', additions: 1, removals: 1, lines: [{ kind: 'removed', text: 'old line', line: 1 }, { kind: 'added', text: 'new line', line: 1 }] }]);
   });
 
   it('renders a Claude edit as the lines that changed, not both texts whole', () => {

@@ -76,7 +76,7 @@ export const editFileTool = defineTool<EditFileArgs>({
   async run(args, ctx) {
     const prepared = await prepareEdits(args.path, [args], ctx);
     await commitEdit(prepared, ctx);
-    return { output: `Edited ${prepared.shown}.`, diff: eventDiff(prepared.before, prepared.after) };
+    return { output: `Edited ${prepared.shown}.`, diff: eventDiff(prepared.before, prepared.after, undefined, { path: prepared.shown, numbered: true }) };
   },
 });
 

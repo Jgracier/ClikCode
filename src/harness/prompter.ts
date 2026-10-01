@@ -44,7 +44,7 @@ export interface HarnessActivityEvent {
    * scrollback viewer, so an uncapped diff would just silently lose its
    * earlier lines to the window sliding past them, not show a real "more"
    * indicator -- capping here means the +N truncation notice is honest. */
-  diff?: { removed: string[]; added: string[] };
+  diff?: { removed: string[]; added: string[]; files?: import('../agent/line-diff.js').FileDiff[] };
   /** How long the call ran, where the vendor (or ClikCode's own loop)
    * reports it. Only on a completion. */
   durationMs?: number;

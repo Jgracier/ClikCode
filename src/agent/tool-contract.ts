@@ -32,7 +32,7 @@ export interface ToolContext {
 export interface ToolRunResult {
   output: string;
   isError?: boolean;
-  diff?: { removed: string[]; added: string[] };
+  diff?: { removed: string[]; added: string[]; files?: import('./line-diff.js').FileDiff[] };
   /** A finished command's exit code, shown on its row. */
   exitCode?: number;
 }
