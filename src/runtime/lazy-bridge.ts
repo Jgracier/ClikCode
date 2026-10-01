@@ -108,15 +108,13 @@ export const harnessIntegrationLevel = (harness: AiLocalHarnessDefinition): AiHa
 };
 
 /** Transport for one turn, read from the declaration. */
-export const harnessPreferredTransport = (
-  harness: AiLocalHarnessDefinition, input: { hasImages?: boolean } = {},
-): AiHarnessTransport => withoutRuntime((router) => router.harnessTurnTransport(harness, input), () => {
-  if (harness.transport === 'codex-app-server') return 'codex-app-server';
-  const cli: AiHarnessTransport = harness.turn?.output === 'text' ? 'text-cli' : 'structured-cli';
-  if (!harness.acp) return harness.turn ? cli : harness.transport ?? cli;
-  if (!harness.turn) return 'acp';
-  return !input.hasImages ? 'acp' : cli;
-});
+export const harnessPreferredTransport = (harness: AiLocalHarnessDefinition): AiHarnessTransport =>
+  withoutRuntime((router) => router.harnessTurnTransport(harness), () => {
+    if (harness.transport === 'codex-app-server') return 'codex-app-server';
+    const cli: AiHarnessTransport = harness.turn?.output === 'text' ? 'text-cli' : 'structured-cli';
+    if (!harness.acp) return harness.turn ? cli : harness.transport ?? cli;
+    return 'acp';
+  });
 
 export const streamLocalAiTurn = (input: Record<string, unknown>): Promise<any> => localRouter().streamAiChatTurn(input);
 

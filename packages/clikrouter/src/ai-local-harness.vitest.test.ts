@@ -473,11 +473,9 @@ describe('local harness catalog', () => {
     expect(harnessAcpLaunch(localHarnessForCommand('claude')!)).toMatchObject({ binary: 'claude-agent-acp', argv: [] });
   });
 
-  it('prefers ACP and selects CLI only for image turns that cannot forward images', () => {
+  it('prefers ACP', () => {
     expect(harnessTurnTransport(localHarnessForCommand('codex')!)).toBe('codex-app-server');
     expect(harnessTurnTransport(localHarnessForCommand('copilot')!)).toBe('acp');
-    expect(harnessTurnTransport(localHarnessForCommand('copilot')!, { hasImages: true })).toBe('text-cli');
-    expect(harnessTurnTransport(localHarnessForCommand('droid')!, { hasImages: true })).toBe('structured-cli');
     expect(harnessTurnTransport(localHarnessForCommand('gemini')!)).toBe('acp');
     expect(harnessTurnTransport(localHarnessForCommand('aider')!)).toBe('text-cli');
     expect(harnessTurnTransport(customAcpHarness({ command: 'zed-agent', binary: 'zed-agent', argv: [] }))).toBe('acp');

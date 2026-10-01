@@ -319,7 +319,7 @@ export interface AiRouterRuntime {
   modelDisplayId(harness: AiLocalHarnessDefinition, model: string): string;
   modelIdFromDisplay(harness: AiLocalHarnessDefinition, typed: string): string;
   harnessAcpLaunch(harness: AiLocalHarnessDefinition, input?: { model?: string | null; effort?: string | null; permissionMode?: AiHarnessPermissionMode }): AiHarnessAcpLaunch | undefined;
-  harnessTurnTransport(harness: AiLocalHarnessDefinition, input?: { hasImages?: boolean }): AiHarnessTransport;
+  harnessTurnTransport(harness: AiLocalHarnessDefinition): AiHarnessTransport;
   harnessCanRunTurns(harness: AiLocalHarnessDefinition): boolean;
   harnessTierRank(harness: AiLocalHarnessDefinition): number;
   guardedPromptArgv(turn: Pick<AiHarnessTurnDefinition, 'promptGuard' | 'promptArgvPrefix'>, prompt: string): string[];

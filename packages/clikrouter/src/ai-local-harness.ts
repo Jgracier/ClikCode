@@ -1636,14 +1636,12 @@ export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHar
   };
 }
 
-/** The transport to use for this turn. An ACP declaration is primary. Callers
- * that cannot forward images can still select an image-capable CLI adapter. */
-export function harnessTurnTransport(harness: AiLocalHarnessDefinition, input: { hasImages?: boolean } = {}): AiHarnessTransport {
+/** The transport to use for this turn. An ACP declaration is primary. */
+export function harnessTurnTransport(harness: AiLocalHarnessDefinition): AiHarnessTransport {
   if (harness.transport === 'codex-app-server') return 'codex-app-server';
   const cli: AiHarnessTransport = harness.turn?.output === 'text' ? 'text-cli' : 'structured-cli';
   if (!harness.acp) return harness.turn ? cli : harness.transport;
-  if (!harness.turn) return 'acp';
-  return !input.hasImages ? 'acp' : cli;
+  return 'acp';
 }
 
 /** A harness can serve a ClikCode conversation through either contract. */

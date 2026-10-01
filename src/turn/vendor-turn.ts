@@ -290,8 +290,7 @@ export async function sendVendorTurn(input: {
     });
     if (provisioned.mcpInstalled.length) await closePersistentTransport(session.id);
     const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
-    const hasImages = images.length > 0;
-    const transport = sessionTurnTransport(harness, session, hasImages, { acpImages: true });
+    const transport = sessionTurnTransport(harness, session);
     activeTransport = transport;
     // A fresh native thread with prior ClikCode messages: see above. Also
     // covers an id ClikCode minted that the vendor never confirmed.
