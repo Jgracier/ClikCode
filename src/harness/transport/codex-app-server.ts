@@ -9,7 +9,7 @@ import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-obser
 import { commandOutcome, fileChangeActivity, thoughtLabel } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, toolLabel } from '../protocol/tools.js';
 import { asRecord } from '../protocol/json-lines.js';
-import { countsOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
+import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
 import { createTurnWatchdog, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 
@@ -154,15 +154,6 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
   return undefined;
 }
 
-type Counts = Omit<TurnUsage, 'contextWindow' | 'contextUsed' | 'stopReason' | 'costUsd'>;
-const COUNTED = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens'] as const;
-
-function subtractCounts(from: Counts, less: Counts): Counts {
-  const result: Counts = {};
-  for (const key of COUNTED) if (from[key] !== undefined) result[key] = Math.max(0, from[key]! - (less[key] ?? 0));
-  return result;
-}
-
 /** One turn's usage from Codex's thread-level reading
  * (`thread/tokenUsage/updated`: `{total, last, modelContextWindow}`).
  *
@@ -173,14 +164,14 @@ function subtractCounts(from: Counts, less: Counts): Counts {
  * turn's first reading less that reading's own call. That also holds when a
  * reading is sent twice, as Codex does alongside rate-limit updates. `start`
  * is the baseline the first reading set, handed back for the next one. */
-export function codexTurnUsage(reading: JsonObject, start?: Counts): { usage: TurnUsage; start: Counts } | undefined {
+export function codexTurnUsage(reading: JsonObject, start?: TurnUsage): { usage: TurnUsage; start: TurnUsage } | undefined {
   const total = asRecord(reading.total) ?? asRecord(reading.total_token_usage);
   if (!total) return undefined;
   const last = asRecord(reading.last) ?? asRecord(reading.last_token_usage);
   const totalCounts = countsOf(total);
   const lastCounts = countsOf(last);
-  const baseline = start ?? subtractCounts(totalCounts, lastCounts);
-  const usage: TurnUsage = subtractCounts(totalCounts, baseline);
+  const baseline = start ?? turnShareOf(totalCounts, lastCounts);
+  const usage = turnShareOf(totalCounts, baseline);
   const window = reading.modelContextWindow ?? reading.model_context_window;
   if (typeof window === 'number' && window > 0) usage.contextWindow = window;
   // The latest call read the whole conversation and wrote on top of it.
@@ -271,7 +262,7 @@ interface Stream {
   /** Reasoning streamed so far, per reasoning item (and per raw/summary). */
   thoughts: Map<string, string>;
   /** The thread's usage when this turn began (codexTurnUsage). */
-  usageStart?: Counts;
+  usageStart?: TurnUsage;
   /** Compaction is announced twice (an item, and a deprecated notification). */
   compacted?: boolean;
   watchdog?: TurnWatchdog;
