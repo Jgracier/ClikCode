@@ -149,6 +149,16 @@ export interface ChatModel {
   currentAccount?: IdeAccount;
 }
 
+/** What a conversation open in another chat (a tab, or the side bar) asks
+ * of the user there: an approval waiting, or a turn that finished while
+ * nobody looked. The conversations list marks it, as that tab's title does. */
+export function conversationAttention(id: string, open: ReadonlyArray<{ sessionId?: string; approvals: number; unread: boolean }>): 'waiting' | 'unread' | undefined {
+  const showing = open.filter((chat) => chat.sessionId === id);
+  if (showing.some((chat) => chat.approvals > 0)) return 'waiting';
+  if (showing.some((chat) => chat.unread)) return 'unread';
+  return undefined;
+}
+
 export function emptyModel(): ChatModel {
   return { connection: 'starting', messages: [], notes: [], queued: [], running: false, plan: [], approvals: [], submissions: [], traces: [] };
 }

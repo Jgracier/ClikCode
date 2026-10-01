@@ -70,7 +70,8 @@
         {
           "id": "clikcode",
           "title": "ClikCode",
-          "icon": "media/activity.svg"
+          "icon": "media/activity.svg",
+          "when": "clikcode.doesNotSupportSecondarySidebar"
         }
       ],
       "secondarySidebar": [
@@ -91,12 +92,6 @@
           "icon": "media/activity.svg",
           "contextualTitle": "ClikCode",
           "when": "clikcode.doesNotSupportSecondarySidebar"
-        },
-        {
-          "id": "clikcode.conversations",
-          "name": "Conversations",
-          "icon": "media/activity.svg",
-          "contextualTitle": "ClikCode"
         }
       ],
       "clikcode-secondary": [
@@ -280,23 +275,6 @@
         "category": "ClikCode"
       },
       {
-        "command": "clikcode.showConversation",
-        "title": "Show Conversation",
-        "category": "ClikCode"
-      },
-      {
-        "command": "clikcode.openConversationInNewTab",
-        "title": "Open in New Tab",
-        "category": "ClikCode",
-        "icon": "$(link-external)"
-      },
-      {
-        "command": "clikcode.refreshConversations",
-        "title": "Refresh Conversations",
-        "category": "ClikCode",
-        "icon": "$(refresh)"
-      },
-      {
         "command": "clikcode.newChatTab",
         "title": "Open ClikCode in New Tab",
         "category": "ClikCode",
@@ -396,14 +374,6 @@
           "when": "clikcode.running"
         },
         {
-          "command": "clikcode.showConversation",
-          "when": "false"
-        },
-        {
-          "command": "clikcode.openConversationInNewTab",
-          "when": "false"
-        },
-        {
           "command": "clikcode.newChatTab",
           "when": "false"
         }
@@ -413,23 +383,6 @@
           "command": "clikcode.openInNewTab",
           "when": "view == clikcode.chat || view == clikcode.chatSecondary",
           "group": "navigation@0"
-        },
-        {
-          "command": "clikcode.openInNewTab",
-          "when": "view == clikcode.conversations",
-          "group": "navigation@1"
-        },
-        {
-          "command": "clikcode.refreshConversations",
-          "when": "view == clikcode.conversations",
-          "group": "navigation@2"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "clikcode.openConversationInNewTab",
-          "when": "view == clikcode.conversations && viewItem == conversation",
-          "group": "inline"
         }
       ]
     },

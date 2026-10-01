@@ -2,7 +2,7 @@
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
-import type { IdeConversation } from '../protocol';
+import type { ListedConversation } from '../webview-protocol';
 import { request } from './bus';
 import { relativeTime } from './format';
 import { choose } from './picker';
@@ -12,13 +12,13 @@ import { Icon, IconButton, KeyList, Popover, type ListRow } from './ui';
  * search, then this chat's recent ones by day. Rename, open in a tab and
  * delete are on each row; the rest (fork, archive) are slash commands. */
 export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
-  const [rows, setRows] = useState<IdeConversation[]>();
+  const [rows, setRows] = useState<ListedConversation[]>();
   const [search, setSearch] = useState('');
   const [renaming, setRenaming] = useState<string>();
   const [confirming, setConfirming] = useState<string>();
   const input = useRef<HTMLInputElement>(null);
   const load = (): void => {
-    request<IdeConversation[]>({ method: 'query', query: 'conversations' }).then(setRows, (failure: Error) => props.onError(failure.message));
+    request<ListedConversation[]>({ method: 'query', query: 'conversations' }).then(setRows, (failure: Error) => props.onError(failure.message));
   };
   useEffect(() => { load(); input.current?.focus(); }, []);
   // While a chat is generating, re-query so its pulse stops when it finishes.
@@ -28,11 +28,11 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     return () => clearInterval(timer);
   }, [rows]);
 
-  const open = (row: IdeConversation): void => {
+  const open = (row: ListedConversation): void => {
     props.onClose();
     if (!row.current) request({ method: 'open', mode: 'resume', sessionId: row.id }).catch((failure: Error) => props.onError(failure.message));
   };
-  const act = (row: IdeConversation, action: 'rename' | 'delete', name?: string): void => {
+  const act = (row: ListedConversation, action: 'rename' | 'delete', name?: string): void => {
     setConfirming(undefined);
     choose({ kind: 'conversation', sessionId: row.id, action, ...(name ? { name } : {}) }).then(load, (failure: Error) => props.onError(failure.message));
   };
@@ -44,8 +44,8 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
       .filter((row) => !query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
     const startOfToday = new Date().setHours(0, 0, 0, 0);
     const day = 24 * 60 * 60 * 1000;
-    const at = (row: IdeConversation): number => Date.parse(row.updatedAt) || 0;
-    const sections: Array<[string, IdeConversation[]]> = [
+    const at = (row: ListedConversation): number => Date.parse(row.updatedAt) || 0;
+    const sections: Array<[string, ListedConversation[]]> = [
       ['Working', matching.filter((row) => row.activity === 'working')],
       ['Today', matching.filter((row) => row.activity !== 'working' && at(row) >= startOfToday)],
       ['Previous 7 days', matching.filter((row) => row.activity !== 'working' && at(row) < startOfToday && at(row) >= startOfToday - 7 * day)],
@@ -61,8 +61,10 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
           onSelect: () => (renaming === row.id ? undefined : open(row)),
           render: () => (
             <div class={`conversation${row.current ? ' current' : ''}`} title={row.preview}>
-              {row.activity === 'working' ? <span class="conversation-dot working" aria-label="working" />
-                : row.current ? <Icon name="check" label="this chat" /> : <span class="conversation-dot" aria-hidden="true" />}
+              {row.attention === 'waiting' ? <Icon name="bell-dot" label="waiting for your answer" />
+                : row.activity === 'working' ? <span class="conversation-dot working" aria-label="working" />
+                  : row.current ? <Icon name="check" label="this chat" />
+                    : row.attention === 'unread' ? <span class="conversation-dot unread" aria-label="finished" /> : <span class="conversation-dot" aria-hidden="true" />}
               <div class="conversation-main">
                 {renaming === row.id ? (
                   <form data-row-action onSubmit={(event) => {

@@ -9,14 +9,14 @@ import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, emptyModel, localNote, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, conversationAttention, emptyModel, localNote, typedDuringTurn, type ChatModel } from './model';
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { applyHunks, fileHunks } from './text';
 import { readFile } from 'node:fs/promises';
 import { DiffDocuments, fileNameIn, runInTerminal } from './ui';
-import type { FromWebview, ToWebview, WebviewRequest } from './webview-protocol';
+import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from './webview-protocol';
 import { mentionFromEditor, mentionFromUri, searchWorkspaceFiles } from './mentions';
 import type { Mention } from './webview-protocol';
 
@@ -29,6 +29,8 @@ export interface ControllerHost {
   openInTab(sessionId?: string): Promise<void>;
   /** Where the surface was, for notifications ("Show"). */
   reveal(controller: ClikCodeController): Promise<void>;
+  /** Every open chat: the side bar's and each tab's. */
+  chats(): readonly ClikCodeController[];
 }
 
 export class ClikCodeController implements vscode.Disposable {
@@ -608,15 +610,6 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
-  /** Every conversation, for the side bar's list. `start`: connect first if
-   * this chat has not yet (only the side bar's chat is asked to). */
-  async conversations(start = false): Promise<IdeConversation[] | undefined> {
-    if (start) await this.ensureStarted();
-    const bridge = this.bridge;
-    if (!bridge?.running) return undefined;
-    return bridge.call<IdeConversation[]>({ type: 'query', query: 'conversations' }, 30_000);
-  }
-
   async slashCommands(): Promise<IdeSlashCommand[]> {
     await this.ensureStarted();
     return (await this.bridge?.call<IdeSlashCommand[]>({ type: 'query', query: 'slash-commands' })) ?? [];
@@ -646,6 +639,13 @@ export class ClikCodeController implements vscode.Disposable {
       case 'openInTab':
         await this.host.openInTab(request.sessionId);
         return undefined;
+      case 'open': {
+        // A conversation another chat shows is brought up there, not opened twice.
+        const other = request.mode === 'resume' ? this.host.chats().find((chat) => chat !== this && chat.state.sessionId === request.sessionId) : undefined;
+        if (!other) break;
+        await this.host.reveal(other);
+        return undefined;
+      }
       case 'openInTerminal': {
         const bridge = this.bridge;
         if (!bridge) throw new Error('ClikCode is not connected.');
@@ -680,7 +680,13 @@ export class ClikCodeController implements vscode.Disposable {
       return undefined;
     }
     if (request.method === 'query') {
-      return bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, 120_000);
+      const data = await bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, 120_000);
+      if (request.query !== 'conversations') return data;
+      const others = this.host.chats().filter((chat) => chat !== this).map((chat) => ({ sessionId: chat.state.sessionId, approvals: chat.state.approvals.length, unread: chat.unread }));
+      return (data as IdeConversation[]).map((row): ListedConversation => {
+        const attention = conversationAttention(row.id, others);
+        return attention ? { ...row, attention } : row;
+      });
     }
     // A choice can take a sign-in or an install: no short deadline.
     const result = await bridge.call({ type: 'choose', choice: request.choice }, 30 * 60_000);

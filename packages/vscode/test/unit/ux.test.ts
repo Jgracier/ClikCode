@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { applyEvent, emptyModel, type ChatModel } from '../../src/model';
+import { applyEvent, conversationAttention, emptyModel, type ChatModel } from '../../src/model';
 import { supportsSecondarySidebar } from '../../src/compat';
 import { mentionScore } from '../../src/text';
 import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../../src/webview/composer';
 import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { noticeLevel } from '../../src/text';
-import { conversationState } from '../../src/conversation-state';
 import { modelWithEffort } from '../../src/webview/picker';
 import { splitEditorContext } from '../../src/editor-context';
 import { pathIn, relativeTime } from '../../src/webview/format';
@@ -173,12 +172,12 @@ describe('editor context', () => {
 });
 
 describe('conversation list', () => {
-  const chat = (patch: Partial<{ sessionId: string; approvals: number; running: boolean; unread: boolean }>) => ({ sessionId: 'a', approvals: 0, running: false, unread: false, ...patch });
-  it('puts a waiting approval first, then work, then an unseen finish', () => {
-    expect(conversationState({ id: 'a', activity: 'working' }, [chat({ approvals: 1 })])).toBe('needs-input');
-    expect(conversationState({ id: 'a', activity: 'working' }, [])).toBe('working');
-    expect(conversationState({ id: 'a', activity: 'idle' }, [chat({ unread: true })])).toBe('unread');
-    expect(conversationState({ id: 'a', activity: 'idle' }, [chat({ sessionId: 'b', approvals: 1 })])).toBe('idle');
+  const chat = (patch: Partial<{ sessionId: string; approvals: number; unread: boolean }>) => ({ sessionId: 'a', approvals: 0, unread: false, ...patch });
+  it('marks a conversation another chat shows: a waiting approval first, then an unseen finish', () => {
+    expect(conversationAttention('a', [chat({ approvals: 1, unread: true })])).toBe('waiting');
+    expect(conversationAttention('a', [chat({ unread: true })])).toBe('unread');
+    expect(conversationAttention('a', [chat({})])).toBeUndefined();
+    expect(conversationAttention('a', [chat({ sessionId: 'b', approvals: 1 })])).toBeUndefined();
   });
 });
 
