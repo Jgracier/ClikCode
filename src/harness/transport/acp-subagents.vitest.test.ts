@@ -2,6 +2,7 @@
  * reports them: every sub-agent update stamped with
  * `_meta.claudeCode.parentToolUseId`, and an Edit's final diff sent after
  * the call already completed. Driven by a real child speaking ACP. */
+import { changed } from '../../agent/line-diff.test-support.js';
 import { expect, it } from 'vitest';
 import { createAcpSession } from './acp-client.js';
 import { upsertActivityEvent } from '../../tui/render/activity-log.js';
@@ -51,14 +52,16 @@ it("keeps a sub-agent's work under its Agent row and out of the answer, and neve
   // The late diff settles into the finished edit.
   const late = events.filter((event) => event.id === 'edit1');
   expect(late.map((event) => event.kind)).toEqual(['tool-start', 'tool-done', 'tool-done']);
-  expect(late[2]!.diff).toMatchObject({ removed: ['x = 1'], added: ['x = 2'], files: [{ path: 'a.ts', additions: 1, removals: 1 }] });
+  expect(changed(late[2]!.diff)).toEqual({ removed: ['x = 1'], added: ['x = 2'] });
+  expect(late[2]!.diff).toMatchObject([{ path: 'a.ts', additions: 1, removals: 1 }]);
 
   // One row for the edit, finished, carrying the diff.
   let entries = upsertActivityEvent([], 0, 0, late[0]!, 1);
   entries = upsertActivityEvent(entries, 0, 0, late[1]!, 2);
   entries = upsertActivityEvent(entries, 0, 0, { ...late[2]!, kind: 'tool-start' }, 3);
   expect(entries).toHaveLength(1);
-  expect(entries[0]!.event).toMatchObject({ kind: 'tool-done', diff: { removed: ['x = 1'], added: ['x = 2'] } });
+  expect(entries[0]!.event!.kind).toBe('tool-done');
+  expect(changed(entries[0]!.event!.diff)).toEqual({ removed: ['x = 1'], added: ['x = 2'] });
 
   // A repeat completion for a finished call settles nothing else.
   const pending = createPendingWorkTracker('claude');

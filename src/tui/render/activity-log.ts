@@ -37,7 +37,7 @@ export function upsertActivityEvent(
     ...event,
     label: visibleSlice(sanitizeTerminalText(event.label, { singleLine: true }).replace(/\s+/g, ' ').trim() || 'tool', 120),
     ...(event.output ? { output: cleanLines(event.output) } : {}),
-    ...(event.diff ? { diff: { ...event.diff, removed: cleanLines(event.diff.removed), added: cleanLines(event.diff.added) } } : {}),
+    ...(event.diff ? { diff: event.diff.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: cleanLines([line.text])[0]! })) })) } : {}),
   };
   const matchIndex = (() => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {

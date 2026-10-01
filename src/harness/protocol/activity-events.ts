@@ -9,13 +9,6 @@ import { claudeShaped, JsonRecord, opencodeShaped, asRecord } from './json-lines
 import { eventDiff, unifiedEventDiff } from '../../agent/line-diff.js';
 import { categoryOf, formatToolRow, toolCategory, toolLabel } from './tools.js';
 
-/** Line-capped, not byte-capped: a diff that's still readable at a glance
- * beats a byte-perfect one that pushes everything else out of the 5-line
- * activity window. */
-/** Captured per side, so a balanced preview always has something to show from
- * both halves of an edit. */
-const DIFF_CAPTURE_LINES = 8;
-
 /** How much of a tool's work a transcript row shows. Enough to recognise the
  * edit or command at a glance without the trail crowding out the answer. */
 export const ACTIVITY_PREVIEW_LINES = 8;
@@ -99,19 +92,9 @@ export function fileChangeActivity(changes: unknown): { label: string; category:
     if (text === undefined) return [];
     const kind = String(asRecord(change.kind)?.type ?? change.kind ?? '');
     const changeKind = (['add', 'delete', 'update', 'move'] as const).find((value) => value === kind);
-    return [unifiedEventDiff(text, DIFF_CAPTURE_LINES, { ...(typeof change.path === 'string' ? { path: change.path } : {}), ...(changeKind ? { change: changeKind } : {}) })];
+    return unifiedEventDiff(text, { ...(typeof change.path === 'string' ? { path: change.path } : {}), ...(changeKind ? { change: changeKind } : {}) });
   });
-  return { label, category: 'edit', ...(parts.length ? { diff: mergedDiff(parts) } : {}) };
-}
-
-/** Several files' diffs as one event diff: every file kept, the flat
- * removed/added lists (what older readers use) capped as before. */
-export function mergedDiff(parts: ReadonlyArray<NonNullable<HarnessActivityEvent['diff']>>): NonNullable<HarnessActivityEvent['diff']> {
-  return {
-    removed: parts.flatMap((part) => part.removed).slice(0, DIFF_CAPTURE_LINES),
-    added: parts.flatMap((part) => part.added).slice(0, DIFF_CAPTURE_LINES),
-    files: parts.flatMap((part) => part.files ?? []),
-  };
+  return { label, category: 'edit', ...(parts.length ? { diff: parts } : {}) };
 }
 
 /** HarnessActivityEvent plus the id of the tool call that spawned it, when the
@@ -157,13 +140,13 @@ export function claudeToolStart(tool: JsonRecord, command: string): NativeActivi
     return {
       kind: 'tool-start', label: toolLabel(name, input, 'edit'), category: toolCategory(name, input, true), ...identity,
       // A fragment of the file: its lines are not numbered.
-      diff: eventDiff(input.old_string, input.new_string, DIFF_CAPTURE_LINES, typeof input.file_path === 'string' ? { path: input.file_path } : {}),
+      diff: eventDiff(input.old_string, input.new_string, typeof input.file_path === 'string' ? { path: input.file_path } : {}),
     };
   }
   if (name === 'Write' && typeof input?.content === 'string') {
     return {
       kind: 'tool-start', label: toolLabel(name, input, 'edit'), category: toolCategory(name, input, true), ...identity,
-      diff: eventDiff('', input.content, DIFF_CAPTURE_LINES, { numbered: true, ...(typeof input.file_path === 'string' ? { path: input.file_path } : {}) }),
+      diff: eventDiff('', input.content, { numbered: true, ...(typeof input.file_path === 'string' ? { path: input.file_path } : {}) }),
     };
   }
   const classified = categoryOf(name, input, command);

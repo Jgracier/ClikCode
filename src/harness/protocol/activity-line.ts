@@ -30,7 +30,7 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   const summary = `  ${event.kind === 'tool-error'
     ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
     : `${mark}${chalk.dim(event.label)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
-  if (!event.diff) {
+  if (!event.diff?.length) {
     // Budgeted by kind: a read's row already names the file, so repeating its
     // contents underneath says nothing the label did not.
     const budget = previewLinesFor(event.category);
@@ -40,23 +40,7 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
     if (budget === 0) return [summary];
     return [summary, ...outputPreviewRows(event, budget)];
   }
-  if (event.diff.files?.length) return [summaryWithCounts(summary, event.diff.files), ...fileDiffRows(event.diff.files, DIFF_PREVIEW_LINES)];
-  // Budget both halves of an edit rather than filling it from the top: a large
-  // deletion would otherwise consume the whole preview and hide every added
-  // line, which is the half that says what the edit actually did.
-  const { removed, added } = event.diff;
-  const budget = previewLinesFor(event.category ?? 'edit');
-  const removedShown = Math.min(removed.length, Math.max(
-    Math.floor(budget / 2), budget - added.length,
-  ));
-  const addedShown = Math.min(added.length, budget - removedShown);
-  const hidden = (removed.length - removedShown) + (added.length - addedShown);
-  return [
-    summary,
-    ...removed.slice(0, removedShown).map((line) => `    ${chalk.red(`- ${line}`)}`),
-    ...added.slice(0, addedShown).map((line) => `    ${chalk.green(`+ ${line}`)}`),
-    ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : []),
-  ];
+  return [summaryWithCounts(summary, event.diff), ...fileDiffRows(event.diff, DIFF_PREVIEW_LINES)];
 }
 
 /** Diff lines an edit's row shows, across all its files. */

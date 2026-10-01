@@ -7,3 +7,4 @@ export type {
 } from '../../../src/ide/protocol.js';
 export type { HarnessSession } from '../../../src/session/model.js';
 export type { HarnessActivityEvent } from '../../../src/harness/prompter.js';
+export type { DiffLine, FileDiff } from '../../../src/agent/line-diff.js';

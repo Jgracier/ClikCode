@@ -1,3 +1,4 @@
+import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
 import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, runAcpTurn } from './acp-client.js';
 
@@ -89,24 +90,24 @@ describe('shared ACP adapter contract', () => {
     expect(acpActivityEvent({
       sessionUpdate: 'tool_call_update', toolCallId: 'edit-1', title: 'Edit file', status: 'completed',
       content: [{ type: 'diff', path: '/repo/a.ts', oldText: 'old', newText: 'new' }],
-    })).toMatchObject({ kind: 'tool-done', diff: { removed: ['old'], added: ['new'] } });
+    })).toMatchObject({ kind: 'tool-done', diff: [{ path: '/repo/a.ts', additions: 1, removals: 1 }] });
   });
 
   it('renders a new file as added-only and caps very large diffs', () => {
     expect(acpActivityEvent({
       sessionUpdate: 'tool_call', toolCallId: 'w', title: 'Write', status: 'pending',
       content: [{ type: 'diff', path: '/repo/new.ts', oldText: null, newText: 'a\nb\n' }],
-    })).toMatchObject({ diff: { removed: [], added: ['a', 'b'] } });
+    })).toMatchObject({ diff: [{ path: '/repo/new.ts', change: 'add', additions: 2, removals: 0 }] });
     const big = (tag: string) => Array.from({ length: 500 }, (_, index) => `${tag} ${index}`).join('\n');
     const event = acpActivityEvent({ sessionUpdate: 'tool_call', status: 'pending', content: [{ type: 'diff', oldText: big('old'), newText: big('new') }] })!;
     // The file's diff is bounded and counts the rest; no marker line.
-    const file = event.diff!.files![0]!;
+    const file = event.diff![0]!;
     expect(file).toMatchObject({ additions: 500, removals: 500 });
     expect(file.lines.length + file.omitted!).toBe(1000);
-    expect(event.diff!.added.some((line) => line.includes('more lines'))).toBe(false);
+    expect(file.lines.some((line) => line.text.includes('more lines'))).toBe(false);
     // Only what changed: the lines both texts share are not repeated.
     expect(acpActivityEvent({ sessionUpdate: 'tool_call', status: 'pending', content: [{ type: 'diff', oldText: 'a\nb\nc', newText: 'a\nB\nc' }] })!.diff)
-      .toMatchObject({ removed: ['b'], added: ['B'] });
+      .toEqual([{ additions: 1, removals: 1, lines: [{ kind: 'same', text: 'a' }, { kind: 'removed', text: 'b' }, { kind: 'added', text: 'B' }, { kind: 'same', text: 'c' }] }]);
   });
 
   it('carries bounded tool output', () => {

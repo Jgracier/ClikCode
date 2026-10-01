@@ -9,7 +9,7 @@
  * copy is the prompt this client just submitted, shown until the worker's
  * own snapshot carries it.
  */
-import type { HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
+import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
 import { diffInDetail, stripAnsi } from './text';
@@ -21,7 +21,8 @@ export interface Activity {
   label: string;
   category?: string;
   output?: string[];
-  diff?: { removed: string[]; added: string[] };
+  /** Each file the call changed, as hunks (see src/agent/line-diff.ts). */
+  diff?: FileDiff[];
   /** When this window first saw the call: a running call's clock. */
   startedAt?: number;
   /** How long it ran, and a command's exit code, where the harness reports them. */
@@ -209,7 +210,7 @@ function upsertActivity(activities: Activity[], event: HarnessActivityEvent): Ac
     label: stripAnsi(event.label),
     ...(event.category ? { category: event.category } : {}),
     ...(event.output?.length ? { output: event.output.map(stripAnsi) } : {}),
-    ...(event.diff ? { diff: { removed: [...event.diff.removed], added: [...event.diff.added] } } : {}),
+    ...(event.diff?.length ? { diff: event.diff.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: stripAnsi(line.text) })) })) } : {}),
     ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
     ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
   };

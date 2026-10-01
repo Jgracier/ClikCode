@@ -18,8 +18,6 @@ export interface FileDiff {
   omitted?: number;
 }
 
-interface LineDiff { removed: string[]; added: string[]; files?: FileDiff[] }
-
 /** Lines of context kept around each change. */
 const DIFF_CONTEXT = 2;
 /** Most lines a file's diff carries; rows show fewer. */
@@ -146,31 +144,16 @@ export function diffLines(before: string, after: string): DiffOp[] {
   return ops;
 }
 
-const EVENT_DIFF_LINE_CAP = 12;
-
-/** The `{removed, added}` shape HarnessActivityEvent carries -- each side
- * capped, no marker line in it -- with the file's hunks (`files`), which is
- * what a row draws. `path` names the file; `numbered` when before/after are
- * the whole file. */
-export function eventDiff(before: string, after: string, cap = EVENT_DIFF_LINE_CAP, options: { path?: string; numbered?: boolean } = {}): LineDiff {
-  const ops = diffLines(before, after);
-  return {
-    removed: ops.filter((op) => op.kind === 'removed').map((op) => op.line).slice(0, cap),
-    added: ops.filter((op) => op.kind === 'added').map((op) => op.line).slice(0, cap),
-    files: [fileDiff(before, after, { ...options, ...(before ? {} : { change: 'add' as const }) })],
-  };
+/** An edit as the files it changed -- one here -- which is what an activity
+ * event carries. `numbered` when before/after are the whole file. */
+export function eventDiff(before: string, after: string, options: { path?: string; numbered?: boolean } = {}): FileDiff[] {
+  return [fileDiff(before, after, { ...options, ...(before ? {} : { change: 'add' as const }) })];
 }
 
 /** The same from a unified diff a vendor already computed (Codex's file
- * changes). */
-export function unifiedEventDiff(diff: string, cap = EVENT_DIFF_LINE_CAP, options: { path?: string; change?: FileDiff['change'] } = {}): LineDiff {
-  const files = unifiedFileDiffs(diff, options);
-  const all = files.flatMap((file) => file.lines);
-  return {
-    removed: all.filter((line) => line.kind === 'removed').map((line) => line.text).slice(0, cap),
-    added: all.filter((line) => line.kind === 'added').map((line) => line.text).slice(0, cap),
-    files,
-  };
+ * changes), one entry per file it names. */
+export function unifiedEventDiff(diff: string, options: { path?: string; change?: FileDiff['change'] } = {}): FileDiff[] {
+  return unifiedFileDiffs(diff, options);
 }
 
 /** Unified-style preview with a little context, for approval prompts. */

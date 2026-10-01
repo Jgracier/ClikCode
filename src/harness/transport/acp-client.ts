@@ -13,7 +13,7 @@ import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
-import { activityOutput, mergedDiff } from '../protocol/activity-events.js';
+import { activityOutput } from '../protocol/activity-events.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
@@ -25,7 +25,6 @@ type Json = Record<string, any>;
 /** Tool kinds that cannot change the workspace or run code. `auto` approves
  * only these; everything else still reaches the user. */
 const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'think', 'fetch']);
-const DIFF_LINE_CAP = 200;
 const DETAIL_LINE_CAP = 12;
 const CANCEL_SETTLE_MS = 2000;
 /** How long an agent that said it is retrying a rate-limited call gets to
@@ -152,8 +151,8 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   // uses -- not both texts whole.
   // Every file the call changed, each its own (a fragment's lines are not
   // numbered: ACP sends the replaced text, not the file).
-  const diff = diffEntries.length ? mergedDiff(diffEntries.map((entry) => eventDiff(String(entry.oldText ?? ''), String(entry.newText ?? ''), DIFF_LINE_CAP,
-    typeof entry.path === 'string' && entry.path ? { path: entry.path } : {}))) : undefined;
+  const diff = diffEntries.length ? diffEntries.flatMap((entry) => eventDiff(String(entry.oldText ?? ''), String(entry.newText ?? ''),
+    typeof entry.path === 'string' && entry.path ? { path: entry.path } : {})) : undefined;
   const outputText = content
     .flatMap((entry) => entry?.type === 'content' && entry.content?.type === 'text' && typeof entry.content.text === 'string' ? [entry.content.text as string] : [])
     .join('\n');
