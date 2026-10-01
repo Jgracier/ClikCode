@@ -22,7 +22,7 @@ import type { PickerOption } from '../harness/prompter.js';
 import { takeTerminalKeys } from './input-decoder.js';
 import { reducedMotion } from './capabilities.js';
 import { pickerDeletesSelection } from './command-palette.js';
-import type { OptionPickerHost } from './option-picker.js';
+import { asideOpener, confirmRowDelete, redrawOnRefresh, type OptionPickerHost } from './option-picker.js';
 import { workingSpinner } from './pickers/conversation-activity.js';
 
 /** How often a running conversation's spinner moves. Only its cells change
@@ -288,16 +288,9 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     };
     /** A second screen (sub-agents, options, a delete confirmation) has the
      * keyboard until it closes; then the board takes it back. */
-    const openAside = async (open: () => Promise<boolean>): Promise<void> => {
-      stopInput();
-      aside = true;
-      try {
-        if (await open()) return;
-      } finally {
-        aside = false;
-      }
-      if (!finished) listen();
-    };
+    const openAside = asideOpener({
+      stopInput: () => stopInput(), listen, finished: () => finished, aside: (open) => { aside = open; },
+    });
     const handle = (key: string): void => {
       const effect = boardKey(state, key, rows());
       if (effect.kind === 'draw') draw();
@@ -325,10 +318,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
         const option = effect.option;
         const action = option.deleteAction!;
         void openAside(async () => {
-          const confirmed = await host.select(`${action.label} ${option.label}?`, [
-            { label: 'Cancel', value: false }, { label: `${action.label} ${option.label}`, value: true },
-          ]);
-          if (!confirmed) return false;
+          if (!await confirmRowDelete(host, option, action)) return false;
           await settings.onAction?.(option.value, action.value);
           finish(undefined);
           return true;
@@ -336,6 +326,6 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       }
     };
     listen();
-    for (const refresh of [settings.refresh ?? []].flat()) void refresh.then(() => { if (!finished) draw(); }, () => { if (!finished) draw(); });
+    redrawOnRefresh(settings.refresh, () => { if (!finished) draw(); });
   });
 }
