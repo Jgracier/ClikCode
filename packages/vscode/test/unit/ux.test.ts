@@ -70,6 +70,12 @@ describe('the composer', () => {
     ]);
     expect(text).toBe('why?\n\n`a.ts` lines 2-3:\n```typescript\nx\ny\n```\n\n/tmp/shot.png');
   });
+
+  it('sends a long paste held as a chip with the message, its text whole', () => {
+    const pasted = Array.from({ length: 5 }, (_, index) => `row ${index}`).join('\r\n');
+    expect(composeMessage('what is wrong here?', [{ kind: 'pasted', text: `${pasted}\r\n` }])).toBe(`what is wrong here?\n\n${pasted.replace(/\r\n/g, '\n')}`);
+    expect(composeMessage('', [{ kind: 'pasted', text: 'only this\nand more' }])).toBe('only this\nand more');
+  });
 });
 
 describe('mentions', () => {

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } from '../model';
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
+import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
 import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
@@ -26,7 +27,10 @@ export interface ComposerHandle {
   accounts(): void;
 }
 
-interface Attachment { key: string; kind: 'selection' | 'image'; label: string; mention?: Mention; path?: string; preview?: string }
+/** A chip above the message box: lines referenced, an image, or a long
+ * paste held as `[Pasted text #1 +40 lines]` (its `text` goes with the
+ * message). */
+interface Attachment { key: string; kind: 'selection' | 'image' | 'pasted'; label: string; mention?: Mention; path?: string; preview?: string; text?: string }
 
 const sameRange = (left: Mention | undefined, right: Mention): boolean =>
   left?.path === right.path && left.startLine === right.startLine && left.endLine === right.endLine;
@@ -75,11 +79,13 @@ export function tokenAtCaret(text: string, caret: number): { kind: '@' | '/'; qu
   return undefined;
 }
 
-/** What is sent: the typed text, then each referenced range of lines as a
- * fenced block (with the problems VS Code reports in it), then each image's
- * path (ClikCode attaches image paths it finds in a message). */
-export function composeMessage(text: string, attachments: ReadonlyArray<{ kind: 'selection' | 'image'; mention?: Mention; path?: string }>): string {
+/** What is sent: the typed text, then each attachment in order -- a long
+ * paste's own text, a referenced range of lines as a fenced block (with the
+ * problems VS Code reports in it), an image's path (ClikCode attaches image
+ * paths it finds in a message). */
+export function composeMessage(text: string, attachments: ReadonlyArray<{ kind: 'selection' | 'image' | 'pasted'; mention?: Mention; path?: string; text?: string }>): string {
   const blocks = attachments.flatMap((attachment) => {
+    if (attachment.kind === 'pasted') return attachment.text?.trim() ? [attachment.text.replace(/\r\n/g, '\n').replace(/\n+$/, '')] : [];
     if (attachment.kind === 'image' && attachment.path) return [attachment.path];
     const mention = attachment.mention;
     if (!mention) return [];
@@ -105,6 +111,8 @@ export function Composer(props: {
   const [dismissedToken, setDismissedToken] = useState<string>();
   /** Where ↑/↓ are in the history, and the draft they left. */
   const recall = useRef<{ index: number; draft: string }>();
+  /** Long pastes held as chips in this message so far: their numbers. */
+  const pastes = useRef(0);
   const history = useMemo(() => promptHistory(model.messages), [model.messages]);
   const connected = model.connection === 'ready' && Boolean(model.sessionId);
 
@@ -225,6 +233,7 @@ export function Composer(props: {
     if (!message || !connected) return;
     post({ type: 'send', text: message, id: uid() });
     recall.current = undefined;
+    pastes.current = 0;
     setText('');
     setAttachments([]);
     save({ draft: '' });
@@ -303,14 +312,35 @@ export function Composer(props: {
     update(`${text.slice(0, start)}${value}${text.slice(end)}`, start + value.length);
   };
 
+  /** A long paste held as a chip (pastePlaceholder decides how long), as
+   * Claude Code holds it: the box keeps what is being said about it. */
+  const holdPaste = (pasted: string): boolean => {
+    const label = pastePlaceholder(pasted, pastes.current + 1);
+    if (!label) return false;
+    pastes.current += 1;
+    setAttachments((items) => [...items, { key: uid(), kind: 'pasted', label, text: pasted }]);
+    textarea.current?.focus();
+    return true;
+  };
+
+  /** A held paste put back into the box, to edit as text. */
+  const expandPaste = (attachment: Attachment): void => {
+    setAttachments((items) => items.filter((item) => item !== attachment));
+    insertAtCaret(attachment.text ?? '');
+  };
+
   /** A paste is what it refers to: an image is attached; lines copied from a
    * file become a reference to those lines, and copied files references to
-   * them (pastedReference); anything else is the text itself. */
+   * them (pastedReference); a long text is held as a chip; anything else is
+   * the text itself. */
   const onPaste = (event: ClipboardEvent): void => {
     const images = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
     if (images.length) { event.preventDefault(); attachImages(images); return; }
     const pasted = event.clipboardData?.getData('text/uri-list') || event.clipboardData?.getData('text/plain') || '';
-    if (!pasted.includes('\n') && !/^file:\/\//i.test(pasted.trim())) return;
+    if (!pasted.includes('\n') && !/^file:\/\//i.test(pasted.trim())) {
+      if (holdPaste(pasted)) event.preventDefault();
+      return;
+    }
     event.preventDefault();
     request<{ lines?: Mention; files?: Mention[] }>({ method: 'paste', text: pasted }).then((found) => {
       if (found.lines) { attachLines(found.lines); return; }
@@ -322,8 +352,8 @@ export function Composer(props: {
         if (others.length) insertAtCaret(`${others.map((item) => `@${item.label}`).join(' ')} `);
         return;
       }
-      insertAtCaret(pasted);
-    }, () => insertAtCaret(pasted));
+      if (!holdPaste(pasted)) insertAtCaret(pasted);
+    }, () => { if (!holdPaste(pasted)) insertAtCaret(pasted); });
   };
 
   /** Dropped on the message box: files from the Explorer or a tab (VS Code
@@ -416,9 +446,11 @@ export function Composer(props: {
         {attachments.length ? (
           <div class="attachments">
             {attachments.map((attachment) => (
-              <span key={attachment.key} class={`attachment${attachment.preview ? ' with-thumb' : ''}`} title={attachment.mention?.label ?? attachment.path}>
-                {attachment.preview ? <img class="attachment-thumb" src={attachment.preview} alt="" /> : <Icon name={attachment.kind === 'image' ? 'file-media' : 'code'} />}
-                <span>{attachment.label}</span>
+              <span key={attachment.key} class={`attachment${attachment.preview ? ' with-thumb' : ''}${attachment.kind === 'pasted' ? ' pasted' : ''}`} title={attachment.mention?.label ?? attachment.path}>
+                {attachment.preview ? <img class="attachment-thumb" src={attachment.preview} alt="" /> : <Icon name={attachment.kind === 'image' ? 'file-media' : attachment.kind === 'pasted' ? 'clippy' : 'code'} />}
+                {attachment.kind === 'pasted' ? (
+                  <button type="button" class="attachment-expand" title="Put the pasted text back in the message box, to edit" onClick={() => expandPaste(attachment)}>{attachment.label}</button>
+                ) : <span>{attachment.label}</span>}
                 <button type="button" class="icon-button tiny" aria-label={`Remove ${attachment.label}`} onClick={() => setAttachments((items) => items.filter((item) => item !== attachment))}><Icon name="close" /></button>
               </span>
             ))}
