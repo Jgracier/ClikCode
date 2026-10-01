@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
+  codexIdTokenEmail, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
   parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser,
 } from './vendor-identity.js';
 
@@ -50,5 +50,11 @@ describe('vendor account email', () => {
   it('reads the OpenHands Cloud user', () => {
     expect(parseOpenHandsUser('{"language":"en","email":"a@example.com","email_verified":false}')).toBe('a@example.com');
     expect(parseOpenHandsUser('<!DOCTYPE html>')).toBeUndefined();
+  });
+
+  it('reads the email claim of the Codex id_token', () => {
+    const payload = Buffer.from(JSON.stringify({ email: 'a@example.com' })).toString('base64url');
+    expect(codexIdTokenEmail(JSON.stringify({ tokens: { id_token: `h.${payload}.s` } }))).toBe('a@example.com');
+    expect(codexIdTokenEmail(JSON.stringify({ tokens: {} }))).toBeUndefined();
   });
 });
