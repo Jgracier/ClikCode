@@ -146,17 +146,14 @@ async function saveMemo(): Promise<void> {
 }
 
 export function resetModelCatalogMemo(): void {
-  modelCatalogCache.clear();
   memo = undefined;
 }
-
-const modelCatalogCache = new Map<string, { at: number; fingerprint: string; result: ModelCatalogResult }>();
 
 /** How long a server-sourced CLI or ACP model list is trusted. */
 const SERVER_LIST_TTL_MS = 300_000;
 
 function serverModelList(harness: AiLocalHarnessDefinition): boolean {
-  return Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false && harness.command !== 'hermes'));
+  return Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false));
 }
 
 async function fileIdentity(path: string | undefined): Promise<string> {
@@ -236,16 +233,7 @@ async function cachedCatalog(
   account?: AiHarnessAccount,
   options?: { allowStale?: boolean },
 ): Promise<ModelCatalogResult | undefined> {
-  const key = cacheKey(harness, account);
-  let cached = modelCatalogCache.get(key);
-  if (!cached) {
-    const memoData = await loadMemo();
-    const entry = memoData.entries[key];
-    if (entry) {
-      cached = entry;
-      modelCatalogCache.set(key, entry);
-    }
-  }
+  const cached = (await loadMemo()).entries[cacheKey(harness, account)];
   if (!cached) return undefined;
   if (cached.fingerprint !== await catalogFingerprint(harness, account)) return undefined;
   if (harness.acp && cached.result.models.length === 0) return undefined;
@@ -264,14 +252,16 @@ async function cachedCatalog(
  * measured harness with room to spare and still bounds a bad one. */
 const MODEL_CATALOG_PICKER_WAIT_MS = 3_000;
 
+/** Claude Code's family aliases, for when its own table cannot be read:
+ * Claude Code resolves each to its latest model itself. */
+const CLAUDE_FALLBACK_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'];
+
 function defaultModelCatalogFallback(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
 ): ModelCatalogResult {
   const models = new Set(account?.models ?? []);
-  if (harness.command === 'claude') {
-    ['opus', 'sonnet', 'haiku'].forEach((m) => models.add(m));
-  }
+  if (harness.command === 'claude') CLAUDE_FALLBACK_ALIASES.forEach((model) => models.add(model));
   return { models: [...models] };
 }
 
@@ -388,11 +378,8 @@ export async function nativeModelCatalog(
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead.
   if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider' || harness.acp)) return result;
-  const key = cacheKey(harness, account);
-  const entry: CatalogMemoEntry = { at: Date.now(), fingerprint, result };
-  modelCatalogCache.set(key, entry);
   const memoData = await loadMemo();
-  memoData.entries[key] = entry;
+  memoData.entries[cacheKey(harness, account)] = { at: Date.now(), fingerprint, result };
   if (memo) memo.dirty = true;
   await saveMemo().catch(() => undefined);
   if (account?.id && result.models.length) {
@@ -453,6 +440,16 @@ async function nativeModelCatalogUncached(
   let configured: string | undefined;
   let connect: ModelCatalogConnect[] | undefined;
   let localRecommendations: ModelCatalogResult['localRecommendations'];
+  // Hermes' and OpenClaw's inventories are the whole truth: ids remembered on
+  // the account from before (bare, or from a provider since signed out)
+  // would run wrong.
+  const adoptInventory = (inventory: { models: readonly string[]; labels: Record<string, string>; configured?: string; connect: ModelCatalogConnect[] }): void => {
+    models.clear();
+    inventory.models.forEach((model) => models.add(model));
+    labels = { ...labels, ...inventory.labels };
+    if (inventory.configured) configured = inventory.configured;
+    connect = inventory.connect;
+  };
   if (profileRoot && harness.command === 'codex') {
     try {
       const config = await readFile(join(profileRoot, 'config.toml'), 'utf8');
@@ -475,7 +472,7 @@ async function nativeModelCatalogUncached(
     // are shown bare rather than with a label that may be a release behind.
     const table = await claudeModelTable(harness.binary);
     const aliases = claudeModelAliases(table);
-    (aliases.length ? aliases : ['fable', 'opus', 'sonnet', 'haiku']).forEach((model) => models.add(model));
+    (aliases.length ? aliases : CLAUDE_FALLBACK_ALIASES).forEach((model) => models.add(model));
     if (table) {
       labels = {};
       for (const alias of aliases) {
@@ -500,13 +497,7 @@ async function nativeModelCatalogUncached(
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     const inventory = await discoverHermesModels(harness, account).catch(() => undefined);
     if (inventory) {
-      // The inventory is the whole truth; ids remembered on the account from
-      // before (bare, or from a provider since signed out) would run wrong.
-      models.clear();
-      inventory.models.forEach((model) => models.add(model));
-      labels = { ...labels, ...inventory.labels };
-      if (inventory.configured) configured = inventory.configured;
-      connect = inventory.connect;
+      adoptInventory(inventory);
       // On a machine TurboFit sees no GPU in, its recommendations are GPU
       // measurements; the CPU lanes, measured or estimated here, replace them.
       const cpuLanes = await turboFitCpuLaneRows(harness, account).catch(() => []);
@@ -527,13 +518,7 @@ async function nativeModelCatalogUncached(
   }
   if (harness.command === 'openclaw') {
     const inventory = await discoverOpenClawModels(harness, account).catch(() => undefined);
-    if (inventory) {
-      models.clear();
-      inventory.models.forEach((model) => models.add(model));
-      labels = { ...labels, ...inventory.labels };
-      if (inventory.configured) configured = inventory.configured;
-      connect = inventory.connect;
-    }
+    if (inventory) adoptInventory(inventory);
   }
   // Aider: the models of each provider it has a key for (aider-discovery.ts).
   if (harness.command === 'aider') {
@@ -581,7 +566,7 @@ async function nativeModelCatalogUncached(
   }
   // No list command, but the ACP session says (Cline: 318 models through its
   // own gateway, none of which ClikCode could offer before).
-  if (harness.acp && harness.acp.listsModels !== false && harness.command !== 'hermes' && !harness.modelDiscoveryArgv) {
+  if (harness.acp && harness.acp.listsModels !== false && !harness.modelDiscoveryArgv) {
     const listed = await queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, nativeProfileEnvironment(account?.nativeProfile),
       async (request, capabilities) => acpSessionModels(await acpDiscoverySession(request, capabilities, cacheKey(harness, account))), 30_000).catch(() => undefined);
     if (listed?.models.length) {
