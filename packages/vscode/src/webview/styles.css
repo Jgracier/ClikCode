@@ -331,7 +331,7 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
   display: flex; align-items: center; gap: 6px; font-size: 0.92em; padding: 4px 8px; border-radius: var(--radius-small);
   border: 1px dashed var(--border);
 }
-.queued-item span:nth-child(2) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queued-item .queued-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .install-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; background: var(--subtle); display: flex; flex-direction: column; gap: 6px; }
 .install-text { display: flex; align-items: center; gap: 8px; }
 .progress { height: 3px; border-radius: 2px; background: var(--vscode-progressBar-background); opacity: 0.25; position: relative; overflow: hidden; }

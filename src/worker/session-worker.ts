@@ -460,6 +460,17 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       return;
     }
     if (command.type === 'detach') { socket.end(); return; }
+    if (command.type === 'unqueue') {
+      if (activeQueuedTurnId === command.id) return;
+      const state = await readState();
+      const found = state.sessions.find((item) => item.id === sessionId);
+      if (!found || !consumeSessionTurn(found, command.id)) return;
+      await writeState(state);
+      observer.broadcast({ type: 'queue-changed' });
+      // Every window drops it now, a turn running or not.
+      void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(() => undefined);
+      return;
+    }
     if (command.type === 'cancel') {
       // Nothing running is not an error -- a cancel racing the turn's own
       // natural completion is ordinary, not a client mistake to report.

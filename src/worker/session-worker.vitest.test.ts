@@ -217,6 +217,22 @@ describe('session worker (real spawned process, real socket)', () => {
     expect(stored?.queuedTurns?.map((item) => item.text)).toEqual(['also check the tests']);
   });
 
+  it('takes a queued message back out of the queue for every window', async () => {
+    const session = await isolatedSession();
+    const client = await WorkerClient.attach(session.id);
+    spawnedClients.push(client);
+    await client.initialSnapshot;
+    const queued = nextEvent(client, 'submission');
+    client.send({ type: 'steer', text: 'never mind this', id: 'msg-2' });
+    await queued;
+    const changed = nextEvent(client, 'snapshot');
+    client.send({ type: 'unqueue', id: 'msg-2' });
+    const snapshot = await changed as Extract<WorkerEvent, { type: 'snapshot' }>;
+    expect(snapshot.session.queuedTurns ?? []).toEqual([]);
+    const stored = (await readState()).sessions.find((item) => item.id === session.id);
+    expect(stored?.queuedTurns ?? []).toEqual([]);
+  });
+
   it('rejects an attach carrying the wrong token', async () => {
     const session = await isolatedSession();
     const legitimate = await WorkerClient.attach(session.id);

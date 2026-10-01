@@ -32,7 +32,22 @@ const sameRange = (left: Mention | undefined, right: Mention): boolean =>
 
 const lineCount = (mention: Mention): number => (mention.endLine ?? 1) - (mention.startLine ?? 1) + 1;
 
-let slashCache: { session?: string; commands: IdeSlashCommand[] } | undefined;
+/** The command list, for the conversation on the provider and model it had
+ * when read: another provider has other commands (its own skills, its own
+ * built-ins). */
+let slashCache: { key: string; commands: IdeSlashCommand[] } | undefined;
+
+/** The prompts ↑ and ↓ step through: this conversation's own, oldest first,
+ * repeats in a row once -- as the terminal recalls what was typed, though
+ * read from the transcript so every tab and window on it has them. */
+export function promptHistory(messages: ReadonlyArray<{ role: string; content: string }>): string[] {
+  const prompts: string[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user' || !message.content.trim()) continue;
+    if (prompts[prompts.length - 1] !== message.content) prompts.push(message.content);
+  }
+  return prompts.slice(-200);
+}
 
 /** The @ or / token the caret is in, if any. */
 export function tokenAtCaret(text: string, caret: number): { kind: '@' | '/'; query: string; start: number } | undefined {
@@ -74,6 +89,9 @@ export function Composer(props: {
   const [menu, setMenu] = useState<Menu>();
   const [suggestions, setSuggestions] = useState<ListRow[]>([]);
   const [dismissedToken, setDismissedToken] = useState<string>();
+  /** Where ↑/↓ are in the history, and the draft they left. */
+  const recall = useRef<{ index: number; draft: string }>();
+  const history = useMemo(() => promptHistory(model.messages), [model.messages]);
   const connected = model.connection === 'ready' && Boolean(model.sessionId);
   const structured = (model.revision ?? 1) >= 2;
 
@@ -124,9 +142,9 @@ export function Composer(props: {
       update(next, token.start + value.length);
     };
     if (token.kind === '/') {
-      const cachedSlash = slashCache;
-      const load = cachedSlash && cachedSlash.session === model.sessionId ? Promise.resolve(cachedSlash.commands)
-        : request<IdeSlashCommand[]>({ method: 'query', query: 'slash-commands' }).then((commands) => { slashCache = { session: model.sessionId, commands }; return commands; });
+      const cacheKey = `${model.sessionId}|${model.providerId}|${model.model}`;
+      const load = slashCache?.key === cacheKey ? Promise.resolve(slashCache.commands)
+        : request<IdeSlashCommand[]>({ method: 'query', query: 'slash-commands' }).then((commands) => { slashCache = { key: cacheKey, commands }; return commands; });
       load.then((commands) => {
         if (!live) return;
         const query = token.query.toLowerCase();
@@ -172,7 +190,7 @@ export function Composer(props: {
       return () => { live = false; clearTimeout(timer); };
     }
     return () => { live = false; };
-  }, [tokenKey, token?.query, model.sessionId]);
+  }, [tokenKey, token?.query, model.sessionId, model.providerId, model.model]);
 
   const send = (): void => {
     const offered = selection?.included && !attachments.some((item) => sameRange(item.mention, selection.mention))
@@ -181,6 +199,7 @@ export function Composer(props: {
     const message = composeMessage(text, [...attachments, ...offered]);
     if (!message || !connected) return;
     post({ type: 'send', text: message, id: uid() });
+    recall.current = undefined;
     setText('');
     setAttachments([]);
     if (offered.length) setSelection({ mention: selection!.mention, included: false });
@@ -197,6 +216,25 @@ export function Composer(props: {
           event.preventDefault();
           textarea.current?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
         }
+        return;
+      }
+    }
+    // ↑ on the first line and ↓ on the last step through earlier prompts, as
+    // in the terminal; Ctrl+P / Ctrl+N anywhere. ↓ past the newest gives
+    // back the draft that was there.
+    const element = textarea.current;
+    const up = (event.key === 'ArrowUp' && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) || (event.ctrlKey && event.key === 'p');
+    const down = (event.key === 'ArrowDown' && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) || (event.ctrlKey && event.key === 'n');
+    if (element && (up || down) && element.selectionStart === element.selectionEnd) {
+      const onFirstLine = !text.slice(0, element.selectionStart).includes('\n');
+      const onLastLine = !text.slice(element.selectionEnd).includes('\n');
+      if ((up && (event.ctrlKey || onFirstLine) && history.length) || (down && (event.ctrlKey || onLastLine) && recall.current)) {
+        const at = recall.current ?? { index: history.length, draft: text };
+        const index = up ? Math.max(0, at.index - 1) : at.index + 1;
+        event.preventDefault();
+        if (index >= history.length) { recall.current = undefined; update(at.draft); return; }
+        recall.current = { index, draft: at.draft };
+        update(history[index]!);
         return;
       }
     }
@@ -260,7 +298,14 @@ export function Composer(props: {
       {model.queued.length ? (
         <div class="queued" aria-label="Queued messages">
           {model.queued.map((item) => (
-            <div key={item.id} class="queued-item"><Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span>{item.text}</span><span class="muted">queued</span></div>
+            <div key={item.id} class="queued-item">
+              <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
+              <span class="muted">queued</span>
+              <button type="button" class="icon-button tiny" title="Edit: take it back into the message box" aria-label="Edit queued message"
+                onClick={() => { post({ type: 'unqueue', id: item.id }); props.handle.current?.insert(item.text); }}><Icon name="edit" /></button>
+              <button type="button" class="icon-button tiny" title="Remove from the queue" aria-label="Remove queued message"
+                onClick={() => post({ type: 'unqueue', id: item.id })}><Icon name="close" /></button>
+            </div>
           ))}
         </div>
       ) : null}
@@ -298,7 +343,7 @@ export function Composer(props: {
         ) : null}
         <textarea id="composer-input" ref={textarea} rows={1} value={text} placeholder={placeholder} aria-label="Message ClikCode"
           aria-autocomplete="list" aria-controls={showSuggestions ? 'suggestions' : undefined} disabled={!connected}
-          onInput={(event) => { const element = event.target as HTMLTextAreaElement; setText(element.value); setCaret(element.selectionStart); save({ draft: element.value }); setDismissedToken(undefined); }}
+          onInput={(event) => { const element = event.target as HTMLTextAreaElement; recall.current = undefined; setText(element.value); setCaret(element.selectionStart); save({ draft: element.value }); setDismissedToken(undefined); }}
           onKeyUp={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
           onClick={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
           onKeyDown={onKeyDown} onPaste={onPaste} />

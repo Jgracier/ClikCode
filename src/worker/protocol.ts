@@ -47,6 +47,10 @@ export type ClientCommand =
   /** Stop everything local this worker started for the conversation. */
   | { type: 'release' }
   | { type: 'detach' }
+  /** Take a queued message back before its turn (an editor's remove, or its
+   * edit, which puts the text back in the composer). One whose turn has
+   * already begun is that turn now, and stays. */
+  | { type: 'unqueue'; id: string }
   /** Sent by a client on a different build. The worker exits if it is idle
    * and otherwise answers `retire-declined` and exits once it is. */
   | { type: 'retire' };
