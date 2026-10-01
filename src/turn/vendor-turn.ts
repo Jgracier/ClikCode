@@ -288,7 +288,6 @@ export async function sendVendorTurn(input: {
       harness, account, workspace: session.workspace, stateDir: stateDirectory(),
     });
     if (provisioned.mcpInstalled.length) await closePersistentTransport(session.id);
-    if (provisioned.summary) prompter?.activity(chalk.dim(provisioned.summary));
     const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
     const hasImages = images.length > 0;
     const transport = sessionTurnTransport(harness, session, hasImages, { acpImages: true });
