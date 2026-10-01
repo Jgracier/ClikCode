@@ -6,14 +6,13 @@
 import chalk from 'chalk';
 import { pastedText } from './keys.js';
 import { backslashNewline, composerVerticalMove, editComposer, editWaitingComposer } from './composer-edit.js';
-import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, paletteDisplayRows, type PaletteEntry } from './command-palette.js';
+import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, type PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { composerLayout } from './render/composer-layout.js';
 import { closeOpenHyperlink } from './render/hyperlinks.js';
 import { createStreamingBlockParser, splitIntoBlocks } from './render/markdown.js';
 import { sanitizeTerminalText } from './render/text.js';
 import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
-import { wrapCodeLine } from './render/wrap.js';
 import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
 import { stripRepeatedTitles } from '../session/title.js';
@@ -33,6 +32,7 @@ import { logProcessWarnings } from './warnings.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
+import { paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
 import { runOptionPicker, type OptionPickerHost } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
@@ -1129,7 +1129,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // touch inner itself, so the notice/composer/meta lines below (which
     // share it) are unaffected.
     const conversationInner = rowWidth - 2;
-    const rule = '─'.repeat(rowWidth);
     const stableMessages = session.messages ?? [];
     const pending = this.waitingLabel ? session.pendingTurn : undefined;
     const pendingPrompt = pendingPromptText({
@@ -1222,21 +1221,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const planGlyph = this.waitingLabel && !this.reducedMotion ? waitingSpinnerGlyph(this.waitingFrame) : undefined;
     const planRows = paletteRows || this.selecting ? [] : planBlockRows(this.planEntries, width, liveBandBudget, planGlyph);
     liveBandBudget -= planRows.length;
-    const panelRows: string[] = [];
+    let panelRows: string[] = [];
     const panel = this.panelState;
     if (panel && !paletteRows && !approval && !this.selecting && liveBandBudget >= 3) {
-      const wrapped = panel.lines.flatMap((line) => (terminalCellWidth(line) <= inner ? [line] : wrapCodeLine(line, inner)));
-      const page = Math.max(1, Math.min(wrapped.length, liveBandBudget - 2, Math.max(3, targetHeight - 10)));
-      panel.page = page;
-      panel.total = wrapped.length;
-      panel.offset = Math.max(0, Math.min(panel.offset, wrapped.length - page));
-      const scrollable = wrapped.length > page;
-      const position = scrollable ? `${panel.offset + 1}-${panel.offset + page} of ${wrapped.length} · ↑↓ PgUp/PgDn scroll · ` : '';
-      panelRows.push(
-        `  ${chalk.bold(visibleSlice(panel.title, inner))}`,
-        ...wrapped.slice(panel.offset, panel.offset + page).map((line) => `  ${line}`),
-        `  ${chalk.dim(visibleSlice(`${position}q/Esc/Enter close`, inner))}`,
-      );
+      const shown = panelBandRows(panel, inner, liveBandBudget, targetHeight);
+      Object.assign(panel, { page: shown.page, total: shown.total, offset: shown.offset });
+      panelRows = shown.rows;
     }
     const maxComposerRows = Math.max(
       1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - planRows.length - panelRows.length,
@@ -1488,29 +1478,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!this.waitingLabel) footer.push('');
     if (noticeRows && notice) footer.push(`  ${chalk.yellow(visibleSlice(notice, inner))}`);
     if (paletteCapacity) {
-      footer.push(rule);
-      const visibleRows = paletteCapacity - 2;
-      const windowed = paletteDisplayRows(options as readonly PaletteEntry[], selected, visibleRows);
-      for (const row of windowed) {
-        if ('header' in row) {
-          // A picker's sections read as headings with their size beside them,
-          // the way Claude Code's session list does; the command palette keeps
-          // its quieter rule.
-          const counted = palette?.headings ? /^(.*?)(?: (\d+))?$/.exec(row.header) : null;
-          footer.push(counted
-            ? `  ${chalk.bold(visibleSlice(counted[1] ?? '', Math.max(1, width - 10)))}${counted[2] ? ` ${chalk.dim(counted[2])}` : ''}`
-            : `  ${chalk.dim(visibleSlice(`── ${row.header}`, Math.max(1, width - 4)))}`);
-          continue;
-        }
-        const selectedOption = row.index === selected;
-        const available = Math.max(1, width - 4);
-        const label = visibleSlice(row.option.label, available);
-        const remaining = available - terminalCellWidth(label);
-        const detail = row.option.detail && remaining > 3 ? visibleSlice(row.option.detail, remaining - 2) : '';
-        footer.push(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
-      }
-      for (let index = windowed.length; index < visibleRows; index++) footer.push('');
-      footer.push(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
+      footer.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {
+        ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),
+      }));
     }
     footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
     if (waitingRows) {
