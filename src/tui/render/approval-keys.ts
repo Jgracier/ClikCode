@@ -16,16 +16,20 @@ export const APPROVAL_GUARD_MS = 400;
  *  - then y/Y allows once, n/N and Enter (the default) deny;
  *  - a/A allows always, and ONLY where a rule was offered -- otherwise it is
  *    ignored rather than silently meaning "once", since a key that appears to
- *    remember an answer and does not is worse than no key at all.
+ *    remember an answer and does not is worse than no key at all;
+ *  - t/T is "no, and tell it what to do instead", ONLY where the caller can
+ *    send that text into the running turn (`canTell`) -- likewise ignored
+ *    otherwise, rather than a denial that drops what was typed.
  * Nothing typed while an approval is pending ever reaches the draft. */
 export function approvalKeyAction(
-  key: string, elapsedMs: number, needsFocus: boolean, focused: boolean, hasRule = false,
-): 'allow' | 'always' | 'deny' | 'focus' | 'ignore' {
+  key: string, elapsedMs: number, needsFocus: boolean, focused: boolean, hasRule = false, canTell = false,
+): 'allow' | 'always' | 'deny' | 'tell' | 'focus' | 'ignore' {
   if (elapsedMs < APPROVAL_GUARD_MS) return 'ignore';
   if (key === '\u001b' || key === '\u0003') return 'deny';
   if (needsFocus && !focused) return key === '\t' ? 'focus' : 'ignore';
   if (key === 'y' || key === 'Y') return 'allow';
   if (hasRule && (key === 'a' || key === 'A')) return 'always';
+  if (canTell && (key === 't' || key === 'T')) return 'tell';
   if (key === 'n' || key === 'N' || key === '\r' || key === '\n') return 'deny';
   return 'ignore';
 }

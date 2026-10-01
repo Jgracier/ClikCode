@@ -41,7 +41,7 @@ describe('answering an approval', () => {
     expect(approvalKeyAction('a', past, true, true, true)).toBe('always');
   });
 
-  const state = { guarded: false, needsFocus: false, focused: false, queued: 0 };
+  const state = { guarded: false, needsFocus: false, focused: false };
 
   it('offers the always key and names the rule it would remember', () => {
     const rows = approvalBlockRows({ title: 'Approve command', detail: 'npm test', rule: 'Bash(npm test:*)' }, 100, 12, state);
@@ -56,6 +56,25 @@ describe('answering an approval', () => {
     const answer = approvalBlockRows({ title: 'Approve command', detail: 'npm test' }, 100, 12, state).at(-1)!;
     expect(answer).not.toContain('[a]');
     expect(answer).toContain('Allow once?');
+  });
+
+  it('offers "tell it instead" only where the caller can send it', () => {
+    expect(key('t')).toBe('ignore');
+    expect(approvalKeyAction('t', past, false, false, false, true)).toBe('tell');
+    expect(approvalKeyAction('T', past, true, true, true, true)).toBe('tell');
+    // Behind the guard and the focus rule like every other answer.
+    expect(approvalKeyAction('t', APPROVAL_GUARD_MS - 1, false, false, false, true)).toBe('ignore');
+    expect(approvalKeyAction('t', past, true, false, false, true)).toBe('ignore');
+    const offered = approvalBlockRows({ title: 'Approve command', detail: 'npm test' }, 100, 12, { ...state, canTell: true }).at(-1)!;
+    expect(offered).toContain('[t] tell it instead');
+    expect(approvalBlockRows({ title: 'Approve command' }, 40, 12, { ...state, canTell: true }).at(-1)).toContain('[t]');
+    const telling = approvalBlockRows({ title: 'Approve command' }, 100, 12, { ...state, canTell: true, telling: true }).at(-1)!;
+    expect(telling).toContain('type what it should do instead');
+  });
+
+  it('says which of several waiting approvals this is', () => {
+    expect(approvalBlockRows({ title: 'Approve command' }, 100, 12, { ...state, position: 1, total: 3 })[0]).toContain('Approval 1 of 3 · Approve command');
+    expect(approvalBlockRows({ title: 'Approve command' }, 100, 12, { ...state, position: 1, total: 1 })[0]).not.toContain('Approval 1');
   });
 
   it('drops to short key hints on a narrow terminal without losing the always key', () => {

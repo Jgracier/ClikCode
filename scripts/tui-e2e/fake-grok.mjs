@@ -42,6 +42,14 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
   const models = { currentModelId: 'grok-4', availableModels: [{ modelId: 'grok-4', name: 'Grok 4' }, { modelId: 'grok-4-fast', name: 'Grok 4 Fast' }] };
   let sessionId;
   let cancelled = false;
+  // Requests this agent made of the client (permissions), by id.
+  const asked = new Map();
+  let askedCount = 0;
+  const ask = (method, params) => new Promise((resolve) => {
+    const id = `fake_${++askedCount}`;
+    asked.set(id, resolve);
+    send({ id, method, params });
+  });
   const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } });
   const prompt = async (id) => {
     const turn = nextTurn();
@@ -59,6 +67,17 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
         update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: piece } });
       }
       await sleep(turn.thought.ms ?? 1500);
+    }
+    // `permissions`: commands that need the user's approval, all asked at
+    // once (as parallel calls are); `{answers}` in a block is what came back.
+    let answers = '';
+    if (turn.permissions && !cancelled) {
+      const outcomes = await Promise.all(turn.permissions.map((command, index) => ask('session/request_permission', {
+        sessionId,
+        toolCall: { toolCallId: `perm_${index}`, title: command, kind: 'execute', rawInput: { command } },
+        options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }],
+      })));
+      answers = outcomes.map((result) => result?.outcome?.optionId ?? result?.outcome?.outcome ?? 'none').join(', ');
     }
     // `explore`: reads and searches in a row, each with what it found.
     for (const [index, call] of (turn.explore ?? []).entries()) {
@@ -92,7 +111,7 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       await sleep(ms);
       update({ sessionUpdate: 'tool_call_update', toolCallId: 'stream_1', status: 'completed' });
     }
-    for (const [index, block] of turn.blocks.entries()) {
+    for (const [index, block] of turn.blocks.map((text) => text.replace('{answers}', answers)).entries()) {
       for (const piece of block.match(/\S+\s*/g) ?? []) {
         if (cancelled) break;
         await sleep(Number(process.env.FAKE_DELAY_MS ?? 120));
@@ -112,7 +131,8 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       if (!line) continue;
       const message = JSON.parse(line);
       const { id, method, params } = message;
-      if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [] } });
+      if (!method && asked.has(id)) { asked.get(id)(message.result); asked.delete(id); }
+      else if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [] } });
       else if (method === 'session/new') { sessionId = randomUUID(); send({ id, result: { sessionId, models } }); }
       else if (method === 'session/load' || method === 'session/resume') { sessionId = params.sessionId; send({ id, result: { models } }); }
       else if (method === 'session/set_model') { models.currentModelId = params.modelId; send({ id, result: {} }); }
