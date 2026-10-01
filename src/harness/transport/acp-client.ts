@@ -13,6 +13,7 @@ import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
+import { activityOutput } from '../protocol/activity-events.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
@@ -25,7 +26,6 @@ type Json = Record<string, any>;
  * only these; everything else still reaches the user. */
 const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'think', 'fetch']);
 const DIFF_LINE_CAP = 200;
-const OUTPUT_LINE_CAP = 20;
 const DETAIL_LINE_CAP = 12;
 const CANCEL_SETTLE_MS = 2000;
 /** How long an agent that said it is retrying a rate-limited call gets to
@@ -146,7 +146,8 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   const outputText = content
     .flatMap((entry) => entry?.type === 'content' && entry.content?.type === 'text' && typeof entry.content.text === 'string' ? [entry.content.text as string] : [])
     .join('\n');
-  const output = outputText.trim() ? outputText.replace(/\r?\n$/, '').split(/\r?\n/).slice(-OUTPUT_LINE_CAP) : undefined;
+  // The end of what the tool printed: a command's last lines are its result.
+  const output = activityOutput(outputText, { tail: true });
   const classified = acpToolClass(update);
   const rawOutput = update.rawOutput && typeof update.rawOutput === 'object' ? update.rawOutput as Record<string, unknown> : undefined;
   return {
@@ -154,7 +155,7 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
     label: acpToolLabel(update, classified),
     ...classified,
     ...(typeof update.toolCallId === 'string' ? { id: update.toolCallId } : {}),
-    ...(output ? { output } : {}),
+    ...output,
     ...(diff ? { diff } : {}),
     ...(completed ? commandOutcome(rawOutput) : {}),
   };

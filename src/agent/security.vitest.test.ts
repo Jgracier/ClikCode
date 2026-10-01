@@ -134,9 +134,11 @@ describe('secrets and caps', () => {
 
   it('builds bounded, masked event previews', () => {
     const preview = eventOutputPreview(`${Array.from({ length: 30 }, (_, index) => `line ${index}`).join('\n')}\nMY_TOKEN=abc123\n`)!;
-    expect(preview[0]).toMatch(/earlier lines/);
-    expect(preview.at(-1)).toBe('MY_TOKEN=[REDACTED]');
-    expect(preview.length).toBeLessThanOrEqual(9);
+    // The newest lines, the earlier ones counted rather than written as a line.
+    expect(preview.outputTail).toBe(true);
+    expect(preview.output.at(-1)).toBe('MY_TOKEN=[REDACTED]');
+    expect(preview.output.length).toBeLessThanOrEqual(8);
+    expect(preview.outputOmitted).toBe(31 - preview.output.length);
     expect(eventOutputPreview('  \n')).toBeUndefined();
   });
 });

@@ -54,6 +54,20 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     for (let index = 0; index < (turn.tools_first ?? 0) && !cancelled; index += 1) {
       await tool(`lead_${index}`, `npx vitest run part${index}`, `part${index} ok`, Number(process.env.FAKE_TOOL_MS ?? 600));
     }
+    // `streamed_tool`: a command printing a line at a time while it runs, then
+    // completing with no content -- how ACP agents report a long build.
+    if (turn.streamed_tool) {
+      const { lines, ms } = turn.streamed_tool;
+      update({ sessionUpdate: 'tool_call', toolCallId: 'stream_1', title: 'npm test', kind: 'execute', status: 'in_progress', rawInput: { command: 'npm test' } });
+      let printed = '';
+      for (const line of lines) {
+        await sleep(ms);
+        printed += `${line}\n`;
+        update({ sessionUpdate: 'tool_call_update', toolCallId: 'stream_1', status: 'in_progress', content: [{ type: 'content', content: { type: 'text', text: printed } }] });
+      }
+      await sleep(ms);
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'stream_1', status: 'completed' });
+    }
     for (const [index, block] of turn.blocks.entries()) {
       for (const piece of block.match(/\S+\s*/g) ?? []) {
         if (cancelled) break;

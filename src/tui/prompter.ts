@@ -26,6 +26,7 @@ import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
+import { outputPreviewRows } from '../harness/protocol/activity-line.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
@@ -80,6 +81,9 @@ const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
 /** How often a drag held at the screen's edge scrolls the selection a line. */
 const SELECTION_SCROLL_MS = 60;
+
+/** Lines of a running tool's newest output shown under its spinner. */
+const LIVE_OUTPUT_LINES = 3;
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
@@ -1192,8 +1196,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // appear at once when the first sentence arrives.
     const settledMessage = pendingPrompt ? undefined : persistedMessages[persistedMessages.length - 1];
     // Nothing of a turn stepped out of is drawn until it is followed again.
+    // While a turn runs, its tools are anchored where it began (activityAnchor)
+    // -- the same anchor turnTools reads them by. Comparing against the
+    // transcript's length missed them whenever the transcript already held
+    // the prompt (a window attached to a worker): every tool stayed invisible
+    // until the first word of the answer, then all appeared at once.
     const hasTransientAssistant = !this.steppedOut && (transientAssistantRequired(
-      this.liveResponse, Boolean(this.waitingLabel), persistedMessages.length, this.activityEntries,
+      this.liveResponse, Boolean(this.waitingLabel), this.waitingLabel ? this.activityAnchor : persistedMessages.length, this.activityEntries,
       settledMessage?.role === 'assistant' ? settledMessage.content : undefined,
     ) || Boolean(pending?.steers?.length));
     const storedQueued = session.queuedTurns ?? [];
@@ -1358,9 +1367,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const row = runningChatLine(
         entry.event?.label ?? '', this.reducedMotion ? 0 : this.waitingFrame, kind, entry.startedAt ? Date.now() - entry.startedAt : 0,
       ).trim();
+      // What it has printed so far, newest last, under the spinner -- a long
+      // build or test run is visibly working instead of a bare timer.
+      const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES)
+        .map((line) => `  ${visibleSlice(line, Math.max(1, conversationInner - 2))}`) : [];
       return {
         id, done: false, responseOffset: entry.responseOffset,
-        lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(child)}`] : []), ''],
+        lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(child)}`] : []), ...live, ''],
       };
     };
     /** A turn's own tool calls: anchored at the message count when it began,

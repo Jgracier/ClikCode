@@ -111,7 +111,7 @@ describe('shared ACP adapter contract', () => {
     expect(acpActivityEvent({
       sessionUpdate: 'tool_call_update', toolCallId: 'c', title: 'Run', status: 'completed',
       content: [{ type: 'content', content: { type: 'text', text: 'ok\n2 passed\n' } }],
-    })).toEqual({ kind: 'tool-done', id: 'c', label: 'Run', category: 'run', output: ['ok', '2 passed'] });
+    })).toEqual({ kind: 'tool-done', id: 'c', label: 'Run', category: 'run', output: ['ok', '2 passed'], outputTail: true });
   });
 
   it('classifies a command or a sub-agent from the ACP kind, input, or title', () => {

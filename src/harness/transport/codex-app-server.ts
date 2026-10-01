@@ -1,3 +1,4 @@
+import { activityOutput } from '../protocol/activity-events.js';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
@@ -77,12 +78,6 @@ export function codexSteerParams(threadId: string, turnId: string, text: string)
   };
 }
 
-const OUTPUT_LINE_CAP = 20;
-
-function outputTail(text: string): string[] {
-  const trimmed = text.replace(/\r?\n$/, '');
-  return trimmed ? trimmed.split(/\r?\n/).slice(-OUTPUT_LINE_CAP) : [];
-}
 
 function codexCommandText(command: unknown): string | undefined {
   if (typeof command === 'string' && command) return command;
@@ -98,10 +93,10 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
     || (typeof item.exit_code === 'number' && item.exit_code !== 0)
     ? 'tool-error' as const : 'tool-done' as const;
   if (type === 'commandExecution') {
-    const aggregated = completed && typeof item.aggregatedOutput === 'string' ? outputTail(item.aggregatedOutput) : undefined;
+    const aggregated = completed && typeof item.aggregatedOutput === 'string' ? activityOutput(item.aggregatedOutput, { tail: true }) : {};
     return {
       kind: completed ? completedKind : 'tool-start', label: formatToolRow('shell', codexCommandText(item.command) ?? 'command', 'run'), category: 'run', ...(id ? { id } : {}),
-      ...(aggregated?.length ? { output: aggregated } : {}),
+      ...aggregated,
       ...(completed ? commandOutcome(item) : {}),
     };
   }
@@ -708,7 +703,7 @@ class CodexSessionImpl implements CodexSession {
       const thought = target.thoughts.get(id);
       if (thought) target.thoughts.set(id, `${thought}\n\n`);
     } else if (method === 'item/mcpToolCall/progress' && typeof params.message === 'string') {
-      this.progress(target, String(params.itemId ?? ''), [params.message]);
+      this.progress(target, String(params.itemId ?? ''), { output: [String(params.message)] });
     } else if (method === 'turn/diff/updated') {
       // Deliberately not shown: it is the turn's changes aggregated, and every
       // fileChange item already shows its own paths and diff on its own row.
@@ -765,17 +760,17 @@ class CodexSessionImpl implements CodexSession {
     const now = Date.now();
     if (now - entry.emittedAt < OUTPUT_EMIT_INTERVAL_MS) return;
     entry.emittedAt = now;
-    this.progress(target, itemId, outputTail(entry.text));
+    this.progress(target, itemId, activityOutput(entry.text, { tail: true }));
   }
 
   /** What a running item has to show so far, on its own row. */
-  private progress(target: Stream, itemId: string, output: string[]): void {
+  private progress(target: Stream, itemId: string, output: Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail'>): void {
     if (!itemId) return;
     const item = target.items.get(itemId);
     const activity = item ? codexActivityForItem(item, false) : undefined;
     target.sawActivity = true;
     target.observer.onActivity?.({
-      kind: 'tool-start', label: activity?.label ?? 'command', id: itemId, output,
+      kind: 'tool-start', label: activity?.label ?? 'command', id: itemId, ...output,
       ...(activity?.category ? { category: activity.category } : {}),
       ...(activity?.agent ? { agent: activity.agent } : {}),
     });

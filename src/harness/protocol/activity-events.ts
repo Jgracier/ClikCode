@@ -46,9 +46,24 @@ function capDiffLines(text: string, max: number): { lines: string[]; truncated: 
   return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
 }
 
-function cappedActivityOutput(text: string): string[] | undefined {
+/** Lines of tool output an event carries -- more than any row shows, so the
+ * renderer can choose what to show (first lines, or a command's last). */
+export const EVENT_OUTPUT_LINES = 20;
+
+/** A tool's output as an event carries it: at most EVENT_OUTPUT_LINES lines,
+ * from the start or (`tail`) the end, with the count of what was dropped. */
+export function activityOutput(text: string, options: { tail?: boolean } = {}): Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail'> {
+  const normalized = text.replace(/\r?\n$/, '');
+  if (!normalized.trim()) return {};
+  const lines = normalized.split(/\r?\n/);
+  const kept = options.tail ? lines.slice(-EVENT_OUTPUT_LINES) : lines.slice(0, EVENT_OUTPUT_LINES);
+  const omitted = lines.length - kept.length;
+  return { output: kept, ...(omitted ? { outputOmitted: omitted } : {}), ...(options.tail ? { outputTail: true } : {}) };
+}
+
+function cappedActivityOutput(text: string): Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail'> {
   const normalized = text.trim();
-  if (!normalized) return undefined;
+  if (!normalized) return {};
   // Machine-readable tool output belongs to the native event protocol, not
   // the human transcript. Printing JSON/JSONL here was the reason a working
   // turn looked like a wall of tool-call envelopes until the final response
@@ -58,9 +73,8 @@ function cappedActivityOutput(text: string): string[] | undefined {
     if (!/^(?:\{|\[)/.test(candidate.trim())) return false;
     try { JSON.parse(candidate); return true; } catch { return false; }
   };
-  if (isJson(normalized) || (records.length > 0 && records.every(isJson))) return undefined;
-  const capped = capDiffLines(normalized, 3);
-  return [...capped.lines, ...(capped.truncated ? [`… ${capped.truncated} more line${capped.truncated === 1 ? '' : 's'}`] : [])];
+  if (isJson(normalized) || (records.length > 0 && records.every(isJson))) return {};
+  return activityOutput(normalized);
 }
 
 /** Exit code and duration of a finished command, under the names vendors
@@ -187,7 +201,7 @@ function claudeShapedActivity(value: JsonRecord, command: string): NativeActivit
       return [{
         kind: result.is_error === true ? 'tool-error' : 'tool-done', label: 'tool',
         ...(typeof result.tool_use_id === 'string' ? { id: result.tool_use_id } : {}),
-        ...(output?.length ? { output } : {}), ...parent,
+        ...output, ...parent,
       }];
     });
   }
@@ -221,7 +235,7 @@ function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[
       const failed = result?.status === 'error' || result?.isError === true || asRecord(result?.value)?.isError === true;
       const payload = Array.isArray(result?.value) ? result.value : asRecord(result?.value)?.content;
       const output = cappedActivityOutput(blockText(payload));
-      return [{ kind: failed ? 'tool-error' : 'tool-done', label: 'tool', ...identity, ...(output?.length ? { output } : {}) }];
+      return [{ kind: failed ? 'tool-error' : 'tool-done', label: 'tool', ...identity, ...output }];
     }
     if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
       return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140) }];
@@ -301,7 +315,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
         ? (item?.status === 'failed' || item?.status === 'error' || (outcome.exitCode ?? 0) !== 0 ? 'tool-error' : 'tool-done')
         : 'tool-start', label: formatToolRow('shell', command, 'run'), category: 'run',
       ...(typeof item?.id === 'string' ? { id: item.id } : {}),
-      ...(output?.length ? { output } : {}),
+      ...output,
       ...(type.endsWith('completed') ? outcome : {}),
     };
   }
@@ -350,13 +364,13 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     const state = asRecord(part?.state);
     const name = String(part?.tool ?? 'tool');
     const status = String(state?.status ?? '');
-    const output = typeof state?.output === 'string' ? cappedActivityOutput(state.output) : undefined;
+    const output = typeof state?.output === 'string' ? cappedActivityOutput(state.output) : {};
     const classified = categoryOf(name, asRecord(state?.input), harness.command);
     return {
       kind: /error|fail/i.test(status) ? 'tool-error' : status === 'completed' ? 'tool-done' : 'tool-start',
       label: toolLabel(name, asRecord(state?.input), classified.category), ...classified,
       ...(typeof part?.callID === 'string' ? { id: part.callID } : typeof part?.id === 'string' ? { id: part.id } : {}),
-      ...(output?.length ? { output } : {}),
+      ...output,
     };
   }
   // Command Code wraps each lifecycle event under a top-level
@@ -386,7 +400,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
         kind, label: formatToolRow(name, description, classified.category),
         ...classified,
         ...(typeof inner.toolCallId === 'string' ? { id: inner.toolCallId } : {}),
-        ...(output?.length ? { output } : {}),
+        ...output,
       };
     }
   }
