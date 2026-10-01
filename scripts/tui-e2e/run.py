@@ -157,7 +157,9 @@ SCENARIOS = {
     # The phone's case: nothing but tool calls for a long while, then out to
     # the board and back, again and again, while more calls arrive.
     'board-and-back-tools-only': {
-        'cols': 70, 'env': {'FAKE_TOOL_MS': '1500'},
+        # Tall enough for the prompt, ten calls, the answer and the turn's
+        # closing line all at once: the prompt is one of the rows counted.
+        'cols': 70, 'rows': 56, 'env': {'FAKE_TOOL_MS': '1500'},
         'turns': [{'tools_first': 10, 'blocks': ['All ten parts pass.']}],
         'steps': [
             ('type', 'run every part'), ('wait_for', 'esc to interrupt', 30), ('settle', 4),
@@ -365,8 +367,9 @@ def run(name, spec, entry, keep):
         os.chdir(workspace)
         os.execve(node, ['node', entry], env)
     cols = spec.get('cols', COLS)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, cols, 0, 0))
-    screen = pyte.Screen(cols, ROWS)
+    rows = spec.get('rows', ROWS)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+    screen = pyte.Screen(cols, rows)
     stream = pyte.ByteStream(screen)
     raw, frames = bytearray(), []
     start = time.time()
