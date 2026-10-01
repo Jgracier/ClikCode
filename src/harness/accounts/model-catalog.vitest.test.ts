@@ -6,6 +6,7 @@ vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../runtime/lazy-bridge.js')>(),
   localHarnessForCommand: catalog.localHarnessForCommand,
   modelDisplayId: catalog.modelDisplayId,
+  modelIdFromDisplay: catalog.modelIdFromDisplay,
 }));
 
 const { harnessModelLabel, modelIdFromLabel, nativeModelLabel } = await import('./model-catalog.js');
@@ -55,5 +56,12 @@ describe('native model display metadata', () => {
     expect(modelIdFromLabel(kilo, ['kilo/openai/gpt-5.1'], 'openai/gpt-5.1')).toBe('kilo/openai/gpt-5.1');
     // Two models reading the same: neither is guessed.
     expect(modelIdFromLabel(opencode, ['opencode/x', 'opencode:x'], 'x')).toBe('x');
+  });
+
+  it('spells a display form the harness way with no catalog in hand', () => {
+    const goose = localHarnessForCommand('goose')!;
+    expect(modelIdFromLabel(goose, [], 'claude-code:sonnet')).toBe('claude-code/sonnet');
+    expect(modelIdFromLabel(goose, [], 'ollama/qwen3:8b')).toBe('ollama/qwen3:8b');
+    expect(modelIdFromLabel(goose, ['claude-code/sonnet'], ' claude-code:sonnet ')).toBe('claude-code/sonnet');
   });
 });
