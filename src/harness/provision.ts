@@ -62,8 +62,6 @@ export interface ProvisionResult {
   mcpSkipped: string[];
   skillsCopied: string[];
   hooksAdded: number;
-  /** One line when something was written. Empty when the harness was already current. */
-  summary: string;
 }
 
 export interface ProvisionInput {
@@ -210,12 +208,7 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   // inherits: already running. different: another schema, left untouched.
   if (hookShare(input.harness.command) === 'inherits') hooksAdded = 0;
 
-  const parts = [
-    mcpInstalled.length ? `Installed ${mcpInstalled.length} MCP server${mcpInstalled.length === 1 ? '' : 's'} into ${input.harness.displayName}` : '',
-    skillsCopied.length ? `copied ${skillsCopied.length} skill${skillsCopied.length === 1 ? '' : 's'}` : '',
-    hooksAdded ? `added ${hooksAdded} hook${hooksAdded === 1 ? '' : 's'}` : '',
-  ].filter(Boolean);
-  return { mcpInstalled, mcpSkipped, skillsCopied, hooksAdded, summary: parts.join(', ') };
+  return { mcpInstalled, mcpSkipped, skillsCopied, hooksAdded };
 }
 
 /** Grok's compat.claude flags default to on. An explicit false is the only off. */
