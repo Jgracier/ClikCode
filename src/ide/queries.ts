@@ -24,14 +24,14 @@ import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import { vendorFacingOptions } from '../harness/options.js';
 import {
-  allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort, harnessTierRank, localHarnessCapabilityManifest,
+  allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort, localHarnessCapabilityManifest,
   localHarnessForCommand, localHarnessForProvider,
 } from '../runtime/lazy-bridge.js';
 import { localModelChoices } from '../local-models/index.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { conversationPreview, transcriptWasLoaded } from '../session/list-facts.js';
-import { conversationIdFor, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
+import { compareProviders, conversationIdFor, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
 import { sessionClaimIsLive } from '../session/claim.js';
 import { liveWorkerSessions, sessionActivity } from '../session/liveness.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
@@ -66,12 +66,12 @@ function choosesModel(harness: AiLocalHarnessDefinition): boolean {
 }
 
 /** Every provider the terminal's /provider lists, in its order: the two
- * ClikCode routes, then installed harnesses, then the catalog's tiers. */
+ * ClikCode routes, then compareProviders. */
 export async function providerList(config: Conf, state: HarnessState, session: HarnessSession | undefined): Promise<IdeProvider[]> {
   const harnesses = allLocalHarnesses().filter((harness) => harnessCanRunTurns(harness));
   const inspected = await Promise.all(harnesses.map(async (harness) => ({ harness, inspection: await inspectNativeHarnessForPicker(harness) })));
-  inspected.sort((left, right) => Number(right.inspection.installed) - Number(left.inspection.installed)
-    || harnessTierRank(left.harness) - harnessTierRank(right.harness));
+  inspected.sort((left, right) => compareProviders(
+    { harness: left.harness, installed: left.inspection.installed }, { harness: right.harness, installed: right.inspection.installed }));
   const ready = new Set(state.accounts.filter((item) => item.status === 'ready').map((item) => item.provider));
   const gatewayConnected = Boolean(getApiKeyForUrl(config, getApiUrl(config)));
   const rows: IdeProvider[] = [
@@ -234,7 +234,7 @@ export async function accountList(state: HarnessState, session: HarnessSession |
   accounts.sort((left, right) => left.providerName.localeCompare(right.providerName) || left.label.localeCompare(right.label));
   const addable = allLocalHarnesses()
     .filter((harness) => harnessCanRunTurns(harness) && (harness.localAuth.includes('api-key') || Boolean(harness.loginArgv)))
-    .sort((left, right) => harnessTierRank(left) - harnessTierRank(right))
+    .sort((left, right) => compareProviders({ harness: left }, { harness: right }))
     .map((harness) => ({ provider: harness.command, name: harness.displayName }));
   return { accounts, addable, failover: (session?.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto' };
 }

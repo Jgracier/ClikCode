@@ -332,16 +332,36 @@ export function integrationLabel(harness: AiLocalHarnessDefinition): string {
 
 /** Keep the provider list deliberately sparse. Account switching belongs to
  * the composer shortcut and /account, not this provider-only menu. */
+/** The providers listed first, in this order, after the ClikDeploy Gateway
+ * and ClikCode Local. The user's own ranking; every other harness follows,
+ * installed ones first, then by catalog tier. */
+export const PROVIDER_ORDER: readonly string[] = ['claude', 'codex', 'grok', 'cursor', 'antigravity', 'opencode', 'hermes'];
+
+/** One order for every list of providers -- /provider, VS Code's list, the
+ * add-account list, the slash menu's harnesses -- so they cannot disagree. */
+export function compareProviders(
+  left: { harness: AiLocalHarnessDefinition; installed?: boolean },
+  right: { harness: AiLocalHarnessDefinition; installed?: boolean },
+): number {
+  const rank = (harness: AiLocalHarnessDefinition): number => {
+    const at = PROVIDER_ORDER.indexOf(harness.command);
+    return at < 0 ? PROVIDER_ORDER.length : at;
+  };
+  return rank(left.harness) - rank(right.harness)
+    || Number(Boolean(right.installed)) - Number(Boolean(left.installed))
+    || harnessTierRank(left.harness) - harnessTierRank(right.harness);
+}
+
 export function providerPickerOptions(
   available: ReadonlyArray<{ harness: AiLocalHarnessDefinition; inspection: { installed: boolean; version?: string } }>,
   session: HarnessSession,
   gatewayConnected: boolean,
   configuredProviders: ReadonlySet<string> = new Set(),
 ): PickerOption<ProviderChoice>[] {
-  // Installed first, then the catalog's declared tier, then catalog order
-  // (Array.prototype.sort is stable) -- never a hardcoded name ranking.
-  const ordered = [...available].sort((left, right) => Number(right.inspection.installed) - Number(left.inspection.installed)
-    || harnessTierRank(left.harness) - harnessTierRank(right.harness));
+  // PROVIDER_ORDER, then installed, then tier, then catalog order (the sort
+  // is stable).
+  const ordered = [...available].sort((left, right) => compareProviders(
+    { harness: left.harness, installed: left.inspection.installed }, { harness: right.harness, installed: right.inspection.installed }));
   // Every provider, in one list. Splitting it left the catalog's own entries
   // behind a "More providers…" row, so the answer to "what can I use?" was
   // two screens deep and looked like a shorter catalog than it is. Installed
