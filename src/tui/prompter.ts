@@ -13,7 +13,8 @@ import { closeOpenHyperlink } from './render/hyperlinks.js';
 import { createStreamingBlockParser, splitIntoBlocks } from './render/markdown.js';
 import { sanitizeTerminalText } from './render/text.js';
 import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
-import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
+import { installTerminalRestoreSignals, restoreTerminal, signalsTeardown, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
+import { FOCUS_REPORTING_ON, PUSH_TITLE, notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle, type FocusState } from './terminal-signals.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
 import { stripRepeatedTitles } from '../session/title.js';
 import { isGatewayService } from '../session/route.js';
@@ -49,7 +50,7 @@ import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
-import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, takeTerminalKeys, waitingInputAction } from './input-decoder.js';
+import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingInputAction } from './input-decoder.js';
 import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { estimatedTokens, formatTurnUsage } from './render/usage-line.js';
@@ -243,6 +244,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Ctrl+S's message: typed during a turn to be the next one at once.
    * `taken` once the loop has it and the turn it starts is starting. */
   private sendNow?: { text: string; taken: boolean };
+  /** Whether the terminal says it is being looked at (terminal-signals.ts). */
+  private focus: FocusState = { since: 0 };
+  private stopFocusReports?: () => void;
+  /** The window title last written, so an unchanged one is not written. */
+  private terminalTitle?: string;
   /** Long pastes held as placeholders so far, for the next one's number. */
   private pasteCount = 0;
   /** Whether the turn being stopped took messages: a real turn, not a wait
@@ -594,19 +600,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
       // Asked for: bracketed paste, because pasted text must not be read as
-      // keystrokes, and the mouse, because that is how the transcript is read
-      // back. Nothing else.
-      //
-      // Not focus reporting or theme notifications: nothing acts on either,
-      // and the filters that drop them stay for a terminal that sends them
+      // keystrokes; the mouse, because that is how the transcript is read
+      // back; and focus reports, because a turn that ends or an approval
+      // that waits while the user has looked away is worth a notification
+      // (see notifyIfAway). Not theme notifications: nothing acts on them,
+      // and the filter that drops them stays for a terminal that sends them
       // unasked.
       //
       // Selection mode means the user asked for the mouse back; taking the
       // screen must not quietly take it again.
-      output.write(`${ENABLE_BRACKETED_PASTE}${SELECTION_MODE.active ? '' : OPENING_MOUSE_TRACKING}`);
+      output.write(`${ENABLE_BRACKETED_PASTE}${SELECTION_MODE.active ? '' : OPENING_MOUSE_TRACKING}${FOCUS_REPORTING_ON}`);
       terminalModes.bracketedPaste = true;
       terminalModes.wheelReporting = true;
     }
+    // The shell's own title is saved, to be put back on the way out; this
+    // UI sets its own while it runs (syncTerminalSignals).
+    this.takeTerminalTitle();
+    this.stopFocusReports = onTerminalFocus((focused) => { this.focus = { focused, since: Date.now() }; });
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
     // Any exit path -- process.exit() deep in a command, an uncaught error, a
@@ -1015,7 +1025,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // A turn that did real work ends on a line saying how long it took and
     // what it changed (Codex). Only a real turn -- one that took messages --
     // and only its end: stepping out of it is not.
-    if (this.waitingLabel && this.waitingSubmitWas && !this.steppedOut) this.pendingTurnSummary = this.endOfTurnSummary();
+    if (this.waitingLabel && this.waitingSubmitWas && !this.steppedOut) {
+      this.pendingTurnSummary = this.endOfTurnSummary();
+      this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
+    }
     this.waitingSubmitWas = false;
     this.waitingLabel = '';
     this.thought = undefined;
@@ -1034,6 +1047,46 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // client's copy any longer would draw it twice.
     this.submittedPrompt = undefined;
     if (refresh && !this.closed) this.repaint({ keepPalette: false });
+  }
+
+  /** Back from a suspend: focus reports and the title again. */
+  private retakeTerminalSignals(): void {
+    if (!output.isTTY) return;
+    output.write(FOCUS_REPORTING_ON);
+    this.takeTerminalTitle();
+  }
+
+  /** Save the shell's title, once per taking of the terminal. */
+  private takeTerminalTitle(): void {
+    if (!output.isTTY || terminalModes.titlePushed) return;
+    output.write(PUSH_TITLE);
+    terminalModes.titlePushed = true;
+    this.terminalTitle = undefined;
+  }
+
+  /** The window title and the tab's progress indicator, kept in step with
+   * the turn: spinner and activity while it runs, the conversation's name
+   * when idle. Written only when they change, and never off a TTY. */
+  private syncTerminalSignals(): void {
+    if (!output.isTTY || this.suspended || this.closed || !terminalModes.titlePushed) return;
+    const running = Boolean(this.waitingLabel);
+    const title = windowTitle({
+      running, glyph: waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame),
+      activity: this.pendingApproval ? 'waiting for you' : (this.toolPhase || this.waitingLabel).replace(/(…|\.\.\.)$/, ''),
+      ...(this.currentSession?.name ? { name: this.currentSession.name } : {}),
+    });
+    let sequence = '';
+    if (title !== this.terminalTitle) { sequence += titleSequence(title); this.terminalTitle = title; }
+    if (running !== terminalModes.progress) { sequence += progressSequence(running); terminalModes.progress = running; }
+    if (sequence) output.write(sequence);
+  }
+
+  /** Something needs the user -- a turn ended, an approval waits -- and the
+   * terminal said it lost focus long enough ago: tell them (OSC 9 and a
+   * bell). A terminal that never reports focus is never notified. */
+  private notifyIfAway(message: string): void {
+    if (!output.isTTY || this.suspended || this.closed || !shouldNotify(this.focus, Date.now())) return;
+    output.write(notifySequence(message));
   }
 
   /** The end-of-turn line, or nothing for a turn that ran no tools and took
@@ -1084,6 +1137,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Repaint when the guard lifts so the answer row visibly becomes live.
     this.approvalGuardTimer = setTimeout(() => { this.approvalGuardTimer = undefined; this.updateWaiting(); }, APPROVAL_GUARD_MS);
     this.approvalGuardTimer.unref();
+    this.notifyIfAway(`Approval needed: ${next.title}`);
     this.updateWaiting();
     return true;
   }
@@ -1745,6 +1799,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const cursorRow = Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
     const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
     this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
+    this.syncTerminalSignals();
   }
 
   /** One frame: `finished` rows are retired into the transcript, and the live
@@ -2239,7 +2294,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       `${popReadModes()}`
       // Whoever takes the terminal takes the main screen with it: a vendor
       // login prompt drawn on our alternate screen would vanish with it.
-      + terminalTeardown(true),
+      + terminalTeardown(true)
+      + signalsTeardown(),
     );
     terminalModes.alternateScreen = false;
     process.once('SIGCONT', this.onContinue);
@@ -2256,6 +2312,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The shell may have resized the terminal while it had it.
     this.rewrapIfWidthChanged();
     this.forgetScreenPosition();
+    this.retakeTerminalSignals();
     this.resumeInput?.();
     if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
     else this.repaint();
@@ -2633,6 +2690,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.pendingScroll = 0;
 
     input.off('data', KEEP_STDIN_FLOWING);
+    this.stopFocusReports?.();
     process.off('SIGWINCH', this.onResize);
     process.off('SIGCONT', this.onContinue);
     process.off('exit', restoreTerminal);
@@ -2642,7 +2700,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // untouched. The conversation is on disk -- `/resume` reopens it.
     output.write(
       `${popReadModes()}`
-      + terminalTeardown(terminalModes.alternateScreen),
+      + terminalTeardown(terminalModes.alternateScreen)
+      + signalsTeardown(),
     );
     terminalModes.alternateScreen = false;
     terminalModes.painted = false;
@@ -2662,7 +2721,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Remove the composer and footer before handing over, so the vendor's
     // output continues directly under the conversation instead of being typed
     // across this UI's status rows.
-    output.write(`${popReadModes()}${terminalTeardown(false)}`);
+    output.write(`${popReadModes()}${terminalTeardown(false)}${signalsTeardown()}`);
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,
@@ -2685,6 +2744,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.rewrapIfWidthChanged();
     this.forgetScreenPosition();
+    this.retakeTerminalSignals();
     if (input.isTTY) input.resume();
     this.repaint({ keepPalette: false });
   }

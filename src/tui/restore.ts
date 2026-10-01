@@ -7,6 +7,7 @@
 
 import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
+import { POP_TITLE, progressSequence } from './terminal-signals.js';
 
 export const terminalModes: {
   bracketedPaste: boolean;
@@ -22,7 +23,25 @@ export const terminalModes: {
    * every mouse mode and the state a client latches, not only what a flag here
    * happened to record. A process that never drew writes nothing. */
   uiStarted: boolean;
-} = { bracketedPaste: false, kittyKeyboard: false, wheelReporting: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false };
+  /** The shell's title was pushed and this UI has been setting its own. */
+  titlePushed: boolean;
+  /** The tab shows a progress indicator this UI started. */
+  progress: boolean;
+} = {
+  bracketedPaste: false, kittyKeyboard: false, wheelReporting: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false,
+  titlePushed: false, progress: false,
+};
+
+/** The title and progress indicator handed back: progress cleared, the
+ * shell's title popped. Only what was set; the record is cleared, so a
+ * second call writes nothing. Focus reporting goes off in terminalTeardown
+ * with the other read modes. */
+export function signalsTeardown(): string {
+  const sequence = `${terminalModes.progress ? progressSequence(false) : ''}${terminalModes.titlePushed ? POP_TITLE : ''}`;
+  terminalModes.progress = false;
+  terminalModes.titlePushed = false;
+  return sequence;
+}
 
 /** The main screen's state, cleared before this program takes the alternate
  * one -- because the previous session may never have got the chance.
@@ -71,7 +90,7 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // was only ever piped through. This is also what keeps repeat calls silent.
     const touched = terminalModes.uiStarted || terminalModes.painted || terminalModes.kittyKeyboard
       || terminalModes.bracketedPaste || terminalModes.wheelReporting
-      || terminalModes.alternateScreen || terminalModes.rawMode;
+      || terminalModes.alternateScreen || terminalModes.rawMode || terminalModes.titlePushed || terminalModes.progress;
     if (!touched) {
       if (input.isRaw && input.isTTY && typeof input.setRawMode === 'function') input.setRawMode(false);
       return;
@@ -105,6 +124,7 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // Claude Code once -- which does clean the main screen -- fixes the next
     // ClikCode.
     sequence += terminalTeardown(terminalModes.alternateScreen);
+    sequence += signalsTeardown();
     const wasRaw = terminalModes.rawMode;
     terminalModes.uiStarted = false;
     terminalModes.painted = false;
