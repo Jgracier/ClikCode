@@ -240,7 +240,6 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       },
     }),
     vscode.commands.registerCommand('clikcode.open', async () => { await revealSidebar(); sidebar.post({ type: 'focus' }); }),
-    vscode.commands.registerCommand('clikcode.openInSideBar', async () => { await revealSidebar(); sidebar.post({ type: 'focus' }); }),
     vscode.commands.registerCommand('clikcode.openInNewTab', () => { openTab({ mode: 'new' }); }),
     // The ClikCode button in the editor's tab bar, as Claude Code's and
     // Codex's are: each click a new chat in a tab of its own.
@@ -251,8 +250,6 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       if (typeof id === 'string') openTab({ mode: 'resume', sessionId: id });
     }),
     vscode.commands.registerCommand('clikcode.refreshConversations', () => conversations.refresh()),
-    // Kept for keybindings and links that name it.
-    vscode.commands.registerCommand('clikcode.openInEditor', () => { openTab({ mode: 'new' }); }),
     vscode.commands.registerCommand('clikcode.openInNewWindow', async () => {
       openTab({ mode: 'new' });
       await new Promise((resolve) => setTimeout(resolve, 150));
@@ -262,7 +259,6 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.blur', () => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')),
     vscode.commands.registerCommand('clikcode.newChat', async () => { const target = await shown(); target.post({ type: 'show', screen: 'chat' }); await target.open('new'); target.post({ type: 'focus' }); }),
     vscode.commands.registerCommand('clikcode.showHistory', screen('history')),
-    vscode.commands.registerCommand('clikcode.resumeChat', screen('history')),
     vscode.commands.registerCommand('clikcode.showAccounts', screen('accounts')),
     vscode.commands.registerCommand('clikcode.openSettings', slash('/settings')),
     vscode.commands.registerCommand('clikcode.chooseProvider', slash('/provider')),
@@ -277,7 +273,6 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.openWalkthrough', () => vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#clikcode.start`, false)),
     vscode.commands.registerCommand('clikcode.addToChat', addToChat),
     vscode.commands.registerCommand('clikcode.insertAtMention', () => addToChat(undefined)),
-    vscode.commands.registerCommand('clikcode.attachFile', addToChat),
     vscode.commands.registerCommand('clikcode.acceptProposedDiff', decideDiff(true)),
     vscode.commands.registerCommand('clikcode.rejectProposedDiff', decideDiff(false)),
     vscode.commands.registerCommand('clikcode.alwaysAllowProposedDiff', decideDiff('always')),

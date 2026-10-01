@@ -120,11 +120,6 @@
         }
       },
       {
-        "command": "clikcode.openInSideBar",
-        "title": "Open in Side Bar",
-        "category": "ClikCode"
-      },
-      {
         "command": "clikcode.openInNewTab",
         "title": "New Chat Tab",
         "category": "ClikCode",
@@ -133,11 +128,6 @@
       {
         "command": "clikcode.openInNewWindow",
         "title": "Open in New Window",
-        "category": "ClikCode"
-      },
-      {
-        "command": "clikcode.openInEditor",
-        "title": "Open Chat in Editor",
         "category": "ClikCode"
       },
       {
@@ -161,11 +151,6 @@
         "title": "Show Conversations",
         "category": "ClikCode",
         "icon": "$(history)"
-      },
-      {
-        "command": "clikcode.resumeChat",
-        "title": "Resume Chat…",
-        "category": "ClikCode"
       },
       {
         "command": "clikcode.showAccounts",
@@ -233,11 +218,6 @@
       {
         "command": "clikcode.askAboutSelection",
         "title": "Ask ClikCode About Selection",
-        "category": "ClikCode"
-      },
-      {
-        "command": "clikcode.attachFile",
-        "title": "Attach File to Chat",
         "category": "ClikCode"
       },
       {
@@ -408,19 +388,7 @@
           "when": "false"
         },
         {
-          "command": "clikcode.openInEditor",
-          "when": "false"
-        },
-        {
-          "command": "clikcode.attachFile",
-          "when": "false"
-        },
-        {
           "command": "clikcode.open",
-          "when": "false"
-        },
-        {
-          "command": "clikcode.resumeChat",
           "when": "false"
         },
         {
