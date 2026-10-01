@@ -225,8 +225,8 @@ export function modelWithEffort(modelName: string | undefined, effort: string | 
   return !effort || effort === 'default' ? name : `${name} ${effortLabel(effort)}`;
 }
 
-/** Effort, chosen beside the model in the same menu: picking one keeps the
- * menu open, so a model and its effort are set together. */
+/** Effort, chosen beside the model in the same menu (or alone, EffortMenu):
+ * picking one keeps the menu open, so a model and its effort are set together. */
 function EffortBar(props: { model: ChatModel; onError: (message: string) => void }): JSX.Element {
   const effort = props.model.chatSettings?.effort;
   const [current, setCurrent] = useState(effort?.current ?? 'default');
@@ -287,24 +287,12 @@ const ACCOUNT_PROBLEM: Record<NonNullable<IdeAccount['problem']>, string> = {
   verify: 'needs verifying', reauth: 'signed out', 'out-of-usage': 'out of usage',
 };
 
+/** Effort alone, for a provider with no model list: the same choices as
+ * beside the model, floated over the chip. */
 export function EffortMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
-  const effort = props.model.chatSettings?.effort;
-  const values = ['default', ...(effort?.choices ?? [])];
-  const current = effort?.current ?? 'default';
-  const rows: ListRow[] = values.map((value) => ({
-    key: value,
-    onSelect: () => { props.onClose(); choose({ kind: 'effort', value }).catch((failure: Error) => props.onError(failure.message)); },
-    render: () => (
-      <div class="row">
-        <span class="row-check">{value === current ? <Icon name="check" /> : null}</span>
-        <span class="row-main"><span class="row-label">{effortLabel(value)}</span>{value === 'default' ? <span class="row-detail">The model decides</span> : null}</span>
-      </div>
-    ),
-  }));
   return (
     <Popover label="Reasoning effort" onClose={props.onClose} class="menu" id="effort-menu">
-      <div class="menu-title">Reasoning effort</div>
-      <KeyList rows={rows} label="Reasoning effort" onEscape={props.onClose} />
+      <EffortBar model={props.model} onError={props.onError} />
     </Popover>
   );
 }
