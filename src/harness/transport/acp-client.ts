@@ -54,7 +54,7 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   effort?: string | null;
   /** The harness's catalog ACP entry: how model, effort and permission mode
    * are selected over the protocol, and what its usage readings mean. */
-  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'usageTotals'>;
+  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'usageTotals' | 'cumulativeChunks'>;
   modelProviderSeparator?: string;
   /** An interactive client can let a single advertised agent-auth method
    * finish its OAuth flow over ACP when the vendor asks for sign-in. */
@@ -353,9 +353,11 @@ interface LiveAgent {
  * turn, or a background turn when there is none. */
 interface Stream {
   observer: HarnessTurnObserver;
-  command: string;
+  /** The catalog's `acp.cumulativeChunks`. */
+  cumulativeChunks: boolean;
   text: string;
-  vibeMessageText: string;
+  /** The message so far, for an agent that sends cumulative chunks. */
+  messageText: string;
   sawActivity: boolean;
   /** Text after a tool call is a new paragraph. ACP agents resume their
    * reply with no break of their own, and appended straight on ("first.The
@@ -418,7 +420,7 @@ class AcpSessionImpl implements AcpSession {
   private readonly pendingTools = new Map<string, string>();
   private settling?: Promise<void>;
   private sessionId?: string;
-  private lastCommand = 'agent';
+  private lastCumulativeChunks = false;
   /** The live session's running totals as the agent last reported them
    * (acpSessionTotals, and a prompt response for an agent declaring
    * `usageTotals: 'session'`). Reset when a session is opened in this
@@ -445,12 +447,12 @@ class AcpSessionImpl implements AcpSession {
     if (!argv) throw new Error(`${input.command} has no ACP adapter`);
     // From here on the user's turn receives what the agent says.
     this.finishBackground('superseded');
-    this.lastCommand = input.command;
+    this.lastCumulativeChunks = input.acp?.cumulativeChunks === true;
     let fail!: (error: Error) => void;
     const failure = new Promise<never>((_, reject) => { fail = reject; });
     failure.catch(() => undefined);
     const turn: ActiveTurn = {
-      input, observer: input, command: input.command, text: '', vibeMessageText: '', sawActivity: false, thoughts: 0, base: {}, promptStarted: false, done: false, fail,
+      input, observer: input, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: {}, promptStarted: false, done: false, fail,
     };
     this.turn = turn;
     const onAbort = (): void => this.cancelTurn(turn);
@@ -543,7 +545,7 @@ class AcpSessionImpl implements AcpSession {
     if (!this.onBackgroundTurn || this.isClosed) return undefined;
     if (this.background && !this.background.channel.done) return this.background;
     const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
-    const run: BackgroundRun = { channel, observer: channel.observer, command: this.lastCommand, text: '', vibeMessageText: '', sawActivity: false, thoughts: 0, base: { ...this.sessionTotals } };
+    const run: BackgroundRun = { channel, observer: channel.observer, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: { ...this.sessionTotals } };
     run.watchdog = this.watchdog(() => {
       if (this.background !== run) return;
       this.pendingTools.clear();
@@ -857,9 +859,9 @@ class AcpSessionImpl implements AcpSession {
     if (!thought && update.sessionUpdate !== 'usage_update') target.thought = undefined;
     const delta = acpResponseDelta(update);
     if (delta) {
-      if (target.command === 'vibe' && typeof update.messageId === 'string') {
-        const change = acpVibeResponseChange(target.vibeMessageText, delta);
-        target.vibeMessageText = change.current;
+      if (target.cumulativeChunks && typeof update.messageId === 'string') {
+        const change = acpVibeResponseChange(target.messageText, delta);
+        target.messageText = change.current;
         if (change.mode === 'replace') target.text = change.current;
         else target.text += change.text;
         input.onResponseDelta?.(change.text, change.mode);

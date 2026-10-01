@@ -69,6 +69,10 @@ export interface AiHarnessAcpDefinition {
    * `agent.session_*`, Vibe `session_prompt_tokens`). A turn's share is what
    * the total grew by. Read from each vendor's installed source. */
   usageTotals?: 'session';
+  /** Each `agent_message_chunk` carrying a `messageId` is that message so far,
+   * not a fragment: a chunk that extends the last is appended, one that
+   * rewrites it replaces it (Mistral Vibe). */
+  cumulativeChunks?: boolean;
   /** Where the agent keeps its session's running usage when its ACP stream
    * carries none: a JSON file (`{id}` is the ACP session id, `~` and
    * `${VAR:-default}` expand against the profile) and the path to the usage
@@ -812,7 +816,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // text-only stub: --output streaming is documented as "newline-delimited
   // JSON per message", and its agents (ask / smart-approve / auto-approve)
   // map onto the three permission modes without inventing anything.
-  { command: 'vibe', provider: 'mistral-vibe', displayName: 'Mistral Vibe', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { binary: 'vibe-acp', argv: [], listsModels: true, usageTotals: 'session' }, experimental: true, localAuth: ['api-key', 'vendor-cli'], binary: 'vibe', installer: HARNESS_INSTALLERS.vibe, loginArgv: ['--setup'], authFiles: [{ path: '${VIBE_HOME:-~/.vibe}/.env', contains: 'MISTRAL_API_KEY=', removeLine: true }], authEnv: ['MISTRAL_API_KEY'], modelArgvPrefix: [], workspaceArgvPrefix: ['--workdir'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--agent', 'ask'] }, bypass: { argv: ['--auto-approve'] }, auto: { argv: ['--smart-approve'] } }, turn: { startArgv: ['--output', 'streaming'], promptArgvPrefix: ['--prompt'], output: 'json-lines', responseFields: ['text', 'content', 'response', 'result'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['-c'] } },
+  { command: 'vibe', provider: 'mistral-vibe', displayName: 'Mistral Vibe', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { binary: 'vibe-acp', argv: [], listsModels: true, usageTotals: 'session', cumulativeChunks: true }, experimental: true, localAuth: ['api-key', 'vendor-cli'], binary: 'vibe', installer: HARNESS_INSTALLERS.vibe, loginArgv: ['--setup'], authFiles: [{ path: '${VIBE_HOME:-~/.vibe}/.env', contains: 'MISTRAL_API_KEY=', removeLine: true }], authEnv: ['MISTRAL_API_KEY'], modelArgvPrefix: [], workspaceArgvPrefix: ['--workdir'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--agent', 'ask'] }, bypass: { argv: ['--auto-approve'] }, auto: { argv: ['--smart-approve'] } }, turn: { startArgv: ['--output', 'streaming'], promptArgvPrefix: ['--prompt'], output: 'json-lines', responseFields: ['text', 'content', 'response', 'result'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['-c'] } },
   // OpenHands CLI: `openhands acp` is documented; headless is `--headless`
   // with the task in `-t`. Its JSON event mode is left undeclared.
   // Checked against the real CLI (OpenHands SDK v1.21.0, `uv tool install
