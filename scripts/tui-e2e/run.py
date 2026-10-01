@@ -205,7 +205,7 @@ def run(name, spec, entry, keep):
         'PATH': ':'.join([fakebin, os.path.dirname(node), '/usr/bin', '/bin']),
         'HOME': home, 'CLIKCODE_HOME': state, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
         'FAKE_TURNS': json.dumps(spec['turns']), 'FAKE_STATE': os.path.join(root, 'turn-counter'),
-        'FAKE_FAMILY': spec.get('family', 'claude'),
+        'FAKE_FAMILY': spec.get('family', 'claude'), 'FAKE_LOG': os.path.join(root, 'argv.log'),
         **spec.get('env', {}),
         # Remote, so a copy goes to the terminal by OSC 52 -- which this
         # harness can read back out of the output -- and never to a real

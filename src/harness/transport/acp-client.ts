@@ -359,6 +359,12 @@ interface Stream {
   text: string;
   vibeMessageText: string;
   sawActivity: boolean;
+  /** Text after a tool call is a new paragraph. ACP agents resume their
+   * reply with no break of their own, and appended straight on ("first.The
+   * final…") it rewrote the paragraph already drawn above the call -- the
+   * screen showed the reply twice, then lost the last block at turn end.
+   * The CLI parsers keep the same flag (events/adapters.ts). */
+  needsSeparator?: boolean;
   /** The thought streaming now: ACP sends fragments with no id, so a thought
    * is a run of `agent_thought_chunk`s that anything else ends. */
   thought?: { id: string; text: string };
@@ -830,8 +836,11 @@ class AcpSessionImpl implements AcpSession {
         else target.text += change.text;
         input.onResponseDelta?.(change.text, change.mode);
       } else {
-        target.text += delta;
-        input.onResponseDelta?.(delta);
+        const separator = target.needsSeparator && target.text
+          ? (target.text.endsWith('\n\n') ? '' : target.text.endsWith('\n') ? '\n' : '\n\n') : '';
+        target.needsSeparator = false;
+        target.text += separator + delta;
+        input.onResponseDelta?.(separator + delta);
       }
       return;
     }
@@ -841,7 +850,7 @@ class AcpSessionImpl implements AcpSession {
       return input.onThought?.(target.thought.text, target.thought.id);
     }
     const activity = acpActivityEvent(update);
-    if (activity) { target.sawActivity = true; input.onActivity?.(activity); return; }
+    if (activity) { target.sawActivity = true; if (target.text) target.needsSeparator = true; input.onActivity?.(activity); return; }
     const plan = acpPlanEntries(update);
     if (plan) return input.onPlan?.(plan);
     // `usage_update` {used, size, cost}: the context the session occupies,
