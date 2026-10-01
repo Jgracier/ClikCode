@@ -55,9 +55,8 @@ describe('shared ACP adapter contract', () => {
     const result = await runAcpTurn({
       binary: process.execPath, command: 'goose', argv: ['-e', agent], cwd: process.cwd(),
       prompt: 'check', environment: {}, permissionMode: 'ask', model: 'codex/new', effort: 'high',
-      modelRequiresProtocol: true, effortRequiresProtocol: true, effortConfigId: 'thinking_effort',
-      providerConfigId: 'provider', modelProviderSeparator: '/',
-      permissionModeIds: { ask: 'approve' },
+      acp: { inheritCliOptions: false, effortConfigId: 'thinking_effort', providerConfigId: 'provider', permissionModeIds: { ask: 'approve' } },
+      modelProviderSeparator: '/',
     });
     expect(JSON.parse(result.text)).toEqual([
       ['session/set_config_option', { sessionId: 's1', configId: 'provider', value: 'codex' }],
