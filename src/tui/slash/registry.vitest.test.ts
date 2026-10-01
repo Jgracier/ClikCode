@@ -106,8 +106,13 @@ describe('slash registry', () => {
     const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
     expect(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.value))
       .toEqual(SLASH_PALETTE_PINNED.map((name) => `/${name}`));
-    expect(SLASH_PALETTE_PINNED.slice(0, 4)).toEqual(['resume', 'provider', 'model', 'account']);
+    expect(SLASH_PALETTE_PINNED.slice(0, 4)).toEqual(['resume', 'provider', 'account', 'model']);
     expect(new Set(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.group))).toEqual(new Set(['Common']));
+    // The conversation board takes resume and new off this list. What remains
+    // at the top of Common is provider, then account, then model.
+    const onBoard = slashPalette(session(), harness(), { omit: new Set(['resume', 'new']) });
+    expect(onBoard.filter((row) => row.group === 'Common').slice(0, 3).map((row) => row.value))
+      .toEqual(['/provider', '/account', '/model']);
     // Pinned once, not listed again under the group it came from.
     const values = palette.map((row) => row.value);
     expect(values.filter((value, index) => values.indexOf(value) !== index)).toEqual([]);

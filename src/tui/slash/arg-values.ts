@@ -7,7 +7,7 @@
  *   /model        the harness's own catalog (model-catalog.ts), with its labels
  *   /effort       what the installed harness accepts for this model
  *   /permissions  the modes this harness maps to a real flag
- *   /account      this machine's accounts, signed-out ones included
+ *   /account      accounts on this chat's provider, signed-out ones included
  *   /resume       the conversations /resume would list
  *
  * The vendor-derived lists load in the background: the palette reads them on
@@ -57,8 +57,13 @@ export function withArgValues(
   const permissions: Values = harness
     ? VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode)).map((value) => ({ value }))
     : [];
-  const accounts: Values = state.accounts.map((item) => ({
-    value: item.label, detail: `${item.provider}${item.status === 'ready' ? '' : ` · ${item.status.replace('_', ' ')}`}`,
+  // Accounts are filed under the catalog id (`xai`) while a session may store
+  // only the command (`grok`). Either names this chat's provider. A list that
+  // ignores that shows every provider's logins under /account.
+  const providerIds = new Set([harness?.provider, harness?.command, session.provider, session.nativeHarness].filter((id): id is string => Boolean(id)));
+  const accounts: Values = state.accounts.filter((item) => providerIds.has(item.provider)).map((item) => ({
+    value: item.label,
+    ...(item.status === 'ready' ? {} : { detail: item.status.replaceAll('_', ' ') }),
   }));
   const chats: Values = state.sessions
     .filter((item) => item.id !== session.id && !isBlankConversation(item) && item.name)
