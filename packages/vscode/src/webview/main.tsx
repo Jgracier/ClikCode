@@ -1,7 +1,7 @@
 /** The chat webview: renders the ChatModel the extension posts, and turns
  * clicks and keys into messages back. Holds no conversation state of its own
  * beyond the composer and which menu is open. */
-import { render, type JSX } from 'preact';
+import { Component, render, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, type ChatModel } from '../model';
 import { applyModelPatch } from '../model-patch';
@@ -148,6 +148,24 @@ function Header({ model, onMenu, history, setHistory, onError }: { model: ChatMo
       {history ? <HistoryMenu model={model} onClose={() => setHistory(false)} onError={onError} /> : null}
     </header>
   );
+}
+
+/** A drawing error in the conversation stays there: it is logged, the rest
+ * of the panel (the message box, the menus) keeps working, and the next
+ * change to the conversation draws it again. One bad value used to blank the
+ * whole page. */
+class DrawGuard extends Component<{ model: ChatModel; children: ComponentChildren }, { failed?: ChatModel }> {
+  override componentDidCatch(error: unknown): void {
+    post({ type: 'log', text: `draw failed: ${String((error as Error)?.stack ?? error)}` });
+    this.setState({ failed: this.props.model });
+  }
+
+  override render(): ComponentChildren {
+    if (this.state.failed && this.state.failed === this.props.model) {
+      return <div class="notice warning" role="alert"><Icon name="warning" /><span>Part of this conversation could not be drawn. It is in the log (Show log); the chat itself is unaffected.</span></div>;
+    }
+    return this.props.children;
+  }
 }
 
 function Toast({ message, onClose }: { message: string; onClose: () => void }): JSX.Element {
@@ -326,7 +344,7 @@ function App(): JSX.Element {
           <Banner model={model} />
           {model.connection === 'starting' && !model.sessionId ? <div class="starting inline"><Icon name="loading" spin /><span class="muted">Starting ClikCode…</span></div> : null}
           {model.connection === 'ready' && model.sessionId && empty ? <Welcome model={model} onPrompt={sendNow} onMenu={showMenu} /> : null}
-          {!empty ? <Transcript model={model} /> : null}
+          {!empty ? <DrawGuard model={model}><Transcript model={model} /></DrawGuard> : null}
         </div>
         {model.approvals[0] ? (
           // One at a time, as the terminal asks: the rest wait their turn.

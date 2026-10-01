@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  activityResult, exploreRuns, exploreSummary, pastePlaceholder, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
+  activityResult, endsWithSummary, exploreRuns, exploreSummary, pastePlaceholder, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
 } from './turn-flow.js';
 
 describe('how a turn reads', () => {
@@ -41,6 +41,9 @@ describe('how a turn reads', () => {
     expect(turnStatus({ toolPhase: 'running tests', quietMs: 60_000 })).toEqual({ label: 'running tests', tone: 'tool', stall: 0 });
     expect(turnStatus({ thought: '**Inspecting the parser** I should look at…', phase: 'thinking' }).label).toBe('Inspecting the parser');
     expect(turnStatus({ phase: 'thinking', thinkingMs: 25_000 }).label).toBe('thinking more');
+    // A clock read just before the thinking began: still words, never a crash.
+    expect(turnStatus({ phase: 'thinking', thinkingMs: -400 }).label).toBe('thinking');
+    expect(turnStatus({ phase: 'thinking', thinkingMs: Number.NaN }).label).toBe('thinking');
     expect(turnStatus({ phase: 'generating response' }).label).toBe('generating response');
     expect(turnStatus({ phase: 'thinking', quietMs: 15_000 }).stall).toBeCloseTo(0.5);
     expect(turnStatus({ phase: 'thinking', quietMs: 30_000 }).tone).toBe('stalled');
@@ -64,5 +67,8 @@ describe('how a turn reads', () => {
     const edit = (path: string, additions: number, removals: number) => [{ path, change: 'modify' as const, additions, removals, lines: [] }];
     expect(turnSummary({ ms: 62_000, diffs: [edit('a.ts', 10, 2), edit('b.ts', 3, 0), edit('a.ts', 1, 1)] })).toBe('Worked for 1m 2s · 2 files changed +14 −3');
     expect(turnSummary({ ms: 400 })).toBe('Worked for 1s');
+    expect(endsWithSummary(5_000, 0)).toBe(false);
+    expect(endsWithSummary(5_000, 1)).toBe(true);
+    expect(endsWithSummary(12_000, 0)).toBe(true);
   });
 });

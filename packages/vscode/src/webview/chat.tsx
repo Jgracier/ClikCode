@@ -7,7 +7,7 @@ import {
   ACTIVITY_PREVIEW_LINES, activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, formatElapsed, LIVE_OUTPUT_LINES, liveWaitKind,
   outputPreview, previewLinesFor, SPIN_MS, STALL_MS, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
-import { activityResult, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
+import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
@@ -395,7 +395,8 @@ function TurnFlow(props: {
 /** The quiet line a finished turn ends on (Codex's "Worked for 1m 2s",
  * Cursor's files edited), and, when it changed files, all of them to review
  * at once or undo together. */
-function TurnSummary({ trace }: { trace: TurnTrace }): JSX.Element {
+function TurnSummary({ trace }: { trace: TurnTrace }): JSX.Element | null {
+  if (!endsWithSummary(trace.endedAt - trace.startedAt, trace.activities.length)) return null;
   const diffs = trace.activities.flatMap((activity) => (activity.kind === 'tool-done' && activity.diff?.length ? [activity.diff] : []));
   const changed = diffs.some((diff) => diff.some((file) => file.path));
   const act = (action: 'view' | 'revert') => (): void => post({ type: 'turnChanges', action, userIndex: trace.userIndex });

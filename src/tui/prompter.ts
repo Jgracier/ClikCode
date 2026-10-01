@@ -30,7 +30,7 @@ import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivity
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { tensedLabel, turnStatus, turnSummary } from '../harness/protocol/turn-flow.js';
+import { tensedLabel, turnStatus, endsWithSummary, turnSummary } from '../harness/protocol/turn-flow.js';
 import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
@@ -59,8 +59,6 @@ import { appendThought, composerUsageLabel, formatElapsed, liveConversationLines
 
 const EXIT_CONFIRM_MS = 2000;
 
-/** A turn this long ends on its summary line even if it ran no tools. */
-const END_SUMMARY_MS = 10_000;
 
 /** Ctrl+S during a turn: stop it and send the typed (or queued) message as
  * the next turn at once. Ctrl+Enter, what Codex and Cursor use, is not a
@@ -1095,7 +1093,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const ms = turnElapsedMs(this.clock, Date.now());
     const calls = this.activityEntries.filter((entry) => entry.event && entry.anchor >= this.activityAnchor
       && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor);
-    if (!calls.length && ms < END_SUMMARY_MS) return undefined;
+    if (!endsWithSummary(ms, calls.length)) return undefined;
     return turnSummary({ ms, diffs: calls.flatMap((entry) => (entry.event?.diff?.length ? [entry.event.diff] : [])) });
   }
 

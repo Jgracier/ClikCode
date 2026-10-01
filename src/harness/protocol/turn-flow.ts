@@ -120,7 +120,10 @@ export function turnStatus(state: {
   const heading = reasoningHeading(state.thought);
   const phase = state.phase?.replace(/(…|\.\.\.)$/, '').trim();
   const thinking = !phase || /^thinking$/i.test(phase);
-  const label = heading ?? (thinking ? THINKING_WORDS.find(([after]) => (state.thinkingMs ?? 0) >= after)![1] : phase!);
+  // A clock read a moment before the thinking began gives a negative time
+  // (or none at all): that is still just "thinking", never no words.
+  const thinkingMs = Number.isFinite(state.thinkingMs) ? Math.max(0, state.thinkingMs!) : 0;
+  const label = heading ?? (thinking ? THINKING_WORDS.find(([after]) => thinkingMs >= after)![1] : phase!);
   return { label, tone: stall >= 1 ? 'stalled' : 'thinking', stall };
 }
 
@@ -143,6 +146,15 @@ export function pastePlaceholder(text: string, index: number): string | undefine
   const lines = text.replace(/\r\n/g, '\n').replace(/\n+$/, '').split('\n').length;
   if (lines <= 3 && text.length <= 800) return undefined;
   return `[Pasted text #${index}${lines > 1 ? ` +${lines} lines` : ''}]`;
+}
+
+/** A turn this long ends on its summary line even if it ran no tools. */
+export const END_SUMMARY_MS = 10_000;
+
+/** Whether a turn ends on the summary line: it did real work -- ran a tool,
+ * or took a while. A quick answer needs no "Worked for 2s" under it. */
+export function endsWithSummary(ms: number, calls: number): boolean {
+  return calls > 0 || ms >= END_SUMMARY_MS;
 }
 
 /** The line a turn ends on, as Codex's "Worked for 1m 2s" and Cursor's
