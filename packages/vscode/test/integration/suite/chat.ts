@@ -31,6 +31,7 @@ export function chatSuite(): void {
       assert.ok((model.revision ?? 0) >= 2, 'the bridge speaks revision 2');
       await waitFor(api, '#composer-input', 'the composer in the side bar');
       await waitFor(api, '.welcome', 'the welcome screen');
+      await screenshot('welcome', 1500);
     });
 
     it('lists only this provider\'s accounts, and sets effort beside the model', async () => {
@@ -45,6 +46,23 @@ export function chatSuite(): void {
         await screenshot('model-picker', 1500);
         await key(api, '#model-picker', 'Escape');
       }
+      await click(api, '#history-button');
+      await waitFor(api, '#history-menu', 'the conversations list');
+      await screenshot('history-menu', 800);
+      await key(api, '#history-menu', 'Escape');
+      await click(api, '#more-button');
+      await waitFor(api, '#more-menu', 'the More menu');
+      await screenshot('more-menu', 500);
+      await key(api, '#more-menu', 'Escape');
+      await vscode.commands.executeCommand('clikcode.showAccounts');
+      await waitFor(api, '[aria-label="Accounts and usage"]', 'the accounts screen');
+      await screenshot('accounts-screen', 1500);
+      await key(api, '[aria-label="Accounts and usage"]', 'Escape');
+      await api.send('/settings');
+      await waitFor(api, '.sheet', 'the settings sheet', 30_000);
+      await screenshot('settings', 1000);
+      await key(api, '.sheet', 'Escape');
+      await waitFor(api, '#composer-input', 'back to the chat');
     });
 
     it('chooses a harness and a model from the composer menu', async () => {
@@ -115,6 +133,7 @@ export function chatSuite(): void {
       const model = await until(api, (state) => state.notes.length > before, 'the /help panel');
       assert.strictEqual(model.notes[model.notes.length - 1]!.title, 'Commands');
       await waitFor(api, '.panel-card', 'the panel on the page');
+      await screenshot('panel', 600);
     });
 
     it('adds the editor selection to the chat from the editor context and sends it', async () => {

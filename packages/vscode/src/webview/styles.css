@@ -158,7 +158,7 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .activity-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .selection-context { display: flex; margin-bottom: 4px; font-size: 0.9em; }
 .selection-context .link { display: inline-flex; gap: 6px; align-items: center; }
-.selection-context.excluded .link { opacity: 0.6; text-decoration: line-through; }
+.selection-context.excluded .link { color: var(--muted); }
 .composer-box.dropping { border-color: var(--focus); border-style: dashed; }
 .drop-hint {
   position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 6px; pointer-events: none;
@@ -197,8 +197,8 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .activity-counts { flex: none; font-size: 0.92em; font-variant-numeric: tabular-nums; }
 .activity-counts .add { color: var(--vscode-gitDecoration-addedResourceForeground, var(--ok)); }
 .activity-counts .del { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--err)); }
-.row-actions { display: inline-flex; gap: 2px; opacity: 0; transition: opacity 0.12s; }
-.activity-line:hover .row-actions, .activity-line:focus-within .row-actions { opacity: 1; }
+.activity-actions { display: inline-flex; gap: 2px; opacity: 0; transition: opacity 0.12s; }
+.activity-line:hover .activity-actions, .activity-line:focus-within .activity-actions { opacity: 1; }
 .activity-child { display: flex; gap: 6px; align-items: center; margin: 0 0 2px 24px; color: var(--muted); font-size: 0.93em; min-width: 0; }
 .activity-child span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-output .gap { opacity: 0.65; }
@@ -258,7 +258,8 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 }
 .approval:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
 .approval .activity-output.diff { margin: 8px 0 0; }
-.approval-rule { margin-top: 8px; font-size: 0.9em; }
+.approval-rule { margin-top: 6px; font-size: 0.85em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.approval-head .approval-diff { margin-left: auto; }
 /* Keys do nothing for the first moments; the buttons say so. */
 .approval.guarded .approval-actions button { opacity: 0.6; }
 .approval-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
@@ -402,7 +403,14 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .keylist-heading { padding: 8px 8px 3px; font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .keylist-row { border-radius: var(--radius-small); cursor: pointer; }
 .keylist-row.active { background: var(--vscode-quickInputList-focusBackground, var(--vscode-list-activeSelectionBackground)); color: var(--vscode-quickInputList-focusForeground, var(--vscode-list-activeSelectionForeground)); }
-.keylist-row.active .row-detail, .keylist-row.active .muted, .keylist-row.active .conversation-meta, .keylist-row.active .conversation-preview { color: inherit; opacity: 0.8; }
+.keylist-row.active .row-detail, .keylist-row.active .muted, .keylist-row.active .conversation-meta, .keylist-row.active .history-menu { width: min(460px, calc(100vw - 2 * var(--gap))); }
+.history-menu .conversation { align-items: center; gap: 8px; padding: 5px 8px; }
+.history-menu .conversation-dot { margin-top: 0; }
+.history-menu .conversation-meta { flex: none; max-width: 45%; }
+.history-menu .conversation .row-actions { top: 50%; transform: translateY(-50%); }
+.history-menu .keylist-row:hover .conversation-meta, .history-menu .keylist-row.active .conversation-meta { visibility: hidden; }
+.history-menu .conversation > .codicon { flex: none; width: 7px; font-size: 12px; display: flex; justify-content: center; }
+.conversation-preview { color: inherit; opacity: 0.8; }
 .keylist-row.disabled { opacity: 0.55; cursor: default; }
 .keylist-empty { padding: 12px; color: var(--muted); text-align: center; }
 .row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; min-height: 28px; }
@@ -502,3 +510,8 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .progress.indeterminate div { left: 0; width: 100%; opacity: 0.6; }
 }
+.turn-tokens { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.composer-status .status-label { max-width: 16em; }
+/* A narrow side bar keeps the three answers on one row; the keys still work. */
+.approval { container-type: inline-size; }
+@container (max-width: 300px) { .approval-actions kbd { display: none; } }

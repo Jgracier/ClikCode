@@ -12,7 +12,7 @@ import { ApprovalCard, Transcript } from './chat';
 import { Composer, type ComposerHandle } from './composer';
 import { homeRelative, relativeTime } from './format';
 import { choose } from './picker';
-import { AccountsScreen, HistoryScreen } from './screens';
+import { AccountsScreen, HistoryMenu } from './screens';
 import { inlineStep, Sheet, type InlineTarget, type OpenQuestion } from './sheet';
 import { Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
 
@@ -96,7 +96,7 @@ function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (t
           ))}
         </div>
       ) : null}
-      <p class="welcome-tip muted"><kbd>@</kbd> mention files · <kbd>/</kbd> commands · <kbd>Alt</kbd>+<kbd>K</kbd> in an editor adds the selection</p>
+      <p class="welcome-tip muted"><kbd>@</kbd> files · <kbd>/</kbd> commands</p>
     </div>
   );
 }
@@ -121,7 +121,7 @@ function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () 
       ? [item('tools', 'plug', 'MCP servers & tools', () => post({ type: 'send', text: '/settings tools', id: uid() }))] : []),
     item('commands', 'symbol-namespace', 'All commands', () => post({ type: 'send', text: '/help', id: uid() }), '/'),
     heading('Open'),
-    item('tab', 'link-external', 'Open in new tab', () => command('clikcode.openInNewTab'), shortcut('Shift+Esc')),
+    item('tab', 'link-external', 'Open in new tab', () => command('clikcode.openInNewTab')),
     item('window', 'empty-window', 'Open in new window', () => command('clikcode.openInNewWindow')),
     heading('Help'),
     item('walkthrough', 'book', 'Get started', () => command('clikcode.openWalkthrough')),
@@ -136,7 +136,7 @@ function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () 
   );
 }
 
-function Header({ model, screen, onScreen }: { model: ChatModel; screen: WebviewScreen; onScreen: (screen: WebviewScreen) => void }): JSX.Element {
+function Header({ model, onScreen, history, setHistory, onError }: { model: ChatModel; onScreen: (screen: WebviewScreen) => void; history: boolean; setHistory: (open: boolean) => void; onError: (message: string) => void }): JSX.Element {
   const [more, setMore] = useState(false);
   const title = model.title ?? (model.sessionId ? 'New chat' : 'ClikCode');
   return (
@@ -145,9 +145,10 @@ function Header({ model, screen, onScreen }: { model: ChatModel; screen: Webview
       {model.running ? <span class="running-indicator" title="Working…"><Icon name="loading" spin label="Working" /></span> : null}
       <span class="spacer" />
       <IconButton id="new-chat" icon="add" label={`New chat (${shortcut('N')})`} onClick={() => { onScreen('chat'); void request({ method: 'open', mode: 'new' }); }} />
-      <IconButton id="history-button" icon="history" label="Conversations" active={screen === 'history'} onClick={() => onScreen(screen === 'history' ? 'chat' : 'history')} />
-      <span data-popover-anchor><IconButton id="more-button" icon="ellipsis" label="More" active={more} onClick={() => setMore(!more)} /></span>
+      <span data-popover-anchor><IconButton id="history-button" icon="history" label="Conversations" active={history} onClick={() => { setMore(false); setHistory(!history); }} /></span>
+      <span data-popover-anchor><IconButton id="more-button" icon="ellipsis" label="More" active={more} onClick={() => { setHistory(false); setMore(!more); }} /></span>
       {more ? <MoreMenu model={model} onClose={() => setMore(false)} onScreen={onScreen} /> : null}
+      {history ? <HistoryMenu model={model} onClose={() => setHistory(false)} onError={onError} /> : null}
     </header>
   );
 }
@@ -186,6 +187,7 @@ function probe(message: Extract<ToWebview, { type: 'probe' }>): unknown {
 function App(): JSX.Element {
   const [model, setModel] = useState<ChatModel>();
   const [screen, setScreen] = useState<WebviewScreen>('chat');
+  const [history, setHistory] = useState(false);
   const [questions, setQuestions] = useState<Array<OpenQuestion & { items?: readonly IdePickItem[] }>>([]);
   const [error, setError] = useState<string>();
   const composer = useRef<ComposerHandle | null>(null);
@@ -203,6 +205,8 @@ function App(): JSX.Element {
   };
 
   const showScreen = (next: WebviewScreen): void => {
+    // Conversations are a list over the chat, not a screen of their own.
+    if (next === 'history') { setScreen('chat'); setHistory(true); return; }
     if (next === 'settings') {
       setScreen('chat');
       post({ type: 'send', text: '/settings', id: uid() });
@@ -334,8 +338,7 @@ function App(): JSX.Element {
 
   return (
     <div class="app" data-screen={screen}>
-      {screen === 'chat' ? <Header model={model} screen={screen} onScreen={showScreen} /> : null}
-      {screen === 'history' ? <HistoryScreen model={model} onBack={() => showScreen('chat')} onError={setError} /> : null}
+      {screen === 'chat' ? <Header model={model} onScreen={showScreen} history={history} setHistory={setHistory} onError={setError} /> : null}
       {screen === 'accounts' ? <AccountsScreen model={model} onBack={() => showScreen('chat')} onError={setError} /> : null}
       <main class="chat" hidden={screen !== 'chat'}>
         <div class="log" ref={log} onScroll={() => { const element = log.current!; stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>

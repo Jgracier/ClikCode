@@ -348,7 +348,7 @@ export function Composer(props: {
   const tokens = formatTurnUsage(usage, estimate) || undefined;
 
   const placeholder = !connected ? 'ClikCode is not connected'
-    : model.running ? 'Steer the running turn, or queue a message…'
+    : model.running ? 'Steer or queue a message…'
       : `Ask ${providerDisplayName(model, knownProviders()) ?? 'ClikCode'} anything`;
 
   const footerButton = useMemo(() => (name: Menu, content: JSX.Element, label: string, id: string) => (
@@ -468,8 +468,10 @@ export function Composer(props: {
         ) : null}
         <span class="spacer" />
         {busy && !installing ? <span class="muted busy"><Icon name="loading" spin /> {busy}</span> : null}
-        {tokens ? <span class="muted turn-tokens" title={model.running ? 'Tokens used by this turn so far' : 'Tokens used by the last turn'}>{tokens}</span> : null}
-        {model.context ? <ContextMeter context={model.context} /> : null}
+        {/* One figure under the box: the context ring, the turn's tokens on
+            hover; the tokens themselves only where no ring is reported. */}
+        {model.context ? <ContextMeter context={model.context} tokens={tokens} />
+          : tokens ? <span class="muted turn-tokens" title={model.running ? 'Tokens used by this turn so far' : 'Tokens used by the last turn'}>{tokens}</span> : null}
       </div>
     </div>
   );
@@ -477,14 +479,14 @@ export function Composer(props: {
 
 /** How full the conversation's context window is, as a ring that fills; the
  * figures on hover, the breakdown (/context) on click. */
-function ContextMeter({ context }: { context: NonNullable<ChatModel['context']> }): JSX.Element {
+function ContextMeter({ context, tokens }: { context: NonNullable<ChatModel['context']>; tokens?: string }): JSX.Element {
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
   const percent = context.percent;
   const figures = context.used ? `${compact(context.used)}${context.window ? ` of ${compact(context.window)}` : ''} tokens` : '';
   const label = `Context ${percent < 10 ? percent.toFixed(1) : Math.round(percent)}% used${figures ? ` (${figures})` : ''}`;
   return (
-    <button type="button" class={`context-meter${percent >= 90 ? ' high' : percent >= 70 ? ' warn' : ''}`} title={`${label}. Click for the breakdown.`} aria-label={label}
+    <button type="button" class={`context-meter${percent >= 90 ? ' high' : percent >= 70 ? ' warn' : ''}`} title={`${label}${tokens ? `\nLast turn: ${tokens}` : ''}\nClick for the breakdown.`} aria-label={label}
       onClick={() => post({ type: 'send', text: '/context', id: uid() })}>
       <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
         <circle cx="8" cy="8" r={radius} class="context-track" />
