@@ -143,7 +143,3 @@ function withDrafts(state: HarnessState): HarnessState {
   if (added.length) hidden(state, DRAFT_BASELINE, baselineOf({ ...state, sessions: added }).sessions);
   return state;
 }
-
-// ---------------------------------------------------------------------------
-// Write
-// ---------------------------------------------------------------------------

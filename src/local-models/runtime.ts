@@ -21,8 +21,7 @@ import { runtimesDir } from './paths.js';
 import type { GpuBudget } from './budget.js';
 
 export const LLAMA_CPP_TAG = 'b11194';
-/** The commit b11194 was built from, for the record. */
-export const LLAMA_CPP_COMMIT = '9f70b2cecd1a9a3f73ac525c47ca22a6ee9a7b69';
+// b11194 was built from llama.cpp commit 9f70b2cecd1a9a3f73ac525c47ca22a6ee9a7b69.
 
 export type RuntimeBackend = 'cpu' | GpuBackend;
 

@@ -396,11 +396,6 @@ export async function releaseLocalModel(sessionId: string): Promise<void> {
   await removeLeases(sessionId);
 }
 
-/** Stop a model's server now, whatever holds it. */
-export async function stopLocalModel(modelId: string): Promise<void> {
-  await stopServer(modelId);
-}
-
 let exitHookInstalled = false;
 
 /** Call once at startup: every lease this process holds is removed as it

@@ -34,8 +34,3 @@ export function resolveDefaultSettings(state: HarnessState, provider?: string | 
     accountFailover: overrides?.accountFailover ?? state.globalSettings.accountFailover,
   };
 }
-
-
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------

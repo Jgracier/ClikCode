@@ -30,10 +30,6 @@ export function harnessCommand(): string {
   return 'clikcode';
 }
 
-// ---------------------------------------------------------------------------
-// Secrets
-// ---------------------------------------------------------------------------
-
 export function isoStamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }

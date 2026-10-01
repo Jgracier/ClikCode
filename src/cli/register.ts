@@ -14,7 +14,7 @@ import { aiSessionInteractive, aiSessionResume } from '../commands/ai/interactiv
 import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, announceBareInteractiveLogin } from '../commands/account.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
-import { ensureChatReady, resolveChat, startOrResumeChat } from '../commands/ai/harness.js';
+import { startOrResumeChat } from '../commands/ai/harness.js';
 import { aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList } from '../commands/ai/sessions.js';
 import { aiGatewayModels, aiGatewayStatus, aiGatewayUsage, aiGatewayCredit, aiModelsList, aiUsage } from '../commands/ai/status.js';
 import { aiStart, aiStatus, aiStop } from '../daemon/server.js';
@@ -73,15 +73,16 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // One command for "ask something from a script": a new chat (or --chat to
   // continue one), bound to an account, and the message sent. It took four
   // before -- sessions create, accounts add, sessions set, sessions send.
+  const send = async (prompt: string[], options: { harness?: string; chat?: string; model?: string; permissions?: string }): Promise<void> => {
+    const id = await startOrResumeChat(options);
+    await untilStopped((signal) => sendScriptedTurn(config, id, prompt.join(' '), signal));
+  };
   program.command('send <prompt...>').description('Send a message: in a new chat, or --chat <id|name|last> to continue one')
     .option('--harness <harness>', 'Harness to run it on, e.g. claude, codex, or clikcode-local (default: the one you are signed in to)')
     .option('--chat <chat>', 'Continue this chat: its id or the start of it, its name, or last')
     .option('--model <model>', 'Model to use')
     .option('--permissions <mode>', 'ask, auto, or bypass for this chat (default: your global setting)')
-    .action(async (prompt: string[], options: { harness?: string; chat?: string; model?: string; permissions?: string }) => {
-      const id = await startOrResumeChat(options);
-      await untilStopped((signal) => sendScriptedTurn(config, id, prompt.join(' '), signal));
-    });
+    .action(send);
   const acp = program.command('acp').description('Add an Agent Client Protocol harness the catalog does not ship');
   acp.command('list').description('List harnesses added on this machine').action(acpList);
   acp.command('add <command> <binary> [argv...]')
@@ -119,12 +120,9 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   const sessions = program.command('sessions').alias('session').description('Create and resume persistent coding sessions');
   sessions.command('list').alias('ls').description('List saved sessions').action(aiSessionsList);
   sessions.command('show <id>').description('Show a saved session').action(aiSessionShow);
+  // `send --chat <chat>`, under its older name.
   sessions.command('send <chat> <prompt...>').alias('chat').description('Send a turn through a saved chat (its id or the start of it, its name, or last)')
-    .action(async (chat: string, prompt: string[]) => {
-      const id = await resolveChat(chat);
-      await ensureChatReady(id);
-      await untilStopped((signal) => sendScriptedTurn(config, id, prompt.join(' '), signal));
-    });
+    .action((chat: string, prompt: string[]) => send(prompt, { chat }));
   sessions.command('command <id> <slash...>').alias('slash').description('Run /claude, /accounts, or another session slash command')
     .action(async (id, slash: string[]) => { await aiSessionCommand(id, slash.join(' ')); });
   // `open` and `resume` were two commands for one thing.

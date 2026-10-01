@@ -21,8 +21,6 @@ import { isBlankConversation } from './options.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 
-export { isBlankConversation };
-
 /** Put a draft on disk. The turn worker is another process and can only see
  * what has been written; this is the moment the chat is actually used. */
 export async function ensureSessionOnDisk(id: string): Promise<void> {
