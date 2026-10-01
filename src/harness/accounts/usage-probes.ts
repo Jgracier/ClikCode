@@ -3,8 +3,8 @@
 
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { auggieUsageLabel } from '../auggie-usage.js';
-import { grokUsageProbe, grokUsageReading } from './grok-usage.js';
-import { ampUsageProbe, commandCodeUsageProbe, commandCodeUsageReading, copilotUsageProbe, copilotUsageReading, cursorUsageProbe, cursorUsageReading, kiloUsageProbe, kimiUsageProbe, kimiUsageReading, kiroUsageProbe, kiroUsageReading } from './cli-usage-probes.js';
+import { grokUsageReading } from './grok-usage.js';
+import { ampUsageProbe, commandCodeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -47,10 +47,6 @@ export const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
  * picker, and a number that never approaches a limit cannot drive failover.
  * A harness that publishes no window publishes no usage.
  */
-async function codexUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
-  return (await codexUsageReading(session, environment))?.label;
-}
-
 async function codexUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   const binary = harnessBinary('codex');
   const response = await new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
@@ -111,10 +107,6 @@ async function codexUsageReading(_session: HarnessSession, environment: Readonly
  * account's. Every turn then keeps it current from the rate-limit data the
  * turn itself carries (claudeStreamReading, or the ACP adapter's
  * `_claude/rateLimit`). */
-async function claudeUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
-  return (await claudeUsageReading(session, environment))?.label;
-}
-
 async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   const harness = localHarnessForCommand('claude');
   if (!harness) return undefined;
@@ -151,10 +143,6 @@ export function claudeStreamReading(lineText: string): UsageReading | undefined 
   return claudeRateLimitReading(record.rate_limit_info);
 }
 
-export function claudeStreamUsage(lineText: string): string | undefined {
-  return claudeStreamReading(lineText)?.label;
-}
-
 /** Codex pushes account/rateLimits/updated on its app-server connection during
  * a turn, unprompted (confirmed live). Reading it there replaces codexUsageProbe
  * spawning an ENTIRE SECOND `codex app-server` process -- handshake, a 250ms
@@ -171,21 +159,6 @@ export function codexRateLimitsReading(rateLimits: unknown): UsageReading | unde
   return usageReading([part(windows?.primary), part(windows?.secondary)]);
 }
 
-/** Label form, for callers that still pass a string to recordDerivedUsage. The
- * structured reading behind the label is remembered briefly so that path keeps
- * `usedPct`/`resetsAt` too; passing codexRateLimitsReading() directly is better. */
-export const recentReadingByLabel = new Map<string, UsageReading>();
-
-function codexRateLimitsLabel(rateLimits: unknown): string | undefined {
-  const reading = codexRateLimitsReading(rateLimits);
-  if (reading?.label) {
-    recentReadingByLabel.delete(reading.label);
-    recentReadingByLabel.set(reading.label, reading);
-    if (recentReadingByLabel.size > 8) recentReadingByLabel.delete(recentReadingByLabel.keys().next().value as string);
-  }
-  return reading?.label;
-}
-
 /** Auggie publishes an account balance; ClikCode reads it from the harness
  * rather than from Augment's API, the same rule every other usage source
  * follows here. */
@@ -197,39 +170,26 @@ async function auggieUsageProbe(_session: HarnessSession, environment: Readonly<
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
 }
 
-export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageProbe>>> = {
-  codex: codexUsageProbe,
-  claude: claudeUsageProbe,
-  auggie: auggieUsageProbe,
-  // Free: an ACP extension call, not a turn (grok-usage.ts).
-  grok: grokUsageProbe,
-  // Free reads of the harness's own usage surface (cli-usage-probes.ts).
-  copilot: copilotUsageProbe,
-  kimi: kimiUsageProbe,
-  amp: ampUsageProbe,
-  kilo: kiloUsageProbe,
-  cursor: cursorUsageProbe,
-  kiro: kiroUsageProbe,
-  command: commandCodeUsageProbe,
-};
-
-/** Probes that cost a model turn. Only an explicit ask (`/usage`, the account
- * picker, `accounts status`) runs one; every other probe is a free local or
- * API read and may run on a passive paint. */
-export const BILLED_USAGE_PROBES: ReadonlySet<string> = new Set();
-
 type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
 
-/** Structured probes for the harnesses whose label probe above is the built-in
- * one. A probe registered only in NATIVE_USAGE_PROBES still works; it simply
- * yields a label without windows. */
-export const NATIVE_USAGE_READING_PROBES: Readonly<Partial<Record<string, { label: NativeUsageProbe; reading: NativeUsageReadingProbe }>>> = {
-  codex: { label: codexUsageProbe, reading: codexUsageReading },
-  claude: { label: claudeUsageProbe, reading: claudeUsageReading },
-  grok: { label: grokUsageProbe, reading: grokUsageReading },
-  copilot: { label: copilotUsageProbe, reading: copilotUsageReading },
-  kimi: { label: kimiUsageProbe, reading: kimiUsageReading },
-  cursor: { label: cursorUsageProbe, reading: cursorUsageReading },
-  kiro: { label: kiroUsageProbe, reading: kiroUsageReading },
-  command: { label: commandCodeUsageProbe, reading: commandCodeUsageReading },
+/** A probe whose harness publishes only a balance label, no windows. */
+const labelOnly = (probe: NativeUsageProbe): NativeUsageReadingProbe => async (session, environment) => {
+  const label = await probe(session, environment);
+  return label === undefined ? undefined : { windows: [], label };
+};
+
+export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageReadingProbe>>> = {
+  codex: codexUsageReading,
+  claude: claudeUsageReading,
+  auggie: labelOnly(auggieUsageProbe),
+  // Free: an ACP extension call, not a turn (grok-usage.ts).
+  grok: grokUsageReading,
+  // Free reads of the harness's own usage surface (cli-usage-probes.ts).
+  copilot: copilotUsageReading,
+  kimi: kimiUsageReading,
+  amp: labelOnly(ampUsageProbe),
+  kilo: labelOnly(kiloUsageProbe),
+  cursor: cursorUsageReading,
+  kiro: kiroUsageReading,
+  command: commandCodeUsageReading,
 };

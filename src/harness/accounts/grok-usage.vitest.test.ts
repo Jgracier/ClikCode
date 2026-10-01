@@ -2,8 +2,8 @@
  * `grok -p ... --output-format streaming-messages-json
  * --include-partial-messages` turn, and its agent's `_x.ai/billing` answer). */
 import { describe, expect, it } from 'vitest';
-import { grokBillingReading } from './grok-usage.js';
-import { NATIVE_USAGE_PROBES, NATIVE_USAGE_READING_PROBES } from './usage-probes.js';
+import { grokBillingReading, grokUsageReading } from './grok-usage.js';
+import { NATIVE_USAGE_PROBES } from './usage-probes.js';
 import { createStreamState, parseHarnessLine } from '../events/adapters.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 
@@ -41,8 +41,7 @@ describe('grok plan allowance (_x.ai/billing)', () => {
   });
 
   it('is registered as a probe with a structured reading', () => {
-    expect(NATIVE_USAGE_PROBES.grok).toBeDefined();
-    expect(NATIVE_USAGE_READING_PROBES.grok?.label).toBe(NATIVE_USAGE_PROBES.grok);
+    expect(NATIVE_USAGE_PROBES.grok).toBe(grokUsageReading);
   });
 });
 

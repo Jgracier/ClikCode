@@ -221,9 +221,6 @@ export async function cursorUsageReading(_session: HarnessSession, environment: 
   }
 }
 
-export const cursorUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
-  (await cursorUsageReading(session, environment))?.label;
-
 // ---------------------------------------------------------------- Kiro
 
 /** Kiro's `/usage` result: each `usageBreakdowns` entry a resource with a
@@ -248,9 +245,6 @@ export async function kiroUsageReading(_session: HarnessSession, environment: En
     return answer.success === false ? undefined : kiroQuotaReading(answer.data);
   }, PROBE_TIMEOUT_MS).catch(() => undefined);
 }
-
-export const kiroUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
-  (await kiroUsageReading(session, environment))?.label;
 
 // ---------------------------------------------------------------- Command Code
 
@@ -283,9 +277,6 @@ export async function commandCodeUsageReading(_session: HarnessSession, environm
   }
 }
 
-export const commandCodeUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
-  (await commandCodeUsageReading(session, environment))?.label;
-
 // ---------------------------------------------------------------- Amp, Kilo
 
 /** `amp usage`: `**Individual credits:** $9.36 remaining (…)`. */
@@ -313,8 +304,3 @@ export const ampUsageProbe = (_session: HarnessSession, environment: Environment
 export const kiloUsageProbe = (_session: HarnessSession, environment: Environment): Promise<string | undefined> =>
   captureLabel('kilo', ['profile'], environment, kiloProfileLabel);
 
-export const copilotUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
-  (await copilotUsageReading(session, environment))?.label;
-
-export const kimiUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
-  (await kimiUsageReading(session, environment))?.label;
