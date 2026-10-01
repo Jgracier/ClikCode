@@ -1,7 +1,8 @@
 /** Signed-in email for the harnesses whose vendor answers "who is this?" --
- * by a command of its own, a field in its own login file, or (OpenHands) the
- * same user endpoint its own CLI calls. Each source below was verified live
- * against a real signed-in account on 2026-09-30. Every reader returns
+ * by a command of its own, a field in its own login file, its own log
+ * (Antigravity), or (OpenHands, Mistral Vibe) the same user endpoint its own
+ * CLI calls. Each source below was verified live against a real signed-in
+ * account. Every reader returns
  * undefined rather than guess: a numbered placeholder beats a wrong name.
  *
  * Harnesses with no entry here were checked too and keep no email anywhere
@@ -12,11 +13,12 @@
  * Multi-provider harnesses (OpenCode, Aider, Goose, Pi, Hermes, OpenClaw,
  * Continue, Deep Agents) have no single account to name. */
 
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
+import { mistralVibeAccountEmail } from './mistral-vibe-identity.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -37,6 +39,12 @@ function emailAfter(text: string, label: RegExp): string | undefined {
 
 function json(text: string): unknown {
   try { return JSON.parse(text); } catch { return undefined; }
+}
+
+/** Any non-empty string: the fields read this way hold the email and only
+ * the email. */
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
 }
 
 /** `kiro-cli whoami --format json` -> {"accountType":"SocialGoogle","email":...}.
@@ -117,22 +125,100 @@ async function openHandsEmail(profilePath: string | undefined): Promise<string |
   return response.ok ? parseOpenHandsUser(await response.text()) : undefined;
 }
 
+/** Codex's auth.json id_token is a standard OIDC JWT whose payload carries an
+ * `email` claim. Decoding the payload to read a claim is not verifying the
+ * signature, and need not be: this is display of a claim from a credential
+ * file already trusted to authenticate real requests, profile-scoped by
+ * CODEX_HOME like the rest of the file. */
+export function codexIdTokenEmail(authJson: string): string | undefined {
+  const payload = (json(authJson) as { tokens?: { id_token?: string } } | undefined)?.tokens?.id_token?.split('.')[1];
+  if (!payload) return undefined;
+  const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+  return text((json(Buffer.from(padded, 'base64url').toString('utf8')) as { email?: unknown } | undefined)?.email);
+}
+
+/** Antigravity keeps no email in any file of its config tree (settings.json,
+ * jetski_state.pbtxt and the project id file are byte-identical across
+ * accounts). Its identity surfaces only in its own log: `server_oauth.go`
+ * logs "OAuth: authenticated successfully as <email>" on every sign-in. A
+ * profile path IS the isolated $HOME, and agy writes under $HOME/.gemini
+ * either way. The log is flushed by a background server after the awaited
+ * client exits -- measured live needing several seconds -- so the newest few
+ * logs are re-read for a while rather than once. */
+async function antigravityEmail(profilePath: string | undefined): Promise<string | undefined> {
+  const logDir = join(profilePath ?? homedir(), '.gemini', 'antigravity-cli', 'log');
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const entries = await readdir(logDir, { withFileTypes: true }).catch(() => []);
+    const logs = (await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.log')).map(async (entry) => {
+      const full = join(logDir, entry.name);
+      const info = await stat(full).catch(() => undefined);
+      return info ? { full, mtime: info.mtimeMs } : undefined;
+    }))).filter((item): item is { full: string; mtime: number } => Boolean(item)).sort((left, right) => right.mtime - left.mtime);
+    for (const { full } of logs.slice(0, 3)) {
+      const content = await readFile(full, 'utf8').catch(() => '');
+      const match = /OAuth: authenticated successfully as ([^\s,]+@[^\s,]+)/.exec(content);
+      if (match) return match[1];
+    }
+    if (attempt < 11) await new Promise((resolve) => setTimeout(resolve, 600));
+  }
+  return undefined;
+}
+
+type IdentitySource = (harness: AiLocalHarnessDefinition, profilePath: string | undefined) => Promise<string | undefined>;
+
+/** Ask the harness itself, under the account's own profile variable. */
+const ask = (argv: readonly string[], parse: (output: string) => string | undefined): IdentitySource =>
+  async (harness, profilePath) => parse(await capture(harness, profilePath, argv));
+
+/** Read the harness's own file -- the first of `paths` that parses to a name. */
+const read = (paths: (profilePath: string | undefined) => string[], parse: (contents: string) => string | undefined): IdentitySource =>
+  async (_harness, profilePath) => {
+    for (const path of paths(profilePath)) {
+      const found = await readFile(path, 'utf8').then(parse, () => undefined);
+      if (found) return found;
+    }
+    return undefined;
+  };
+
+/** `profilePath` when the account has one, else the vendor's default directory. */
+const under = (profilePath: string | undefined, fallback: string): string => profilePath ?? join(homedir(), fallback);
+
+const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
+  // `claude auth status` prints JSON with this profile's own email.
+  claude: ask(['auth', 'status'], (output) => text((json(output) as { email?: unknown } | undefined)?.email)),
+  kiro: ask(['whoami', '--format', 'json'], parseKiroWhoami),
+  kilo: ask(['profile', '--json'], parseKiloProfile),
+  amp: ask(['usage'], parseAmpUsage),
+  command: ask(['whoami'], parseCommandCodeWhoami),
+  devin: ask(['auth', 'status'], parseDevinAuthStatus),
+  codex: read((profilePath) => [join(under(profilePath, '.codex'), 'auth.json')], codexIdTokenEmail),
+  // google_accounts.json names the signed-in Google account in `active`.
+  gemini: read((profilePath) => [join(under(profilePath, '.gemini'), 'google_accounts.json')],
+    (contents) => text((json(contents) as { active?: unknown } | undefined)?.active)),
+  // auth.json is keyed by issuer::uuid; each entry carries a plain `email`.
+  grok: read((profilePath) => [join(under(profilePath, '.grok'), 'auth.json')], (contents) => {
+    const entries = Object.values((json(contents) ?? {}) as Record<string, { email?: unknown } | null>);
+    return entries.map((entry) => text(entry?.email)).find(Boolean);
+  }),
+  // cli-config.json's authInfo.email, under XDG_CONFIG_HOME when that is set
+  // -- which every ClikCode account profile sets -- and in ~/.cursor otherwise.
+  cursor: read((profilePath) => {
+    const home = profilePath ?? homedir();
+    const config = profilePath ? join(profilePath, '.config') : process.env.XDG_CONFIG_HOME || join(home, '.config');
+    return [join(config, 'cursor', 'cli-config.json'), join(home, '.cursor', 'cli-config.json')];
+  }, (contents) => text((json(contents) as { authInfo?: { email?: unknown } } | undefined)?.authInfo?.email)),
+  cline: read((profilePath) => [join(profilePath ?? homedir(), '.cline', 'data', 'settings', 'providers.json')], parseClineProviders),
+  junie: read((profilePath) => [join(profilePath ?? homedir(), '.junie', 'secure_credentials.json')], parseJunieCredentials),
+  copilot: read((profilePath) => [join(under(profilePath, '.copilot'), 'config.json')], parseCopilotConfig),
+  openhands: (_harness, profilePath) => openHandsEmail(profilePath),
+  vibe: (_harness, profilePath) => mistralVibeAccountEmail(profilePath),
+  antigravity: (_harness, profilePath) => antigravityEmail(profilePath),
+};
+
 /** The signed-in email for one of the harnesses above, or undefined. */
 export async function vendorAccountEmail(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
-  const home = profilePath ?? homedir();
   try {
-    switch (harness.command) {
-      case 'kiro': return parseKiroWhoami(await capture(harness, profilePath, ['whoami', '--format', 'json']));
-      case 'kilo': return parseKiloProfile(await capture(harness, profilePath, ['profile', '--json']));
-      case 'amp': return parseAmpUsage(await capture(harness, profilePath, ['usage']));
-      case 'command': return parseCommandCodeWhoami(await capture(harness, profilePath, ['whoami']));
-      case 'devin': return parseDevinAuthStatus(await capture(harness, profilePath, ['auth', 'status']));
-      case 'cline': return parseClineProviders(await readFile(join(home, '.cline', 'data', 'settings', 'providers.json'), 'utf8'));
-      case 'junie': return parseJunieCredentials(await readFile(join(home, '.junie', 'secure_credentials.json'), 'utf8'));
-      case 'openhands': return await openHandsEmail(profilePath);
-      case 'copilot': return parseCopilotConfig(await readFile(join(profilePath ?? join(homedir(), '.copilot'), 'config.json'), 'utf8'));
-      default: return undefined;
-    }
+    return await IDENTITY[harness.command]?.(harness, profilePath);
   } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
   return undefined;
 }
