@@ -24,6 +24,8 @@ export interface ComposerHandle {
   mention(mention: Mention): void;
   /** The editor's current selection (none: nothing selected). */
   selection(mention: Mention | undefined): void;
+  /** Opens the account menu under the message box. */
+  accounts(): void;
 }
 
 interface Attachment { key: string; kind: 'selection' | 'image'; label: string; mention?: Mention; path?: string; preview?: string }
@@ -146,6 +148,7 @@ export function Composer(props: {
       }
     },
     selection: (mention) => setSelection(mention ? { mention, included: true } : undefined),
+    accounts: () => setMenu('account'),
   };
 
   const token = tokenAtCaret(text, caret);
@@ -450,10 +453,11 @@ export function Composer(props: {
       <div class="composer-status">
         {menu === 'account' ? <AccountMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
-        {account ? (
+        {/* The Gateway has no account of its own: its button is for its credit. */}
+        {account || model.providerId === 'gateway' ? (
           <button type="button" id="account-button" class={`status-account${menu === 'account' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'account'}
-            title={`${account.label}: this provider's accounts`} disabled={!connected} onClick={() => setMenu(menu === 'account' ? undefined : 'account')}>
-            <Icon name={account.problem ? 'warning' : 'account'} /><span class="status-label">{account.label}</span><Icon name="chevron-down" />
+            title={account ? `${account.label}: this provider's accounts` : 'Gateway credit'} disabled={!connected} onClick={() => setMenu(menu === 'account' ? undefined : 'account')}>
+            <Icon name={account?.problem ? 'warning' : account ? 'account' : 'credit-card'} /><span class="status-label">{account?.label ?? 'Credit'}</span><Icon name="chevron-down" />
           </button>
         ) : null}
         {/* Permissions belong to how this chat runs, beside whose account it runs on. */}

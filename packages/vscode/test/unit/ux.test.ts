@@ -8,7 +8,7 @@ import { noticeLevel } from '../../src/text';
 import { conversationState } from '../../src/conversation-state';
 import { modelWithEffort } from '../../src/webview/picker';
 import { splitEditorContext } from '../../src/editor-context';
-import { pathIn, relativeTime, resetIn } from '../../src/webview/format';
+import { pathIn, relativeTime } from '../../src/webview/format';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -90,12 +90,10 @@ describe('formatting', () => {
     expect(pathIn('run npm test')).toBeUndefined();
   });
 
-  it('says when things happened and reset', () => {
+  it('says when things happened', () => {
     const now = Date.parse('2026-09-29T12:00:00Z');
     expect(relativeTime('2026-09-29T11:58:00Z', now)).toBe('2m ago');
     expect(relativeTime('2026-09-29T07:00:00Z', now)).toBe('5h ago');
-    expect(resetIn('2026-09-29T14:30:00Z', now)).toBe('resets in 3h');
-    expect(resetIn('2026-09-29T11:00:00Z', now)).toBeUndefined();
   });
 });
 

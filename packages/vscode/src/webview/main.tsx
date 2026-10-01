@@ -1,18 +1,18 @@
 /** The chat webview: renders the ChatModel the extension posts, and turns
  * clicks and keys into messages back. Holds no conversation state of its own
- * beyond the composer and which screen is showing. */
+ * beyond the composer and which menu is open. */
 import { render, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, type ChatModel } from '../model';
 import { applyModelPatch } from '../model-patch';
 import type { IdeConversation, IdePickItem, IdeUiResult } from '../protocol';
-import type { ToWebview, WebviewScreen } from '../webview-protocol';
+import type { ToWebview, WebviewMenu } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, Spinner, Transcript } from './chat';
 import { Composer, type ComposerHandle } from './composer';
 import { homeRelative, relativeTime } from './format';
 import { choose } from './picker';
-import { AccountsScreen, HistoryMenu } from './screens';
+import { HistoryMenu } from './screens';
 import { Sheet, type OpenQuestion } from './sheet';
 import { Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
 
@@ -47,7 +47,7 @@ const SUGGESTIONS: Array<{ icon: string; title: string; prompt: string }> = [
   { icon: 'git-compare', title: 'Review my changes', prompt: '/review' },
 ];
 
-function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (text: string) => void; onScreen: (screen: WebviewScreen) => void }): JSX.Element {
+function Welcome({ model, onPrompt, onMenu }: { model: ChatModel; onPrompt: (text: string) => void; onMenu: (menu: WebviewMenu) => void }): JSX.Element {
   const [recent, setRecent] = useState<IdeConversation[]>();
   useEffect(() => {
     request<IdeConversation[]>({ method: 'query', query: 'conversations' }).then((rows) => setRecent(rows.filter((row) => !row.current).slice(0, 3)), () => undefined);
@@ -72,7 +72,7 @@ function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (t
           <p class="muted">{provider!.name} needs an account before it can answer. Its own sign-in opens in a terminal.</p>
           <div class="banner-actions">
             <button type="button" class="primary" onClick={() => (needsGateway ? choose({ kind: 'provider', provider: 'gateway' }) : choose({ kind: 'add-account', provider: provider!.id })).catch(() => undefined)}>Sign in</button>
-            <button type="button" class="secondary" onClick={() => onScreen('accounts')}>Accounts</button>
+            <button type="button" class="secondary" onClick={() => onMenu('accounts')}>Accounts</button>
           </div>
         </div>
       ) : null}
@@ -85,7 +85,7 @@ function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (t
       </div>
       {recent?.length ? (
         <div class="recent">
-          <div class="group-head">Recent<button type="button" class="link small" onClick={() => onScreen('history')}>View all</button></div>
+          <div class="group-head">Recent<button type="button" class="link small" onClick={() => onMenu('history')}>View all</button></div>
           {recent.map((row) => (
             <button key={row.id} type="button" class="recent-row" onClick={() => { void request({ method: 'open', mode: 'resume', sessionId: row.id }); }}>
               <span class={`conversation-dot ${row.activity ?? ''}`} aria-hidden="true" />
@@ -106,7 +106,7 @@ export function shortcut(keys: string): string {
   return MAC ? `⌘${keys.replace(/Shift\+/g, '⇧').replace(/Esc/g, 'Esc')}` : `Ctrl+${keys}`;
 }
 
-function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () => void; onScreen: (screen: WebviewScreen) => void }): JSX.Element {
+function MoreMenu({ model, onClose, onMenu }: { model: ChatModel; onClose: () => void; onMenu: (menu: WebviewMenu) => void }): JSX.Element {
   const item = (key: string, icon: string, label: string, run: () => void, hint?: string): ListRow => ({
     key, onSelect: () => { onClose(); run(); },
     render: () => <div class="row"><span class="row-check"><Icon name={icon} /></span><span class="row-main"><span class="row-label">{label}</span></span>{hint ? <span class="row-end muted">{hint}</span> : null}</div>,
@@ -114,7 +114,7 @@ function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () 
   const heading = (title: string): ListRow => ({ key: `h:${title}`, heading: true, render: () => <>{title}</> });
   const rows: ListRow[] = [
     heading('Chat'),
-    item('accounts', 'account', 'Accounts & usage', () => onScreen('accounts')),
+    item('accounts', 'account', 'Accounts & usage', () => onMenu('accounts')),
     item('settings', 'settings-gear', 'Chat settings', () => post({ type: 'send', text: '/settings', id: uid() })),
     ...(model.route === 'local' && model.harness
       ? [item('tools', 'plug', 'MCP servers & tools', () => post({ type: 'send', text: '/settings tools', id: uid() }))] : []),
@@ -134,7 +134,7 @@ function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () 
   );
 }
 
-function Header({ model, onScreen, history, setHistory, onError }: { model: ChatModel; onScreen: (screen: WebviewScreen) => void; history: boolean; setHistory: (open: boolean) => void; onError: (message: string) => void }): JSX.Element {
+function Header({ model, onMenu, history, setHistory, onError }: { model: ChatModel; onMenu: (menu: WebviewMenu) => void; history: boolean; setHistory: (open: boolean) => void; onError: (message: string) => void }): JSX.Element {
   const [more, setMore] = useState(false);
   const title = model.title ?? (model.sessionId ? 'New chat' : 'ClikCode');
   return (
@@ -142,10 +142,10 @@ function Header({ model, onScreen, history, setHistory, onError }: { model: Chat
       <span class="title-text" title={title}>{title}</span>
       {model.running ? <span class="running-indicator" title="Working…" role="img" aria-label="Working"><Spinner tone="tone-cyan" /></span> : null}
       <span class="spacer" />
-      <IconButton id="new-chat" icon="add" label={`New chat (${shortcut('N')})`} onClick={() => { onScreen('chat'); void request({ method: 'open', mode: 'new' }); }} />
+      <IconButton id="new-chat" icon="add" label={`New chat (${shortcut('N')})`} onClick={() => { void request({ method: 'open', mode: 'new' }); }} />
       <span data-popover-anchor><IconButton id="history-button" icon="history" label="Conversations" active={history} onClick={() => { setMore(false); setHistory(!history); }} /></span>
       <span data-popover-anchor><IconButton id="more-button" icon="ellipsis" label="More" active={more} onClick={() => { setHistory(false); setMore(!more); }} /></span>
-      {more ? <MoreMenu model={model} onClose={() => setMore(false)} onScreen={onScreen} /> : null}
+      {more ? <MoreMenu model={model} onClose={() => setMore(false)} onMenu={onMenu} /> : null}
       {history ? <HistoryMenu model={model} onClose={() => setHistory(false)} onError={onError} /> : null}
     </header>
   );
@@ -164,8 +164,7 @@ function probe(message: Extract<ToWebview, { type: 'probe' }>): unknown {
     return { count: elements.length, text: element?.innerText ?? element?.textContent ?? '', texts: elements.slice(0, 50).map((item) => item.innerText ?? item.textContent ?? ''), disabled: (element as HTMLButtonElement | undefined)?.disabled ?? false };
   }
   if (!element) {
-    const screen = document.querySelector<HTMLElement>('.app')?.dataset.screen ?? 'none';
-    return { ok: false, error: `nothing matches ${message.selector} (screen ${screen}; page: ${document.body.innerText.slice(0, 300).replace(/\s+/g, ' ')})` };
+    return { ok: false, error: `nothing matches ${message.selector} (page: ${document.body.innerText.slice(0, 300).replace(/\s+/g, ' ')})` };
   }
   if (message.action === 'click') { element.scrollIntoView?.({ block: 'nearest' }); element.click(); return { ok: true }; }
   if (message.action === 'type') {
@@ -184,7 +183,6 @@ function probe(message: Extract<ToWebview, { type: 'probe' }>): unknown {
 
 function App(): JSX.Element {
   const [model, setModel] = useState<ChatModel>();
-  const [screen, setScreen] = useState<WebviewScreen>('chat');
   const [history, setHistory] = useState(false);
   const [questions, setQuestions] = useState<Array<OpenQuestion & { items?: readonly IdePickItem[] }>>([]);
   const [error, setError] = useState<string>();
@@ -201,11 +199,9 @@ function App(): JSX.Element {
     post({ type: 'ui-response', id, result });
   };
 
-  const showScreen = (next: WebviewScreen): void => {
-    // Conversations are a list over the chat, not a screen of their own.
-    if (next === 'history') { setScreen('chat'); setHistory(true); return; }
-    setScreen(next);
-    if (next === 'chat') requestAnimationFrame(() => composer.current?.focus());
+  const showMenu = (menu: WebviewMenu): void => {
+    if (menu === 'history') setHistory(true);
+    else composer.current?.accounts();
   };
 
   useEffect(() => listen((message) => {
@@ -217,11 +213,11 @@ function App(): JSX.Element {
         setModel((previous) => (previous ? applyModelPatch(previous, message.patch) : previous));
         if (message.patch.set.sessionId) save({ sessionId: message.patch.set.sessionId }); return;
       case 'setDraft': composer.current?.setDraft(message.text); return;
-      case 'insert': setScreen('chat'); composer.current?.insert(message.text); return;
-      case 'mention': setScreen('chat'); requestAnimationFrame(() => composer.current?.mention(message.mention)); return;
+      case 'insert': composer.current?.insert(message.text); return;
+      case 'mention': requestAnimationFrame(() => composer.current?.mention(message.mention)); return;
       case 'selection': composer.current?.selection(message.mention); return;
       case 'focus': requestAnimationFrame(() => composer.current?.focus()); return;
-      case 'show': showScreen(message.screen); return;
+      case 'show': showMenu(message.menu); return;
       case 'ui-request': setQuestions((items) => [...items.filter((item) => item.id !== message.id), { id: message.id, request: message.request }]); return;
       case 'ui-update': setQuestions((items) => items.map((item) => (item.id === message.id ? { ...item, items: message.items } : item))); return;
       case 'ui-cancel': setQuestions((items) => items.filter((item) => item.id !== message.id)); return;
@@ -302,7 +298,7 @@ function App(): JSX.Element {
   // A sheet closing hands the keyboard back to the composer.
   const hadQuestion = useRef(false);
   useEffect(() => {
-    if (hadQuestion.current && !questions.length && screen === 'chat') requestAnimationFrame(() => composer.current?.focus());
+    if (hadQuestion.current && !questions.length) requestAnimationFrame(() => composer.current?.focus());
     hadQuestion.current = questions.length > 0;
   }, [questions.length]);
 
@@ -319,14 +315,13 @@ function App(): JSX.Element {
   const sendNow = (text: string): void => post({ type: 'send', text, id: uid() });
 
   return (
-    <div class="app" data-screen={screen}>
-      {screen === 'chat' ? <Header model={model} onScreen={showScreen} history={history} setHistory={setHistory} onError={setError} /> : null}
-      {screen === 'accounts' ? <AccountsScreen model={model} onBack={() => showScreen('chat')} onError={setError} /> : null}
-      <main class="chat" hidden={screen !== 'chat'}>
+    <div class="app">
+      <Header model={model} onMenu={showMenu} history={history} setHistory={setHistory} onError={setError} />
+      <main class="chat">
         <div class="log" ref={log} onScroll={() => { const element = log.current!; stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>
           <Banner model={model} />
           {model.connection === 'starting' && !model.sessionId ? <div class="starting inline"><Icon name="loading" spin /><span class="muted">Starting ClikCode…</span></div> : null}
-          {model.connection === 'ready' && model.sessionId && empty ? <Welcome model={model} onPrompt={sendNow} onScreen={showScreen} /> : null}
+          {model.connection === 'ready' && model.sessionId && empty ? <Welcome model={model} onPrompt={sendNow} onMenu={showMenu} /> : null}
           {!empty ? <Transcript model={model} /> : null}
         </div>
         {model.approvals[0] ? (

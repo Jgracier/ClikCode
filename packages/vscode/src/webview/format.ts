@@ -22,17 +22,6 @@ export function duration(ms: number): string {
   return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
 }
 
-export function resetIn(iso: string | undefined, now = Date.now()): string | undefined {
-  if (!iso) return undefined;
-  const at = Date.parse(iso);
-  if (Number.isNaN(at) || at <= now) return undefined;
-  const minutes = Math.round((at - now) / 60_000);
-  if (minutes < 60) return `resets in ${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `resets in ${hours}h`;
-  return `resets in ${Math.round(hours / 24)}d`;
-}
-
 /** The last two segments of a path, for a compact label. */
 export function shortPath(path: string): string {
   const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);

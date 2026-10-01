@@ -10,7 +10,7 @@ import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND } from './compat';
 import { DiffDocuments } from './ui';
 import { registerCustomAcpCommands } from './custom-acp';
 import { mentionFromEditor, mentionFromUri } from './mentions';
-import type { WebviewScreen } from './webview-protocol';
+import type { WebviewMenu } from './webview-protocol';
 
 /** What activate() returns: used by the integration tests, and a stable
  * surface for anything else that wants to drive the chat. The top-level
@@ -185,9 +185,9 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     const target = await shown();
     await target.send(line);
   };
-  const screen = (name: WebviewScreen) => async () => {
+  const menu = (name: WebviewMenu) => async () => {
     const target = await shown();
-    target.post({ type: 'show', screen: name });
+    target.post({ type: 'show', menu: name });
   };
   const addToChat = async (target: unknown): Promise<void> => {
     const uri = target instanceof vscode.Uri ? target : undefined;
@@ -257,9 +257,9 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     }),
     vscode.commands.registerCommand('clikcode.focus', async () => { const target = await shown(); target.post({ type: 'focus' }); }),
     vscode.commands.registerCommand('clikcode.blur', () => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')),
-    vscode.commands.registerCommand('clikcode.newChat', async () => { const target = await shown(); target.post({ type: 'show', screen: 'chat' }); await target.open('new'); target.post({ type: 'focus' }); }),
-    vscode.commands.registerCommand('clikcode.showHistory', screen('history')),
-    vscode.commands.registerCommand('clikcode.showAccounts', screen('accounts')),
+    vscode.commands.registerCommand('clikcode.newChat', async () => { const target = await shown(); await target.open('new'); target.post({ type: 'focus' }); }),
+    vscode.commands.registerCommand('clikcode.showHistory', menu('history')),
+    vscode.commands.registerCommand('clikcode.showAccounts', menu('accounts')),
     vscode.commands.registerCommand('clikcode.openSettings', slash('/settings')),
     vscode.commands.registerCommand('clikcode.chooseProvider', slash('/provider')),
     vscode.commands.registerCommand('clikcode.chooseModel', slash('/model')),

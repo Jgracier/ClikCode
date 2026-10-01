@@ -18,8 +18,9 @@ export interface Mention {
   problems?: string[];
 }
 
-/** Screens the webview shows besides the chat. */
-export type WebviewScreen = 'chat' | 'history' | 'accounts';
+/** The lists a command can drop over the chat: the conversations, or the
+ * chat's account menu. */
+export type WebviewMenu = 'history' | 'accounts';
 
 export type ToWebview =
   | { type: 'model'; model: ChatModel }
@@ -31,7 +32,7 @@ export type ToWebview =
   /** The active editor's selection, or none: offered with the next message. */
   | { type: 'selection'; mention?: Mention }
   | { type: 'focus' }
-  | { type: 'show'; screen: WebviewScreen }
+  | { type: 'show'; menu: WebviewMenu }
   /** The answer to a `request`. */
   | { type: 'response'; id: string; ok: boolean; data?: unknown; error?: string }
   /** A terminal picker, drawn in the panel. */

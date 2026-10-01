@@ -554,7 +554,7 @@
           {
             "id": "accounts",
             "title": "Sign in and add accounts",
-            "description": "Add several accounts per provider. When one hits its usage limit, ClikCode moves the chat to the next automatically. Usage meters show each account's 5-hour and weekly windows.\n[Accounts and usage](command:clikcode.showAccounts)",
+            "description": "Add several accounts per provider. When one hits its usage limit, ClikCode moves the chat to the next automatically. *All accounts & usage* shows each account's 5-hour and weekly windows.\n[Accounts and usage](command:clikcode.showAccounts)",
             "media": {
               "image": "media/walkthrough/accounts.png",
               "altText": "Accounts and usage"
