@@ -1,6 +1,36 @@
 /** The environment a vendor CLI is spawned with, per account profile. */
 
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { stateDirectory } from '../../session/store/paths.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
+
+/** Copilot with no sign-in of its own asks `gh auth token --hostname
+ * github.com` and runs as the GitHub CLI's user -- verified on copilot 1.0.87:
+ * an empty COPILOT_HOME reported `authType: "gh-cli"` and that user's quota.
+ * Inside an account profile that silently made every added account the same
+ * one, sharing its usage. This `gh` refuses only `auth token` and hands every
+ * other command to the real gh further along PATH. */
+const COPILOT_GH_SHIM = `#!/bin/sh
+# ClikCode: a Copilot account profile signs in on its own, never as gh's user.
+if [ "$1" = "auth" ] && [ "$2" = "token" ]; then exit 1; fi
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+exec gh "$@"
+`;
+
+function copilotGhShimDirectory(): string | undefined {
+  const directory = join(stateDirectory(), 'tools', 'copilot-gh-shim');
+  const file = join(directory, 'gh');
+  try {
+    if (!existsSync(file)) {
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(file, COPILOT_GH_SHIM);
+      chmodSync(file, 0o755);
+    }
+    return directory;
+  } catch { return undefined; } // fail-open-ok: no shim leaves Copilot as it was, not broken
+}
 
 /** The one place that turns an account's nativeProfile into an actual
  * environment object -- every call site used to build `{ [env]: path }`
@@ -26,7 +56,14 @@ export function nativeProfileEnvironment(
       LOCALAPPDATA: `${profileHome}/AppData/Local`,
     } : {}),
     ...nativeProfile.extraEnv,
+    ...copilotProfileEnvironment(nativeProfile, platform),
   };
+}
+
+function copilotProfileEnvironment(nativeProfile: NonNullable<AiHarnessAccount['nativeProfile']>, platform: NodeJS.Platform): Record<string, string> {
+  if (nativeProfile.env !== 'COPILOT_HOME' || platform === 'win32') return {};
+  const shim = copilotGhShimDirectory();
+  return shim ? { PATH: [shim, process.env.PATH].filter(Boolean).join(':') } : {};
 }
 
 /** Environment for one account. API-key references stay in the parent
