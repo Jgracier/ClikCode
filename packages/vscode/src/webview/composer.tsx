@@ -242,6 +242,8 @@ export function Composer(props: {
     setSuggestions([]);
   };
 
+  // Esc during a turn (stop, or deny a pending approval) is the page's
+  // (main.tsx): it bubbles there unless the suggestions took it.
   const onKeyDown = (event: KeyboardEvent): void => {
     if (suggestions.length) {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDismissedToken(tokenKey); return; }
@@ -276,11 +278,6 @@ export function Composer(props: {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       send();
-    } else if (event.key === 'Escape' && model.running) {
-      event.preventDefault();
-      // A pending approval is what Esc answers first (denied), as in the terminal.
-      if (model.approvals[0]) post({ type: 'approve', id: model.approvals[0].id, approved: false });
-      else post({ type: 'cancel', restoreDraft: !text });
     } else if (event.key === 'Backspace' && !text && attachments.length) {
       setAttachments((items) => items.slice(0, -1));
     }
