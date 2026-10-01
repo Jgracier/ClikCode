@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ampUsageLabel, copilotQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint } from './cli-usage-probes.js';
+import { ampUsageLabel, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint } from './cli-usage-probes.js';
 
 const NOW = Date.parse('2026-09-30T04:42:49.300Z');
 
@@ -55,5 +55,22 @@ describe('credit balances', () => {
   it('kilo profile', () => {
     expect(kiloProfileLabel('Name: Someone\nEmail: someone@example.com\nTeam: Personal\nBalance: $0.00\n')).toBe('$0 credits left');
     expect(kiloProfileLabel('Balance: $1,204.50')).toBe('$1204.50 credits left');
+  });
+});
+
+describe('Cursor plan usage', () => {
+  // GetCurrentPeriodUsage on a Free account, 2026-09-30 (trimmed).
+  const answer = {
+    billingCycleStart: '1790013310084', billingCycleEnd: '1792605310084',
+    planUsage: { totalSpend: 13, bonusSpend: 13, autoPercentUsed: 13, apiPercentUsed: 0, totalPercentUsed: 6.5 },
+    displayMessage: "You've used 0% of your included usage",
+  };
+  it('reads the included and API shares as monthly windows resetting at the cycle end', () => {
+    const reading = cursorQuotaReading(answer);
+    expect(reading?.label).toBe('monthly 94% left · API 100% left');
+    expect(reading?.windows[0]).toEqual({ name: 'monthly', usedPct: 6.5, resetsAt: new Date(1792605310084).toISOString() });
+  });
+  it('has nothing to say without plan usage', () => {
+    expect(cursorQuotaReading({ displayMessage: 'x' })).toBeUndefined();
   });
 });
