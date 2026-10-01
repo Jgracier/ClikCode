@@ -43,11 +43,11 @@ describe('usage on a passive paint', () => {
     expect(cachedAccountUsageLabel(state.accounts[0]!, state)).toBeUndefined();
   });
 
-  it('never runs a billed probe (a real Claude Code turn) without an explicit ask', async () => {
+  // Claude Code's probe is its local /usage now -- no model call -- so a
+  // passive paint may run it, and the composer is not blank until an ask.
+  it("runs Claude Code's free /usage probe on a passive paint", async () => {
     const session = { id: 's', nativeHarness: 'claude', accountId: 'a' } as HarnessSession;
-    expect(await nativeUsageReading(session, stateWith())).toBeUndefined();
-    expect(claude).not.toHaveBeenCalled();
-    expect((await nativeUsageReading(session, stateWith(), { network: true }))?.label).toBe('5h 10% left');
+    expect((await nativeUsageReading(session, stateWith()))?.label).toBe('5h 10% left');
     expect(claude).toHaveBeenCalledTimes(1);
   });
 

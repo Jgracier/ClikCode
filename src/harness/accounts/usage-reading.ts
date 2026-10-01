@@ -204,8 +204,66 @@ export function settleQuotaMark(account: AiHarnessAccount, now: number = Date.no
  * way the endpoint probe already does keeps one wording for one account no
  * matter which path produced the reading. */
 export function usageWindowName(minutes: number): string {
+  // A month as Codex reports it (43,200 minutes, 30 days); vendors may count
+  // 28 to 31. It read "720h".
+  if (minutes >= 40_320 && minutes <= 44_640) return 'monthly';
   if (minutes === 10_080) return 'weekly';
   if (minutes === 1_440) return 'daily';
   if (minutes % 60 === 0) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+/** Claude Code's `rate_limit_info` -- on its stream-json `rate_limit_event`,
+ * and forwarded by claude-agent-acp as `usage_update._meta["_claude/rateLimit"]`:
+ * `unifiedWindows.{five_hour,seven_day}` with a 0..1 `utilization`. */
+export function claudeRateLimitReading(info: unknown): UsageReading | undefined {
+  const windows = (info as { unifiedWindows?: Record<string, { utilization?: unknown; resetsAt?: unknown; resets_at?: unknown } | undefined> } | undefined)?.unifiedWindows;
+  if (!windows) return undefined;
+  const window = (name: string, value?: { utilization?: unknown; resetsAt?: unknown; resets_at?: unknown }): UsageWindow | undefined =>
+    usageWindow(name, typeof value?.utilization === 'number' ? value.utilization * 100 : undefined, value?.resetsAt ?? value?.resets_at);
+  return usageReading([window('5h', windows.five_hour), window('weekly', windows.seven_day)]);
+}
+
+/** The offset of `timeZone` from UTC at `at`, in ms. */
+function zoneOffsetMs(at: number, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+  }).formatToParts(at);
+  const part = (type: string): number => Number(parts.find((item) => item.type === type)?.value);
+  return Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second')) - at;
+}
+
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/** "Oct 1, 1:50pm" in "America/Denver" as an instant: the next such moment
+ * from `now`, since the text gives no year. */
+function claudeResetTime(text: string, timeZone: string, now: number): string | undefined {
+  const match = /^([a-z]{3})[a-z]* (\d{1,2}), (\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i.exec(text.trim());
+  const month = match ? MONTHS.indexOf(match[1]!.toLowerCase()) : -1;
+  if (!match || month < 0) return undefined;
+  const hour = (Number(match[3]) % 12) + (match[5]!.toLowerCase() === 'pm' ? 12 : 0);
+  try {
+    const instant = (year: number): number => {
+      const wall = Date.UTC(year, month, Number(match[2]), hour, Number(match[4] ?? 0));
+      const first = wall - zoneOffsetMs(wall, timeZone);
+      return wall - zoneOffsetMs(first, timeZone);
+    };
+    const year = new Date(now).getUTCFullYear();
+    let at = instant(year);
+    if (at < now - 86_400_000) at = instant(year + 1);
+    return Number.isFinite(at) ? new Date(at).toISOString() : undefined;
+  } catch { return undefined; } // fail-open-ok: an unknown zone leaves the window without a reset, not wrong
+}
+
+/** Claude Code's own `/usage`, a local command that calls no model:
+ *   Current session: 3% used · resets Oct 1, 1:50pm (America/Denver)
+ *   Current week (all models): 82% used · resets Oct 3, 1pm (America/Denver)
+ * The session line is the 5-hour window. */
+export function claudeUsageCommandReading(text: string, now: number = Date.now()): UsageReading | undefined {
+  const line = (label: string, name: string): UsageWindow | undefined => {
+    const found = new RegExp(`${label}:\\s*(\\d+(?:\\.\\d+)?)% used(?:\\s*·\\s*resets ([^(\\n]+?)\\s*\\(([^)\\n]+)\\))?`, 'i').exec(text);
+    if (!found) return undefined;
+    return usageWindow(name, Number(found[1]), found[2] && found[3] ? claudeResetTime(found[2], found[3], now) : undefined);
+  };
+  return usageReading([line('Current session', '5h'), line('Current week \\(all models\\)', 'weekly')]);
 }

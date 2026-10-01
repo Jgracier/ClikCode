@@ -12,6 +12,7 @@ import { eventDiff } from '../../agent/line-diff.js';
 import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
+import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
@@ -855,6 +856,13 @@ class AcpSessionImpl implements AcpSession {
     if (plan) return input.onPlan?.(plan);
     // `usage_update` {used, size, cost}: the context the session occupies,
     // its window, and what it has cost -- live, while the turn runs.
+    // claude-agent-acp forwards each rate_limit_event's info here: the 5-hour
+    // and weekly windows, current as of this turn.
+    const claudeLimits = update._meta?.['_claude/rateLimit'];
+    if (claudeLimits && typeof claudeLimits === 'object' && target === this.turn) {
+      const reading = claudeRateLimitReading(claudeLimits);
+      if (reading) this.turn.input.onQuotaReading?.(reading);
+    }
     if (update.sessionUpdate === 'usage_update' || (update.usage && typeof update.usage === 'object')) {
       const usage = normalizeTurnUsage(update.usage && typeof update.usage === 'object' ? update.usage : update) ?? {};
       // Its cost is the session's; the turn's is its share.

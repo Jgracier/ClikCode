@@ -99,6 +99,9 @@ export async function runVendorSessionAttempt(input: {
         providerConfigId: harness.acp?.providerConfigId,
         modelProviderSeparator: harness.modelProviderSeparator,
         allowAgentAuth: Boolean(prompter),
+        // Claude Code's quota, carried by the turn itself: published like a
+        // stream reading, so the composer and the account picker see it.
+        onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },
         permissionModeIds: harness.acp?.permissionModeIds,
         environment, signal, images, onSessionId,
         ...sharedObserver,

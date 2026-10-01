@@ -21,6 +21,7 @@
  */
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { TurnUsage } from '../protocol/turn-usage.js';
+import type { UsageReading } from '../accounts/usage-reading.js';
 
 /** One step of an agent's plan. Codex publishes `{content, status}`, ACP adds
  * a `priority`; the UI reads content and status and ignores the rest. */
@@ -63,6 +64,9 @@ export interface HarnessTurnObserver {
    * publishes before calling this; a later call's fields replace earlier ones
    * (the readings are cumulative within one attempt). */
   onUsage?: (usage: TurnUsage) => void;
+  /** The account's plan usage, when the turn itself carries it (Claude
+   * Code's rate-limit windows, over its stream or ACP). */
+  onQuotaReading?: (reading: UsageReading) => void;
   /** A tool or command needing a yes or no before it runs. */
   onApproval?: (title: string, detail?: string) => Promise<boolean>;
   /** Coarse progress ("generating response", "retrying"), for the waiting line. */
