@@ -452,6 +452,8 @@ export async function interactiveSessionPicker(
   /** What a row action did to the chat that is open, so the loop can move off
    * one that no longer exists (deleted) or is put away (archived). */
   let replacement: string | undefined;
+  /** After delete/archive, reopen the list instead of landing in a chat. */
+  let returnToList = false;
   let actedOn = false;
   const manage = async (targetId: string, action: string): Promise<void> => {
     actedOn = true;
@@ -462,7 +464,8 @@ export async function interactiveSessionPicker(
     }
     // Putting away the chat that is open lands on a fresh one with the same
     // setup -- staying in ClikCode, not leaving it. Made BEFORE the action,
-    // because a deleted chat has no setup left to copy.
+    // because a deleted chat has no setup left to copy. The list reopens on
+    // that draft so Delete does not drop the user into an empty chat.
     if (targetId === currentId && (action === 'archive' || action === 'delete')) {
       replacement = await newConversation(currentId);
     }
@@ -472,8 +475,13 @@ export async function interactiveSessionPicker(
     } else if (action === 'fork') await aiSessionCommand(targetId, '/fork');
     // Archive needs no confirmation -- resuming undoes it. Delete is confirmed
     // by the picker itself before this runs.
-    else if (action === 'archive') await aiSessionCommand(targetId, '/archive');
-    else if (action === 'delete') await aiSessionCommand(targetId, '/delete confirm');
+    else if (action === 'archive') {
+      await aiSessionCommand(targetId, '/archive');
+      returnToList = true;
+    } else if (action === 'delete') {
+      await aiSessionCommand(targetId, '/delete confirm');
+      returnToList = true;
+    }
   };
   let selected: string | undefined;
   if (onBoard) {
@@ -496,6 +504,9 @@ export async function interactiveSessionPicker(
         // everything running -- but never more than a small terminal can hold.
         rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)) });
   }
+  // Delete and archive always return to the list. If the open chat was the
+  // one removed, the list's "current" is the fresh draft made above.
+  if (returnToList) return interactiveSessionPicker(rl, replacement ?? currentId, boardCommands);
   if (replacement) return { id: replacement };
   // Any other action closes the list on purpose (the picker rebuilds from
   // state rather than show a stale row), so it opens again on what changed.
