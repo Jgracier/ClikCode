@@ -4,6 +4,7 @@ import { isClikCodeAgent } from '../../session/route.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { learnedUsageReading } from '../../harness/accounts/usage-learning.js';
+import { compactCount, dollars } from '../render/usage-line.js';
 import { accountQuotaSpent, usageReadingIsCurrent, usageResetLabel, usageWindowTitle, type AccountUsageReading, type UsageWindow } from '../../harness/accounts/usage-reading.js';
 
 type Invocation = HarnessState['invocations'][number];
@@ -37,27 +38,6 @@ function sumInvocations(invocations: readonly Invocation[]): UsageReportTotals {
   }), { accounts: 0, turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0, costUsd: 0, costKnown: false });
 }
 
-function money(value: number): string {
-  if (value !== 0 && Math.abs(value) < 0.01) return `$${value.toFixed(4)}`;
-  return `$${value.toFixed(2)}`;
-}
-
-/** 7,166,839 becomes 7.2M. A full comma-separated count is what wrapped
- * mid-number on a phone. */
-function compact(value: number): string {
-  const abs = Math.abs(value);
-  const sign = value < 0 ? '-' : '';
-  if (abs >= 1_000_000) {
-    const scaled = abs / 1_000_000;
-    return `${sign}${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '')}M`;
-  }
-  if (abs >= 1_000) {
-    const scaled = abs / 1_000;
-    return `${sign}${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(scaled >= 10 ? 0 : 1).replace(/\.0$/, '')}k`;
-  }
-  return value.toLocaleString('en-US');
-}
-
 function allowance(account: AiHarnessAccount, state: HarnessState, now: number): { label: string; reset?: string } {
   const stored = account.usage as AccountUsageReading | undefined;
   const windows = stored?.windows ?? [];
@@ -80,8 +60,8 @@ function accountLines(account: AiHarnessAccount, state: HarnessState, session: H
   const totals = sumInvocations(state.invocations.filter((item) => item.accountId === account.id));
   const quota = allowance(account, state, now);
   const name = account.id === session.accountId ? `${account.label} · current` : account.label;
-  const figures = [compact(totals.totalTokens)];
-  if (totals.costKnown) figures.push(money(totals.costUsd));
+  const figures = [compactCount(totals.totalTokens)];
+  if (totals.costKnown) figures.push(dollars(totals.costUsd));
   return [
     `  ${name}`,
     ...(quota.label === 'not reported yet' ? [] : [`  ${quota.label}`]),
@@ -91,9 +71,9 @@ function accountLines(account: AiHarnessAccount, state: HarnessState, session: H
 }
 
 function splitLines(totals: UsageReportTotals): string[] {
-  const flow = [`${compact(totals.inputTokens)} in`, `${compact(totals.outputTokens)} out`];
+  const flow = [`${compactCount(totals.inputTokens)} in`, `${compactCount(totals.outputTokens)} out`];
   const lines = [`  ${flow.join(' · ')}`];
-  if (totals.cacheReadTokens > 0) lines.push(`  ${compact(totals.cacheReadTokens)} cached`);
+  if (totals.cacheReadTokens > 0) lines.push(`  ${compactCount(totals.cacheReadTokens)} cached`);
   return lines;
 }
 
@@ -120,8 +100,8 @@ export function usageReport(
   const providerInvocations = state.invocations.filter((item) => accountIds.has(item.accountId) || ids.has(item.provider));
   const totals = { ...sumInvocations(providerInvocations), accounts: accounts.length };
   const conversation = sumInvocations(state.invocations.filter((item) => item.sessionId === session.id));
-  const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, compact(conversation.totalTokens)];
-  if (conversation.costKnown) chatBits.push(money(conversation.costUsd));
+  const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, compactCount(conversation.totalTokens)];
+  if (conversation.costKnown) chatBits.push(dollars(conversation.costUsd));
   const lines = [
     providerName,
     '',
@@ -129,7 +109,7 @@ export function usageReport(
     '',
     ...(accounts.length === 1 ? [] : [`  ${totals.accounts} accounts · ${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`]),
     ...splitLines(totals),
-    ...(totals.costKnown && accounts.length !== 1 ? [`  ${money(totals.costUsd)}`] : []),
+    ...(totals.costKnown && accounts.length !== 1 ? [`  ${dollars(totals.costUsd)}`] : []),
     '',
     `  This chat · ${chatBits.join(' · ')}`,
   ];
