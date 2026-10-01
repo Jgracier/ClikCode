@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto';
 
 const argv = process.argv.slice(2);
+if (process.env.FAKE_LOG) (await import('node:fs')).appendFileSync(process.env.FAKE_LOG, `${JSON.stringify(argv)}\n`);
 const out = (record) => process.stdout.write(`${JSON.stringify(record)}\n`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // FAKE_TURNS is a list, one entry per turn: the Nth invocation replays the
@@ -33,6 +34,58 @@ if (argv.includes('--version')) { console.log('grok 9.9.9 (fake)'); process.exit
 if (argv.includes('--help')) { console.log('Usage: grok [options]\n  --reasoning-effort <EFFORT>  Reasoning effort'); process.exit(0); }
 if (argv[0] === 'models' || argv.includes('--list-models')) { console.log('grok-4\ngrok-4-fast'); process.exit(0); }
 if (['login', 'logout', 'auth', 'status'].includes(argv[0])) process.exit(0);
+
+// `grok agent stdio`: the ACP agent ClikCode starts for Grok since it moved
+// to ACP. Same recorded turns, as session/update notifications.
+if (argv[0] === 'agent' && argv.includes('stdio')) {
+  const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+  const models = { currentModelId: 'grok-4', availableModels: [{ modelId: 'grok-4', name: 'Grok 4' }, { modelId: 'grok-4-fast', name: 'Grok 4 Fast' }] };
+  let sessionId;
+  let cancelled = false;
+  const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } });
+  const prompt = async (id) => {
+    const turn = nextTurn();
+    cancelled = false;
+    const tool = async (toolCallId, command, result, ms) => {
+      update({ sessionUpdate: 'tool_call', toolCallId, title: command, kind: 'execute', status: 'in_progress', rawInput: { command } });
+      await sleep(ms);
+      update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: result } }] });
+    };
+    for (let index = 0; index < (turn.tools_first ?? 0) && !cancelled; index += 1) {
+      await tool(`lead_${index}`, `npx vitest run part${index}`, `part${index} ok`, Number(process.env.FAKE_TOOL_MS ?? 600));
+    }
+    for (const [index, block] of turn.blocks.entries()) {
+      for (const piece of block.match(/\S+\s*/g) ?? []) {
+        if (cancelled) break;
+        await sleep(Number(process.env.FAKE_DELAY_MS ?? 120));
+        update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
+      }
+      if (index < turn.blocks.length - 1 && !cancelled) await tool(`tool_${index}`, 'git log -1 --oneline', 'abc123 fix', 600);
+    }
+    await sleep(300);
+    send({ id, result: { stopReason: cancelled ? 'cancelled' : 'end_turn' } });
+  };
+  let buffer = '';
+  process.stdin.on('data', (chunk) => {
+    buffer += chunk;
+    for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) {
+      const line = buffer.slice(0, at).trim();
+      buffer = buffer.slice(at + 1);
+      if (!line) continue;
+      const message = JSON.parse(line);
+      const { id, method, params } = message;
+      if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [] } });
+      else if (method === 'session/new') { sessionId = randomUUID(); send({ id, result: { sessionId, models } }); }
+      else if (method === 'session/load' || method === 'session/resume') { sessionId = params.sessionId; send({ id, result: { models } }); }
+      else if (method === 'session/set_model') { models.currentModelId = params.modelId; send({ id, result: {} }); }
+      else if (method === 'session/set_mode' || method === 'session/set_config_option') send({ id, result: {} });
+      else if (method === 'session/prompt') void prompt(id);
+      else if (method === 'session/cancel') cancelled = true;
+      else if (id !== undefined) send({ id, error: { code: -32601, message: `fake grok: ${method}` } });
+    }
+  });
+  process.stdin.on('end', () => process.exit(0));
+} else {
 const turn = nextTurn();
 
 const at = argv.indexOf('--session-id');
@@ -94,3 +147,4 @@ for (const [index, block] of turn.blocks.entries()) {
 }
 await sleep(300);
 out({ type: 'result', subtype: 'success', is_error: false, session_id: sessionId, result: turn.blocks[turn.blocks.length - 1] });
+}
