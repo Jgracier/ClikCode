@@ -210,7 +210,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{outcome.text}</span> : null}
         {activity.diff?.length && status !== 'running' ? (
-          <span class="row-actions">
+          <span class="activity-actions">
             <button type="button" class="icon-button tiny" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={change('view')}><Icon name="diff" /></button>
             {status === 'done' ? <button type="button" class="icon-button tiny" title="Undo this change" aria-label="Undo this change" onClick={change('revert')}><Icon name="discard" /></button> : null}
           </span>
@@ -455,16 +455,20 @@ export function ApprovalCard({ approval, workspace, waiting, onAnswer }: { appro
   const answer = (value: boolean | 'always') => (): void => { if (Date.now() - shownAt.current >= 400) onAnswer(value); };
   return (
     <div class={`approval${guarded ? ' guarded' : ''}`} role="alertdialog" aria-label={`Approval: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
-      <div class="approval-head"><Icon name="shield" /><span class="approval-title">{relative(approval.title, workspace)}</span>{waiting ? <span class="muted">+{waiting} waiting</span> : null}</div>
-      {approval.detail ? <pre class="approval-detail">{relative(approval.detail, workspace)}</pre> : null}
-      {approval.diff?.length ? <DiffView files={approval.diff} budget={APPROVAL_DIFF_LINES} /> : null}
-      {approval.rule ? <div class="approval-rule muted">Always allow remembers <code>{approval.rule}</code></div> : null}
+      <div class="approval-head">
+        <Icon name="shield" /><span class="approval-title">{relative(approval.title, workspace)}</span>
+        {waiting ? <span class="muted">+{waiting} waiting</span> : null}
+        {approval.diff?.length ? <button type="button" class="icon-button tiny approval-diff" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={() => post({ type: 'viewDiff', id: approval.id })}><Icon name="diff" /></button> : null}
+      </div>
+      {/* The change speaks for an edit; a command's words are its detail. */}
+      {approval.diff?.length ? <DiffView files={approval.diff} budget={APPROVAL_DIFF_LINES} />
+        : approval.detail ? <pre class="approval-detail">{relative(approval.detail, workspace)}</pre> : null}
       <div class="approval-actions">
         <button type="button" class="primary" data-approve="yes" onClick={answer(true)}>Allow <kbd>y</kbd></button>
-        {approval.rule ? <button type="button" class="secondary" data-approve="always" title={`Always allow: ${approval.rule}`} onClick={answer('always')}>Always allow <kbd>a</kbd></button> : null}
+        {approval.rule ? <button type="button" class="secondary" data-approve="always" title={`Always allow ${approval.rule}`} onClick={answer('always')}>Always <kbd>a</kbd></button> : null}
         <button type="button" class="secondary" data-approve="no" title="Deny (n, Enter or Esc)" onClick={answer(false)}>Deny <kbd>n</kbd></button>
-        {approval.diff?.length ? <button type="button" class="link" onClick={() => post({ type: 'viewDiff', id: approval.id })}><Icon name="diff" /> Open in diff editor</button> : null}
       </div>
+      {approval.rule ? <div class="approval-rule muted" title="What Always allow remembers">Always: <code>{approval.rule}</code></div> : null}
     </div>
   );
 }
