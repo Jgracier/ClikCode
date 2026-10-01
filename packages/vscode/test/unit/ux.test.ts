@@ -179,8 +179,11 @@ describe('editor context', () => {
 
   it('splits the context back off what was typed, for the bubble and for recall', () => {
     const sent = composeMessage('fix it', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'src/a.ts', problems: ['line 1 error: x', 'line 2 warning: y'] } }]);
-    expect(splitEditorContext(sent)).toEqual({ text: 'fix it', file: 'src/a.ts', problems: 2 });
-    expect(splitEditorContext('just text\n\nmore')).toEqual({ text: 'just text\n\nmore', problems: 0 });
+    expect(splitEditorContext(sent)).toEqual({ text: 'fix it', file: 'src/a.ts', problems: 2, selections: [] });
+    expect(splitEditorContext('just text\n\nmore')).toEqual({ text: 'just text\n\nmore', problems: 0, selections: [] });
+    // A selection with blank lines inside its code is one block.
+    const withSelection = composeMessage('why?', [{ kind: 'selection', mention: { path: '/w/a.ts', label: 'src/a.ts', startLine: 2, endLine: 5, text: 'a\n\nb', languageId: 'ts' } }]);
+    expect(splitEditorContext(withSelection)).toEqual({ text: 'why?', problems: 0, selections: ['a.ts:2-5'] });
     expect(promptHistory([{ role: 'user', content: sent }])).toEqual(['fix it']);
   });
 });
