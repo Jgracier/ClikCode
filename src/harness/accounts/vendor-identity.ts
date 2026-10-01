@@ -5,7 +5,8 @@
  * undefined rather than guess: a numbered placeholder beats a wrong name.
  *
  * Harnesses with no entry here were checked too and keep no email anywhere
- * ClikCode can reach: Copilot stores a GitHub username, Kimi's token carries a
+ * ClikCode can reach: Copilot keeps only a GitHub login (used as its name
+ * below), Kimi's token carries a
  * user id only, MiniMax and Qwen store bare tokens, Droid keeps its login in
  * the OS keyring, and Auggie's account status names a plan, not a person.
  * Multi-provider harnesses (OpenCode, Aider, Goose, Pi, Hermes, OpenClaw,
@@ -81,6 +82,16 @@ export function parseJunieCredentials(text: string): string | undefined {
   return email((json(stored) as { jbAccount?: { email?: unknown } } | undefined)?.jbAccount?.email);
 }
 
+/** COPILOT_HOME/config.json (comment lines allowed): the GitHub user this
+ * profile signed in as. Copilot keeps no email anywhere local -- its token is
+ * in the system keyring -- so the account is named by its GitHub login, which
+ * still tells two accounts apart and merges a repeat sign-in of the same one. */
+export function parseCopilotConfig(text: string): string | undefined {
+  const parsed = json(text.replace(/^\s*\/\/.*$/gm, '')) as { lastLoggedInUser?: { login?: unknown } } | undefined;
+  const login = parsed?.lastLoggedInUser?.login;
+  return typeof login === 'string' && login.trim() ? login.trim() : undefined;
+}
+
 /** OpenHands Cloud `GET /api/v1/users/me` -- the endpoint openhands_cli's own
  * api_client calls -- returns the user's settings including `email`. */
 export function parseOpenHandsUser(text: string): string | undefined {
@@ -119,6 +130,7 @@ export async function vendorAccountEmail(harness: AiLocalHarnessDefinition, prof
       case 'cline': return parseClineProviders(await readFile(join(home, '.cline', 'data', 'settings', 'providers.json'), 'utf8'));
       case 'junie': return parseJunieCredentials(await readFile(join(home, '.junie', 'secure_credentials.json'), 'utf8'));
       case 'openhands': return await openHandsEmail(profilePath);
+      case 'copilot': return parseCopilotConfig(await readFile(join(profilePath ?? join(homedir(), '.copilot'), 'config.json'), 'utf8'));
       default: return undefined;
     }
   } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
