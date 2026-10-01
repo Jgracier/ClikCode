@@ -170,10 +170,27 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
   margin: 2px 0 6px 24px; padding: 6px 8px; max-height: 14em; overflow: auto; font-size: 0.92em; white-space: pre;
   background: var(--vscode-textCodeBlock-background); border-radius: var(--radius-small);
 }
-.activity-output.diff .del { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--err)); }
-.activity-output.diff .add { color: var(--vscode-gitDecoration-addedResourceForeground, var(--ok)); }
-.activity-output.diff .same, .activity-output.diff .gap, .activity-output.diff .num { opacity: 0.6; }
-.activity-output.diff .file { opacity: 0.8; margin-top: 4px; }
+.activity-output.diff { padding: 4px 0; white-space: pre; font-family: var(--vscode-editor-font-family); }
+.activity-output.diff > div > div, .activity-output.diff > .gap { padding: 0 8px; }
+/* The editor's own diff colours: tinted rows, as its diff editor draws them. */
+.activity-output.diff .del { background: var(--vscode-diffEditor-removedLineBackground, rgba(255, 0, 0, 0.12)); color: var(--vscode-gitDecoration-deletedResourceForeground, var(--err)); }
+.activity-output.diff .add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0, 200, 0, 0.12)); color: var(--vscode-gitDecoration-addedResourceForeground, var(--ok)); }
+.activity-output.diff .file .add, .activity-output.diff .file .del, .activity-counts .add, .activity-counts .del { background: none; }
+.activity-output.diff .same, .activity-output.diff .gap { opacity: 0.65; }
+.activity-output.diff .num { display: inline-block; opacity: 0.55; margin-right: 6px; user-select: none; }
+.activity-output.diff .mark { display: inline-block; width: 1.4ch; user-select: none; }
+.activity-output.diff .file { opacity: 0.85; padding: 4px 8px 2px; font-family: var(--vscode-font-family); }
+.activity-counts { flex: none; font-size: 0.92em; font-variant-numeric: tabular-nums; }
+.activity-counts .add { color: var(--vscode-gitDecoration-addedResourceForeground, var(--ok)); }
+.activity-counts .del { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--err)); }
+.row-actions { display: inline-flex; gap: 2px; opacity: 0; transition: opacity 0.12s; }
+.activity-line:hover .row-actions, .activity-line:focus-within .row-actions { opacity: 1; }
+.activity-child { display: flex; gap: 6px; align-items: center; margin: 0 0 2px 24px; color: var(--muted); font-size: 0.93em; min-width: 0; }
+.activity-child span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-output .gap { opacity: 0.65; }
+.reasoning { margin: 4px 0 6px 0; padding: 6px 10px; border-left: 2px solid var(--border); color: var(--muted); font-style: italic; font-size: 0.93em; max-height: 20em; overflow: auto; }
+.reasoning p { margin: 0 0 6px; white-space: pre-wrap; }
+.reasoning p:last-child { margin-bottom: 0; }
 .more-steps, .trace-toggle {
   display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 2px 0; color: var(--muted); font-size: 0.93em;
 }
@@ -184,8 +201,10 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .working { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.93em; }
 .working-label { color: var(--vscode-foreground); }
 .working-hint { margin-left: auto; }
-.thought { display: flex; gap: 6px; align-items: center; margin-top: 6px; color: var(--muted); font-style: italic; font-size: 0.93em; min-width: 0; }
-.thought span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thought { margin-top: 6px; min-width: 0; }
+.thought-toggle { display: flex; gap: 6px; align-items: center; max-width: 100%; background: none; border: none; padding: 0; color: var(--muted); font-style: italic; font-size: 0.93em; text-align: left; }
+.thought-toggle:hover { color: var(--vscode-foreground); }
+.thought-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .stalled { display: inline-flex; gap: 4px; align-items: center; color: var(--warn); }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-textLink-foreground); animation: pulse 1.4s ease-in-out infinite; flex: none; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
@@ -195,7 +214,8 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .plan-head .muted { font-weight: 400; margin-left: auto; }
 .plan-entry { display: flex; align-items: flex-start; gap: 8px; padding: 2px 0; }
 .plan-entry .codicon { margin-top: 2px; font-size: 14px; color: var(--muted); }
-.plan-entry.completed { color: var(--muted); text-decoration: line-through; }
+.plan-entry.completed { color: var(--muted); }
+.plan-entry.cancelled { color: var(--muted); text-decoration: line-through; }
 .plan-entry.completed .codicon { color: var(--ok); }
 .plan-entry.in_progress .codicon { color: var(--vscode-textLink-foreground); }
 .notice { display: flex; gap: 8px; align-items: flex-start; padding: 6px 10px; border-radius: var(--radius-small); white-space: pre-wrap; background: var(--subtle); border: 1px solid var(--border); }
@@ -222,10 +242,11 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
   margin: 8px 0 0; padding: 6px 8px; max-height: 10em; overflow: auto; white-space: pre-wrap; font-size: 0.92em;
   background: var(--vscode-textCodeBlock-background); border-radius: var(--radius-small);
 }
-.approval-detail .add { color: var(--vscode-gitDecoration-addedResourceForeground, var(--ok)); }
-.approval-detail .del { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--err)); }
-.approval-detail .hunk { color: var(--muted); }
 .approval:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.approval .activity-output.diff { margin: 8px 0 0; }
+.approval-rule { margin-top: 8px; font-size: 0.9em; }
+/* Keys do nothing for the first moments; the buttons say so. */
+.approval.guarded .approval-actions button { opacity: 0.6; }
 .approval-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
 
 /* ---- composer ---- */

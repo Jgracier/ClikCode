@@ -13,8 +13,49 @@ const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
 });
 const run = (events: IdeEvent[], start: ChatModel = emptyModel()): ChatModel => events.reduce(applyEvent, start);
 const worker = (event: unknown): IdeEvent => ({ type: 'worker', sessionId: 's1', event } as IdeEvent);
+const change = { path: 'a.ts', change: 'modify', additions: 1, removals: 1, lines: [{ kind: 'removed', line: 1, text: 'a' }, { kind: 'added', line: 1, text: 'b' }] };
+const activity = (event: Record<string, unknown>): IdeEvent => worker({ type: 'activity', event });
+const turn = (...events: IdeEvent[]): ChatModel => run([
+  { type: 'ready', version: '1', pid: 1 }, { type: 'session', session: session() },
+  { type: 'turn-start', sessionId: 's1', prompt: 'hi' }, worker({ type: 'waiting-start', message: 'thinking' }), ...events,
+]);
 
 describe('chat model', () => {
+  it('merges the frames of a call that has no id into one row, as the terminal does', () => {
+    const model = turn(activity({ kind: 'tool-start', label: 'npm test' }), activity({ kind: 'tool-done', label: 'npm test', exitCode: 1 }), activity({ kind: 'tool-start', label: 'npm test' }));
+    const rows = model.live!.activities;
+    expect(rows.map((row) => [row.key, row.kind, row.exitCode])).toEqual([['#1', 'tool-done', 1], ['#2', 'tool-start', undefined]]);
+  });
+
+  it('never reopens a finished call, and keeps what its start knew', () => {
+    const model = turn(
+      activity({ kind: 'tool-start', id: 't', label: 'Read a.ts', category: 'read' }),
+      activity({ kind: 'tool-done', id: 't', label: 'tool', output: ['x'] }),
+      activity({ kind: 'tool-start', id: 't', label: 'tool' }),
+    );
+    expect(model.live!.activities).toEqual([expect.objectContaining({ kind: 'tool-done', label: 'Read a.ts', category: 'read', output: ['x'] })]);
+  });
+
+  it("shows a sub-agent's current step inside its parent's row", () => {
+    const working = turn(
+      activity({ kind: 'tool-start', id: 'agent', label: 'Task explore', agent: true }),
+      activity({ kind: 'tool-start', id: 'c1', parentId: 'agent', label: 'grep TODO' }),
+    );
+    expect(working.live!.activities).toEqual([expect.objectContaining({ key: 'agent', child: 'grep TODO' })]);
+    const between = run([activity({ kind: 'tool-done', id: 'c1', parentId: 'agent', label: 'grep TODO' })], working);
+    expect(between.live!.activities[0]!.child).toBeUndefined();
+  });
+
+  it('accumulates thinking fragments and keeps the reasoning with the finished turn', () => {
+    const model = turn(
+      activity({ kind: 'thinking', id: 'r1', label: 'Reading' }),
+      activity({ kind: 'thinking', id: 'r1', label: 'the config' }),
+    );
+    expect(model.live!.thought?.text).toBe('Reading the config');
+    const next = run([activity({ kind: 'thinking', id: 'r2', label: 'Now the tests' }), worker({ type: 'waiting-stop' })], model);
+    expect(next.traces.at(-1)?.reasoning).toEqual(['Reading the config', 'Now the tests']);
+  });
+
   it('says nothing when an idle worker retires, but reports a cut-off turn', () => {
     const open = run([{ type: 'ready', version: '1', pid: 1 }, { type: 'session', session: session() }]);
     const retired = run([worker({ type: 'shutdown', reason: 'replaced by a newer ClikCode build' })], open);
@@ -39,7 +80,7 @@ describe('chat model', () => {
     expect(during.running).toBe(true);
     expect(during.pendingPrompt).toBe('hi');
     expect(during.live?.text).toBe('Hello');
-    expect(during.live?.activities).toEqual([{ key: 't1', kind: 'tool-done', label: 'read a.ts', startedAt: expect.any(Number) }]);
+    expect(during.live?.activities).toEqual([{ id: 't1', key: 't1', kind: 'tool-done', label: 'read a.ts', startedAt: expect.any(Number) }]);
     expect(during.plan).toEqual([{ content: 'step', status: 'in_progress' }]);
     const after = run([
       worker({ type: 'snapshot', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello' }] }), live: { text: 'Hello', waitingLabel: 'thinking' } }),
@@ -60,12 +101,13 @@ describe('chat model', () => {
   it('shows approvals, notices, queued turns and strips ANSI', () => {
     const model = run([
       { type: 'session', session: session({ queuedTurns: [{ id: 'q', text: 'later', submittedAt: '' }] }) },
-      worker({ type: 'approval-request', id: 'a', title: 'Edit a.ts', preview: { diff: ['-a', '+b'] }, rule: 'Edit(*)' }),
+      worker({ type: 'approval-request', id: 'a', title: 'Edit a.ts', preview: { diff: [change] }, rule: 'Edit(*)' }),
       worker({ type: 'notice', message: '\u001b[33mStopped\u001b[0m' }),
       worker({ type: 'turn-error', message: 'boom' }),
     ]);
-    expect(model.approvals).toEqual([{ id: 'a', title: 'Edit a.ts', rule: 'Edit(*)', hasDiff: true }]);
-    expect(model.notes.map((n) => [n.level, n.text])).toEqual([['info', 'Stopped'], ['error', 'boom']]);
+    expect(model.approvals).toEqual([{ id: 'a', title: 'Edit a.ts', rule: 'Edit(*)', diff: [change] }]);
+    // The terminal's colour is the level: yellow warns.
+    expect(model.notes.map((n) => [n.level, n.text])).toEqual([['warning', 'Stopped'], ['error', 'boom']]);
     expect(model.queued).toEqual([{ id: 'q', text: 'later', command: false }]);
   });
 

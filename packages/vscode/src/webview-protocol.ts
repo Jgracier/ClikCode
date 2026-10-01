@@ -57,6 +57,9 @@ export type FromWebview =
   | { type: 'cancel'; restoreDraft: boolean }
   | { type: 'approve'; id: string; approved: boolean | 'always' }
   | { type: 'viewDiff'; id: string }
+  /** A change a tool call made: shown in the diff editor, or undone.
+   * `userIndex` names the finished turn it is in; none, the running one. */
+  | { type: 'change'; action: 'view' | 'revert'; key: string; userIndex?: number }
   | { type: 'command'; command: string; args?: unknown[] }
   | { type: 'openLink'; href: string }
   | { type: 'openFile'; path: string; line?: number }

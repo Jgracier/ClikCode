@@ -205,7 +205,9 @@ export function Composer(props: {
       send();
     } else if (event.key === 'Escape' && model.running) {
       event.preventDefault();
-      post({ type: 'cancel', restoreDraft: !text });
+      // A pending approval is what Esc answers first (denied), as in the terminal.
+      if (model.approvals[0]) post({ type: 'approve', id: model.approvals[0].id, approved: false });
+      else post({ type: 'cancel', restoreDraft: !text });
     } else if (event.key === 'Backspace' && !text && attachments.length) {
       setAttachments((items) => items.slice(0, -1));
     }

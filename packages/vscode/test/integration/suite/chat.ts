@@ -167,7 +167,7 @@ export function chatSuite(): void {
       const asking = await until(api, (state) => state.approvals.length > 0, 'an approval request', 240_000);
       await waitFor(api, '.approval', 'the approval card');
       await sleep(1_500);
-      assert.ok(asking.approvals[0]!.hasDiff, 'the approval carries the change');
+      assert.ok(asking.approvals[0]!.diff?.length, 'the approval carries the change');
       const diffTab = vscode.window.tabGroups.all.flatMap((group) => group.tabs)
         .find((tab) => tab.input instanceof vscode.TabInputTextDiff && tab.input.modified.scheme === 'clikcode-diff');
       assert.ok(diffTab, 'the proposed change is open in a diff editor');

@@ -184,7 +184,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     chat.post({ type: 'focus' });
   };
   /** Accept or reject the proposed change shown in the active diff editor. */
-  const decideDiff = (approved: boolean) => async (target?: unknown): Promise<void> => {
+  const decideDiff = (approved: boolean | 'always') => async (target?: unknown): Promise<void> => {
     const uri = target instanceof vscode.Uri ? target : vscode.window.activeTextEditor?.document.uri;
     const id = DiffDocuments.approvalOf(uri);
     const owner = id ? all().find((item) => item.hasApproval(id)) : undefined;
@@ -192,9 +192,13 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       void vscode.window.showInformationMessage('This change is no longer waiting for an answer.');
       return;
     }
+    // "Always" only where the request offered a rule to remember, as in the
+    // terminal: a choice that looks remembered and is not is worse than none.
+    if (approved === 'always' && !owner.state.approvals.find((item) => item.id === id)?.rule) {
+      void vscode.window.showInformationMessage('This change can only be allowed once.');
+      return;
+    }
     owner.approve(id, approved);
-    const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
-    if (tab?.input instanceof vscode.TabInputTextDiff && DiffDocuments.approvalOf(tab.input.modified) === id) await vscode.window.tabGroups.close(tab);
   };
 
   registerCustomAcpCommands(context);
@@ -205,6 +209,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.window.registerWebviewViewProvider(VIEW_IDS.secondary, sidebarProvider, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.window.registerWebviewViewProvider(VIEW_IDS.activity, sidebarProvider, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.scheme, diffs),
+    vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.madeScheme, diffs),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('clikcode.path') || event.affectsConfiguration('clikcode.nodePath')) for (const controller of all()) void controller.restart();
     }),
@@ -246,6 +251,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.attachFile', addToChat),
     vscode.commands.registerCommand('clikcode.acceptProposedDiff', decideDiff(true)),
     vscode.commands.registerCommand('clikcode.rejectProposedDiff', decideDiff(false)),
+    vscode.commands.registerCommand('clikcode.alwaysAllowProposedDiff', decideDiff('always')),
     // Install and update are the same npm command; the fallback is for a machine that cannot reach the npm registry.
     ...(['install', 'update'] as const).map((verb) => vscode.commands.registerCommand(`clikcode.${verb}`, async () => {
       const terminal = vscode.window.createTerminal({ name: verb === 'install' ? 'Install ClikCode' : 'Update ClikCode' });

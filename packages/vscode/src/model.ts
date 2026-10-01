@@ -11,25 +11,26 @@
  */
 import { composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { asFileDiffs } from '../../../src/agent/line-diff';
+import { appendThought, childActivity, mergeActivity, sameCall, type Thought } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
-import { stripAnsi } from './text';
+import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
 
-export interface Activity {
+/** One tool call, as the terminal's activity log keeps it: the harness's own
+ * event fields (cleaned of escapes), merged frame by frame with the CLI's
+ * rules (activity-view.ts). */
+export interface Activity extends Pick<HarnessActivityEvent,
+  'id' | 'kind' | 'label' | 'category' | 'agent' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode'> {
+  /** The call's id, or its position for a harness that sends none. */
   key: string;
-  kind: HarnessActivityEvent['kind'];
-  label: string;
-  category?: string;
-  output?: string[];
   /** Each file the call changed, as hunks (see src/agent/line-diff.ts). */
   diff?: FileDiff[];
   /** When this window first saw the call: a running call's clock. */
   startedAt?: number;
-  /** How long it ran, and a command's exit code, where the harness reports them. */
-  durationMs?: number;
-  exitCode?: number;
+  /** What a sub-agent this call started is doing now. */
+  child?: string;
 }
 
 export interface Note {
@@ -46,7 +47,8 @@ export interface Approval {
   title: string;
   detail?: string;
   rule?: string;
-  hasDiff: boolean;
+  /** What the call would change, file by file. */
+  diff?: FileDiff[];
 }
 
 /** A finished turn's tool activity, kept beside the answer it produced. The
@@ -56,6 +58,8 @@ export interface TurnTrace {
   /** Index in `messages` of the prompt the turn answered. */
   userIndex: number;
   activities: Activity[];
+  /** The turn's reasoning, one entry per thought, oldest first. */
+  reasoning?: string[];
   startedAt: number;
   endedAt: number;
 }
@@ -64,9 +68,13 @@ export interface LiveTurn {
   text: string;
   waitingLabel: string;
   phase?: string;
-  /** The most recent thought, on one line, as the terminal shows it. */
-  thought?: string;
+  /** The thought being had now, accumulated as the terminal does. */
+  thought?: Thought;
+  /** Earlier thoughts of this turn, kept for its trace. */
+  reasoning: string[];
   activities: Activity[];
+  /** Rows made so far: the key of a call that came without an id. */
+  seen: number;
   startedAt: number;
   /** When the turn last said anything: text, a tool, a thought, a phase. */
   lastEventAt: number;
@@ -129,6 +137,8 @@ export function emptyModel(): ChatModel {
 const MAX_NOTES = 50;
 const MAX_ACTIVITIES = 200;
 const MAX_TRACES = 100;
+/** Characters of a turn's reasoning a trace keeps. */
+const MAX_REASONING = 12_000;
 
 /** The provider record, only while it is still the chat's: right after a
  * switch the session has moved and the record not yet been read again. */
@@ -205,38 +215,98 @@ function sameMessages(previous: ChatModel['messages'], next: ChatModel['messages
     && previous.every((message, index) => message.role === next[index]!.role && message.content === next[index]!.content);
 }
 
-function upsertActivity(activities: Activity[], event: HarnessActivityEvent): Activity[] {
-  const activity: Activity = {
-    key: event.id ?? `${activities.length}`,
-    kind: event.kind,
-    label: stripAnsi(event.label),
-    ...(event.category ? { category: event.category } : {}),
-    ...(event.output?.length ? { output: event.output.map(stripAnsi) } : {}),
-    ...(asFileDiffs(event.diff)?.length ? { diff: asFileDiffs(event.diff)!.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: stripAnsi(line.text) })) })) } : {}),
-    ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
-    ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+function cleanEvent(event: HarnessActivityEvent): HarnessActivityEvent {
+  const { diff: rawDiff, ...rest } = event;
+  const files = asFileDiffs(rawDiff);
+  return {
+    ...rest,
+    label: stripAnsi(event.label).replace(/\s+/g, ' ').trim() || 'tool',
+    ...(event.output ? { output: event.output.map(stripAnsi) } : {}),
+    ...(files?.length ? { diff: cleanDiff(files) } : {}),
   };
-  if (event.parentId) return activities;
-  if (event.id) {
-    const index = activities.findIndex((item) => item.key === event.id);
-    if (index >= 0) return activities.map((item, position) => (position === index ? { ...item, ...activity, label: activity.label || item.label } : item));
+}
+
+function cleanDiff(files: FileDiff[]): FileDiff[] {
+  return files.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: stripAnsi(line.text) })) }));
+}
+
+function asActivity(key: string, event: HarnessActivityEvent, extra: Partial<Activity>): Activity {
+  const { parentId: _parent, ...fields } = event;
+  return { ...fields, key, ...extra } as Activity;
+}
+
+/** A tool frame into the turn's rows, by the terminal's rules: a later frame
+ * of the same call (by id, or the open row with its label) merges into it --
+ * never reopening a finished call -- and a sub-agent's frames say what it is
+ * doing inside its parent's row rather than adding rows of their own. */
+function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent): LiveTurn {
+  if (raw.kind === 'thinking' && !raw.parentId) return live;
+  const event = cleanEvent(raw);
+  if (event.parentId) {
+    const index = live.activities.findIndex((item) => item.key === event.parentId);
+    if (index < 0) return live;
+    const parent = live.activities[index]!;
+    const child = childActivity(parent.child, event);
+    if (child === parent.child) return live;
+    const activities = [...live.activities];
+    activities[index] = { ...parent, ...(child ? { child } : { child: undefined }) };
+    return { ...live, activities };
   }
-  return [...activities, { ...activity, startedAt: Date.now() }].slice(-MAX_ACTIVITIES);
+  for (let index = live.activities.length - 1; index >= 0; index -= 1) {
+    const prior = live.activities[index]!;
+    if (!sameCall(prior, event)) continue;
+    const merged = mergeActivity(prior, event);
+    const activities = [...live.activities];
+    activities[index] = asActivity(prior.key, merged, {
+      ...(prior.startedAt ? { startedAt: prior.startedAt } : {}),
+      ...(prior.child && merged.kind === 'tool-start' ? { child: prior.child } : {}),
+    });
+    return { ...live, activities };
+  }
+  const seen = live.seen + 1;
+  const row = asActivity(event.id ?? `#${seen}`, event, { startedAt: Date.now() });
+  return { ...live, seen, activities: [...live.activities, row].slice(-MAX_ACTIVITIES) };
+}
+
+/** The terminal's rule: the thought being had accumulates (appendThought);
+ * a tool starting, or a new reasoning item, settles it into the turn's
+ * reasoning. */
+function withThought(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
+  if (event.parentId) return live;
+  if (event.kind === 'tool-start') return live.thought ? { ...live, thought: undefined, reasoning: settle(live.reasoning, live.thought) } : live;
+  if (event.kind !== 'thinking') return live;
+  const next = appendThought(live.thought, stripAnsi(event.label), event.id);
+  if (!next || next === live.thought) return live;
+  const replaced = live.thought && live.thought.id !== next.id;
+  return { ...live, thought: next, ...(replaced ? { reasoning: settle(live.reasoning, live.thought!) } : {}) };
+}
+
+function settle(reasoning: string[], thought: Thought): string[] {
+  return [...reasoning, thought.text];
+}
+
+function applyActivity(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
+  return withThought(upsertActivity(live, event), event);
 }
 
 function freshLive(waitingLabel: string): LiveTurn {
   const now = Date.now();
-  return { text: '', waitingLabel, activities: [], startedAt: now, lastEventAt: now };
+  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, startedAt: now, lastEventAt: now };
 }
 
-/** The terminal's rule: the latest thought stays until a tool starts, and a
- * bare "thinking" says nothing the spinner does not. */
-function latestThought(current: string | undefined, event: HarnessActivityEvent): string | undefined {
-  if (event.parentId) return current;
-  if (event.kind === 'tool-start') return undefined;
-  if (event.kind !== 'thinking') return current;
-  const thought = stripAnsi(event.label).replace(/\s+/g, ' ').trim();
-  return thought && thought.toLowerCase() !== 'thinking' ? thought : current;
+/** A turn's reasoning for its trace: every thought, the newest kept when
+ * there is more than a trace holds. */
+function turnReasoning(live: LiveTurn | undefined): string[] | undefined {
+  if (!live) return undefined;
+  const all = live.thought ? settle(live.reasoning, live.thought) : live.reasoning;
+  const kept: string[] = [];
+  let room = MAX_REASONING;
+  for (let index = all.length - 1; index >= 0 && room > 0; index -= 1) {
+    const text = all[index]!.length > room ? `…${all[index]!.slice(-room)}` : all[index]!;
+    kept.unshift(text);
+    room -= text.length;
+  }
+  return kept.length ? kept : undefined;
 }
 
 export function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent): ChatModel {
@@ -249,15 +319,16 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       if (!event.live) return model.live ? endTurn({ ...next, pendingPrompt: undefined }) : next;
       // The running turn's tool rows and plan come with it (from ClikCode
       // builds that send them), so a panel opened mid-turn shows them too.
-      const activities = event.live.activities
-        ? event.live.activities.reduce<Activity[]>((list, item) => upsertActivity(list, item.event), [])
-        : next.live?.activities ?? [];
+      const base = next.live ?? freshLive('');
+      const replayed = event.live.activities
+        ? event.live.activities.reduce<LiveTurn>((live, item) => applyActivity(live, item.event), { ...base, activities: [], reasoning: [], thought: undefined, seen: 0 })
+        : base;
       return {
         ...next,
         running: true,
         turnUserIndex: next.turnUserIndex ?? next.messages.length,
         live: {
-          ...(next.live ?? freshLive('')), activities, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel),
+          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel),
           ...(next.live?.text === event.live.text ? {} : { lastEventAt: Date.now() }),
         },
         ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) } : {}),
@@ -277,7 +348,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
-      return { ...model, live: { ...live, activities: upsertActivity(live.activities, event.event), thought: latestThought(live.thought, event.event), lastEventAt: Date.now() } };
+      return { ...model, live: { ...applyActivity(live, event.event), lastEventAt: Date.now() } };
     }
     case 'phase':
       return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message), lastEventAt: Date.now() } } : model;
@@ -293,12 +364,14 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
           id: event.id, title: stripAnsi(event.title),
           ...(event.detail ? { detail: stripAnsi(event.detail) } : {}),
           ...(event.rule ? { rule: event.rule } : {}),
-          hasDiff: Boolean(event.preview?.diff?.length),
+          ...(asFileDiffs(event.preview?.diff)?.length ? { diff: cleanDiff(asFileDiffs(event.preview?.diff)!) } : {}),
         }],
       };
     case 'notice':
     case 'note':
-      return withNote(model, { kind: 'notice', level: 'info', text: stripAnsi(event.message) });
+      // The terminal colours its notes: yellow for an account switch or a
+      // limit, red for a failure. The colour is the level.
+      return withNote(model, { kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message) });
     case 'turn-error':
       return withNote(model, { kind: 'notice', level: 'error', text: stripAnsi(event.message) });
     case 'submission':
@@ -318,9 +391,10 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
 /** The turn is over: its tool rows are kept beside the answer. */
 function endTurn(model: ChatModel): ChatModel {
   const activities = model.live?.activities ?? [];
-  const traces = activities.length && model.turnUserIndex !== undefined
+  const reasoning = turnReasoning(model.live);
+  const traces = (activities.length || reasoning) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
-      userIndex: model.turnUserIndex, activities, startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
+      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
     }].slice(-MAX_TRACES)
     : model.traces;
   return { ...model, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined, traces };

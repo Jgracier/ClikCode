@@ -96,23 +96,48 @@ export class BridgeQuestion {
 
 /** Before/after documents for approval diffs, served from memory. */
 export class DiffDocuments implements vscode.TextDocumentContentProvider {
+  /** A proposed change, waiting on an approval (its editor offers accept and reject). */
   static readonly scheme = 'clikcode-diff';
+  /** A change already made, shown for review. */
+  static readonly madeScheme = 'clikcode-change';
   private readonly contents = new Map<string, string>();
 
   provideTextDocumentContent(uri: vscode.Uri): string {
     return this.contents.get(uri.toString()) ?? '';
   }
 
-  async show(id: string, title: string, before: string, after: string, fileName = 'change'): Promise<void> {
-    const safeName = fileName.replace(/[^\w.-]+/g, '_').slice(0, 80) || 'change';
-    const left = vscode.Uri.from({ scheme: DiffDocuments.scheme, path: `/${id}/before/${safeName}` });
-    const right = vscode.Uri.from({ scheme: DiffDocuments.scheme, path: `/${id}/after/${safeName}` });
-    this.contents.set(left.toString(), before);
-    this.contents.set(right.toString(), after);
-    // Named after the file, as the editor names any diff; the request's own
-    // title ("Approve Edit x.ts") when no file is known.
-    const label = fileName !== 'change' ? `${fileName} (ClikCode's proposed change)` : `${title} (ClikCode's proposed change)`;
-    await vscode.commands.executeCommand('vscode.diff', left, right, label, { preview: true, preserveFocus: true });
+  /** A change in VS Code's own diff editor: one file side by side, several
+   * in the multi-file changes editor, as source control shows a commit. */
+  async show(id: string, title: string, files: ReadonlyArray<{ name: string; before: string; after: string }>, made = false): Promise<void> {
+    const scheme = made ? DiffDocuments.madeScheme : DiffDocuments.scheme;
+    const uris = files.map((file, index) => {
+      const safeName = file.name.replace(/[^\w.-]+/g, '_').slice(0, 80) || 'change';
+      const left = vscode.Uri.from({ scheme, path: `/${id}/before/${index}/${safeName}` });
+      const right = vscode.Uri.from({ scheme, path: `/${id}/after/${index}/${safeName}` });
+      this.contents.set(left.toString(), file.before);
+      this.contents.set(right.toString(), file.after);
+      return { left, right, name: file.name };
+    });
+    if (uris.length === 1) {
+      const only = uris[0]!;
+      // Named after the file, as the editor names any diff; the request's own
+      // title ("Approve Edit x.ts") when no file is known.
+      const what = made ? "ClikCode's change" : "ClikCode's proposed change";
+      const label = only.name !== 'change' ? `${only.name} (${what})` : `${title} (${what})`;
+      await vscode.commands.executeCommand('vscode.diff', only.left, only.right, label, { preview: true, preserveFocus: true });
+      return;
+    }
+    await vscode.commands.executeCommand('vscode.changes', `${title} (${made ? "ClikCode's change" : "ClikCode's proposed change"})`, uris.map((uri) => [uri.right, uri.left, uri.right]));
+  }
+
+  /** Closes every editor showing this approval's change. */
+  async close(id: string): Promise<void> {
+    const ours = (uri: unknown): boolean => uri instanceof vscode.Uri && DiffDocuments.approvalOf(uri) === id;
+    const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => {
+      const input = tab.input as { modified?: unknown; textDiffs?: Array<{ modified?: unknown }> } | undefined;
+      return ours(input?.modified) || Boolean(input?.textDiffs?.some((diff) => ours(diff.modified)));
+    });
+    if (tabs.length) await vscode.window.tabGroups.close(tabs);
   }
 
   /** The approval a diff editor's document belongs to. */

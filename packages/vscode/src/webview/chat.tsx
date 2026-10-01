@@ -3,7 +3,11 @@
 import type { JSX } from 'preact';
 import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, outputPreview } from '../../../../src/harness/protocol/activity-view';
+import { approvalKeyAction } from '../../../../src/tui/render/approval-keys';
+import { planWindow } from '../../../../src/tui/render/plan-window';
 import type { Activity, Approval, ChatModel, LiveTurn as Live, Note, TurnTrace } from '../model';
+import type { FileDiff } from '../protocol';
 import { post } from './bus';
 import { duration, pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
@@ -77,15 +81,10 @@ function ActivityLabel({ label, workspace }: { label: string; workspace?: string
   );
 }
 
-/** What the terminal shows after a call: a running one's clock, and a finished
- * one's non-zero exit and a run of a second or more -- the exceptions, since
+/** What the terminal shows after a finished call: its non-zero exit and a run of a second or more -- the exceptions, since
  * every call exits 0 in under a second. */
-function activityOutcome(activity: Activity, now: number | undefined): { text: string; failed: boolean } | undefined {
-  if (activity.kind === 'tool-start') {
-    const elapsed = now !== undefined && activity.startedAt !== undefined ? now - activity.startedAt : 0;
-    return elapsed >= 1000 ? { text: duration(elapsed), failed: false } : undefined;
-  }
-  if (activity.kind === 'thinking') return undefined;
+function activityOutcome(activity: Activity): { text: string; failed: boolean } | undefined {
+  if (activity.kind === 'tool-start' || activity.kind === 'thinking') return undefined;
   const failed = activity.exitCode !== undefined && activity.exitCode !== 0;
   const parts = [
     ...(failed ? [`exit ${activity.exitCode}`] : []),
@@ -96,34 +95,76 @@ function activityOutcome(activity: Activity, now: number | undefined): { text: s
 
 /** An edit as the terminal shows it: per file (named when there are
  * several), hunks with line numbers where they are real, removed and added
- * coloured, context dim, ⋮ between hunks. */
-function DiffView({ files }: { files: NonNullable<Activity['diff']> }): JSX.Element {
-  const width = Math.max(0, ...files.flatMap((file) => file.lines.map((line) => String(line.line ?? '').length)));
+ * on tinted rows, context dim, ⋮ between hunks. `budget` lines across at
+ * most four files, the rest counted (activity-view.ts); none: all of it. */
+function DiffView({ files, budget }: { files: readonly FileDiff[]; budget?: number }): JSX.Element {
+  const preview = diffPreview(files, budget ?? Number.MAX_SAFE_INTEGER);
+  const shown = budget === undefined ? files.map((file) => ({ file, lines: file.lines })) : preview.files;
+  const width = preview.gutter;
+  const notes = budget === undefined ? [] : [
+    ...(preview.hiddenLines > 0 ? [`${preview.hiddenLines} more line${preview.hiddenLines === 1 ? '' : 's'}`] : []),
+    ...(preview.moreFiles > 0 ? [`${preview.moreFiles} more file${preview.moreFiles === 1 ? '' : 's'}`] : []),
+  ];
   return (
-    <pre class="activity-output diff">
-      {files.map((file, fileIndex) => (
+    <div class="activity-output diff" role="group" aria-label="Change">
+      {shown.map(({ file, lines }, fileIndex) => (
         <div key={`f${fileIndex}`}>
           {files.length > 1 ? (
-            <div class="file">{file.path ?? 'file'}{file.change === 'add' ? ' (new)' : file.change === 'delete' ? ' (deleted)' : ''} <span class="add">+{file.additions}</span> <span class="del">-{file.removals}</span></div>
+            <div class="file">{file.path ?? 'file'}{file.change === 'add' ? ' (new)' : file.change === 'delete' ? ' (deleted)' : ''} <Counts additions={file.additions} removals={file.removals} /></div>
           ) : null}
-          {file.lines.map((line, index) => {
-            const number = width ? `${String(line.line ?? '').padStart(width)} ` : '';
-            if (line.kind === 'gap') return <div key={index} class="gap">{''.padStart(width)}{width ? ' ' : ''}⋮</div>;
+          {lines.map((line, index) => {
+            const number = width ? String(line.line ?? '').padStart(width) : '';
+            if (line.kind === 'gap') return <div key={index} class="gap"><span class="num">{''.padStart(width)}</span>⋮</div>;
             const mark = line.kind === 'removed' ? '-' : line.kind === 'added' ? '+' : ' ';
-            return <div key={index} class={line.kind === 'removed' ? 'del' : line.kind === 'added' ? 'add' : 'same'}><span class="num">{number}</span>{mark} {line.text}</div>;
+            return <div key={index} class={line.kind === 'removed' ? 'del' : line.kind === 'added' ? 'add' : 'same'}><span class="num">{number}</span><span class="mark">{mark}</span>{line.text}</div>;
           })}
-          {file.omitted ? <div class="gap">… {file.omitted} more line{file.omitted === 1 ? '' : 's'}</div> : null}
+          {budget === undefined && file.omitted ? <div class="gap">… {file.omitted} more line{file.omitted === 1 ? '' : 's'}</div> : null}
         </div>
       ))}
-    </pre>
+      {notes.length ? <div class="gap">… {notes.join(', ')}</div> : null}
+    </div>
   );
 }
 
-function ActivityRow({ activity, workspace, now }: { activity: Activity; workspace?: string; now?: number }): JSX.Element {
-  const [open, setOpen] = useState(false);
+function Counts({ additions, removals }: { additions: number; removals: number }): JSX.Element {
+  return <>{additions ? <span class="add">+{additions}</span> : null}{additions && removals ? ' ' : ''}{removals ? <span class="del">-{removals}</span> : null}</>;
+}
+
+/** A tool's output as the terminal budgets it: a command's last lines, the
+ * earlier ones counted above; anything else its first, the rest below. */
+function OutputView({ activity, budget }: { activity: Activity; budget: number }): JSX.Element | null {
+  const { lines, hidden, fromEnd } = outputPreview(activity, budget);
+  if (!lines.length) return null;
+  const note = hidden > 0 ? <div class="gap">… {hidden} {fromEnd ? 'earlier' : 'more'} line{hidden === 1 ? '' : 's'}</div> : null;
+  return <pre class="activity-output">{fromEnd ? note : null}{lines.join('\n')}{fromEnd ? null : note}</pre>;
+}
+
+/** Which rows are open, kept across the live turn becoming its trace and
+ * across a redraw: a row is its call (key) at the moment it was first seen. */
+const openRows = new Set<string>();
+const rowId = (activity: Activity): string => `${activity.key}@${activity.startedAt ?? ''}`;
+
+/** The seconds a running call has taken, ticking on its own so the rest of
+ * the turn is not redrawn every second. */
+function Clock({ since }: { since: number }): JSX.Element | null {
+  const now = useNow();
+  return now - since >= 1000 ? <span class="activity-outcome">{duration(now - since)}</span> : null;
+}
+
+function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; workspace?: string; userIndex?: number }): JSX.Element {
+  const id = rowId(activity);
+  const [open, setOpenState] = useState(openRows.has(id));
+  const setOpen = (value: boolean): void => { if (value) openRows.add(id); else openRows.delete(id); setOpenState(value); };
   const status = activity.kind === 'tool-start' ? 'running' : activity.kind === 'tool-error' ? 'error' : 'done';
-  const hasMore = Boolean(activity.output?.length || activity.diff);
-  const outcome = activityOutcome(activity, now);
+  // An edit shows its change (the edit IS the lines); anything else folds
+  // its output away until asked, as Claude Code's rows do.
+  const hasMore = Boolean(activity.output?.length || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines));
+  const outcome = activityOutcome(activity);
+  const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
+  const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
+    event.stopPropagation();
+    post({ type: 'change', action, key: activity.key, ...(userIndex === undefined ? {} : { userIndex }) });
+  };
   return (
     <div class={`activity ${status}`}>
       <div class="activity-line">
@@ -131,15 +172,27 @@ function ActivityRow({ activity, workspace, now }: { activity: Activity; workspa
           {status === 'running' ? <Icon name="loading" spin /> : status === 'error' ? <Icon name="error" /> : <Icon name={activityIcon(activity)} />}
         </span>
         <ActivityLabel label={activity.label} workspace={workspace} />
+        {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
+        {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{outcome.text}</span> : null}
+        {activity.diff?.length && status !== 'running' ? (
+          <span class="row-actions">
+            <button type="button" class="icon-button tiny" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={change('view')}><Icon name="diff" /></button>
+            {status === 'done' ? <button type="button" class="icon-button tiny" title="Undo this change" aria-label="Undo this change" onClick={change('revert')}><Icon name="discard" /></button> : null}
+          </span>
+        ) : null}
         {hasMore ? (
-          <button type="button" class="icon-button tiny" aria-expanded={open} aria-label={open ? 'Hide output' : 'Show output'} onClick={() => setOpen(!open)}>
+          <button type="button" class="icon-button tiny" aria-expanded={open} aria-label={open ? 'Hide details' : 'Show details'} onClick={() => setOpen(!open)}>
             <Icon name={open ? 'chevron-up' : 'chevron-down'} />
           </button>
         ) : null}
       </div>
-      {open && activity.diff ? <DiffView files={activity.diff} /> : null}
-      {open && activity.output?.length ? <pre class="activity-output">{activity.output.slice(-40).join('\n')}</pre> : null}
+      {status === 'running' && activity.child ? <div class="activity-child" title={activity.child}><Icon name="arrow-small-right" /><span>{activity.child}</span></div> : null}
+      {/* A running call shows what it has printed so far, newest last -- a
+          long build is visibly working instead of a bare timer. */}
+      {status === 'running' && !open && activity.output?.length ? <OutputView activity={{ ...activity, outputTail: true }} budget={LIVE_OUTPUT_LINES} /> : null}
+      {activity.diff?.length ? <DiffView files={activity.diff} budget={open ? undefined : status === 'running' ? 0 : DIFF_PREVIEW_LINES} /> : null}
+      {open && activity.output?.length ? <OutputView activity={activity} budget={Number.MAX_SAFE_INTEGER} /> : null}
     </div>
   );
 }
@@ -149,17 +202,30 @@ const TraceRow = memo(({ trace, workspace }: { trace: TurnTrace; workspace?: str
   const [open, setOpen] = useState(false);
   const tools = trace.activities.filter((activity) => activity.kind !== 'thinking');
   const failed = tools.filter((activity) => activity.kind === 'tool-error').length;
+  const totals = diffTotals(tools.flatMap((activity) => activity.diff ?? []));
+  const label = tools.length ? `${tools.length} step${tools.length === 1 ? '' : 's'}` : `Thought for ${duration(trace.endedAt - trace.startedAt)}`;
   return (
     <div class="trace">
       <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
-        <span>{tools.length ? `${tools.length} step${tools.length === 1 ? '' : 's'}` : 'Thought'}</span>
-        <span class="muted">· {duration(trace.endedAt - trace.startedAt)}{failed ? ` · ${failed} failed` : ''}</span>
+        <span>{label}</span>
+        <span class="muted">{tools.length ? ` · ${duration(trace.endedAt - trace.startedAt)}` : ''}{failed ? ` · ${failed} failed` : ''}</span>
+        {totals.additions || totals.removals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
       </button>
-      {open ? <div class="activities">{trace.activities.map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} />)}</div> : null}
+      {open ? (
+        <div class="activities">
+          {trace.reasoning?.length ? <Reasoning thoughts={trace.reasoning} /> : null}
+          {tools.map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} userIndex={trace.userIndex} />)}
+        </div>
+      ) : null}
     </div>
   );
 });
+
+/** A turn's reasoning, each thought its own paragraph. */
+function Reasoning({ thoughts }: { thoughts: readonly string[] }): JSX.Element {
+  return <div class="reasoning" aria-label="Reasoning">{thoughts.map((thought, index) => <p key={index}>{thought}</p>)}</div>;
+}
 
 const NoteView = memo(({ note }: { note: Note }): JSX.Element => {
   const [open, setOpen] = useState(note.text.split('\n').length <= 14);
@@ -177,17 +243,23 @@ const NoteView = memo(({ note }: { note: Note }): JSX.Element => {
   return <div class={`notice ${note.level ?? 'info'}`} role={note.level === 'error' ? 'alert' : undefined}><Icon name={icon} /><span>{note.text}</span></div>;
 });
 
+/** The plan, windowed around the step in progress as the terminal shows it;
+ * the rest one click away. */
 function Plan({ plan }: { plan: ChatModel['plan'] }): JSX.Element {
-  const done = plan.filter((entry) => entry.status === 'completed').length;
+  const [all, setAll] = useState(false);
+  const { visible, done, hidden } = planWindow(plan);
+  const rows = all ? plan.map((entry, index) => ({ entry, index })) : visible;
   return (
     <div class="plan-card" aria-label="Plan">
       <div class="plan-head"><Icon name="checklist" /><span>Plan</span><span class="muted">{done}/{plan.length}</span></div>
-      {plan.map((entry, index) => (
+      {rows.map(({ entry, index }) => (
         <div key={index} class={`plan-entry ${entry.status ?? ''}`}>
-          <Icon name={entry.status === 'completed' ? 'pass-filled' : entry.status === 'in_progress' ? 'circle-large-filled' : 'circle-large'} />
+          <Icon name={entry.status === 'completed' ? 'pass-filled' : entry.status === 'cancelled' ? 'circle-slash' : entry.status === 'in_progress' ? 'circle-large-filled' : 'circle-large'} />
           <span>{entry.content}</span>
         </div>
       ))}
+      {hidden && !all ? <button type="button" class="more-steps" onClick={() => setAll(true)}><Icon name="ellipsis" /> {hidden} more step{hidden === 1 ? '' : 's'}</button> : null}
+      {all && hidden ? <button type="button" class="more-steps" onClick={() => setAll(false)}><Icon name="fold-up" /> Show fewer</button> : null}
     </div>
   );
 }
@@ -203,35 +275,59 @@ function useNow(): number {
 }
 
 const VISIBLE_ACTIVITIES = 6;
+/** Lines of a proposed change an approval shows, as in the terminal. */
+const APPROVAL_DIFF_LINES = 8;
 /** Silence this long reads as a stall, not as work. */
 const STALL_MS = 30_000;
 
-const LiveTurn = memo(({ live, workspace, elsewhere }: { live: Live | undefined; workspace?: string; elsewhere: boolean }): JSX.Element => {
+/** The working line: what the turn is doing, how long it has run, and a
+ * stall named as one. Ticks on its own, once a second. */
+function Working({ live, elsewhere }: { live: Live | undefined; elsewhere: boolean }): JSX.Element {
   const now = useNow();
-  const [showAll, setShowAll] = useState(false);
-  // Thoughts are one line below, as in the terminal; the rows are tools.
-  const activities = live?.activities.filter((activity) => activity.kind !== 'thinking') ?? [];
-  const hidden = showAll ? 0 : Math.max(0, activities.length - VISIBLE_ACTIVITIES);
   const label = live?.phase ?? live?.waitingLabel ?? 'starting';
   const quiet = live ? now - (live.lastEventAt ?? live.startedAt) : 0;
-  const toolRunning = activities.some((activity) => activity.kind === 'tool-start');
+  const toolRunning = live?.activities.some((activity) => activity.kind === 'tool-start');
+  return (
+    <div class="working" role="status">
+      <span class="pulse" aria-hidden="true" />
+      <span class="working-label">{titleCase(label.replace(/(…|\.\.\.)$/, ''))}…</span>
+      <span class="muted">{live ? duration(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
+      {quiet >= STALL_MS ? <span class="stalled" title="Nothing has arrived from the agent for a while"><Icon name="warning" /> {toolRunning ? 'no output' : 'no response'} for {duration(quiet)}</span> : null}
+      <span class="muted working-hint">Esc to stop</span>
+    </div>
+  );
+}
+
+/** The thought being had, on one line as in the terminal; open, the whole
+ * of this turn's reasoning so far. */
+function LiveThought({ live }: { live: Live }): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  if (!live.thought) return null;
+  return (
+    <div class={`thought${open ? ' open' : ''}`}>
+      <button type="button" class="thought-toggle" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} onClick={() => setOpen(!open)}>
+        <Icon name="lightbulb" /><span class="thought-text">{live.thought.text}</span>
+      </button>
+      {open ? <Reasoning thoughts={[...live.reasoning, live.thought.text]} /> : null}
+    </div>
+  );
+}
+
+const LiveTurn = memo(({ live, workspace, elsewhere }: { live: Live | undefined; workspace?: string; elsewhere: boolean }): JSX.Element => {
+  const [showAll, setShowAll] = useState(false);
+  const activities = live?.activities ?? [];
+  const hidden = showAll ? 0 : Math.max(0, activities.length - VISIBLE_ACTIVITIES);
   return (
     <div class="message assistant live" aria-busy="true">
       {activities.length ? (
         <div class="activities">
           {hidden ? <button type="button" class="more-steps" onClick={() => setShowAll(true)}><Icon name="ellipsis" /> {hidden} earlier step{hidden === 1 ? '' : 's'}</button> : null}
-          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} now={now} />)}
+          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} />)}
         </div>
       ) : null}
       {live?.text ? <LiveMarkdown key={live.startedAt} text={live.text} /> : null}
-      {live?.thought ? <div class="thought" title={live.thought}><Icon name="lightbulb" /><span>{live.thought}</span></div> : null}
-      <div class="working" role="status">
-        <span class="pulse" aria-hidden="true" />
-        <span class="working-label">{titleCase(label.replace(/(…|\.\.\.)$/, ''))}…</span>
-        <span class="muted">{live ? duration(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
-        {quiet >= STALL_MS ? <span class="stalled" title="Nothing has arrived from the agent for a while"><Icon name="warning" /> {toolRunning ? 'no output' : 'no response'} for {duration(quiet)}</span> : null}
-        <span class="muted working-hint">Esc to stop</span>
-      </div>
+      {live ? <LiveThought live={live} /> : null}
+      <Working live={live} elsewhere={elsewhere} />
     </div>
   );
 });
@@ -277,7 +373,7 @@ export function Transcript({ model }: { model: ChatModel }): JSX.Element {
   const parts: JSX.Element[] = [];
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
   if (model.plan.length) parts.push(<Plan key="plan" plan={model.plan} />);
-  if (model.running) parts.push(<LiveTurn key="live" live={model.live} workspace={model.workspace} elsewhere={model.ownTurn === false || (!model.ownTurn && model.running)} />);
+  if (model.running) parts.push(<LiveTurn key="live" live={model.live} workspace={model.workspace} elsewhere={!model.ownTurn} />);
   const queuedTexts = new Set(model.queued.map((item) => item.text));
   for (const submission of model.submissions) {
     // A queued message is drawn once, from the stored queue under the composer.
@@ -300,33 +396,35 @@ function relative(text: string, workspace: string | undefined): string {
   return text.split(`${root}/`).join('').split(`${root}\\`).join('');
 }
 
-/** A proposed change's text with its added and removed lines coloured. */
-function diffLines(text: string): JSX.Element[] {
-  return text.split('\n').map((line, index) => {
-    const kind = /^\+(?!\+\+)/.test(line) ? 'add' : /^-(?!--)/.test(line) ? 'del' : /^@@/.test(line) ? 'hunk' : '';
-    return <div key={index} class={kind}>{line || ' '}</div>;
-  });
-}
-
-export function ApprovalCard({ approval, workspace, onAnswer }: { approval: Approval; workspace?: string; onAnswer: (value: boolean | 'always') => void }): JSX.Element {
+/** A pending approval, answered with the terminal's keys and its guard
+ * (approval-keys.ts): nothing counts for the first moments, so a word being
+ * typed cannot approve a call; y once, a always (only where a rule is
+ * offered, and the rule is shown), n, Enter or Esc deny. */
+export function ApprovalCard({ approval, workspace, waiting, onAnswer }: { approval: Approval; workspace?: string; waiting: number; onAnswer: (value: boolean | 'always') => void }): JSX.Element {
+  const shownAt = useRef(Date.now());
+  const [guarded, setGuarded] = useState(true);
+  useEffect(() => { const timer = setTimeout(() => setGuarded(false), 400); return () => clearTimeout(timer); }, []);
   const onKey = (event: KeyboardEvent): void => {
-    if ((event.target as HTMLElement).tagName === 'TEXTAREA') return;
-    if (event.key === '1') onAnswer(true);
-    else if (event.key === '2' && approval.rule) onAnswer('always');
-    else if (event.key === '3' || event.key === 'Escape') onAnswer(false);
-    else return;
+    if ((event.target as HTMLElement).tagName === 'TEXTAREA' || event.ctrlKey || event.metaKey || event.altKey) return;
+    const key = event.key === 'Escape' ? '\u001b' : event.key === 'Enter' ? '\r' : event.key === 'Tab' ? '\t' : event.key;
+    const action = approvalKeyAction(key, Date.now() - shownAt.current, false, true, Boolean(approval.rule));
+    if (action === 'ignore' || action === 'focus') { if (key.length === 1) event.preventDefault(); return; }
     event.preventDefault();
     event.stopPropagation();
+    onAnswer(action === 'allow' ? true : action === 'always' ? 'always' : false);
   };
+  const answer = (value: boolean | 'always') => (): void => { if (Date.now() - shownAt.current >= 400) onAnswer(value); };
   return (
-    <div class="approval" role="alertdialog" aria-label={`Approval: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
-      <div class="approval-head"><Icon name="shield" /><span class="approval-title">{relative(approval.title, workspace)}</span></div>
-      {approval.detail ? <pre class="approval-detail">{approval.hasDiff ? diffLines(relative(approval.detail, workspace)) : relative(approval.detail, workspace)}</pre> : null}
+    <div class={`approval${guarded ? ' guarded' : ''}`} role="alertdialog" aria-label={`Approval: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
+      <div class="approval-head"><Icon name="shield" /><span class="approval-title">{relative(approval.title, workspace)}</span>{waiting ? <span class="muted">+{waiting} waiting</span> : null}</div>
+      {approval.detail ? <pre class="approval-detail">{relative(approval.detail, workspace)}</pre> : null}
+      {approval.diff?.length ? <DiffView files={approval.diff} budget={APPROVAL_DIFF_LINES} /> : null}
+      {approval.rule ? <div class="approval-rule muted">Always allow remembers <code>{approval.rule}</code></div> : null}
       <div class="approval-actions">
-        <button type="button" class="primary" data-approve="yes" onClick={() => onAnswer(true)}>Allow <kbd>1</kbd></button>
-        {approval.rule ? <button type="button" class="secondary" data-approve="always" title={`Always allow: ${approval.rule}`} onClick={() => onAnswer('always')}>Always allow <kbd>2</kbd></button> : null}
-        <button type="button" class="secondary" data-approve="no" title="Reject (3 or Esc)" onClick={() => onAnswer(false)}>Reject <kbd>3</kbd></button>
-        {approval.hasDiff ? <button type="button" class="link" onClick={() => post({ type: 'viewDiff', id: approval.id })}><Icon name="diff" /> Open diff</button> : null}
+        <button type="button" class="primary" data-approve="yes" onClick={answer(true)}>Allow <kbd>y</kbd></button>
+        {approval.rule ? <button type="button" class="secondary" data-approve="always" title={`Always allow: ${approval.rule}`} onClick={answer('always')}>Always allow <kbd>a</kbd></button> : null}
+        <button type="button" class="secondary" data-approve="no" title="Deny (n, Enter or Esc)" onClick={answer(false)}>Deny <kbd>n</kbd></button>
+        {approval.diff?.length ? <button type="button" class="link" onClick={() => post({ type: 'viewDiff', id: approval.id })}><Icon name="diff" /> Open in diff editor</button> : null}
       </div>
     </div>
   );
