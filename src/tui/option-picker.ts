@@ -13,7 +13,7 @@
  */
 
 import chalk from 'chalk';
-import type { PickerOption } from '../harness/prompter.js';
+import type { PickerOption, PickerSettings } from '../harness/prompter.js';
 import { takeTerminalKeys } from './input-decoder.js';
 import { pickerConfirmsSelection, pickerDeletesSelection } from './command-palette.js';
 
@@ -30,19 +30,8 @@ export interface OptionPickerHost {
   select<T>(
     title: string, options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
-    settings?: OptionPickerSettings,
+    settings?: PickerSettings<T>,
   ): Promise<T | undefined>;
-}
-
-export interface OptionPickerSettings {
-  onBack?: () => void;
-  /** The row to start on: the current value, or the row a sub-menu was
-   * opened from. Absent or not listed, the first. Sub-pickers start at
-   * the top, hence never here. */
-  startAt?: never;
-  onEscape?: () => void;
-  refreshedOptions?: () => readonly PickerOption<never>[];
-  refresh?: Promise<unknown> | readonly Promise<unknown>[];
 }
 
 /** How the last picker closed. A menu that opened a sub-picker reopens
@@ -64,17 +53,7 @@ export function runOptionPicker<T>(
   title: string,
   options: readonly PickerOption<T>[],
   onAction?: (value: T, action: string) => Promise<void>,
-  settings?: {
-    onBack?: () => void;
-    /** The row to start on: the current value, or the row a sub-menu was
-     * opened from. Absent or not listed, the first. */
-    startAt?: T;
-    onEscape?: () => void;
-    refreshedOptions?: () => readonly PickerOption<T>[];
-    refresh?: Promise<unknown> | readonly Promise<unknown>[];
-    /** Rows the list may use, when more than the default suits it. */
-    rows?: number;
-  },
+  settings?: PickerSettings<T>,
 ): Promise<T | undefined> {
   if (!options.length) return Promise.resolve(undefined);
   return new Promise((resolveSelection) => {

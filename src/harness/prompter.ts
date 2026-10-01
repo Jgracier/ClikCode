@@ -62,17 +62,7 @@ export interface HarnessPrompter {
     title: string,
     options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
-    settings?: {
-      onBack?: () => void;
-      /** The row to start on: the current value, or the row a sub-menu was
-       * opened from. Absent or not listed, the first. */
-      startAt?: T;
-      onEscape?: () => void;
-      refreshedOptions?: () => readonly PickerOption<T>[];
-      refresh?: Promise<unknown> | readonly Promise<unknown>[];
-      /** Rows the list may use, when more than the default suits it. */
-      rows?: number;
-    },
+    settings?: PickerSettings<T>,
   ): Promise<T | undefined>;
   /** The full-page conversation board (tui/conversation-board.ts), where a
    * terminal can draw one. */
@@ -106,6 +96,20 @@ export type MessageBlock =
   | { kind: 'code'; lines: string[]; language?: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean }
   | { kind: 'table'; header: string[]; rows: string[][]; align: Array<'left' | 'center' | 'right' | null>; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
   | { kind: 'list-item'; text: string; depth: number; ordered: boolean; number?: number; task: boolean; checked?: boolean; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean };
+
+/** Everything a list takes beyond its rows: where it starts, what Left and
+ * Esc do, and rows that arrive after it opens. */
+export interface PickerSettings<T> {
+  onBack?: () => void;
+  /** The row to start on: the current value, or the row a sub-menu was
+   * opened from. Absent or not listed, the first. */
+  startAt?: T;
+  onEscape?: () => void;
+  refreshedOptions?: () => readonly PickerOption<T>[];
+  refresh?: Promise<unknown> | readonly Promise<unknown>[];
+  /** Rows the list may use, when more than the default suits it. */
+  rows?: number;
+}
 
 export interface PickerOption<T> {
   label: string;
