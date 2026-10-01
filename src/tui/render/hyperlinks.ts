@@ -25,9 +25,6 @@ function hyperlinksSupported(environment: NodeJS.ProcessEnv = process.env, isTty
 
 let hyperlinksEnabled: boolean | undefined;
 
-/** Tests and callers that know better than the environment can decide. */
-function setHyperlinksEnabled(enabled: boolean | undefined): void { hyperlinksEnabled = enabled; }
-
 /** Resolved once per process unless something sets it explicitly. */
 export const linksOn = (): boolean => hyperlinksEnabled ?? (hyperlinksEnabled = hyperlinksSupported());
 

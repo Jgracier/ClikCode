@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './width';
-import { appendThought, formatElapsed, liveConversationLines, liveWaitKind, rightLabeledRule, runningChatLine, waitingSpinnerFrame, waitingSpinnerGlyph } from './waiting';
+import { appendThought, formatElapsed, liveConversationLines, liveWaitKind, rightLabeledRule, runningChatLine, waitingSpinnerGlyph } from './waiting';
+import { waitingSpinnerFrame } from '../../harness/protocol/activity-view';
 import { visibleTail } from './width';
 
 describe('the waiting band', () => {

@@ -200,8 +200,6 @@ export class TerminalInputDecoder {
 /** `ESC [ row ; column R` is the terminal answering DSR, never a keystroke. */
 const CURSOR_POSITION_REPORT = /^\u001b\[\d+;\d+R$/;
 
-const cursorReportWaiters = new Set<(report: { row: number; column: number }) => void>();
-
 /** A read from the terminal is one batch of keys, and the end of it is
  * announced so a listener can draw once for the whole chunk.
  *

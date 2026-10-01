@@ -12,18 +12,6 @@ import { logCursorEvent } from './cursor-log.js';
  * fences the payload and the whole thing arrives as one key. */
 export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 
-const DISABLE_BRACKETED_PASTE = '\u001b[?2004l';
-
-/** Focus reporting and theme notifications are turned OFF on the way out and
- * never on. Both doc comments here used to argue the opposite -- that each was
- * enabled for what announcing it means, captured from Claude Code in a pty --
- * but the enable constants had no caller, so the claim described an intention
- * rather than the code. Clearing them on teardown still earns its place: a
- * program that ran before this one may have left either set. */
-const DISABLE_FOCUS_REPORTING = '\u001b[?1004l';
-
-const DISABLE_THEME_NOTIFICATIONS = '\u001b[?2031l';
-
 /** Mouse tracking: normal (1000), button-event (1002), any-event (1003), SGR
  * encoding (1006). All four, and a swipe does not scroll without all four.
  *
@@ -164,20 +152,12 @@ export function enterInputModes(): string {
  * away has no reason to forward the swipe that follows, and claims the
  * gesture for itself instead.
  *
- * They come back off in leaveInputModes(), which is for handing the terminal
- * to something else: a suspend, a vendor CLI, an exit. */
+ * They come back off in terminalTeardown() (restore.ts), which is for handing
+ * the terminal to something else: a suspend, a vendor CLI, an exit. */
 export function popReadModes(): string {
   if (!terminalModes.kittyKeyboard) return '';
   terminalModes.kittyKeyboard = false;
   return POP_KITTY_KEYBOARD;
-}
-
-function leaveInputModes(): string {
-  const sequence = `${terminalModes.kittyKeyboard ? POP_KITTY_KEYBOARD : ''}${DISABLE_BRACKETED_PASTE}${DISABLE_MOUSE_TRACKING}${DISABLE_THEME_NOTIFICATIONS}${DISABLE_FOCUS_REPORTING}`;
-  terminalModes.kittyKeyboard = false;
-  terminalModes.bracketedPaste = false;
-  terminalModes.wheelReporting = false;
-  return sequence;
 }
 
 /** Turn selection mode on or off, returning what the user should be told.

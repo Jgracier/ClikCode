@@ -132,10 +132,6 @@ const NATIVE_SESSION_DISCOVERY = { run: discoverAdoptableSessions };
 
 let nativeDiscoveryCache: { key: string; result: Promise<AdoptableNativeSession[]> } | undefined;
 
-function resetNativeDiscoveryCache(): void {
-  nativeDiscoveryCache = undefined;
-}
-
 /** One discovery at a time for the same inputs -- a picker that reopens while
  * the last one is still running shares it rather than starting another.
  *

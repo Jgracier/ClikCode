@@ -17,9 +17,7 @@ import { catalogModel } from '../../local-models/catalog.js';
 import { missingBytes } from '../../local-models/models.js';
 import { formatBytes } from '../../local-models/download.js';
 import { randomUUID } from 'node:crypto';
-import { open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { stdin as input } from 'node:process';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
 import { localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
@@ -246,13 +244,13 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-archived', text: 'Conversation archived.' });
   },
-  delete: async ({ id, state, session, words }) => {
+  delete: async ({ id, state, words }) => {
     if (words[0]?.toLowerCase() !== 'confirm') throw new Error('Use /delete confirm to permanently delete this ClikCode conversation. Provider-owned history is not deleted.');
     state.sessions = state.sessions.filter((item) => item.id !== id);
     await writeState(state);
     return emitHarnessOutput({ panel: 'session-deleted', text: 'Conversation deleted from ClikCode.' });
   },
-  fork: async ({ id, state, session, words }) => {
+  fork: async ({ state, session, words }) => {
     const now = new Date().toISOString();
     const fork: HarnessSession = {
       ...session, id: randomUUID(), name: words.join(' ').trim() || (session.name ? `${session.name} (fork)` : undefined),
@@ -372,7 +370,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     else delete session.speed;
     return saveSettings(state, session);
   },
-  sessions: async ({ id, state, session, words }) => {
+  sessions: async ({ state, words }) => {
     const action = words.shift()?.toLowerCase();
     const targetId = words.shift();
     if (action === 'close') {
