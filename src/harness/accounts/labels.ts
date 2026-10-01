@@ -10,6 +10,7 @@ import { inspectNativeHarness } from '../transport/native/inspect.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { mistralVibeAccountEmail } from './mistral-vibe-identity.js';
+import { vendorAccountEmail } from './vendor-identity.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessState } from '../../session/model.js';
 
@@ -64,9 +65,9 @@ export async function refreshPlaceholderAccountLabels(state: HarnessState): Prom
     // and syncAccountIdentityAfterLogin scopes its own check the same way.
     if (!label || state.accounts.some((item) =>
       item.id !== account.id && item.provider === account.provider && item.label.toLowerCase() === label.toLowerCase())) {
-      // Nothing derivable (OpenCode, Copilot, Hermes, Pi, Droid and Amp keep
-      // no identity anywhere ClikCode can read). Drop the old " default"
-      // suffix anyway: this IS that harness's account, and the suffix made a
+      // Nothing derivable (OpenCode, Copilot, Hermes, Pi and Droid keep no
+      // email anywhere ClikCode can read; see vendor-identity.ts). Drop the
+      // old " default" suffix anyway: this IS that harness's account, and the suffix made a
       // real connected account read as a placeholder row.
       if (account.label !== harness.displayName) { account.label = harness.displayName; changed = true; }
       continue;
@@ -79,6 +80,8 @@ export async function refreshPlaceholderAccountLabels(state: HarnessState): Prom
 
 export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
   if (harness.command === 'vibe') return mistralVibeAccountEmail(profilePath);
+  const vendorEmail = await vendorAccountEmail(harness, profilePath);
+  if (vendorEmail) return vendorEmail;
   if (harness.command === 'claude') {
     try {
       // Asked of the harness, about the account it is running as.
