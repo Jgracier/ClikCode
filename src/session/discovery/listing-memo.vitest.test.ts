@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  EMPTY_LISTING_TTL_MS, SEEN_LISTING_TTL_MS, lastSeenListing, listingKnownEmpty, rememberListing, rememberSeenListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache, seenListingFresh,
+  EMPTY_LISTING_TTL_MS, SEEN_LISTING_TTL_MS, freshListing, lastSeenListing, rememberListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
 } from './cache.js';
 
 /**
@@ -28,48 +28,49 @@ describe('the empty-listing memo', () => {
   });
 
   it('remembers a harness that found nothing', async () => {
-    expect(await listingKnownEmpty('kilo', '/work', undefined)).toBe(false);
-    await rememberListing('kilo', '/work', undefined, 0);
-    expect(await listingKnownEmpty('kilo', '/work', undefined)).toBe(true);
-  });
-
-  it('never memoizes a harness that found something', async () => {
-    await rememberListing('hermes', '/work', undefined, 8);
-    expect(await listingKnownEmpty('hermes', '/work', undefined)).toBe(false);
+    expect(await freshListing('kilo', '/work', undefined)).toBeUndefined();
+    await rememberListing('kilo', '/work', undefined, []);
+    expect(await freshListing('kilo', '/work', undefined)).toEqual([]);
   });
 
   it('forgets the memo as soon as sessions appear', async () => {
-    await rememberListing('kilo', '/work', undefined, 0);
-    await rememberListing('kilo', '/work', undefined, 2);
-    expect(await listingKnownEmpty('kilo', '/work', undefined)).toBe(false);
+    await rememberListing('kilo', '/work', undefined, []);
+    await rememberListing('kilo', '/work', undefined, [{ nativeId: 'k1' }]);
+    expect(await freshListing('kilo', '/work', undefined)).toEqual([{ nativeId: 'k1' }]);
   });
 
   it('does not let one account silence another', async () => {
     // Two accounts of the same provider have separate vendor stores. Keying
     // the memo on command+workspace alone would have hidden every session the
     // second account had, which is the bug this key exists to prevent.
-    await rememberListing('hermes', '/work', '/profiles/a', 0);
-    expect(await listingKnownEmpty('hermes', '/work', '/profiles/a')).toBe(true);
-    expect(await listingKnownEmpty('hermes', '/work', '/profiles/b')).toBe(false);
+    await rememberListing('hermes', '/work', '/profiles/a', []);
+    expect(await freshListing('hermes', '/work', '/profiles/a')).toEqual([]);
+    expect(await freshListing('hermes', '/work', '/profiles/b')).toBeUndefined();
   });
 
   it('does not let one workspace silence another', async () => {
-    await rememberListing('kilo', '/work', undefined, 0);
-    expect(await listingKnownEmpty('kilo', '/elsewhere', undefined)).toBe(false);
+    await rememberListing('kilo', '/work', undefined, []);
+    expect(await freshListing('kilo', '/elsewhere', undefined)).toBeUndefined();
   });
 
   it('expires, so a session made elsewhere still turns up', async () => {
     const now = Date.now();
-    await rememberListing('kilo', '/work', undefined, 0, now);
-    expect(await listingKnownEmpty('kilo', '/work', undefined, now + EMPTY_LISTING_TTL_MS - 1)).toBe(true);
-    expect(await listingKnownEmpty('kilo', '/work', undefined, now + EMPTY_LISTING_TTL_MS + 1)).toBe(false);
+    await rememberListing('kilo', '/work', undefined, [], now);
+    expect(await freshListing('kilo', '/work', undefined, now + EMPTY_LISTING_TTL_MS - 1)).toEqual([]);
+    expect(await freshListing('kilo', '/work', undefined, now + EMPTY_LISTING_TTL_MS + 1)).toBeUndefined();
+  });
+
+  it('is not believed from another build', async () => {
+    const now = Date.now();
+    await rememberListing('kilo', '/work', undefined, [], now, 'kilo-1');
+    expect(await freshListing('kilo', '/work', undefined, now + 1_000, 'kilo-2')).toBeUndefined();
   });
 
   it('survives a restart, which is the point of writing it down', async () => {
-    await rememberListing('kilo', '/work', undefined, 0);
+    await rememberListing('kilo', '/work', undefined, []);
     await saveDiscoveryCache();
     resetNativeSessionDiscoveryCache();
-    expect(await listingKnownEmpty('kilo', '/work', undefined)).toBe(true);
+    expect(await freshListing('kilo', '/work', undefined)).toEqual([]);
   });
 });
 
@@ -89,37 +90,32 @@ describe('the last list each CLI gave', () => {
   });
 
   it('is kept across processes, so the next list shows it before asking again', async () => {
-    await rememberSeenListing('kilo', '/work', undefined, [{ nativeId: 'k1', title: 'Refactor' }]);
+    await rememberListing('kilo', '/work', undefined, [{ nativeId: 'k1', title: 'Refactor' }]);
     await saveDiscoveryCache();
     resetNativeSessionDiscoveryCache();
     expect(await lastSeenListing('kilo', '/work', undefined)).toEqual([{ nativeId: 'k1', title: 'Refactor' }]);
   });
 
   it('is per folder and per account, like the listing itself', async () => {
-    await rememberSeenListing('hermes', '/work', '/profiles/a', [{ nativeId: 'h1' }]);
+    await rememberListing('hermes', '/work', '/profiles/a', [{ nativeId: 'h1' }]);
     expect(await lastSeenListing('hermes', '/work', '/profiles/b')).toEqual([]);
     expect(await lastSeenListing('hermes', '/other', '/profiles/a')).toEqual([]);
   });
 
   it('is replaced by the next answer, and cleared when that answer is empty', async () => {
-    await rememberSeenListing('opencode', '/work', undefined, [{ nativeId: 'o1' }]);
-    await rememberSeenListing('opencode', '/work', undefined, [{ nativeId: 'o2' }]);
+    await rememberListing('opencode', '/work', undefined, [{ nativeId: 'o1' }]);
+    await rememberListing('opencode', '/work', undefined, [{ nativeId: 'o2' }]);
     expect(await lastSeenListing('opencode', '/work', undefined)).toEqual([{ nativeId: 'o2' }]);
-    await rememberSeenListing('opencode', '/work', undefined, []);
+    await rememberListing('opencode', '/work', undefined, []);
     expect(await lastSeenListing('opencode', '/work', undefined)).toEqual([]);
-  });
-
-  it('never skips asking the CLI: a remembered list is not an empty memo', async () => {
-    await rememberSeenListing('kilo', '/work', undefined, [{ nativeId: 'k1' }]);
-    expect(await listingKnownEmpty('kilo', '/work', undefined)).toBe(false);
   });
 
   it('reuses a list for two minutes, then asks the CLI again', async () => {
     const now = Date.now();
-    await rememberSeenListing('kilo', '/work', undefined, [{ nativeId: 'k1' }], now, 'kilo-1');
-    expect(await seenListingFresh('kilo', '/work', undefined, now + 1_000, 'kilo-1')).toBe(true);
-    expect(await seenListingFresh('kilo', '/work', undefined, now + SEEN_LISTING_TTL_MS + 1, 'kilo-1')).toBe(false);
+    await rememberListing('kilo', '/work', undefined, [{ nativeId: 'k1' }], now, 'kilo-1');
+    expect(await freshListing('kilo', '/work', undefined, now + 1_000, 'kilo-1')).toEqual([{ nativeId: 'k1' }]);
+    expect(await freshListing('kilo', '/work', undefined, now + SEEN_LISTING_TTL_MS + 1, 'kilo-1')).toBeUndefined();
     // A new binary is asked at once.
-    expect(await seenListingFresh('kilo', '/work', undefined, now + 1_000, 'kilo-2')).toBe(false);
+    expect(await freshListing('kilo', '/work', undefined, now + 1_000, 'kilo-2')).toBeUndefined();
   });
 });

@@ -2,7 +2,7 @@
  * prints -- a table for some, structured output for others. */
 
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
-import { lastSeenListing, listingKnownEmpty, rememberListing, rememberSeenListing, seenListingFresh } from './cache.js';
+import { freshListing, lastSeenListing, rememberListing } from './cache.js';
 import { harnessBinaryIdentity } from '../../harness/transport/native/version-memo.js';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -135,20 +135,17 @@ export async function discoverNativeSessions(
   if (!inspection.installed) return [];
   // Each of these is a subprocess, and most of them find nothing: /resume
   // spent 2.5s spawning six CLIs here, of which two took 2.16s between them
-  // to return zero. A harness that had nothing in this workspace a moment ago
-  // is not asked again until the memo expires.
+  // to return zero. A recent answer from this build is the answer: "nothing
+  // here" for five minutes, a list for two. Opening the board does not spawn
+  // the CLI again until that expires.
   const build = await harnessBinaryIdentity(harness.binary);
-  const now = Date.now();
-  if (await listingKnownEmpty(harness.command, workspace, profile, now, build)) return [];
-  // A list from the last two minutes is the list. Opening the board does not
-  // spawn the CLI again until that expires.
-  if (await seenListingFresh(harness.command, workspace, profile, now, build)) return lastSeenListing(harness.command, workspace, profile);
+  const fresh = await freshListing(harness.command, workspace, profile, Date.now(), build);
+  if (fresh) return fresh;
   try {
     const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
     const format = harness.session.discoverFormat ?? 'json';
     const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
-    await rememberListing(harness.command, workspace, profile, found.length, Date.now(), build);
-    await rememberSeenListing(harness.command, workspace, profile, found, Date.now(), build);
+    await rememberListing(harness.command, workspace, profile, found, Date.now(), build);
     return found;
   } catch {
     // fail-open-ok: passive discovery must not break the picker when an
