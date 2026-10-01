@@ -603,13 +603,22 @@ function relative(text: string, workspace: string | undefined): string {
 /** A pending approval, answered with the terminal's keys and its guard
  * (approval-keys.ts): nothing counts for the first moments, so a word being
  * typed cannot approve a call; y once, a always (only where a rule is
- * offered, and the rule is shown), n, Enter or Esc deny. */
-export function ApprovalCard({ approval, workspace, waiting, onAnswer }: { approval: Approval; workspace?: string; waiting: number; onAnswer: (value: boolean | 'always') => void }): JSX.Element {
+ * offered, and the rule is shown), n, Enter or Esc deny. Or denied with a
+ * note (Claude Code's "No, and tell it what to do instead"): the note goes
+ * into the running turn as a message. Several waiting: "Approval 1 of 3". */
+export function ApprovalCard({ approval, workspace, position, total, onAnswer }: {
+  approval: Approval; workspace?: string; position: number; total: number; onAnswer: (value: boolean | 'always', note?: string) => void;
+}): JSX.Element {
   const shownAt = useRef(Date.now());
   const [guarded, setGuarded] = useState(true);
+  const [noting, setNoting] = useState(false);
+  const [note, setNote] = useState('');
+  const noteInput = useRef<HTMLInputElement>(null);
   useEffect(() => { const timer = setTimeout(() => setGuarded(false), APPROVAL_GUARD_MS); return () => clearTimeout(timer); }, []);
+  useEffect(() => { if (noting) noteInput.current?.focus(); }, [noting]);
   const onKey = (event: KeyboardEvent): void => {
-    if ((event.target as HTMLElement).tagName === 'TEXTAREA' || event.ctrlKey || event.metaKey || event.altKey) return;
+    const tag = (event.target as HTMLElement).tagName;
+    if (tag === 'TEXTAREA' || tag === 'INPUT' || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key === 'Escape' ? '\u001b' : event.key === 'Enter' ? '\r' : event.key === 'Tab' ? '\t' : event.key;
     const action = approvalKeyAction(key, Date.now() - shownAt.current, false, true, Boolean(approval.rule));
     if (action === 'ignore' || action === 'focus') { if (key.length === 1) event.preventDefault(); return; }
@@ -618,11 +627,28 @@ export function ApprovalCard({ approval, workspace, waiting, onAnswer }: { appro
     onAnswer(action === 'allow' ? true : action === 'always' ? 'always' : false);
   };
   const answer = (value: boolean | 'always') => (): void => { if (Date.now() - shownAt.current >= APPROVAL_GUARD_MS) onAnswer(value); };
+  const denyWithNote = (): void => {
+    if (Date.now() - shownAt.current >= APPROVAL_GUARD_MS && note.trim()) onAnswer(false, note.trim());
+  };
+  // The note's own keys: Enter denies with it, Esc puts the note away (and
+  // is not the page's Esc, which would deny without it).
+  const onNoteKey = (event: KeyboardEvent): void => {
+    if (event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      denyWithNote();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      setNoting(false);
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-approval="${approval.id}"]`)?.focus());
+    }
+  };
   return (
     <div class={`approval${guarded ? ' guarded' : ''}`} role="alertdialog" aria-label={`Approval: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
       <div class="approval-head">
         <Icon name="shield" /><span class="approval-title">{relative(approval.title, workspace)}</span>
-        {waiting ? <span class="muted">+{waiting} waiting</span> : null}
+        {total > 1 ? <span class="muted approval-count">Approval {position} of {total}</span> : null}
         {approval.diff?.length ? <button type="button" class="icon-button tiny approval-diff" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={() => post({ type: 'viewDiff', id: approval.id })}><Icon name="diff" /></button> : null}
       </div>
       {/* The change speaks for an edit; a command's words are its detail. */}
@@ -632,7 +658,15 @@ export function ApprovalCard({ approval, workspace, waiting, onAnswer }: { appro
         <button type="button" class="primary" data-approve="yes" onClick={answer(true)}>Allow <kbd>y</kbd></button>
         {approval.rule ? <button type="button" class="secondary" data-approve="always" title={`Always allow ${approval.rule}`} onClick={answer('always')}>Always <kbd>a</kbd></button> : null}
         <button type="button" class="secondary" data-approve="no" title="Deny (n, Enter or Esc)" onClick={answer(false)}>Deny <kbd>n</kbd></button>
+        <button type="button" class="link" data-approve="note" aria-expanded={noting} title="Deny, and tell it what to do instead" onClick={() => setNoting(!noting)}>Deny with a note…</button>
       </div>
+      {noting ? (
+        <div class="approval-note">
+          <input ref={noteInput} type="text" class="approval-note-input" value={note} placeholder="Tell it what to do instead…" aria-label="Tell it what to do instead"
+            onInput={(event) => setNote((event.target as HTMLInputElement).value)} onKeyDown={onNoteKey} />
+          <button type="button" class="secondary" data-approve="note-send" title="Deny, and send this note into the turn (Enter)" disabled={!note.trim()} onClick={denyWithNote}>Deny <kbd>↵</kbd></button>
+        </div>
+      ) : null}
       {approval.rule ? <div class="approval-rule muted" title="What Always allow remembers">Always: <code>{approval.rule}</code></div> : null}
     </div>
   );
