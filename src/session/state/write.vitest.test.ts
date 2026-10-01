@@ -182,3 +182,44 @@ describe('a chat nothing has happened in', () => {
     expect(await listStoredSessionIds()).toContain('draft');
   });
 });
+
+describe('a draft another process stored meanwhile', () => {
+  it('is merged into, not overwritten by, the copy read while it was a draft', async () => {
+    // The chat opened as a draft (Claude Code, its default) and a slow read
+    // took it (the editor's usage refresh). Meanwhile the user chose OpenCode
+    // and its first turn stored the conversation. The slow read then wrote
+    // back: with no baseline for the draft, every field of it replaced the
+    // stored record -- the chat silently went back to Claude Code, on a
+    // native session id that was OpenCode's.
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const now = new Date().toISOString();
+    const draft = {
+      id: 'd', route: 'local', accountId: null, provider: 'anthropic', nativeHarness: 'claude', model: 'opus', effort: 'medium',
+      permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [],
+    } as HarnessSession;
+    const opening = await readState();
+    opening.sessions.push(draft);
+    await writeState(opening); // blank: held in this process only
+    const slow = await readState();
+    expect(slow.sessions.find((item) => item.id === 'd')?.nativeHarness).toBe('claude');
+
+    // Another process stores the conversation, now on OpenCode with a turn.
+    const { dropEphemeral } = await import('../ephemeral.js');
+    dropEphemeral('d');
+    const other = await readState();
+    other.sessions.push({
+      ...draft, provider: 'opencode', nativeHarness: 'opencode', model: 'opencode/big-pickle', nativeSessionId: 'ses_1',
+      messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'PONG' }],
+    } as HarnessSession);
+    await writeState(other);
+
+    // The slow reader writes what it changed: something else entirely.
+    slow.globalSettings = { ...slow.globalSettings, effort: 'high' } as typeof slow.globalSettings;
+    await writeState(slow);
+
+    const stored = (await readState()).sessions.find((item) => item.id === 'd')!;
+    expect({ harness: stored.nativeHarness, model: stored.model, native: stored.nativeSessionId }).toEqual({ harness: 'opencode', model: 'opencode/big-pickle', native: 'ses_1' });
+    expect(stored.messages).toEqual([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'PONG' }]);
+  });
+});

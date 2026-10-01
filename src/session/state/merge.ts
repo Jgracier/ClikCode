@@ -53,13 +53,17 @@ function mergeAccount(baseline: AiHarnessAccount | undefined, working: AiHarness
 function mergeById<T extends Identified>(
   baseline: readonly T[], working: readonly T[], disk: readonly T[],
   mergeRecordFields: (baseline: T | undefined, working: T, disk: T | undefined) => T = (_before, after) => after,
+  /** Records this writer read as drafts (not on disk then). One that is on
+   * disk now was stored by someone else meanwhile: it merges against the
+   * draft as read, like any record, instead of replacing what was stored. */
+  drafts?: ReadonlyMap<string, T>,
 ): T[] {
   const before = new Map(baseline.map((item) => [item.id, item]));
   const workingIds = new Set(working.map((item) => item.id));
   const merged = new Map(disk.map((item) => [item.id, item]));
   for (const id of before.keys()) if (!workingIds.has(id)) merged.delete(id);
   for (const item of working) {
-    const previous = before.get(item.id);
+    const previous = before.get(item.id) ?? (merged.has(item.id) ? drafts?.get(item.id) : undefined);
     if (previous === undefined) merged.set(item.id, item);
     else if (!sameData(previous, item)) merged.set(item.id, mergeRecordFields(previous, item, merged.get(item.id)));
   }
@@ -128,8 +132,12 @@ export interface StateBaselineData {
 /** The snapshot a state object was last known to agree with on disk. Writes
  * diff against it so a process only ever persists what it actually changed. */
 export const STATE_BASELINE = Symbol('clikcode.stateBaseline');
+/** The drafts a read added (withDrafts), each as it was then. Not part of the
+ * baseline -- a draft was never on disk, so dropping one is not a delete --
+ * but the baseline its record merges against if it is stored meanwhile. */
+export const DRAFT_BASELINE = Symbol('clikcode.draftBaseline');
 
-export type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineData };
+export type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineData; [DRAFT_BASELINE]?: Map<string, BaselineSession> };
 
 /** `state` exactly as it is at this instant. Whatever `previous` already
  * holds unchanged is shared with it rather than copied: history that did not
@@ -206,7 +214,7 @@ export function indexFromWorking(state: HarnessState, disk: StateIndex | undefin
   };
 }
 
-export function mergedIndex(baseline: StateBaselineData, state: HarnessState, disk: StateIndex): StateIndex {
+export function mergedIndex(baseline: StateBaselineData, state: HarnessState, disk: StateIndex, drafts?: ReadonlyMap<string, BaselineSession>): StateIndex {
   const changed = <T>(before: T, after: T, onDisk: T): T => (!sameData(before, after) ? after : onDisk);
   const devicePublicKey = changed(baseline.devicePublicKey, state.devicePublicKey, disk.devicePublicKey);
   const { devicePublicKey: _previousKey, ...rest } = disk;
@@ -221,6 +229,7 @@ export function mergedIndex(baseline: StateBaselineData, state: HarnessState, di
       [...baseline.sessions.values()].map((entry) => entry.meta),
       (state.sessions ?? []).map((session) => splitSession(session).meta),
       disk.sessions ?? [], mergeFields,
+      drafts && new Map([...drafts].map(([id, entry]) => [id, entry.meta])),
     ),
     invocations: mergeById(baseline.invocations, state.invocations ?? [], disk.invocations ?? []),
     globalSettings: mergeRecord(baseline.globalSettings, state.globalSettings, disk.globalSettings),

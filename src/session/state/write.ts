@@ -12,7 +12,7 @@ import { deleteSessionTranscript, readSessionTranscript, transcriptParentOf, wri
 import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from '../claims.js';
 import { HarnessStateVersionError, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
-import { BaselinedState, STATE_BASELINE, StateBaselineData, baselineOf, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
+import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
 import { ensureLayoutLocked } from './migrate.js';
 import { HARNESS_STATE_VERSION, exists, harnessStatePath } from './paths.js';
 import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from './secrets.js';
@@ -90,7 +90,8 @@ export async function writeState(state: HarnessState): Promise<void> {
     }
     const persisted = sessions.filter((session) => !isBlankConversation(session) || diskIds.has(session.id) || sessionForceStored(session.id));
     const persistedState = { ...state, sessions: persisted };
-    const next = baseline && disk ? mergedIndex(baseline, persistedState, disk) : indexFromWorking(persistedState, disk);
+    const drafts = (state as BaselinedState)[DRAFT_BASELINE];
+    const next = baseline && disk ? mergedIndex(baseline, persistedState, disk, drafts) : indexFromWorking(persistedState, disk);
     next.version = HARNESS_STATE_VERSION;
     capInvocations(next);
 
@@ -99,9 +100,13 @@ export async function writeState(state: HarnessState): Promise<void> {
     for (const session of persisted) {
       const transcript = taken.sessions.get(session.id)!.transcript;
       const before = baseline?.sessions.get(session.id);
+      const draft = diskSessionIds.has(session.id) ? drafts?.get(session.id) : undefined;
       let changed: boolean;
       // baselineOf shares an unchanged transcript with the baseline.
       if (before && diskSessionIds.has(session.id)) changed = before.transcript !== transcript;
+      // A draft stored elsewhere since this copy read it: only a transcript
+      // this process changed is its to write; the stored one is newer.
+      else if (draft) changed = !sameData(draft.transcript, transcript);
       // New here, or removed elsewhere and re-added by this change: compare
       // with what is actually stored so nothing is written needlessly or lost.
       else changed = !sameData(await readSessionTranscript(session.id), transcript);
