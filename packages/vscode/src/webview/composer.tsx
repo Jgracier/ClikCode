@@ -8,9 +8,9 @@ import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } 
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import type { Mention } from '../webview-protocol';
-import { selectionBlock } from '../editor-context';
+import { openFileLine, problemsBlock, selectionBlock } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
-import { formatTurnUsage, titleCase } from './format';
+import { estimatedTokens, formatTurnUsage, titleCase } from './format';
 import { EffortMenu, effortLabel, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
 import { Icon, KeyList, type ListRow } from './ui';
 
@@ -76,14 +76,17 @@ export function tokenAtCaret(text: string, caret: number): { kind: '@' | '/'; qu
 }
 
 /** What is sent: the typed text, then each attached selection as a fenced
- * block, then each pasted image's path (ClikCode attaches image paths it
- * finds in a message). */
-export function composeMessage(text: string, attachments: ReadonlyArray<{ kind: 'selection' | 'image'; mention?: Mention; path?: string }>): string {
+ * block, the editor's context (`context`: the open file, or its selection,
+ * and the problems VS Code reports there), then each pasted image's path
+ * (ClikCode attaches image paths it finds in a message). */
+export function composeMessage(text: string, attachments: ReadonlyArray<{ kind: 'selection' | 'image' | 'context'; mention?: Mention; path?: string }>): string {
   const blocks = attachments.flatMap((attachment) => {
     if (attachment.kind === 'image' && attachment.path) return [attachment.path];
     const mention = attachment.mention;
-    if (!mention?.text) return mention ? [`@${mention.label}`] : [];
-    return [selectionBlock({ path: mention.label, languageId: mention.languageId ?? '', startLine: mention.startLine ?? 1, endLine: mention.endLine ?? 1, text: mention.text })];
+    if (!mention) return [];
+    const problems = mention.problems?.length ? [problemsBlock(mention.label, mention.problems)] : [];
+    if (!mention.text) return attachment.kind === 'context' ? [openFileLine(mention.label), ...problems] : [`@${mention.label}`];
+    return [selectionBlock({ path: mention.label, languageId: mention.languageId ?? '', startLine: mention.startLine ?? 1, endLine: mention.endLine ?? 1, text: mention.text }), ...problems];
   });
   return [text.trim(), ...blocks].filter(Boolean).join('\n\n');
 }
@@ -224,7 +227,7 @@ export function Composer(props: {
 
   const send = (): void => {
     const offered = selection?.included && !attachments.some((item) => sameRange(item.mention, selection.mention))
-      ? [{ kind: 'selection' as const, mention: selection.mention }] : [];
+      ? [{ kind: 'context' as const, mention: selection.mention }] : [];
     if (!text.trim() && !attachments.length) return;
     const message = composeMessage(text, [...attachments, ...offered]);
     if (!message || !connected) return;
@@ -304,7 +307,10 @@ export function Composer(props: {
   const account = model.currentAccount;
   const busy = model.busy;
   const installing = busy && /^(installing|waiting for another ClikCode to finish installing)/i.test(busy);
-  const tokens = formatTurnUsage(model.turnUsage) || undefined;
+  // What streamed since the vendor last counted is an estimate (`~`), as in
+  // the terminal, until its own count covers it.
+  const estimate = model.running && model.live ? estimatedTokens(model.live.text.length - (model.usageTextAt ?? 0)) : 0;
+  const tokens = formatTurnUsage(model.turnUsage, estimate) || undefined;
 
   const placeholder = !connected ? 'ClikCode is not connected'
     : model.running ? 'Steer the running turn, or queue a message…'
@@ -352,11 +358,16 @@ export function Composer(props: {
         {selection && !attachments.some((item) => sameRange(item.mention, selection.mention)) ? (
           <div class={`selection-context${selection.included ? '' : ' excluded'}`}>
             <button type="button" class="link small" aria-pressed={selection.included}
-              title={selection.included ? 'Sent with your next message. Click to leave it out.' : 'Click to send it with your next message.'}
+              title={`${selection.mention.text ? 'The selection' : 'The open file'}${selection.mention.problems?.length ? ' and its problems' : ''} ${selection.included ? 'will be sent with your next message. Click to leave it out.' : 'is left out. Click to include it.'}`}
               onClick={() => setSelection({ ...selection, included: !selection.included })}>
               <Icon name={selection.included ? 'eye' : 'eye-closed'} />
-              <span>{lineCount(selection.mention)} line{lineCount(selection.mention) === 1 ? '' : 's'} selected</span>
-              <span class="muted">{selection.mention.label.split(/[\\/]/).pop()}</span>
+              {selection.mention.text
+                ? <span>{lineCount(selection.mention)} line{lineCount(selection.mention) === 1 ? '' : 's'} selected</span>
+                : <span>{selection.mention.label.split(/[\\/]/).pop()}</span>}
+              {selection.mention.text ? <span class="muted">{selection.mention.label.split(/[\\/]/).pop()}</span> : null}
+              {selection.mention.problems?.length ? (
+                <span class="context-problems" title={selection.mention.problems.join('\n')}><Icon name="warning" />{selection.mention.problems.length}</span>
+              ) : null}
             </button>
           </div>
         ) : null}
@@ -407,8 +418,31 @@ export function Composer(props: {
         ) : null}
         <span class="spacer" />
         {busy && !installing ? <span class="muted busy"><Icon name="loading" spin /> {busy}</span> : null}
-        {tokens ? <span class="muted" title="Tokens used by the last turn">{tokens}</span> : null}
+        {tokens ? <span class="muted turn-tokens" title={model.running ? 'Tokens used by this turn so far' : 'Tokens used by the last turn'}>{tokens}</span> : null}
+        {model.context ? <ContextMeter context={model.context} /> : null}
       </div>
     </div>
   );
 }
+
+/** How full the conversation's context window is, as a ring that fills; the
+ * figures on hover, the breakdown (/context) on click. */
+function ContextMeter({ context }: { context: NonNullable<ChatModel['context']> }): JSX.Element {
+  const radius = 6;
+  const circumference = 2 * Math.PI * radius;
+  const percent = context.percent;
+  const figures = context.used ? `${compact(context.used)}${context.window ? ` of ${compact(context.window)}` : ''} tokens` : '';
+  const label = `Context ${percent < 10 ? percent.toFixed(1) : Math.round(percent)}% used${figures ? ` (${figures})` : ''}`;
+  return (
+    <button type="button" class={`context-meter${percent >= 90 ? ' high' : percent >= 70 ? ' warn' : ''}`} title={`${label}. Click for the breakdown.`} aria-label={label}
+      onClick={() => post({ type: 'send', text: '/context', id: uid() })}>
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r={radius} class="context-track" />
+        <circle cx="8" cy="8" r={radius} class="context-fill" stroke-dasharray={`${(percent / 100) * circumference} ${circumference}`} transform="rotate(-90 8 8)" />
+      </svg>
+      <span>{Math.round(percent)}%</span>
+    </button>
+  );
+}
+
+const compact = (count: number): string => (count < 1000 ? String(count) : count < 1_000_000 ? `${Math.round(count / 1000)}k` : `${(count / 1_000_000).toFixed(1)}M`);

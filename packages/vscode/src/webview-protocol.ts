@@ -13,6 +13,9 @@ export interface Mention {
   /** A selection's text, sent with the message as a fenced block. */
   text?: string;
   languageId?: string;
+  /** What VS Code's Problems panel reports in it (in the selection, for a
+   * selection): `line 12 error: Cannot find name 'x'. (ts 2304)`. */
+  problems?: string[];
 }
 
 /** Screens the webview shows besides the chat. */

@@ -120,6 +120,12 @@ export interface ChatModel {
   traces: TurnTrace[];
   plan: Array<{ content: string; status?: string }>;
   turnUsage?: Extract<WorkerEvent, { type: 'usage' }>['usage'];
+  /** How much of the live answer had streamed when usage last arrived: what
+   * streamed since is shown as an estimate, as the terminal does. */
+  usageTextAt?: number;
+  /** The conversation's context window as last reported: kept between turns
+   * (a turn's usage starts empty) and dropped with the conversation. */
+  context?: { used?: number; window?: number; percent: number };
   approvals: Approval[];
   busy?: string;
   /** A message typed during the turn and what became of it. */
@@ -338,7 +344,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return {
         ...model, running: true, turnUserIndex: model.messages.length,
         live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
-        turnUsage: undefined,
+        turnUsage: undefined, usageTextAt: undefined,
       };
     case 'waiting-stop':
       return { ...endTurn(model), pendingPrompt: undefined, approvals: [], submissions: [] };
@@ -354,8 +360,14 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message), lastEventAt: Date.now() } } : model;
     case 'plan':
       return { ...model, plan: event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) };
-    case 'usage':
-      return { ...model, turnUsage: { ...event.usage } };
+    case 'usage': {
+      const usage = event.usage;
+      const percent = usage.contextPercent ?? (usage.contextUsed && usage.contextWindow ? (usage.contextUsed / usage.contextWindow) * 100 : undefined);
+      return {
+        ...model, turnUsage: { ...usage }, usageTextAt: model.live?.text.length ?? 0,
+        ...(percent !== undefined ? { context: { percent: Math.min(100, Math.max(0, percent)), ...(usage.contextUsed ? { used: usage.contextUsed } : {}), ...(usage.contextWindow ? { window: usage.contextWindow } : {}) } } : {}),
+      };
+    }
     case 'approval-request':
       if (model.approvals.some((item) => item.id === event.id)) return model;
       return {

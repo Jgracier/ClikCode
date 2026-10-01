@@ -57,16 +57,35 @@ export async function searchWorkspaceFiles(typed: string, limit = 30): Promise<M
 }
 
 /** The active editor's selection as a mention, or the whole file when
- * nothing is selected. */
-export function mentionFromEditor(editor: vscode.TextEditor): Mention {
+ * nothing is selected; with the errors and warnings VS Code reports there
+ * when `withProblems`. */
+export function mentionFromEditor(editor: vscode.TextEditor, withProblems = false): Mention {
   const { document, selection } = editor;
   const label = vscode.workspace.asRelativePath(document.uri, false);
-  if (selection.isEmpty) return { path: document.uri.fsPath, label };
+  const problems = withProblems ? problemsIn(document.uri, selection.isEmpty ? undefined : selection) : [];
+  const extra = problems.length ? { problems } : {};
+  if (selection.isEmpty) return { path: document.uri.fsPath, label, ...extra };
   const endLine = selection.end.character === 0 && selection.end.line > selection.start.line ? selection.end.line : selection.end.line + 1;
   return {
     path: document.uri.fsPath, label, startLine: selection.start.line + 1, endLine,
-    text: document.getText(selection), languageId: document.languageId,
+    text: document.getText(selection), languageId: document.languageId, ...extra,
   };
+}
+
+const PROBLEM_LIMIT = 20;
+
+/** Errors and warnings in a file (or a range of it), worst and first first. */
+export function problemsIn(uri: vscode.Uri, range?: vscode.Range): string[] {
+  return vscode.languages.getDiagnostics(uri)
+    .filter((item) => item.severity <= vscode.DiagnosticSeverity.Warning && (!range || item.range.intersection(range)))
+    .sort((left, right) => left.severity - right.severity || left.range.start.line - right.range.start.line)
+    .slice(0, PROBLEM_LIMIT)
+    .map((item) => {
+      const code = typeof item.code === 'object' ? item.code.value : item.code;
+      const source = [item.source, code].filter((part) => part !== undefined && part !== '').join(' ');
+      const message = item.message.replace(/\s+/g, ' ').trim();
+      return `line ${item.range.start.line + 1} ${item.severity === vscode.DiagnosticSeverity.Error ? 'error' : 'warning'}: ${message}${source ? ` (${source})` : ''}`;
+    });
 }
 
 export function mentionFromUri(uri: vscode.Uri): Mention {
