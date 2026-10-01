@@ -8,7 +8,7 @@ import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } 
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import type { Mention } from '../webview-protocol';
-import { openFileLine, problemsBlock, selectionBlock } from '../editor-context';
+import { openFileLine, problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { estimatedTokens, formatTurnUsage, titleCase } from './format';
 import { EffortMenu, effortLabel, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
@@ -58,8 +58,9 @@ export function paletteEntry(item: IdeSlashCommand): PaletteEntry {
 export function promptHistory(messages: ReadonlyArray<{ role: string; content: string }>): string[] {
   const prompts: string[] = [];
   for (const message of messages) {
-    if (message.role !== 'user' || !message.content.trim()) continue;
-    if (prompts[prompts.length - 1] !== message.content) prompts.push(message.content);
+    const typed = message.role === 'user' ? splitEditorContext(message.content).text : '';
+    if (!typed.trim()) continue;
+    if (prompts[prompts.length - 1] !== typed) prompts.push(typed);
   }
   return prompts.slice(-200);
 }

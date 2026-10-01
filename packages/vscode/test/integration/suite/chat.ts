@@ -53,7 +53,9 @@ export function chatSuite(): void {
       watch.dispose();
       assert.ok(sawRunning, 'the chat showed the turn running');
       assert.deepStrictEqual(done.messages.map((m) => m.role), ['user', 'assistant']);
-      assert.strictEqual(done.messages[0]!.content, 'Reply with exactly the word PONG and nothing else.');
+      // The open file goes with the message as context, shown as a chip, not as text the user typed.
+      assert.match(done.messages[0]!.content, /^Reply with exactly the word PONG and nothing else\.(\n\nOpen in the editor: `[^`]+`)?$/);
+      await waitFor(api, '.message.user .bubble', 'the prompt on the page', 10_000, (found) => found.texts.some((text) => text.startsWith('Reply with exactly the word PONG and nothing else.') && !text.includes('Open in the editor')));
       await waitFor(api, '.message.assistant', 'the answer on the page', 10_000, (found) => found.texts.some((text) => /PONG/.test(text)));
       await screenshot('turn');
     });
@@ -84,8 +86,12 @@ export function chatSuite(): void {
       await click(api, '#send-button');
       await until(api, (state) => state.running, 'the turn to start', 120_000);
       await key(api, '#composer-input', 'Escape');
+      const before = { harness: api.state.harness, model: api.state.model };
       const stopped = await until(api, (state) => !state.running, 'the turn to stop', 120_000);
       assert.ok(stopped.connection === 'ready');
+      // Stopping a turn is not a change of provider: the chat stays on it.
+      await sleep(1_500);
+      assert.deepStrictEqual({ harness: api.state.harness, model: api.state.model }, before, 'the chat kept its provider and model');
       await waitFor(api, '#composer-input', 'the composer', 10_000, (found) => !found.disabled);
     });
 
