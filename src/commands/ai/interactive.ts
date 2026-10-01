@@ -56,7 +56,7 @@ import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/chec
 import { newConversation, newProviderConversation, releaseQueuedTurn } from './conversations.js';
 import { aiSessionLeave, launchSession } from './sessions.js';
 import { aiSessionCommand, slashRouteTurn } from '../../tui/slash/handlers.js';
-import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../../tui/slash/context.js';
+import { sessionHarness, sessionOrProviderHarness, slashExtrasFor, slashRouteContextFor } from '../../tui/slash/context.js';
 import { capabilitiesText } from '../../tui/slash/capabilities-text.js';
 import { compactConversation } from '../../tui/slash/compact.js';
 import { exportTranscript } from '../../tui/slash/export-transcript.js';
@@ -277,8 +277,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     stateChanged = true;
   }
   if (!session.model) {
-    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
-      : session.provider ? localHarnessForProvider(session.provider) : undefined;
+    const harness = sessionOrProviderHarness(session);
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
     if (harness) {
       const resolved = await resolveNativeModel(harness, account);
@@ -300,8 +299,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     const key = `${target.nativeHarness ?? ''}\0${target.provider ?? ''}\0${target.accountId ?? ''}`;
     if (key === warmedCatalogKey) return;
     warmedCatalogKey = key;
-    const harness = target.nativeHarness ? localHarnessForCommand(target.nativeHarness)
-      : target.provider ? localHarnessForProvider(target.provider) : undefined;
+    const harness = sessionOrProviderHarness(target);
     warmNativeModelCatalog(harness, target.accountId ? targetState.accounts.find((item) => item.id === target.accountId) : undefined);
   };
   warmCatalogFor(session, state);

@@ -9,7 +9,8 @@ import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
-import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { sessionOrProviderHarness } from '../slash/context.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { accountUsageLabel, cachedAccountUsageLabel } from '../../harness/accounts/account-usage.js';
@@ -38,8 +39,7 @@ export async function interactiveAccountPicker(
     const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
     if (!session) throw new Error(`AI session "${id}" was not found`);
-    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
-      : session.provider ? localHarnessForProvider(session.provider) : undefined;
+    const harness = sessionOrProviderHarness(session);
     if (!harness || isClikCodeAgent(session)) {
       rl.panel?.('Accounts', 'Choose a local provider before switching accounts.');
       return undefined;

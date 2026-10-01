@@ -4,7 +4,8 @@ import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
 import { gatewayModelDetail, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
-import { localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
+import { modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
+import { sessionOrProviderHarness } from '../slash/context.js';
 import { readState } from '../../session/state/read.js';
 import { harnessModelLabel, modelSettingsDetail, modelIdFromLabel, nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
 import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
@@ -99,8 +100,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   if (isGatewayService(session)) return gatewayModelPicker(rl, id, session.model ?? null);
   if (session.route === 'clikcode-local') return localModelPicker(rl, id, session.model);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
-    : session.provider ? localHarnessForProvider(session.provider) : undefined;
+  const harness = sessionOrProviderHarness(session);
   // Awaited, not fired and forgotten: opening /model on a cold cache used to
   // show an empty list, and the models only appeared if the user backed out
   // and opened it a second time. The wait is bounded and a warm cache is
