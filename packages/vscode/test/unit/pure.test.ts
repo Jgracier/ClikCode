@@ -134,3 +134,12 @@ describe('editor context', () => {
       .toBe('Why?\n\n`src/a.ts` lines 3-4:\n````typescript\na\n```\nb\n````');
   });
 });
+
+describe('usage in the chat bar', () => {
+  it('reads as the terminal words it: the figure, the reset once a window is spent', async () => {
+    const { composerUsageLabel } = await import('../../../../src/tui/render/usage-words');
+    expect(composerUsageLabel('5h 96% left · Weekly 18% left')).toBe('5h 96% left · Weekly 18% left');
+    expect(composerUsageLabel('5h 0% left · Weekly 18% left', 'Resets 1:50PM')).toBe('Resets 1:50PM');
+    expect(composerUsageLabel('$0 credits exhausted')).toBe('Out Of Credits');
+  });
+});

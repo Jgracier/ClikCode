@@ -234,7 +234,12 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
   position: relative; border: 1px solid var(--vscode-input-border, var(--border)); border-radius: 10px; background: var(--input);
   display: flex; flex-direction: column; transition: border-color 0.12s;
 }
-.composer-box:focus-within { border-color: var(--focus); }
+/* Focus is the whole box's: its border and a ring that follow its rounded
+   shape. The text area draws none of its own -- the global :focus-visible
+   rule outranked its outline:none and drew a square box around the text
+   alone, inside the rounded one. */
+.composer-box:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.composer-box textarea:focus, .composer-box textarea:focus-visible { outline: none; }
 .composer-box[data-running="true"] { border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 55%, transparent); }
 textarea {
   width: 100%; resize: none; font: inherit; line-height: 1.5; color: var(--vscode-input-foreground); background: transparent;
@@ -260,6 +265,15 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
   .composer-footer #provider-button, .composer-footer #model-button { padding: 0 6px; min-width: 56px; }
 }
 .slash-glyph { font-family: var(--mono); font-weight: 600; font-size: 13px; }
+/* Usage as the terminal words it ("5h 96% left · Weekly 18% left"): plain
+   while there is room, red once a window is spent. */
+.composer-usage {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 24px; padding: 0 6px;
+  border: none; border-radius: var(--radius-small); background: transparent; color: var(--muted); font-size: 0.88em;
+}
+.composer-usage:hover { background: var(--vscode-toolbar-hoverBackground, var(--hover)); color: var(--vscode-foreground); }
+.composer-usage.spent { color: var(--vscode-errorForeground, var(--err)); }
+@container (max-width: 380px) { .composer-usage { display: none; } }
 .chip-button {
   flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; height: 24px; padding: 0 8px; border-radius: var(--radius-small);
   border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 0.93em;

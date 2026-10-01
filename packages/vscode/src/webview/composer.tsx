@@ -1,6 +1,7 @@
 /** The message box: text with / commands and @ files, attached selections
  * and images, and the footer that chooses provider·model, effort and
  * permissions for this chat. */
+import { usageLabelIsSpent } from '../../../../src/tui/render/usage-words';
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } from '../model';
@@ -10,7 +11,6 @@ import { selectionBlock } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { formatTurnUsage, titleCase } from './format';
 import { EffortMenu, effortLabel, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
-import { UsageBars } from './screens';
 import { Icon, KeyList, type ListRow } from './ui';
 
 type Menu = 'provider' | 'model' | 'effort' | 'mode' | undefined;
@@ -307,6 +307,9 @@ export function Composer(props: {
           {structured && effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current && effort.current !== 'default' ? effortLabel(effort.current) : 'Effort'}</span></>, `Reasoning effort: ${effortLabel(effort.current)}`, 'effort-button') : null}
           {structured && model.chatSettings?.permissions ? footerButton('mode', <><Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} /><span class="chip-text">{model.chatSettings.plan ? 'Plan' : permissionLabel(model.permissions)}</span></>, `Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`, 'mode-button') : null}
           <span class="spacer" />
+          {model.accountUsage ? (
+            <button type="button" class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="Accounts and usage" onClick={() => props.onOpenScreen('accounts')}>{model.accountUsage}</button>
+          ) : null}
           <button type="button" class="icon-button" aria-label="Mention a file" title="Mention a file (@)" disabled={!connected}
             onClick={() => { const spacer = text && !/\s$/.test(text) ? ' ' : ''; update(`${text}${spacer}@`); }}><Icon name="mention" /></button>
           <button type="button" class="icon-button" aria-label="Commands" title="Commands (/)" disabled={!connected} onClick={() => update('/')}><span class="slash-glyph" aria-hidden="true">/</span></button>
@@ -320,12 +323,11 @@ export function Composer(props: {
         </div>
       </div>
       <div class="composer-status">
-        {account && (account.problem || account.usage?.windows?.length || account.usage?.label || account.label.toLowerCase() !== providerName.toLowerCase()) ? (
+        {account && (account.problem || account.label.toLowerCase() !== providerName.toLowerCase()) ? (
           <button type="button" class="status-account" title={`${account.label}: accounts and usage`} onClick={() => props.onOpenScreen('accounts')}>
             <Icon name={account.problem ? 'warning' : 'account'} />{account.label.toLowerCase() !== providerName.toLowerCase() ? <span class="status-label">{account.label}</span> : null}
-            <UsageBars account={account} compact />
           </button>
-        ) : model.accountUsage ? <span class="muted">{model.accountUsage}</span> : null}
+        ) : null}
         <span class="spacer" />
         {busy && !installing ? <span class="muted busy"><Icon name="loading" spin /> {busy}</span> : null}
         {tokens ? <span class="muted" title="Tokens used by the last turn">{tokens}</span> : null}
