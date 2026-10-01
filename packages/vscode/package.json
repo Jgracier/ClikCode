@@ -336,7 +336,7 @@
         },
         {
           "command": "clikcode.openInNewTab",
-          "when": "activeWebviewPanelId == 'clikcode.chatEditor'",
+          "when": "activeWebviewPanelId =~ /(^|-)clikcode\\.chatEditor$/",
           "group": "navigation@0"
         },
         {

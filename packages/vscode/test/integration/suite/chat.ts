@@ -143,9 +143,21 @@ export function chatSuite(): void {
       assert.strictEqual(tab.connection, 'ready');
       assert.ok(tab.sessionId && tab.sessionId !== sidebarSession, 'the tab has its own conversation');
       assert.strictEqual(api.state.sessionId, sidebarSession, 'the side bar kept its own');
-      const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith('clikcode.chatEditor'));
+      // As many as wanted: from the chat's own header button, and again from
+      // a tab, each a tab of its own in the same group.
+      await click(api, '#new-tab-button');
+      await vscode.commands.executeCommand('clikcode.openInNewTab');
+      assert.strictEqual(api.tabs, 3, 'three chat tabs');
+      const groups = new Set(vscode.window.tabGroups.all.filter((group) => group.tabs.some((item) => item.input instanceof vscode.TabInputWebview && item.input.viewType.endsWith('clikcode.chatEditor'))).map((group) => group.viewColumn));
+      assert.strictEqual(groups.size, 1, 'the chat tabs share one editor group');
+      const chatTabs = (): vscode.Tab[] => vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith('clikcode.chatEditor'));
+      // The editor's tab list catches up with new panels a moment later.
+      for (const shownBy = Date.now() + 10_000; chatTabs().length < 3 && Date.now() < shownBy;) await sleep(200);
+      const tabs = chatTabs();
+      assert.strictEqual(tabs.length, 3, 'three chat tabs in the editor');
+      await screenshot('tabs');
       await vscode.window.tabGroups.close(tabs);
-      await sleep(500);
+      for (const closeBy = Date.now() + 10_000; api.tabs && Date.now() < closeBy;) await sleep(200);
       assert.strictEqual(api.tabs, 0);
       await vscode.commands.executeCommand('clikcode.open');
       await sleep(500);
