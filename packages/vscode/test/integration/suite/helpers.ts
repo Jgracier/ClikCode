@@ -28,7 +28,7 @@ export function until(
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-export interface Found { count: number; text: string; texts: string[]; disabled: boolean }
+export interface Found { count: number; text: string; texts: string[]; disabled: boolean; value?: string }
 
 export async function query(api: ClikCodeApi, selector: string): Promise<Found> {
   return await api.probe('query', selector) as Found;
@@ -54,6 +54,11 @@ export async function click(api: ClikCodeApi, selector: string): Promise<void> {
 export async function type(api: ClikCodeApi, selector: string, text: string): Promise<void> {
   const result = await api.probe('type', selector, text) as { ok: boolean; error?: string };
   if (!result.ok) throw new Error(result.error);
+}
+
+/** A paste of `text` into the element, as the clipboard would deliver it. */
+export async function paste(api: ClikCodeApi, selector: string, text: string): Promise<void> {
+  await api.probe('paste', selector, text);
 }
 
 export async function key(api: ClikCodeApi, selector: string, name: string): Promise<void> {

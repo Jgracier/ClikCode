@@ -27,8 +27,10 @@ models of the provider you are on, so it changes with the provider. Reasoning ef
 ![The provider menu](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/picker.png)
 
 **Work the way you do in an editor.** Type `@` to mention a file, `/` for commands, paste images.
-Press `Alt+K` in an editor (or right-click → *Add to ClikCode Chat*) to attach the selection with its
-file and lines. Tool activity streams as compact rows that link to the files they touch; type while a
+Copy lines from a file and paste them into the chat: they arrive as a reference to the file and lines,
+not as a wall of text. Copied files paste as references too (images attach as images). `Alt+K` in an
+editor (or right-click → *Add to ClikCode Chat*) adds the selection directly. Nothing is attached on
+its own: what you select stays yours until you paste or add it. Tool activity streams as compact rows that link to the files they touch; type while a
 turn runs to steer it, `Esc` to stop.
 
 **Review every change.** When an agent asks to edit a file, the approval appears above the message box

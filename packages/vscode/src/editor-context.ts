@@ -23,11 +23,6 @@ export function selectionBlock(context: SelectionContext): string {
   return `\`${context.path}\` ${lines}:\n${fence}${language}\n${context.text.replace(/\s+$/, '')}\n${fence}`;
 }
 
-/** The file in front of the user, when nothing in it is selected. */
-export function openFileLine(path: string): string {
-  return `Open in the editor: \`${path}\``;
-}
-
 /** VS Code's own errors and warnings, under the selection or file they are in. */
 export function problemsBlock(path: string, problems: readonly string[]): string {
   return `VS Code reports ${problems.length === 1 ? 'this problem' : 'these problems'} in \`${path}\`:\n${problems.map((problem) => `- ${problem}`).join('\n')}`;
@@ -38,7 +33,7 @@ const SELECTION = /^`([^`\n]+)` lines? (\d+(?:-\d+)?):\n(`{3,})[\w+-]*\n[\s\S]*\
 const PROBLEMS = /^VS Code reports (?:this problem|these problems) in `([^`\n]+)`:\n((?:- [^\n]*(?:\n|$))+)$/;
 
 /** A sent message as typed, and the editor context the composer added after
- * it (openFileLine, problemsBlock): the transcript keeps the whole message,
+ * it (problemsBlock; older messages also carried the open file): the transcript keeps the whole message,
  * and the bubble shows the context as a chip rather than as text the user
  * did not write. */
 export function splitEditorContext(content: string): { text: string; file?: string; problems: number; selections: string[] } {

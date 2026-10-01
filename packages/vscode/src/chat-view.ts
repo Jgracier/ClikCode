@@ -66,7 +66,7 @@ export class WebviewSurface implements vscode.Disposable {
   }
 
   /** Integration tests: read or drive the page. */
-  probe(action: 'query' | 'click' | 'type' | 'key', selector: string, text?: string): Promise<unknown> {
+  probe(action: 'query' | 'click' | 'type' | 'key' | 'paste', selector: string, text?: string): Promise<unknown> {
     const id = randomBytes(6).toString('hex');
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.probes.delete(id); reject(new Error(`probe ${action} ${selector} timed out`)); }, 30_000);

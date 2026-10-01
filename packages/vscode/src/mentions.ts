@@ -91,3 +91,51 @@ export function problemsIn(uri: vscode.Uri, range?: vscode.Range): string[] {
 export function mentionFromUri(uri: vscode.Uri): Mention {
   return { path: uri.fsPath, label: vscode.workspace.asRelativePath(uri, false) };
 }
+
+/** What was selected in files lately, newest last: a paste is matched
+ * against these to become a reference instead of raw lines. Nothing here is
+ * shown or sent until the user pastes it. */
+const recentSelections: Mention[] = [];
+const RECENT_SELECTIONS = 20;
+
+const normalized = (text: string): string => text.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+
+/** Remembers each settled selection in a file (or an unsaved buffer). */
+export function rememberSelections(): vscode.Disposable {
+  let timer: NodeJS.Timeout | undefined;
+  const subscription = vscode.window.onDidChangeTextEditorSelection(({ textEditor }) => {
+    const scheme = textEditor.document.uri.scheme;
+    if ((scheme !== 'file' && scheme !== 'untitled') || textEditor.selection.isEmpty) return;
+    // A drag is a stream of events; the selection that stays is the one.
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      const mention = mentionFromEditor(textEditor, true);
+      const at = recentSelections.findIndex((item) => item.path === mention.path && item.startLine === mention.startLine && item.endLine === mention.endLine);
+      if (at >= 0) recentSelections.splice(at, 1);
+      recentSelections.push(mention);
+      if (recentSelections.length > RECENT_SELECTIONS) recentSelections.shift();
+    }, 150);
+  });
+  return new vscode.Disposable(() => { if (timer) clearTimeout(timer); subscription.dispose(); });
+}
+
+const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+
+/** What pasted text refers to, when it refers to something: lines copied
+ * from a file (two or more, as they were selected there) become a reference
+ * to those lines, and copied files (the Explorer puts their URIs on the
+ * clipboard) become references to the files -- an image as an image. Any
+ * other paste is just text. */
+export function pastedReference(text: string): { lines?: Mention; files?: Mention[] } {
+  const pasted = normalized(text);
+  const uris = pasted.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (uris.length && uris.every((line) => /^file:\/\//i.test(line))) {
+    return { files: uris.map((line) => ({ ...mentionFromUri(vscode.Uri.parse(line, true)), ...(IMAGE.test(line) ? { image: true } : {}) })) };
+  }
+  if (!pasted.includes('\n')) return {};
+  for (let index = recentSelections.length - 1; index >= 0; index -= 1) {
+    const selection = recentSelections[index]!;
+    if (selection.text !== undefined && normalized(selection.text) === pasted) return { lines: selection };
+  }
+  return {};
+}
