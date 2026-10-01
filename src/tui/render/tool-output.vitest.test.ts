@@ -59,6 +59,6 @@ describe('a turn saved or sent by an older build', () => {
   it('opens, its edit drawn from the old shape', () => {
     const legacy = { kind: 'tool-done', label: 'Edit a.ts', category: 'edit', id: 'x', diff: { removed: ['old line'], added: ['new line'] } } as unknown as Parameters<typeof upsertActivityEvent>[3];
     const entries = upsertActivityEvent([], 0, 0, legacy, 1);
-    expect(plain(entries[0]!.lines)).toEqual(['◆ Edit a.ts +1 -1', '- old line', '+ new line']);
+    expect(plain(entries[0]!.lines)).toEqual(['◆ Edited a.ts +1 -1', '- old line', '+ new line']);
   });
 });

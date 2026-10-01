@@ -5,7 +5,8 @@ import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { FileDiff } from '../../agent/line-diff.js';
-import { activityOutcome, DIFF_PREVIEW_LINES, diffPreview, diffTotals, outputPreview, previewLinesFor } from './activity-view.js';
+import { type CommandPreview, activityOutcome, commandOutputPreview, DIFF_PREVIEW_LINES, diffPreview, diffTotals, outputPreview, previewLinesFor } from './activity-view.js';
+import { activityResult, tensedLabel } from './turn-flow.js';
 import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
 import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
@@ -27,9 +28,13 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   const mark = style ? `${style.paint(style.glyph)} ` : '';
   const plainMark = style ? `${style.glyph} ` : '';
   const outcome = outcomeSuffix(event);
+  // In the tense of its state -- `Reading a.ts` while it runs, `Read a.ts`
+  // once done -- and then what it found (`42 lines`), before the outcome.
+  // A failure keeps the call's own name: "Edited a.ts failed" says two things.
+  const result = activityResult(event);
   const summary = `  ${event.kind === 'tool-error'
     ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
-    : `${mark}${chalk.dim(event.label)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
+    : `${mark}${chalk.dim(`${tensedLabel(event.label, event.kind === 'tool-start')}${result ? ` · ${result}` : ''}`)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
   if (!event.diff?.length) {
     // Budgeted by kind: a read's row already names the file, so repeating its
     // contents underneath says nothing the label did not.
@@ -38,6 +43,9 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
     // Counting what is not shown ("… 3 more lines" under a filename) is
     // noise about noise -- strictly worse than the single clean row.
     if (budget === 0) return [summary];
+    // A command whose whole output was kept: its first and last lines.
+    const command = commandOutputPreview(event);
+    if (command) return [summary, ...commandPreviewRows(command)];
     return [summary, ...outputPreviewRows(event, budget)];
   }
   return [summaryWithCounts(summary, event.diff), ...fileDiffRows(event.diff, DIFF_PREVIEW_LINES)];
@@ -89,6 +97,13 @@ export function outputPreviewRows(event: HarnessActivityEvent, budget: number): 
   const note = hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} ${fromEnd ? 'earlier' : 'more'} line${hidden === 1 ? '' : 's'}`)}`] : [];
   const rows = lines.map((line) => `    ${chalk.dim(line)}`);
   return fromEnd ? [...note, ...rows] : [...rows, ...note];
+}
+
+/** commandOutputPreview's choice, painted: head, `… N lines hidden`, tail. */
+export function commandPreviewRows(preview: CommandPreview): string[] {
+  const row = (line: string): string => `    ${chalk.dim(line)}`;
+  const note = preview.hidden > 0 ? [row(`\u2026 ${preview.hidden} line${preview.hidden === 1 ? '' : 's'} hidden`)] : [];
+  return [...preview.head.map(row), ...note, ...preview.tail.map(row)];
 }
 
 /** `(exit 2, 3.4s)` after a finished call (activityOutcome). */

@@ -245,7 +245,8 @@ interface Stream {
   sawActivity: boolean;
   lastError?: JsonObject;
   items: Map<string, JsonObject>;
-  output: Map<string, { text: string; emittedAt: number }>;
+  /** `cut`: the buffer has dropped the output's start, so it has no head. */
+  output: Map<string, { text: string; emittedAt: number; cut?: boolean }>;
   /** Reasoning streamed so far, per reasoning item (and per raw/summary). */
   thoughts: Map<string, string>;
   /** The thread's usage when this turn began (codexTurnUsage). */
@@ -661,16 +662,21 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   private outputDelta(target: Stream, itemId: string, delta: string): void {
     if (!itemId) return;
     const entry = target.output.get(itemId) ?? { text: '', emittedAt: 0 };
-    entry.text = `${entry.text}${delta}`.slice(-OUTPUT_BUFFER_LIMIT);
+    const text = `${entry.text}${delta}`;
+    if (text.length > OUTPUT_BUFFER_LIMIT) entry.cut = true;
+    entry.text = text.slice(-OUTPUT_BUFFER_LIMIT);
     target.output.set(itemId, entry);
     const now = Date.now();
     if (now - entry.emittedAt < OUTPUT_EMIT_INTERVAL_MS) return;
     entry.emittedAt = now;
-    this.progress(target, itemId, activityOutput(entry.text, { tail: true }));
+    // Once the buffer has dropped the start, its first lines are not the
+    // command's, and are not offered as its head.
+    const { outputHead, ...output } = activityOutput(entry.text, { tail: true });
+    this.progress(target, itemId, entry.cut || !outputHead ? output : { ...output, outputHead });
   }
 
   /** What a running item has to show so far, on its own row. */
-  private progress(target: Stream, itemId: string, output: Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail'>): void {
+  private progress(target: Stream, itemId: string, output: Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail' | 'outputHead'>): void {
     if (!itemId) return;
     const item = target.items.get(itemId);
     const activity = item ? codexActivityForItem(item, false) : undefined;

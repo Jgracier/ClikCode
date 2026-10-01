@@ -73,6 +73,7 @@ export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivity
       output: prior.output,
       ...(prior.outputOmitted ? { outputOmitted: prior.outputOmitted } : {}),
       ...(prior.outputTail ? { outputTail: true } : {}),
+      ...(prior.outputHead ? { outputHead: prior.outputHead } : {}),
     }),
   };
 }
@@ -90,6 +91,30 @@ export function outputPreview(event: Pick<HarnessActivityEvent, 'output' | 'outp
   if (!output.length || budget <= 0) return { lines: [], hidden: 0, fromEnd };
   const lines = fromEnd ? output.slice(-budget) : output.slice(0, budget);
   return { lines, hidden: output.length - lines.length + (event.outputOmitted ?? 0), fromEnd };
+}
+
+/** A command's head and tail, as Grok and Cursor show a long one. */
+export const COMMAND_HEAD_LINES = 2;
+export const COMMAND_TAIL_LINES = 3;
+
+export type CommandPreview = { head: string[]; hidden: number; tail: string[] };
+
+/** A command's output as its first lines -- what it set out to do -- and its
+ * last -- how it ended -- with the middle counted. From the whole output, or
+ * from a tail the producer cut that kept its head (`outputHead`); undefined
+ * for anything else, including a cut tail without one, whose first kept line
+ * is somewhere in the middle (outputPreview shows that one's end). Short
+ * output is shown whole. */
+export function commandOutputPreview(event: Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputHead' | 'category'>): CommandPreview | undefined {
+  const output = event.output ?? [];
+  if (event.category !== 'run' || !output.length) return undefined;
+  if (event.outputOmitted) {
+    if (!event.outputHead?.length || output.length < COMMAND_TAIL_LINES) return undefined;
+    const head = event.outputHead.slice(0, COMMAND_HEAD_LINES);
+    return { head, hidden: output.length + event.outputOmitted - head.length - COMMAND_TAIL_LINES, tail: output.slice(-COMMAND_TAIL_LINES) };
+  }
+  if (output.length <= COMMAND_HEAD_LINES + COMMAND_TAIL_LINES) return { head: [...output], hidden: 0, tail: [] };
+  return { head: output.slice(0, COMMAND_HEAD_LINES), hidden: output.length - COMMAND_HEAD_LINES - COMMAND_TAIL_LINES, tail: output.slice(-COMMAND_TAIL_LINES) };
 }
 
 export type DiffPreview = {

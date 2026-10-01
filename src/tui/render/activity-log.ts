@@ -43,6 +43,7 @@ export function upsertActivityEvent(
     ...rest,
     label: visibleSlice(sanitizeTerminalText(event.label, { singleLine: true }).replace(/\s+/g, ' ').trim() || 'tool', 120),
     ...(event.output ? { output: cleanLines(event.output) } : {}),
+    ...(event.outputHead ? { outputHead: cleanLines(event.outputHead) } : {}),
     ...(files?.length ? { diff: files.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: cleanLines([line.text])[0]! })) })) } : {}),
   };
   const matchIndex = (() => {
