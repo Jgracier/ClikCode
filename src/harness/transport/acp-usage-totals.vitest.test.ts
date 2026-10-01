@@ -9,16 +9,17 @@ type Step = { update?: Record<string, unknown>; answer?: Record<string, unknown>
 
 /** `prompts[n]` is what the agent does for the nth session/prompt; `onLoad`
  * is what it replays when asked to session/load. */
-function agent(prompts: Step[][], onLoad: Record<string, unknown>[] = []): string {
+function agent(prompts: Step[][], onLoad: Record<string, unknown>[] = [], started: Record<string, unknown> = {}): string {
   return `
     const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
     const prompts = ${JSON.stringify(prompts)};
     const onLoad = ${JSON.stringify(onLoad)};
+    const started = ${JSON.stringify(started)};
     let n = 0; let buf = '';
     const update = (u) => send({ method: 'session/update', params: { sessionId: 's1', update: u } });
     process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
       if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
-      else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1' } });
+      else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1', ...started } });
       else if (m.method === 'session/load') { onLoad.forEach(update); send({ id: m.id, result: {} }); }
       else if (m.method === 'session/prompt') { for (const s of prompts[n++] ?? []) { if (s.update) update(s.update); if (s.answer) send({ id: m.id, result: s.answer }); } }
     } });
@@ -27,14 +28,14 @@ function agent(prompts: Step[][], onLoad: Record<string, unknown>[] = []): strin
 
 const chunk = (text: string, meta?: Record<string, unknown>) => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, ...(meta ? { _meta: meta } : {}) });
 
-async function turns(prompts: Step[][], options: { onLoad?: Record<string, unknown>[]; resume?: boolean; extra?: Record<string, unknown>; count?: number } = {}): Promise<TurnUsage[]> {
+async function turns(prompts: Step[][], options: { onLoad?: Record<string, unknown>[]; started?: Record<string, unknown>; resume?: boolean; extra?: Record<string, unknown>; count?: number } = {}): Promise<TurnUsage[]> {
   const session = createAcpSession();
   const last: TurnUsage[] = [];
   try {
     for (let index = 0; index < (options.count ?? prompts.length); index += 1) {
       let merged: TurnUsage = {};
       await session.runTurn({
-        binary: process.execPath, command: 'fake', argv: ['-e', agent(prompts, options.onLoad)], cwd: process.cwd(), prompt: 'go',
+        binary: process.execPath, command: 'fake', argv: ['-e', agent(prompts, options.onLoad, options.started)], cwd: process.cwd(), prompt: 'go',
         environment: {}, permissionMode: 'ask', ...(options.resume ? { nativeSessionId: 's1' } : {}), ...options.extra,
         // Merged as the turn loop does: field by field, the latest wins.
         onUsage: (usage) => { merged = { ...merged, ...usage }; },
@@ -54,6 +55,20 @@ describe('ACP usage reported as session totals', () => {
     });
     expect(first).toMatchObject({ input: 1000, output: 50, totalTokens: 1050 });
     expect(second).toMatchObject({ input: 1600, output: 40, totalTokens: 1640 });
+  });
+
+  // Grok Build 1.0.46, captured live: per-turn usage under `_meta.usage`
+  // (numTurns: 1 on every turn), cost in ticks, no usage_update -- the
+  // context occupied is `_meta.totalTokens` and the window is the model's.
+  it('Grok: per-turn usage, cost from ticks, context from the result and model', async () => {
+    const answer = (input: number, output: number, ticks: number, context: number) => ({ stopReason: 'end_turn', _meta: {
+      modelId: 'grok-4.7', totalTokens: context,
+      usage: { inputTokens: input, outputTokens: output, totalTokens: input + output, cachedReadTokens: 1664, reasoningTokens: 25, costUsdTicks: ticks, numTurns: 1 },
+    } });
+    const started = { models: { currentModelId: 'grok-4.7', availableModels: [{ modelId: 'grok-4.7', _meta: { totalContextTokens: 256_000 } }] } };
+    const [, second] = await turns([[{ update: chunk('a'), answer: answer(14_349, 29, 91_636_800, 14_386) }], [{ update: chunk('b'), answer: answer(14_407, 26, 90_011_600, 14_440) }]], { started });
+    expect(second).toMatchObject({ input: 14_407, output: 26, cacheRead: 1664, reasoning: 25, contextUsed: 14_440, contextWindow: 256_000 });
+    expect(second!.costUsd).toBeCloseTo(0.0090011600, 10);
   });
 
   it('an undeclared prompt usage stays the turn\'s own', async () => {

@@ -306,7 +306,11 @@ export function normalizeTurnUsage(raw: unknown): TurnUsage | undefined {
   const assign = assigner(result);
   const cost = asRecord(top.cost);
   const currency = typeof cost?.currency === 'string' ? cost.currency.toUpperCase() : 'USD';
-  assign('costUsd', finiteNumber(top.totalCostUsd, top.total_cost_usd, top.costUsd, currency === 'USD' ? cost?.amount : undefined));
+  // Grok counts cost in integer ticks, 10^10 to the dollar (its own docs:
+  // total_cost_usd 0.01268905 == total_cost_usd_ticks 126890500).
+  const ticks = finiteNumber(top.costUsdTicks, top.cost_usd_ticks, top.total_cost_usd_ticks);
+  assign('costUsd', finiteNumber(top.totalCostUsd, top.total_cost_usd, top.costUsd, currency === 'USD' ? cost?.amount : undefined,
+    ticks === undefined ? undefined : ticks / 1e10));
   assign('contextWindow', finiteNumber(top.modelContextWindow, top.model_context_window, top.contextWindow, top.size));
   assign('contextUsed', finiteNumber(top.used, top.contextUsed));
   return Object.keys(result).length ? result : undefined;
