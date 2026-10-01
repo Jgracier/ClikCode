@@ -248,6 +248,12 @@
         "icon": "$(discard)"
       },
       {
+        "command": "clikcode.alwaysAllowProposedDiff",
+        "title": "Always Allow Changes Like This",
+        "category": "ClikCode",
+        "icon": "$(check-all)"
+      },
+      {
         "command": "clikcode.cancel",
         "title": "Stop Current Turn",
         "category": "ClikCode",
@@ -302,13 +308,18 @@
           "group": "navigation@2"
         },
         {
+          "command": "clikcode.alwaysAllowProposedDiff",
+          "when": "resourceScheme == clikcode-diff",
+          "group": "1_clikcode@3"
+        },
+        {
           "command": "clikcode.openInNewTab",
           "when": "activeWebviewPanelId == 'clikcode.chatEditor'",
           "group": "navigation@0"
         },
         {
           "command": "clikcode.open",
-          "when": "resourceScheme != clikcode-diff",
+          "when": "resourceScheme != clikcode-diff && resourceScheme != clikcode-change",
           "group": "navigation@100"
         }
       ],
@@ -332,6 +343,11 @@
           "command": "clikcode.rejectProposedDiff",
           "when": "resourceScheme == clikcode-diff",
           "group": "clikcode@2"
+        },
+        {
+          "command": "clikcode.alwaysAllowProposedDiff",
+          "when": "resourceScheme == clikcode-diff",
+          "group": "clikcode@3"
         }
       ],
       "editor/title/context": [
@@ -355,6 +371,10 @@
         },
         {
           "command": "clikcode.rejectProposedDiff",
+          "when": "resourceScheme == clikcode-diff"
+        },
+        {
+          "command": "clikcode.alwaysAllowProposedDiff",
           "when": "resourceScheme == clikcode-diff"
         },
         {

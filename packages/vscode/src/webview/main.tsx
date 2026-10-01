@@ -196,6 +196,8 @@ function App(): JSX.Element {
   const inlineTarget = useRef<InlineTarget>();
   const runningRef = useRef(false);
   runningRef.current = Boolean(model?.running);
+  const approvalRef = useRef<string>();
+  approvalRef.current = model?.approvals[0]?.id;
 
   const answer = (id: string, result: IdeUiResult): void => {
     setQuestions((items) => items.filter((item) => item.id !== id));
@@ -280,9 +282,13 @@ function App(): JSX.Element {
       }
       // Esc stops the running turn from anywhere in the panel -- unless a
       // menu, a sheet or the composer already took it (they preventDefault).
+      // With an approval pending it denies that call instead, as in the
+      // terminal: the turn goes on without it.
       if (event.key === 'Escape' && !event.defaultPrevented && runningRef.current) {
         event.preventDefault();
-        post({ type: 'cancel', restoreDraft: !composer.current?.hasText() });
+        const pending = approvalRef.current;
+        if (pending) post({ type: 'approve', id: pending, approved: false });
+        else post({ type: 'cancel', restoreDraft: !composer.current?.hasText() });
       }
     };
     document.addEventListener('click', onClick);
@@ -296,8 +302,9 @@ function App(): JSX.Element {
     };
   }, []);
 
-  // An approval takes the keyboard (1 allow, 2 always, 3 or Esc reject) when
-  // nothing is being typed, as a terminal prompt would.
+  // An approval takes the keyboard (y allow, a always, n or Esc deny) when
+  // nothing is being typed, as a terminal prompt would; with a draft in the
+  // composer it waits for a click or Tab, so the draft's letters stay its own.
   const firstApproval = model?.approvals[0]?.id;
   useEffect(() => {
     if (!firstApproval) return;
@@ -339,9 +346,11 @@ function App(): JSX.Element {
           {model.connection === 'ready' && model.sessionId && empty ? <Welcome model={model} onPrompt={sendNow} onScreen={showScreen} /> : null}
           {!empty ? <Transcript model={model} /> : null}
         </div>
-        {model.approvals.length ? (
+        {model.approvals[0] ? (
+          // One at a time, as the terminal asks: the rest wait their turn.
           <div class="approvals">
-            {model.approvals.map((approval) => <ApprovalCard key={approval.id} approval={approval} workspace={model.workspace} onAnswer={(value) => post({ type: 'approve', id: approval.id, approved: value })} />)}
+            <ApprovalCard key={model.approvals[0].id} approval={model.approvals[0]} workspace={model.workspace} waiting={model.approvals.length - 1}
+              onAnswer={(value) => post({ type: 'approve', id: model.approvals[0]!.id, approved: value })} />
           </div>
         ) : null}
         <Composer model={model} handle={composer} onError={setError} onOpenScreen={showScreen} />

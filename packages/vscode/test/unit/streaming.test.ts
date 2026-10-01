@@ -75,7 +75,7 @@ describe('model patches', () => {
       worker({ type: 'activity', event: { kind: 'thinking', label: 'Reading   the\nconfig' } }),
       worker({ type: 'activity', event: { kind: 'thinking', label: 'thinking' } }),
     ]);
-    expect(thinking.live?.thought).toBe('Reading the config');
+    expect(thinking.live?.thought?.text).toBe('Reading the config');
     const tool = applyEvent(thinking, worker({ type: 'activity', event: { kind: 'tool-start', id: 't', label: 'read' } }));
     expect(tool.live?.thought).toBeUndefined();
   });
