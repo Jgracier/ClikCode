@@ -7,7 +7,7 @@ import {
   ACTIVITY_PREVIEW_LINES, activityOutcome, diffPreview, diffTotals, DIFF_PREVIEW_LINES, formatElapsed, LIVE_OUTPUT_LINES, liveWaitKind,
   outputPreview, previewLinesFor, SPIN_MS, STALL_MS, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
-import { activityResult, exploreRuns, exploreSummary, tensedLabel } from '../../../../src/harness/protocol/turn-flow';
+import { activityResult, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
@@ -392,6 +392,26 @@ function TurnFlow(props: {
   return <>{parts}</>;
 }
 
+/** The quiet line a finished turn ends on (Codex's "Worked for 1m 2s",
+ * Cursor's files edited), and, when it changed files, all of them to review
+ * at once or undo together. */
+function TurnSummary({ trace }: { trace: TurnTrace }): JSX.Element {
+  const diffs = trace.activities.flatMap((activity) => (activity.kind === 'tool-done' && activity.diff?.length ? [activity.diff] : []));
+  const changed = diffs.some((diff) => diff.some((file) => file.path));
+  const act = (action: 'view' | 'revert') => (): void => post({ type: 'turnChanges', action, userIndex: trace.userIndex });
+  return (
+    <div class="turn-summary">
+      <span class="muted">{turnSummary({ ms: trace.endedAt - trace.startedAt, diffs })}</span>
+      {changed ? (
+        <>
+          <button type="button" class="link small" data-turn-changes="view" title="Open every change this turn made in the diff editor" onClick={act('view')}><Icon name="diff-multiple" />Review changes</button>
+          <button type="button" class="link small" data-turn-changes="revert" title="Undo every change this turn made" onClick={act('revert')}><Icon name="discard" />Undo all</button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 /** A finished answer with how it was reached, in the order it happened.
  * Rows and thoughts land where they came in the answer as it streamed; one
  * whose place the saved answer no longer reads the same up to goes first. */
@@ -405,6 +425,7 @@ const FinishedTurn = memo(({ text, trace, cacheKey, workspace }: { text: string;
       {trace.plan ? <Plan plan={trace.plan} folded /> : null}
       <TurnFlow text={text} activities={trace.activities.map(place)} thoughts={(trace.reasoning ?? []).map(place)} steers={(trace.steers ?? []).map(place)}
         workspace={workspace} cacheKey={cacheKey} userIndex={trace.userIndex} />
+      <TurnSummary trace={trace} />
       <div class="message-actions"><CopyAnswer text={text} /></div>
     </div>
   );

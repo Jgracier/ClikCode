@@ -80,3 +80,35 @@ export function applyHunks(text: string, hunks: readonly Hunk[]): string | undef
   out.push(...lines.slice(at));
   return out.join(newline);
 }
+
+/** Every change a turn made, by file, in the order made: what "Review
+ * changes" and "Undo all" act on. Only calls that finished made a change;
+ * a file the harness did not name cannot be found again and is left out. */
+export function turnChanges(activities: ReadonlyArray<{ kind: string; diff?: FileDiff[] }>): Map<string, FileDiff[]> {
+  const files = new Map<string, FileDiff[]>();
+  for (const activity of activities) {
+    if (activity.kind !== 'tool-done') continue;
+    for (const file of activity.diff ?? []) {
+      if (!file.path) continue;
+      files.set(file.path, [...(files.get(file.path) ?? []), file]);
+    }
+  }
+  return files;
+}
+
+/** A file as it was before all of a turn's changes to it, from the file as
+ * it is now: each change undone, newest first. `whole` only when every one
+ * of them placed cleanly -- the file changed since otherwise, or a change
+ * was cut short -- and `created` when the turn made the file. */
+export function unwindChanges(current: string | undefined, changes: readonly FileDiff[]): { before: string; whole: boolean; created: boolean } {
+  if (current === undefined) return { before: '', whole: false, created: false };
+  let text = current;
+  for (let index = changes.length - 1; index >= 0; index -= 1) {
+    const change = changes[index]!;
+    if (change.change === 'add') return { before: '', whole: true, created: true };
+    const undone = change.omitted ? undefined : applyHunks(text, fileHunks(change).map((hunk) => ({ before: hunk.after, after: hunk.before })));
+    if (undone === undefined) return { before: text, whole: false, created: false };
+    text = undone;
+  }
+  return { before: text, whole: true, created: false };
+}

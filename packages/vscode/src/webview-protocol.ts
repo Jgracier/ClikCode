@@ -78,6 +78,9 @@ export type FromWebview =
   /** A change a tool call made: shown in the diff editor, or undone.
    * `userIndex` names the finished turn it is in; none, the running one. */
   | { type: 'change'; action: 'view' | 'revert'; key: string; userIndex?: number }
+  /** Every change a finished turn made: shown together in the diff editor,
+   * or all undone. */
+  | { type: 'turnChanges'; action: 'view' | 'revert'; userIndex: number }
   | { type: 'command'; command: string; args?: unknown[] }
   | { type: 'openLink'; href: string }
   | { type: 'openFile'; path: string; line?: number }

@@ -13,7 +13,7 @@ import { answeredApproval, applyEvent, conversationAttention, emptyModel, localN
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
-import { applyHunks, fileHunks } from './text';
+import { applyHunks, fileHunks, turnChanges, unwindChanges } from './text';
 import { readFile } from 'node:fs/promises';
 import { DiffDocuments, fileNameIn, runInTerminal } from './ui';
 import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from './webview-protocol';
@@ -560,24 +560,60 @@ export class ClikCodeController implements vscode.Disposable {
   private async revertChange(key: string, userIndex: number | undefined): Promise<void> {
     const diff = this.changeOf(key, userIndex);
     if (!diff?.length) return;
-    const files = await Promise.all(diff.map(async (file) => ({ file, ...(await this.fileVersions(file, 'made')) })));
+    const files = await Promise.all(diff.map(async (file) => ({ ...(await this.fileVersions(file, 'made')), created: file.change === 'add' })));
+    await this.undoFiles(files, 'this change', (names) => `Undo ClikCode's change to ${names}?`, 'Undo Change');
+  }
+
+  /** Every file a finished turn changed, as it was before the turn and as
+   * it is now (unwindChanges): whole where all its changes still place. */
+  private async turnFiles(userIndex: number): Promise<Array<{ name: string; path: string; before: string; after: string; whole: boolean; created: boolean }>> {
+    const trace = this.model.traces.find((item) => item.userIndex === userIndex);
+    const workspace = this.model.workspace ?? this.workspaceFolder();
+    return Promise.all([...turnChanges(trace?.activities ?? [])].map(async ([file, changes]) => {
+      const path = isAbsolute(file) ? file : join(workspace, file);
+      const current = await readFile(path, 'utf8').catch(() => undefined);
+      const unwound = unwindChanges(current, changes);
+      return { name: file.split(/[\\/]/).pop() || file, path, before: unwound.before, after: current ?? '', whole: unwound.whole, created: unwound.created };
+    }));
+  }
+
+  /** All of a turn's changes in the diff editor at once -- the multi-file
+   * changes editor where it touched several files. */
+  private async viewTurnChanges(userIndex: number): Promise<void> {
+    const files = await this.turnFiles(userIndex);
+    if (!files.length) return;
+    await this.host.diffs.show(`turn-${userIndex}`, 'Changes', files, true);
+  }
+
+  /** Every change a turn made undone as one edit, after a modal confirm;
+   * refused when any of its files changed since. */
+  private async revertTurnChanges(userIndex: number): Promise<void> {
+    const files = await this.turnFiles(userIndex);
+    if (!files.length) return;
+    await this.undoFiles(files, "this turn's changes", (names) => `Undo all of ClikCode's changes in this turn (${files.length} file${files.length === 1 ? '' : 's'}: ${names})?`, 'Undo All');
+  }
+
+  /** Files put back as they were, as one WorkspaceEdit VS Code can itself
+   * undo: a file the agent created is deleted. Nothing is touched unless
+   * every file still places cleanly. */
+  private async undoFiles(files: ReadonlyArray<{ name?: string; path?: string; before: string; whole: boolean; created: boolean }>, what: string, question: (names: string) => string, action: string): Promise<void> {
     const stale = files.filter((item) => !item.whole || !item.path);
     if (stale.length) {
-      void vscode.window.showWarningMessage(`ClikCode cannot undo this change: ${stale.map((item) => item.name ?? 'a file').join(', ')} changed since.`);
+      void vscode.window.showWarningMessage(`ClikCode cannot undo ${what}: ${stale.map((item) => item.name ?? 'a file').join(', ')} changed since.`);
       return;
     }
     const names = files.map((item) => item.name).join(', ');
-    const choice = await vscode.window.showWarningMessage(`Undo ClikCode's change to ${names}?`, { modal: true, detail: 'You can redo it with Undo in the editor.' }, 'Undo Change');
-    if (choice !== 'Undo Change') return;
+    const choice = await vscode.window.showWarningMessage(question(names), { modal: true, detail: 'You can redo it with Undo in the editor.' }, action);
+    if (choice !== action) return;
     const edit = new vscode.WorkspaceEdit();
     for (const item of files) {
       const uri = vscode.Uri.file(item.path!);
-      if (item.file.change === 'add') { edit.deleteFile(uri, { ignoreIfNotExists: true }); continue; }
+      if (item.created) { edit.deleteFile(uri, { ignoreIfNotExists: true }); continue; }
       const document = await vscode.workspace.openTextDocument(uri);
       edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), item.before);
     }
     if (!(await vscode.workspace.applyEdit(edit))) { void vscode.window.showErrorMessage(`ClikCode could not undo the change to ${names}.`); return; }
-    await Promise.all(files.filter((item) => item.file.change !== 'add').map(async (item) => (await vscode.workspace.openTextDocument(vscode.Uri.file(item.path!))).save()));
+    await Promise.all(files.filter((item) => !item.created).map(async (item) => (await vscode.workspace.openTextDocument(vscode.Uri.file(item.path!))).save()));
     this.note(`Undid the change to ${names}`);
   }
 
@@ -734,6 +770,9 @@ export class ClikCodeController implements vscode.Disposable {
         return;
       case 'change':
         void (message.action === 'view' ? this.viewChange(message.key, message.userIndex) : this.revertChange(message.key, message.userIndex));
+        return;
+      case 'turnChanges':
+        void (message.action === 'view' ? this.viewTurnChanges(message.userIndex) : this.revertTurnChanges(message.userIndex));
         return;
       case 'request':
         void this.answer(surface, message.id, message.request);
