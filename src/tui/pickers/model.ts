@@ -6,7 +6,7 @@ import { isGatewayService } from '../../session/route.js';
 import { gatewayModelDetail, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
 import { localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
-import { harnessModelLabel, modelIdFromLabel, nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
+import { harnessModelLabel, modelSettingsDetail, modelIdFromLabel, nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
 import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
@@ -84,6 +84,7 @@ export function modelRow(
   const respells = name !== undefined && [shown, shown.slice(shown.indexOf('/') + 1)].some((id) => bare(id) === bare(name));
   const parts = [
     name && !respells ? name : undefined,
+    modelSettingsDetail(model),
     model === current ? 'current' : undefined,
     model === current && providerConfigured ? 'provider configured' : undefined,
   ].filter((part): part is string => Boolean(part));

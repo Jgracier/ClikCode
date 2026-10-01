@@ -45,8 +45,40 @@ export function nativeModelLabel(
   }
 }
 
+/** Cursor's ids carry the variant's settings in brackets -- `default[]` is
+ * Auto, `claude-opus-5-5[context=300k,effort=medium,fast=false]` -- and its
+ * ACP list names each one ("Auto", "claude-opus-5-5"). The id is what goes
+ * back to the vendor; the name is what a person reads. */
+const BRACKETED_MODEL = /^([^[\]]+)\[([^\]]*)\]$/;
+const vendorModelNames = new Map<string, string>();
+
+/** Remember the names a catalog carries for bracketed ids, so every label --
+ * the status line included, which has no catalog in hand -- can use them. */
+export function rememberVendorModelNames(harness: AiLocalHarnessDefinition, catalog: Pick<ModelCatalogResult, 'labels'> | undefined): void {
+  for (const [model, name] of Object.entries(catalog?.labels ?? {})) {
+    if (BRACKETED_MODEL.test(model) && name) vendorModelNames.set(`${harness.command}\0${model}`, name);
+  }
+}
+
+/** A bracketed id's settings, readable: `effort high · 300k context · fast`.
+ * A flag set false says nothing worth reading and is left out. */
+export function modelSettingsDetail(model: string): string | undefined {
+  const inner = BRACKETED_MODEL.exec(model)?.[2];
+  if (!inner) return undefined;
+  const parts = inner.split(',').flatMap((pair) => {
+    const [key, value] = pair.split('=').map((part) => part.trim()) as [string, string | undefined];
+    if (!key || value === 'false') return [];
+    if (value === undefined || value === 'true') return [key.replace(/_/g, ' ')];
+    if (key === 'context') return [`${value} context`];
+    return [`${key.replace(/_/g, ' ')} ${value}`];
+  });
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
 /** One model of `harness` as its lists and status lines show it. */
 export function harnessModelLabel(harness: AiLocalHarnessDefinition, model: string): string {
+  const bracketed = BRACKETED_MODEL.exec(model);
+  if (bracketed) return vendorModelNames.get(`${harness.command}\0${model}`) ?? bracketed[1]!.trim();
   return modelLabel(modelDisplayId(harness, model), harness.command, harness.provider);
 }
 
@@ -219,6 +251,7 @@ async function cachedCatalog(
   if (harness.acp && cached.result.models.length === 0) return undefined;
   const isExpired = serverModelList(harness) && Date.now() - cached.at >= SERVER_LIST_TTL_MS;
   if (isExpired && !options?.allowStale) return undefined;
+  rememberVendorModelNames(harness, cached.result);
   return cached.result;
 }
 
@@ -336,6 +369,7 @@ export async function nativeModelCatalog(
   // entry that no longer matches rather than one that looks current.
   const fingerprint = await catalogFingerprint(harness, account);
   const result = await nativeModelCatalogUncached(harness, account);
+  rememberVendorModelNames(harness, result);
   // A list read from a server (Copilot's, from models.dev) that came back
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead.

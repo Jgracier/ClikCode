@@ -16,7 +16,7 @@
  */
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { harnessModelLabel, nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
+import { harnessModelLabel, modelSettingsDetail, nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { harnessSupportsPermissionMode } from '../../runtime/lazy-bridge.js';
 import { isBlankConversation, VALID_PERMISSION_MODES } from '../../session/options.js';
@@ -34,10 +34,12 @@ function loadVendorValues(session: HarnessSession, harness: AiLocalHarnessDefini
   loaded.set(key, slot);
   if (loaded.size > 32) loaded.delete(loaded.keys().next().value as string);
   void nativeModelCatalog(harness, account).then((catalog) => {
-    slot.models = catalog.models.map((model) => ({
-      value: model, label: harnessModelLabel(harness, model),
-      ...(catalog.labels?.[model] ? { detail: catalog.labels[model] } : {}),
-    }));
+    slot.models = catalog.models.map((model) => {
+      const label = harnessModelLabel(harness, model);
+      const name = catalog.labels?.[model];
+      const detail = modelSettingsDetail(model) ?? (name && name !== label ? name : undefined);
+      return { value: model, label, ...(detail ? { detail } : {}) };
+    });
   }).catch(() => undefined);
   void effortChoicesFor(harness, account, session.model).then((choices) => {
     slot.efforts = choices.values.map((value) => ({ value }));
