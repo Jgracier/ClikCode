@@ -39,3 +39,15 @@ it("gives OpenCode's and Pi's edit rows their diff, as Claude's", () => {
   const pi = parseNativeActivityEventsFromValue(harness('pi'), { type: 'tool_execution_start', toolCallId: 'p1', toolName: 'edit', args: { path: 'a.ts', oldText: 'r', newText: 'R' } })[0]!;
   expect(changed(pi.diff)).toEqual({ removed: ['r'], added: ['R'] });
 });
+
+it("gives Cursor's CLI turns tool rows: a command with its output and exit, an edit with its diff", () => {
+  const cursor = { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent' } as AiLocalHarnessDefinition;
+  const parse = (value: Record<string, unknown>) => parseNativeActivityEventsFromValue(cursor, value)[0];
+  expect(parse({ type: 'tool_call', subtype: 'started', call_id: 'c1', tool_call: { shellToolCall: { args: { command: 'npm test' } } } }))
+    .toMatchObject({ kind: 'tool-start', id: 'c1', label: '$ npm test', category: 'run' });
+  expect(parse({ type: 'tool_call', subtype: 'completed', call_id: 'c1', tool_call: { tool: { case: 'shellToolCall', value: { args: { command: 'npm test' }, result: { success: { exitCode: 1, stdout: '1 failed\n' } } } } } }))
+    .toMatchObject({ kind: 'tool-error', id: 'c1', exitCode: 1, output: ['1 failed'] });
+  expect(changed(parse({ type: 'tool_call', subtype: 'started', call_id: 'e1', tool_call: { editToolCall: { args: { path: 'a.ts', oldString: 'a', newString: 'b' } } } })!.diff))
+    .toEqual({ removed: ['a'], added: ['b'] });
+  expect(parse({ type: 'thinking', subtype: 'delta', text: 'Checking the tests' })).toMatchObject({ kind: 'thinking', label: 'Checking the tests' });
+});
