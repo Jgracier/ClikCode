@@ -27,6 +27,7 @@ import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock,
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows } from '../harness/protocol/activity-line.js';
+import { logProcessWarnings } from './warnings.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
@@ -486,6 +487,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // The `?1006l` before `?1006h` is the script's, kept deliberately: it
       // makes SGR reporting a transition rather than a no-op, and a client
       // deciding how to route touches has something to notice.
+      logProcessWarnings();
       output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
       // Asked for: bracketed paste, because pasted text must not be read as
