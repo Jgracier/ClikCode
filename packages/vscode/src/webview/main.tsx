@@ -120,7 +120,6 @@ function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () 
       ? [item('tools', 'plug', 'MCP servers & tools', () => post({ type: 'send', text: '/settings tools', id: uid() }))] : []),
     item('commands', 'symbol-namespace', 'All commands', () => post({ type: 'send', text: '/help', id: uid() }), '/'),
     heading('Open'),
-    item('tab', 'link-external', 'Open in new tab', () => command('clikcode.openInNewTab')),
     item('window', 'empty-window', 'Open in new window', () => command('clikcode.openInNewWindow')),
     heading('Help'),
     item('walkthrough', 'book', 'Get started', () => command('clikcode.openWalkthrough')),
