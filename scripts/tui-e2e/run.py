@@ -228,6 +228,14 @@ SCENARIOS = {
         'watch': [], 'ever': ['test file 3 passed'],
         'final_contains': ['test file 8 passed', 'earlier lines'],
     },
+    # Reasoning that names itself: its heading is what the status line says
+    # while the model thinks.
+    'thinking-heading-status': {
+        'turns': [{'thought': {'text': '**Inspecting the parser** I should look at the tokens first.', 'ms': 2500},
+                   'blocks': ['The parser is fine.']}],
+        'steps': [('type', 'check the parser'), ('wait_for', 'The parser is fine.', 30), ('settle', 2)],
+        'watch': ['check the parser', 'The parser is fine.'], 'ever': ['Inspecting the parser ('],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],

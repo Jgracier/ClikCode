@@ -29,6 +29,8 @@ import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivity
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
+import { turnStatus } from '../harness/protocol/turn-flow.js';
+import { paintStatus } from './render/status-line.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
@@ -114,6 +116,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The calls still open, and what the status line says about the newest. */
   private activeTools = new Map<string, { label: string; category?: ToolCategory; agent?: boolean }>();
   private toolPhase = '';
+  /** The newest open call's kind of work: the status line wears its colour. */
+  private toolCategory?: ToolCategory;
+  /** When the current stretch of thinking began -- the turn's start, or the
+   * last call finishing or answer text arriving -- for turnStatus's words. */
+  private thinkingSince = 0;
   /** The latest call inside a running sub-agent, keyed by the parent tool id.
    * Shown as one line under that agent, never as its own row. */
   private childActivity = new Map<string, string>();
@@ -583,7 +590,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
     // The thought led to this text; once the answer is arriving it is stale.
-    if (text) this.thought = undefined;
+    if (text) { this.thought = undefined; this.thinkingSince = Date.now(); }
     // A replacement is usually the same answer again, so only its growth counts.
     this.streamedChars += mode === 'replace' ? Math.max(0, text.length - this.liveResponse.length) : text.length;
     if (text) this.noteData();
@@ -673,8 +680,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // while a call is open, the turn's own phase otherwise. The call itself
     // is also one row in the live transcript, below.
     const lifecycle = activityLifecyclePhase(this.activeTools, event);
+    // The last open call finishing starts a new stretch of thinking.
+    if (this.activeTools.size && !lifecycle.activeTools.size) this.thinkingSince = Date.now();
     this.activeTools = lifecycle.activeTools;
     this.toolPhase = lifecycle.activeTools.size ? lifecycle.phase : '';
+    this.toolCategory = lifecycle.activeTools.size ? lifecycle.category : undefined;
     this.schedulePaint();
   }
 
@@ -772,6 +782,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingCancelled = false;
     this.waitingFrame = 0;
     this.clock = startTurnClock(Date.now());
+    this.thinkingSince = Date.now();
     this.streamedChars = 0;
     this.usageCharsCounted = 0;
     this.turnUsage = undefined;
@@ -782,6 +793,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!rejoined) {
       this.activeTools = new Map();
       this.toolPhase = '';
+      this.toolCategory = undefined;
       this.childActivity.clear();
       this.liveActivitiesShown = -1;
       this.turnTranscript.reset();
@@ -1001,21 +1013,36 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const elapsed = formatElapsed(turnElapsedMs(this.clock, now));
     const tokens = formatTurnUsage(this.turnUsage, estimatedTokens(this.streamedChars - this.usageCharsCounted));
     const stalled = turnStalledMs(this.clock, now, this.turnWaits());
-    const status = this.pendingApproval || this.waitingCancelled ? this.waitingLabel : this.toolPhase || this.waitingLabel;
+    // What it says and how it looks, by the shared rules (turn-flow.ts):
+    // waiting on the user, the open call, the reasoning's heading, the
+    // thinking in words; and a tone that fades toward red with silence.
+    const status = turnStatus({
+      phase: this.waitingLabel,
+      ...(!this.waitingCancelled && this.toolPhase ? { toolPhase: this.toolPhase } : {}),
+      ...(this.thought && !this.waitingCancelled ? { thought: this.thought.text } : {}),
+      thinkingMs: now - this.thinkingSince,
+      asking: Boolean(this.pendingApproval),
+      quietMs: this.pendingApproval ? 0 : now - this.clock.lastDataAt,
+    });
     // "send", not "steer or queue": which of the two happens depends on the
     // harness, and each submission's own row says which it was.
-    const label = `${status} (${elapsed}${tokens ? ` · ${tokens}` : ''}${stalled ? ` · nothing received for ${formatElapsed(stalled)}` : ''})`
+    const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''}${stalled ? ` · nothing received for ${formatElapsed(stalled)}` : ''})`
       + `${this.cancelWaiting && !this.pendingApproval ? ' · esc to interrupt' : ''}`
       + `${this.leaveWaiting && !this.pendingApproval && !this.waitingDraft ? ' · ← conversations' : ''}`
       + `${this.waitingSubmit ? ' · type and press Enter to send' : ''}`;
     // What the agent is doing is essential and stays at full contrast; only the
     // counters and key hints after it are dimmed.
-    const split = label.indexOf(' (');
+    const split = status.label.length;
     // One spinner, one motion, for every harness and every tool. It moves
-    // while data does; stalled, it holds still in yellow.
+    // while data does, the label shimmering with it; quiet, both hold still
+    // and fade toward red.
     const glyph = waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
-    const spinner = stalled ? chalk.yellow(glyph) : chalk.cyanBright(glyph);
-    return `${spinner}  ${label.slice(0, split)}${chalk.dim(label.slice(split))}`;
+    const painted = paintStatus({
+      glyph, label: label.slice(0, split), tone: status.tone, stall: status.stall,
+      ...(status.tone === 'tool' && this.toolCategory ? { category: this.toolCategory } : {}),
+      frame: this.waitingFrame, shimmer: !this.reducedMotion && this.waitingTickFast && status.tone !== 'asking',
+    });
+    return `${painted.spinner}  ${painted.label}${chalk.dim(label.slice(split))}`;
   }
 
   private updateWaiting(): void {
