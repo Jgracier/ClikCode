@@ -1,5 +1,4 @@
 /** The Gateway platform assistant used when its model endpoint cannot serve a turn. */
-import { randomUUID } from 'node:crypto';
 import { stdout as output } from 'node:process';
 import type Conf from 'conf';
 import chalk from 'chalk';
@@ -8,11 +7,11 @@ import { CLIKCODE_USER_AGENT } from '../version.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { completeTurnCheckpoint, type DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { StreamingTitle } from '../session/title.js';
+import { recordInvocation, turnSink } from './turn-output.js';
 
 /** What the Gateway's final `result` event says that the text did not. */
 function gatewayResultNotice(data: unknown): string | undefined {
@@ -42,6 +41,7 @@ export async function runPlatformAssistantTurn(input: {
 }): Promise<void> {
   const { config, state, session, turnText, baseMessages, checkpoint, startedAt, titleStream, signal, run } = input;
   const prompter = run.prompter;
+  const sink = turnSink(checkpoint, prompter);
   // Only a Gateway session reaches here, and it is the same connection the
   // model client was built from.
   const { baseUrl, apiKey } = gatewayConnection(config);
@@ -99,9 +99,7 @@ export async function runPlatformAssistantTurn(input: {
         // fake here.
         if (event.type === 'status' && typeof event.label === 'string') {
           const activityEvent: HarnessActivityEvent = { kind: event.kind === 'tool-start' ? 'tool-start' : 'thinking', label: event.tool ?? event.label };
-          checkpoint.activity(activityEvent);
-          if (prompter) prompter.activityEvent(activityEvent);
-          else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(activityEvent)) output.write(`${activity}\n`);
+          sink.activity(activityEvent);
         }
         if (event.type === 'error') throw new Error(event.error ?? 'gateway AI request failed');
       }
@@ -114,8 +112,7 @@ export async function runPlatformAssistantTurn(input: {
     if (!reply) reply = gatewayNotice;
   }
   if (!reply) throw new Error('gateway AI response contained no text');
-  const invocation = { id: randomUUID(), sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'gateway', ...(session.model ? { model: session.model } : {}), at: new Date().toISOString(), latencyMs: Date.now() - startedAt };
-  state.invocations.push(invocation);
+  const invocation = recordInvocation(state, { sessionId: session.id, accountId: 'gateway', provider: session.provider ?? 'gateway', model: session.model, startedAt });
   const completedText = await completeTurnCheckpoint(session, checkpoint, reply, { title: titleStream?.title });
   if (wroteDelta) output.write('\n\n');
   else if (!prompter) emitHarnessOutput({ session, text: completedText, usage: { attributedBy: 'gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });

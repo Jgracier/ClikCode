@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
  * site among four; no behavioural test of the other three would have caught
  * it, and none did.
  *
- * The four call sites are now one shared `emitResponseDelta`, so the omission
+ * The four call sites are now one shared `turnSink`, so the omission
  * this guards against is no longer expressible -- a transport cannot skip a
  * filter that lives inside the only function that paints. These tests
  * therefore assert the invariant itself (nothing paints an unfiltered delta,
@@ -26,7 +26,7 @@ import { describe, expect, it } from 'vitest';
  */
 describe('streamed answers go through the title filter', () => {
   const turnSources = async (): Promise<string> => (await Promise.all(
-    ['vendor-turn.ts', 'vendor-cli-attempt.ts', 'vendor-session-attempt.ts', 'direct-turn.ts', 'agent-turn.ts', 'platform-assistant-turn.ts']
+    ['turn-output.ts', 'vendor-turn.ts', 'vendor-cli-attempt.ts', 'vendor-session-attempt.ts', 'direct-turn.ts', 'agent-turn.ts', 'platform-assistant-turn.ts']
       .map((file) => readFile(new URL(file, import.meta.url), 'utf8')),
   )).join('\n');
 
@@ -69,18 +69,17 @@ describe('streamed answers go through the title filter', () => {
 
   it('routes every transport through the one shared delta emitter', async () => {
     const source = await turnSources();
-    // The real invariant after consolidation: ONE filter site per execution
-    // path, not one per transport. The three that remain are the vendor
-    // path (where three transports share a single emitter), the api-key
-    // path and the gateway path -- each a separate function with its own
-    // titleStream, which is irreducible without merging the paths themselves.
-    // A fourth is the regression to catch: it would mean a transport grew its
+    // The real invariant after consolidation: ONE filter site per sink, not
+    // one per transport. The two that remain are turnSink (the vendor path,
+    // where three transports share it, and the api-key path) and the gateway
+    // platform assistant, which also echoes to the terminal as it streams.
+    // A third is the regression to catch: it would mean a transport grew its
     // own copy back.
     const filterSites = [...source.matchAll(/titleStream \? titleStream\.push\(/g)];
-    expect(filterSites.length, 'the title filter has been copied again').toBe(3);
-    expect(source).toMatch(/const emitResponseDelta = /);
+    expect(filterSites.length, 'the title filter has been copied again').toBe(2);
+    expect(source).toMatch(/export function turnSink\(/);
     // The two session protocols and CLI parser all use the shared observer.
-    expect(source).toMatch(/onResponseDelta: emitResponseDelta/);
+    expect(source).toMatch(/onResponseDelta: sink\.response/);
     const spreads = [...source.matchAll(/\.\.\.sharedObserver/g)];
     expect(spreads.length, 'a transport stopped using the shared observer').toBe(3);
     expect(source).toMatch(/sharedObserver\.onResponseDelta\?\.\(text, mode \?\? 'append'\)/);

@@ -2,17 +2,13 @@
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { randomUUID } from 'node:crypto';
-import { accountSwitchNotice, accountSwitchPhase } from './failover.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
-import { stdout as output } from 'node:process';
 import chalk from 'chalk';
-import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
-import { accountAfterFailure, initialAccountChoice, turnAccountRecorder, turnBackendForAccount, type FailoverTally } from './account-routing.js';
-import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
+import { turnAccounts, turnBackendForAccount } from './account-routing.js';
+import { classifyAccountFailure } from './failover.js';
 import { failoverPrompt, INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { interruptedTurnFailoverPrompt } from './interrupted-turn-prompt.js';
 import { carryNativeSession } from '../session/carry.js';
@@ -21,7 +17,6 @@ import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
-import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { writeState } from '../session/state/write.js';
@@ -39,13 +34,14 @@ import { sessionTurnTransport } from '../harness/transport/select.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelProvider } from '../runtime/lazy-bridge.js';
 import { prepareAttachments } from '../session/attachments.js';
-import { addTurnUsage, stopReasonNotice, type TurnUsage } from '../harness/protocol/turn-usage.js';
+import { addTurnUsage, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
+import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
 
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
@@ -135,11 +131,6 @@ export async function sendVendorTurn(input: {
   session.workspace ??= process.cwd();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
-  let switchedFrom: string | undefined;
-  /** Why the turn left that account: the failure it met there. */
-  let switchReason: AccountFailureKind = 'quota-exhausted';
-  const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
-  const onVendorBackend = (item: AiHarnessAccount): boolean => turnBackendForAccount(item) === 'vendor';
   /** The vendor's own thread, carried into the account taking over, so it
    * resumes with everything it actually said and did rather than a retelling
    * of it. Undefined where that cannot be done -- a harness whose transcript
@@ -155,26 +146,15 @@ export async function sendVendorTurn(input: {
     checkpoint.response(RETRY_EDITS[edit][0], RETRY_EDITS[edit][1]);
     prompter?.response(RETRY_EDITS[edit][0], RETRY_EDITS[edit][1]);
   };
-  /** Moving the turn to another account: said before the retry, not after it
-   * returns (it happens inside one await chain and would otherwise look
-   * instantaneous), and with the reason, so a crash is not called a spent plan. */
-  const recordAccount = turnAccountRecorder(session, () => checkpoint.persistNow());
-  const switchAccount = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
-    prompter?.activity(chalk.yellow(accountSwitchNotice(why, to.label)));
-    prompter?.phase(accountSwitchPhase(to.label));
-    await closePersistentTransport(session.id);
-    switchedFrom = account.label;
-    account = to;
-    await recordAccount(to);
-  };
+  const accounts = turnAccounts({
+    state, session, prompter, matchesBackend: (item) => turnBackendForAccount(item) === 'vendor',
+    persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
+    beforeSwitch: () => closePersistentTransport(session.id),
+  });
   try {
-  const initial = initialAccountChoice(state, account, session.accountFailover, onVendorBackend, tally.attempted);
-  if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
-  if (initial.kind === 'switch') {
-    // The thread goes with the conversation, as on a switch mid-turn; only
-    // one that cannot be carried starts afresh.
-    if (!await carryThread(account, initial.account)) forgetNativeThread(session);
-    await switchAccount(initial.account, 'quota-exhausted');
+  // The thread goes with the conversation, as on a switch mid-turn; only
+  // one that cannot be carried starts afresh.
+  if (await accounts.start(async (to) => { if (!await carryThread(account, to)) forgetNativeThread(session); })) {
     await checkpoint.persistNow();
   }
   // A fresh native thread (no nativeSessionId yet) with prior ClikCode
@@ -218,11 +198,25 @@ export async function sendVendorTurn(input: {
    *  clears turnUsage on every pass, which is right for a failover and
    *  wrong for a continuation. */
   let carriedPendingUsage: TurnUsage | undefined;
+  /** The response-delta rule, in one place. Every transport owes the same
+   * three steps -- through the title filter, then to the checkpoint and to
+   * the screen -- and they differed only in which default mode they passed.
+   * This was three copies, and drift between them was not hypothetical: the
+   * structured-CLI copy once skipped the title filter entirely, which made
+   * what was displayed differ from what was persisted, and the transcript
+   * then read the saved answer as new content and drew the whole reply a
+   * second time. That was the duplicated response. One function cannot
+   * drift from itself. */
+  const sink = turnSink(checkpoint, prompter, {
+    title: () => titleStream,
+    // A later snapshot that is not a longer copy of what is already on
+    // screen must not replace it. Vendors resend only the last block; taking
+    // that as the whole answer is what made earlier paragraphs vanish.
+    keep: (visible, mode) => mode !== 'replace' || durableAnswer(session.pendingTurn?.response ?? '', visible) === visible,
+  });
   const onActivity = (event: HarnessActivityEvent): void => {
     pendingWork.note(event);
-    checkpoint.activity(event);
-    if (prompter) prompter.activityEvent(event);
-    else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
+    sink.activity(event);
   };
   /** A transport's thought is the whole of it so far: one row per id,
    *  replaced as it grows (activity-events.ts thoughtLabel). */
@@ -233,33 +227,13 @@ export async function sendVendorTurn(input: {
   const onSessionId = async (nativeSessionId: string): Promise<void> => {
     if (session.nativeSessionId === nativeSessionId && !session.nativeSessionPreallocated) return;
     session.nativeSessionId = nativeSessionId;
-    if (activeTransport === 'acp' || activeTransport === 'structured-cli' || activeTransport === 'text-cli') session.nativeTransport ??= activeTransport;
+    keepTransport(activeTransport);
     delete session.nativeSessionPreallocated;
     await checkpoint.persistNow();
   };
-  /** The response-delta rule, in one place. Every transport owes the same
-   * three steps -- through the title filter, then to the checkpoint and to
-   * the screen -- and they differed only in which default mode they passed.
-   * This was three copies, and drift between them was not hypothetical: the
-   * structured-CLI copy once skipped the title filter entirely, which made
-   * what was displayed differ from what was persisted, and the transcript
-   * then read the saved answer as new content and drew the whole reply a
-   * second time. That was the duplicated response. One function cannot
-   * drift from itself. */
-  const emitResponseDelta = (text: string, mode: 'append' | 'replace' = 'append'): void => {
-    const visible = titleStream ? titleStream.push(text, mode) : text;
-    // undefined: the title filter is still holding the head back. '': a
-    // replace arrived before that question was settled. Either one used to
-    // be written through, and an empty replace clears the answer already
-    // on screen -- the reply flashed, then was gone.
-    if (!visible) return;
-    // A later snapshot that is not a longer copy of what is already on
-    // screen must not replace it. Vendors resend only the last block; taking
-    // that as the whole answer is what made earlier paragraphs vanish.
-    const kept = mode === 'replace' ? durableAnswer(session.pendingTurn?.response ?? '', visible) : visible;
-    if (mode === 'replace' && kept !== visible) return;
-    checkpoint.response(visible, mode);
-    prompter?.response(visible, mode);
+  /** A vendor thread stays on the transport that created it (select.ts). */
+  const keepTransport = (transport: typeof activeTransport): void => {
+    if (transport === 'acp' || transport === 'structured-cli' || transport === 'text-cli') session.nativeTransport ??= transport;
   };
   /** The observer members every transport implements identically. Each
    * transport spreads this and then overrides only what genuinely differs
@@ -268,7 +242,7 @@ export async function sendVendorTurn(input: {
    * deliberate default, not a forgotten one. */
   const sharedObserver = {
     onActivity, onThought, onUsage: noteUsage,
-    onResponseDelta: emitResponseDelta,
+    onResponseDelta: sink.response,
     onPhase: (phase: string) => prompter?.phase(phase),
     onNotice: (message: string) => prompter?.activity(chalk.yellow(message)),
     onPlan: (entries: readonly HarnessPlanEntry[]) => prompter?.setPlan(entries),
@@ -334,7 +308,7 @@ export async function sendVendorTurn(input: {
     const replyError = !result.isError ? harnessReplyError(harness, result.text ?? '') : undefined;
     if (replyError) result = { ...result, isError: true, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
     if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
-    if (session.nativeSessionId && (transport === 'acp' || transport === 'structured-cli' || transport === 'text-cli')) session.nativeTransport ??= transport;
+    if (session.nativeSessionId) keepTransport(transport);
     // A route that keeps no history: forget the session, so the next turn
     // opens a fresh one and carries ClikCode's own transcript (the fresh-
     // thread replay above) instead of resuming into an empty memory.
@@ -412,7 +386,7 @@ export async function sendVendorTurn(input: {
             });
           if (signedIn) {
             account = await syncAccountIdentityAfterLogin(harness, account, state);
-            await recordAccount(account);
+            await accounts.recordAccount(account);
             // The failed reply may already be on screen; the retry replaces it.
             editAnswer('clear');
             continue;
@@ -437,14 +411,9 @@ export async function sendVendorTurn(input: {
         editAnswer('clear');
         continue;
       }
-      const fallback = await accountAfterFailure({
-        state, session, account, failure, kind: failureKind, signal, matchesBackend: onVendorBackend, tally,
-        persist: () => checkpoint.persistNow(),
-        notice: (message) => prompter?.activity(chalk.yellow(message)),
-      });
+      const fallback = await accounts.after(failure, failureKind, signal);
       const carriedThread = await carryThread(account, fallback);
-      switchReason = failureKind;
-      await switchAccount(fallback, failureKind);
+      await accounts.switchTo(fallback, failureKind);
       nativeThreadRetried = false;
       if (carriedThread) {
         // The same thread, under a new account: it holds the conversation,
@@ -498,23 +467,9 @@ export async function sendVendorTurn(input: {
     // recording one per pass counted every earlier pass again each time
     // (usage-learning fits its limits from exactly these records).
     const usage = addTurnUsage(carriedPendingUsage, turnUsage);
-    const invocation = {
-      id: randomUUID(), accountId: account.id, provider: harness.provider, ...(model ? { model } : {}),
-      at: new Date().toISOString(), sessionId: session.id,
-      ...(usage?.input !== undefined ? { inputTokens: usage.input } : {}),
-      ...(usage?.output !== undefined ? { outputTokens: usage.output } : {}),
-      ...(usage?.cacheRead !== undefined ? { cacheReadTokens: usage.cacheRead } : {}),
-      ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
-      ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-      ...(usage?.credits !== undefined ? { credits: usage.credits } : {}),
-      latencyMs: Date.now() - startedAt,
-    };
-    state.invocations.push(invocation);
+    const invocation = recordInvocation(state, { sessionId: session.id, accountId: account.id, provider: harness.provider, model, startedAt, usage });
     recordSuccessfulAccountTurn(state, account, invocation.at);
-    // An answer the vendor cut short says so, beside the answer.
-    const stopped = stopReasonNotice(usage?.stopReason);
-    if (stopped && prompter) prompter.activity(chalk.yellow(stopped));
-    else if (stopped && !isJsonDefaultMode()) process.stderr.write(`${chalk.yellow(stopped)}\n`);
+    showStopReason(prompter, usage?.stopReason);
     // Completion always extracts the title, including when the stream that
     // filtered an earlier attempt was replaced during a retry.
     const completedText = await completeTurnCheckpoint(session, checkpoint, result.text, {
@@ -528,7 +483,7 @@ export async function sendVendorTurn(input: {
     // final response are reflected in ClikCode before the turn is saved.
     await synchronizeNativeTranscript(state, session);
     await writeState(state);
-    if (!prompter) emitHarnessOutput({ session, text: completedText, usage: { attributedBy: harness.command, ...usage }, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: switchReason } : {}) });
+    if (!prompter) emitHarnessOutput({ session, text: completedText, usage: { attributedBy: harness.command, ...usage }, invocation, ...accounts.switched() });
     return;
   }
   } finally {

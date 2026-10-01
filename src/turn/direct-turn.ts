@@ -1,5 +1,4 @@
 /** One turn through a directly addressable model API. */
-import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -7,12 +6,12 @@ import { prepareSessionTitle, titleStreamForAttempt } from '../session/title.js'
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { startTurnCheckpoint, completeTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
-import { writeState } from '../session/state/write.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../daemon/server.js';
-import { accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, type AccountFailureKind } from './failover.js';
+import { classifyAccountFailure } from './failover.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
-import { accountAfterFailure, initialAccountChoice, matchesDirectTurnModel, turnAccountRecorder, type FailoverTally } from './account-routing.js';
+import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
+import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { prepareAttachments } from '../session/attachments.js';
 
@@ -40,26 +39,13 @@ export async function sendDirectApiTurn(input: {
   turnText = directTitle.prompt;
   let titleStream = directTitle.stream;
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
-  let switchedFrom: string | undefined;
-  /** Why the turn left that account: the failure it met there. */
-  let switchReason: AccountFailureKind = 'quota-exhausted';
-  const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
-  const onThisModel = (item: AiHarnessAccount): boolean => matchesDirectTurnModel(item, model);
-  const recordAccount = turnAccountRecorder(session, () => checkpoint.persistNow());
-  const switchAccount = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
-    prompter?.activity(chalk.yellow(accountSwitchNotice(why, to.label)));
-    prompter?.phase(accountSwitchPhase(to.label));
-    switchedFrom = account.label;
-    switchReason = why;
-    account = to;
-    await recordAccount(to);
-  };
+  const accounts = turnAccounts({
+    state, session, prompter, matchesBackend: (item) => matchesDirectTurnModel(item, model),
+    persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
+  });
+  const sink = turnSink(checkpoint, prompter, { title: () => titleStream });
   try {
-  const initial = initialAccountChoice(state, account, session.accountFailover, onThisModel, tally.attempted);
-  if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
-  if (initial.kind === 'switch') {
-    await switchAccount(initial.account, 'quota-exhausted');
-  }
+  await accounts.start();
   const invoke = (active: AiHarnessAccount) => {
     // A retry is a new response attempt: this path re-sends the whole prompt,
     // so the partial answer from the account that failed is cleared first.
@@ -70,12 +56,7 @@ export async function sendDirectApiTurn(input: {
       provider: session.provider ?? active.provider, model, apiKey: localApiKey(active),
       messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort,
       ...(signal ? { abortSignal: signal } : {}),
-      onDelta: (delta: string) => {
-        const visible = titleStream ? titleStream.push(delta, 'append') : delta;
-        if (visible === undefined) return;
-        checkpoint.response(visible, 'append');
-        prompter?.response(visible, 'append');
-      },
+      onDelta: (delta: string) => sink.response(delta),
     });
   };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
@@ -89,19 +70,9 @@ export async function sendDirectApiTurn(input: {
       break;
     } catch (error) {
       const failureKind = classifyAccountFailure(error);
-      const fallback = await accountAfterFailure({
-        state, session, account, failure: error, kind: failureKind, signal, matchesBackend: onThisModel, tally,
-        persist: () => checkpoint.persistNow(),
-        notice: (message) => prompter?.activity(chalk.yellow(message)),
-      });
-      await switchAccount(fallback, failureKind);
+      await accounts.switchTo(await accounts.after(error, failureKind, signal), failureKind);
     }
   }
-  const invocation = {
-    id: randomUUID(), sessionId: session.id, accountId: account.id, provider: session.provider ?? account.provider, model,
-    at: new Date().toISOString(), inputTokens: turn.usage.inputTokens,
-    outputTokens: turn.usage.outputTokens, latencyMs: Date.now() - startedAt,
-  };
   if (prompter && Array.isArray(turn.toolCalls)) {
     for (const call of turn.toolCalls) {
       const name = call && typeof call.name === 'string' ? call.name : 'tool';
@@ -111,10 +82,13 @@ export async function sendDirectApiTurn(input: {
       prompter.activity(chalk.dim(name));
     }
   }
-  state.invocations.push(invocation);
+  const invocation = recordInvocation(state, {
+    sessionId: session.id, accountId: account.id, provider: session.provider ?? account.provider, model, startedAt,
+    usage: { input: turn.usage.inputTokens, output: turn.usage.outputTokens },
+  });
   recordSuccessfulAccountTurn(state, account, invocation.at);
   const completedText = await completeTurnCheckpoint(session, checkpoint, turn.text, { title: titleStream?.title });
-  if (!prompter) emitHarnessOutput({ session, text: completedText, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...(switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: switchReason } : {}) });
+  if (!prompter) emitHarnessOutput({ session, text: completedText, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...accounts.switched() });
   } finally {
     await checkpoint.flush();
   }

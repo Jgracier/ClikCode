@@ -5,10 +5,13 @@ import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { usageExhaustedMessage } from './usage-exhausted.js';
-import { accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
+import chalk from 'chalk';
+import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
 import { recordQuotaRefusal } from './account-outcome.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
+import type { TurnObserver } from './observer.js';
 
 /** Credentials do not select a transport by themselves: tool-style providers
  * use their CLI even when the account supplies an API key. */
@@ -185,5 +188,62 @@ export function turnAccountRecorder(session: HarnessSession, persist: () => Prom
     session.accountId = to.id;
     recorded = to.id;
     await persist();
+  };
+}
+
+/** A turn's account and how it moved, for either account backend
+ * (vendor-turn.ts, direct-turn.ts): the choice it starts on, the step after a
+ * failed attempt, and the switch itself -- said before the retry (it happens
+ * inside one await chain and would otherwise look instantaneous) and with the
+ * reason, so a crash is not called a spent plan. The account itself stays the
+ * caller's variable (`current`/`adopt`). */
+export function turnAccounts(input: {
+  state: HarnessState;
+  session: HarnessSession;
+  prompter?: TurnObserver;
+  matchesBackend: (candidate: AiHarnessAccount) => boolean;
+  /** Saves what a step recorded. */
+  persist: () => Promise<void>;
+  current: () => AiHarnessAccount;
+  adopt: (account: AiHarnessAccount) => void;
+  /** Runs before the account changes (a vendor closes its live process). */
+  beforeSwitch?: () => Promise<void>;
+}) {
+  const { state, session, prompter, matchesBackend, persist } = input;
+  const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
+  const recordAccount = turnAccountRecorder(session, persist);
+  let switchedFrom: string | undefined;
+  /** Why the turn left that account: the failure it met there. */
+  let switchReason: AccountFailureKind = 'quota-exhausted';
+  const switchTo = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
+    prompter?.activity(chalk.yellow(accountSwitchNotice(why, to.label)));
+    prompter?.phase(accountSwitchPhase(to.label));
+    await input.beforeSwitch?.();
+    switchedFrom = input.current().label;
+    switchReason = why;
+    input.adopt(to);
+    await recordAccount(to);
+  };
+  return {
+    recordAccount,
+    switchTo,
+    /** Moves off a spent account before the first attempt; true when it did.
+     * `carry` runs first, while the account is still the old one. */
+    async start(carry?: (to: AiHarnessAccount) => Promise<void>): Promise<boolean> {
+      const initial = initialAccountChoice(state, input.current(), session.accountFailover, matchesBackend, tally.attempted);
+      if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
+      if (initial.kind !== 'switch') return false;
+      await carry?.(initial.account);
+      await switchTo(initial.account, 'quota-exhausted');
+      return true;
+    },
+    /** accountAfterFailure for the current account. */
+    after: (failure: unknown, kind: AccountFailureKind, signal?: AbortSignal): Promise<AiHarnessAccount> => accountAfterFailure({
+      state, session, account: input.current(), failure, kind, signal, matchesBackend, tally, persist,
+      notice: (message) => prompter?.activity(chalk.yellow(message)),
+    }),
+    /** What the turn's output says about a move, when there was one. */
+    switched: (): { accountSwitchedFrom?: string; reason?: AccountFailureKind } =>
+      switchedFrom ? { accountSwitchedFrom: switchedFrom, reason: switchReason } : {},
   };
 }
