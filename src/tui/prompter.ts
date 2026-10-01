@@ -880,18 +880,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return true;
   }
 
-  /** The caller uses these only after an interrupted turn: before any output,
-   * Escape restores the submitted text; after output begins, the partial turn
-   * is persisted instead. */
+  /** What the next prompt's composer opens with: a message that never
+   * reached its turn, a cancelled one the worker hands back, or a `/`. */
   restoreDraft(value: string): void { this.queuedDraft = value; }
   async flushWaitingSubmissions(): Promise<void> {
     await Promise.allSettled([...this.waitingSubmissionWrites]);
-  }
-  liveResponseText(): string { return this.liveResponse; }
-  turnOutputStarted(): boolean {
-    return Boolean(this.liveResponse || this.activityEntries.some((entry) =>
-      entry.anchor === this.activityAnchor && entry.responseOffset !== undefined
-      && (entry.event?.kind === 'tool-start' || entry.event?.kind === 'tool-done' || entry.event?.kind === 'tool-error')));
   }
 
   /** This window stops following the running turn (← to the board); its

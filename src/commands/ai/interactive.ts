@@ -32,7 +32,7 @@ import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessFor
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
-import { commandDuringTurn, enqueueCommandLine } from '../../tui/slash/queue.js';
+import { enqueueCommandLine } from '../../tui/slash/queue.js';
 import { impliedHarnessCommand } from '../../tui/slash/infer-provider.js';
 import { aiHarnessSelect } from './harness.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
@@ -40,7 +40,7 @@ import { harnessModelLabel, resolveNativeModel, warmNativeModelCatalog } from '.
 import { settingLabel } from '../../tui/pickers/setting-scope.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, nativeAvailableCommands, persistentTransports } from '../../turn/vendor-process.js';
-import { discardInterruptedTurn, preserveInterruptedTurn } from '../../turn/turn-journal.js';
+import { discardInterruptedTurn } from '../../turn/turn-journal.js';
 import { synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { turnEnvironment } from '../../turn/turn-environment.js';
 import { runSessionTurn } from '../../turn/session-turn.js';
@@ -52,7 +52,6 @@ import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneA
 import { claimSession, releaseSession, sessionClaimIsLive, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
 import { existsSync } from 'node:fs';
 import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
-import { LiveTurnInputBroker } from '../../turn/live-input.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversation, newProviderConversation, releaseQueuedTurn } from './conversations.js';
 import { aiSessionLeave, launchSession } from './sessions.js';
@@ -567,7 +566,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // opening, so picking any row starts a worker on this build.
         void retireStaleWorkers().catch(() => undefined);
       }
-      let interruptedSubmission: { text: string; restoreOnEscape: boolean } | undefined;
       /** One turn with the normal waiting / cancel / live-input UI. `echo`
        * paints the submitted text as the pending user message; synthetic
        * prompts (/review, /init, /compact) are not shown as if typed. */
@@ -587,18 +585,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // Likewise a ClikCode Local model: loaded here, with its progress on
         // the waiting line, and held by this terminal rather than the worker.
         await ensureLocalModelForTurn(active);
-        const run = {
-          persistentTransports: true,
-          ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}),
-          ...(rl instanceof TerminalHarnessPrompter ? { prompter: rl } : {}),
-        };
-        if (active && rl.render) {
+        if (active && rl instanceof TerminalHarnessPrompter) {
           // The submitted prompt is the prompter's for the whole turn, not a
           // message and not part of this snapshot: it is not a message yet, and
           // put in `messages` it lived somewhere the worker's next snapshot
           // overwrote -- which is what made the message the user had just sent
           // appear and then vanish. See tui/render/pending-prompt.ts.
-          rl.submitted?.(turn.echo ? promptText : undefined);
+          rl.submitted(turn.echo ? promptText : undefined);
           const pending: HarnessSession = {
             ...active,
             messages: sessionTranscriptMessages(active),
@@ -608,40 +601,19 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               : {}),
           };
           rl.render(pending, activeAccount);
-          if (rl instanceof TerminalHarnessPrompter) {
-            // The worker owns cancellation/steering and the preserve-vs-
-            // discard decision on a real cancel itself now (see
-            // worker/session-worker.ts's runTurn) -- interruptedSubmission,
-            // a few lines below in the catch block this bypasses, is what
-            // the DIRECT path still needs that decision made FOR it from.
-            // Left unset here on purpose: `cancelled` will be false for
-            // this path regardless (runTurnThroughWorker never rethrows an
-            // ordinary cancellation, only a genuine failure), so that
-            // block's own `interruptedSubmission &&` check already no-ops
-            // correctly without this being threaded through it too.
-            const outcome = await runTurnThroughWorker(targetId, rl, promptText, turn);
-            if (outcome.notice) notice = outcome.notice;
-            if (outcome.left) openBoard = true;
-            return;
-          }
-          const turnController = new AbortController();
-          const liveInput = new LiveTurnInputBroker();
-          interruptedSubmission = { text: promptText, restoreOnEscape: false };
-          TERMINAL.active?.startWaiting('thinking', (restoreDraft) => {
-            interruptedSubmission!.restoreOnEscape = restoreDraft && turn.echo;
-            turnController.abort();
-          }, (text) => liveInput.submit(text), (text) => commandDuringTurn(targetId, text));
-          try { await runSessionTurn(config, targetId, promptText, turnController.signal, { ...run, liveInput }); }
-          finally {
-            liveInput.close();
-            await TERMINAL.active?.flushWaitingSubmissions();
-            TERMINAL.active?.stopWaiting();
-          }
+          // The worker owns cancellation, steering and the preserve-vs-discard
+          // decision on a cancel (worker/session-worker.ts's runTurn), and
+          // runTurnThroughWorker rethrows only a genuine failure.
+          const outcome = await runTurnThroughWorker(targetId, rl, promptText, turn);
+          if (outcome.notice) notice = outcome.notice;
+          if (outcome.left) openBoard = true;
           return;
         }
         output.write(`${chalk.dim(`${active ? sessionProviderLabel(active) : 'Provider'} · working…`)}\n`);
-        try { await runSessionTurn(config, targetId, promptText, undefined, run); }
-        finally { TERMINAL.active?.stopWaiting(); }
+        await runSessionTurn(config, targetId, promptText, undefined, {
+          persistentTransports: true,
+          ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}),
+        });
       };
       /** A subprocess the user has to wait for gets the same waiting indicator a turn does. */
       const withWaiting = async <T>(label: string, work: () => Promise<T>): Promise<T> => {
@@ -1014,18 +986,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           await releaseQueuedTurn(id, queuedTurnId).catch(() => undefined);
           TERMINAL.active?.restoreDraft(line);
         }
-        if (cancelled && interruptedSubmission && TERMINAL.active) {
-          const outputStarted = TERMINAL.active.turnOutputStarted();
-          const partialResponse = TERMINAL.active.liveResponseText();
-          if (outputStarted) await preserveInterruptedTurn(id, interruptedSubmission.text, partialResponse, true);
-          else {
-            await discardInterruptedTurn(id, interruptedSubmission.text);
-            if (interruptedSubmission.restoreOnEscape) TERMINAL.active.restoreDraft(interruptedSubmission.text);
-          }
-          notice = outputStarted ? 'Stopped' : interruptedSubmission.restoreOnEscape ? 'Stopped · draft restored' : 'Stopped';
         // Running out of quota is an outcome, not a fault. "All accounts
         // exhausted" reads wrong behind an "Error:" that suggests something broke.
-        } else if (rl.render) {
+        if (rl.render) {
           notice = cancelled ? 'Stopped' : isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
           // Out of usage on every account here: offer the harnesses that
           // still have some, and carry on there with the same message.
