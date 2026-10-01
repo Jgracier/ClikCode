@@ -149,13 +149,3 @@ export function nativeActivityPhaseFromValue(harness: AiLocalHarnessDefinition, 
   return undefined;
 }
 
-function nativeActivityPhase(harness: AiLocalHarnessDefinition, lineText: string): 'generating response' | undefined {
-  const candidate = lineText.trim();
-  if (candidate[0] !== '{') return undefined;
-  try {
-    return nativeActivityPhaseFromValue(harness, JSON.parse(candidate));
-  } catch {
-    // fail-open-ok: non-JSON output is ordinary assistant text, not a structured result envelope.
-    return undefined;
-  }
-}
