@@ -264,7 +264,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.showHistory', screen('history')),
     vscode.commands.registerCommand('clikcode.resumeChat', screen('history')),
     vscode.commands.registerCommand('clikcode.showAccounts', screen('accounts')),
-    vscode.commands.registerCommand('clikcode.openSettings', screen('settings')),
+    vscode.commands.registerCommand('clikcode.openSettings', slash('/settings')),
     vscode.commands.registerCommand('clikcode.chooseProvider', slash('/provider')),
     vscode.commands.registerCommand('clikcode.chooseModel', slash('/model')),
     vscode.commands.registerCommand('clikcode.chooseAccount', slash('/account')),
