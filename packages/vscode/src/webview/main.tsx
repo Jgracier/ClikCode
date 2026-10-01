@@ -141,9 +141,7 @@ function Header({ model, screen, onScreen }: { model: ChatModel; screen: Webview
   const title = model.title ?? (model.sessionId ? 'New chat' : 'ClikCode');
   return (
     <header class="topbar">
-      <button type="button" class="title-button" title="Conversations" onClick={() => onScreen(screen === 'history' ? 'chat' : 'history')}>
-        <span class="title-text">{title}</span><Icon name="chevron-down" />
-      </button>
+      <span class="title-text" title={title}>{title}</span>
       {model.running ? <span class="running-indicator" title="Working…"><Icon name="loading" spin label="Working" /></span> : null}
       <span class="spacer" />
       <IconButton id="new-chat" icon="add" label={`New chat (${shortcut('N')})`} onClick={() => { onScreen('chat'); void request({ method: 'open', mode: 'new' }); }} />
