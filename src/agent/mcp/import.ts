@@ -72,6 +72,9 @@ export const SOURCES: readonly VendorSource[] = [
   { vendor: 'opencode', command: 'opencode', homeRelative: ['.config', 'opencode', 'opencode.jsonc'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' },
   { vendor: 'Kilo', command: 'kilo', homeRelative: ['.config', 'kilo', 'kilo.json'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' },
   { vendor: 'Kilo', command: 'kilo', homeRelative: ['.config', 'kilo', 'kilo.jsonc'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' },
+  // `cmd mcp add -s user` writes ~/.commandcode/mcp.json. Verified against
+  // Command Code's own MCP reference (user scope).
+  { vendor: 'Command Code', command: 'command', homeRelative: ['.commandcode', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
 ];
 
 export const IMPORT_MARKER_FILE = 'mcp-import.json';
@@ -207,6 +210,65 @@ async function readServerTable(path: string, source: VendorSource): Promise<Reco
   let table: unknown = root;
   for (const key of source.key) table = isRecord(table) ? table[key] : undefined;
   return isRecord(table) ? table : undefined;
+}
+
+/** Where this account's copy of one vendor file might be.
+ *
+ * A profile is either a fake HOME or the vendor's own config root
+ * (`CODEX_HOME`, `QWEN_HOME`). Both shapes are checked: a missing path adds
+ * nothing, and a name found in either one counts as already there. */
+export function vendorConfigCandidates(
+  source: VendorSource, home: string, profile?: { env: string; path: string },
+): string[] {
+  const files = [join(home, ...source.homeRelative)];
+  if (profile?.env === 'HOME') files.push(join(profile.path, ...source.homeRelative));
+  else if (profile) {
+    files.push(join(profile.path, ...source.homeRelative));
+    if (source.homeRelative.length > 1) files.push(join(profile.path, ...source.homeRelative.slice(1)));
+    if (source.rootRelative) files.push(join(profile.path, ...source.rootRelative));
+  }
+  return [...new Set(files)];
+}
+
+/** Names already configured for this harness, when ClikCode knows the file.
+ * `known` is false for a harness whose MCP file has not been observed.
+ * `unreadable` is a file that exists but could not be parsed: the caller must
+ * not add into it, because it cannot tell whether the name is already there. */
+/** Names in one vendor file. A missing file or a missing server table is no
+ * names. A file that exists but does not parse is unreadable. */
+async function namesInVendorFile(path: string, source: VendorSource): Promise<Set<string> | 'missing' | 'unreadable'> {
+  let text: string;
+  try { text = await readFile(path, 'utf8'); } catch { return 'missing'; }
+  if (!text.trim()) return 'missing';
+  let root: unknown;
+  try {
+    if (source.format === 'toml') root = parseToml(text);
+    else if (source.format === 'yaml') root = (await import('yaml')).parse(text);
+    else root = JSON.parse(source.format === 'jsonc' ? stripJsonc(text) : text);
+  } catch { return 'unreadable'; }
+  let table: unknown = root;
+  for (const key of source.key) {
+    if (!isRecord(table) || !(key in table)) return new Set();
+    table = table[key];
+  }
+  return isRecord(table) ? new Set(Object.keys(table)) : 'unreadable';
+}
+
+export async function vendorMcpServerNames(
+  command: string, home: string, profile?: { env: string; path: string },
+): Promise<{ known: boolean; names: Set<string>; unreadable?: string }> {
+  const sources = SOURCES.filter((source) => source.command === command);
+  const names = new Set<string>();
+  if (!sources.length) return { known: false, names };
+  for (const source of sources) {
+    for (const path of vendorConfigCandidates(source, home, profile)) {
+      const found = await namesInVendorFile(path, source);
+      if (found === 'missing') continue;
+      if (found === 'unreadable') return { known: true, names, unreadable: path };
+      for (const name of found) names.add(name);
+    }
+  }
+  return { known: true, names };
 }
 
 /** The files to read for one source: the user's own, then each isolated

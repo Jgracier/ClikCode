@@ -1,5 +1,5 @@
 /** Tools & integrations: the harness's own managers (MCP servers, skills,
- * plugins, hooks, …) and adding an MCP server to every harness at once.
+ * plugins, hooks, …) and recording an MCP server for whichever harness is chosen.
  *
  * The managers were reachable only by typing `/mcp`, `/plugins` and so on --
  * left out of the `/` palette on purpose, since the vendor owns them -- and a
@@ -9,7 +9,7 @@
 
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
-import { installMcpServerEverywhere } from '../../harness/mcp-registry.js';
+import { recordSharedMcpServer } from '../../harness/mcp-registry.js';
 import { runNativeHarnessCommand } from '../../harness/transport/native/command.js';
 import { localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
@@ -33,7 +33,7 @@ export async function interactiveToolsPicker(rl: HarnessPrompter, id: string, ha
       detail: `· ${[manager.listArgv ? 'list' : '', manager.manageArgv ? `open ${harness.displayName}'s manager` : ''].filter(Boolean).join(' · ')}`,
       value: name,
     })),
-    { label: 'Add an MCP server to every harness', detail: '· one command or URL, written into each harness that takes MCP', value: '__mcp_everywhere__' },
+    { label: 'Add an MCP server', detail: '· recorded once, installed into a harness when you choose it', value: '__mcp_everywhere__' },
   ]);
   if (!choice) return;
   if (choice === '__mcp_everywhere__') return addMcpEverywhere(rl);
@@ -65,10 +65,6 @@ async function addMcpEverywhere(rl: HarnessPrompter): Promise<void> {
   const line = (await rl.question('Command to run, or URL › ')).trim();
   if (!line) return;
   const [target, ...args] = line.split(/\s+/);
-  const state = await readState({ transcripts: [] });
-  const results = await installMcpServerEverywhere({ name, target: target!, ...(args.length ? { args } : {}) }, state.accounts);
-  const added = results.filter((result) => result.ok);
-  rl.panel?.(`MCP server ${name}`, results.length
-    ? [`Added to ${added.length} of ${results.length}.`, ...results.map((result) => `${result.ok ? '✓' : '✗'} ${result.harness}${result.account ? ` (${result.account})` : ''}${result.ok ? '' : ` ${result.detail ?? ''}`}`)].join('\n')
-    : 'No installed harness takes an MCP server from the command line.');
+  await recordSharedMcpServer({ name, target: target!, ...(args.length ? { args } : {}) });
+  rl.panel?.(`MCP server ${name}`, `${name} is recorded. A harness receives it the first time you choose that provider, if the name is not already there.`);
 }

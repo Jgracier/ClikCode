@@ -1,10 +1,10 @@
 /** Which MCP servers ClikCode's own agent connects to.
  *
  * The source is `<state dir>/mcp.json`, in the same `{ "mcpServers": { … } }`
- * shape Cursor, Kimi and Claude's project file use, and it is written by the
- * same `clikcode mcp add` (and the Tools picker) that fans a server out to
- * every vendor harness -- see installMcpServerEverywhere. So a user adds a
- * server once and every harness, this one included, has it.
+ * shape Cursor, Kimi and Claude's project file use. `clikcode mcp add` (and
+ * the Tools picker) writes it here. A vendor harness does not read this file:
+ * the first turn on that provider copies any name it does not already have
+ * into its own config. See provisionChosenHarness.
  *
  * The file is read, never assumed to be ClikCode's alone: a user may edit it by
  * hand, so the keys other tools write (`env`, `headers`, `type`, `disabled`)

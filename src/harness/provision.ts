@@ -1,0 +1,234 @@
+/** Give the harness that was just chosen whatever ClikCode already has, and
+ * only what that harness does not already have.
+ *
+ * MCP servers come from `<state dir>/mcp.json`. Skills come from the same
+ * directories ClikCode's own agent reads. Hooks come from Claude's settings
+ * files, and are written only for a harness that executes that same JSON.
+ * Claude and Grok already load those files, so writing them again would run
+ * every hook twice. A harness with a different hook schema is left alone.
+ *
+ * An existing name is never replaced. The vendor's copy may be one the user
+ * edited, and a different command under the same name stays theirs.
+ */
+import { cp, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
+import { installMcpOnHarness, type McpServerEntry } from './mcp-registry.js';
+import { loadMcpServers, type McpServerSpec } from '../agent/mcp/config.js';
+import { vendorMcpServerNames } from '../agent/mcp/import.js';
+import type { HookConfig } from '../agent/hooks.js';
+import { discoverSkills, type Skill } from '../agent/skills.js';
+import { stateDirectory } from '../session/store/paths.js';
+
+/** `<dir>/<name>/SKILL.md`, checked against a real install of that harness. */
+const USER_SKILL_DIR: Record<string, readonly string[]> = {
+  claude: ['.claude', 'skills'],
+  codex: ['.codex', 'skills'],
+  grok: ['.grok', 'skills'],
+  gemini: ['.gemini', 'skills'],
+  copilot: ['.copilot', 'skills'],
+  qwen: ['.qwen', 'skills'],
+  hermes: ['.hermes', 'skills'],
+  cn: ['.continue', 'skills'],
+  junie: ['.junie', 'skills'],
+  command: ['.commandcode', 'skills'],
+  cursor: ['.cursor', 'skills'],
+};
+
+/** Project skill directory, where the vendor documents one. The others load
+ * skills from the user directory only, so a project skill is copied there. */
+const PROJECT_SKILL_DIR: Record<string, readonly string[]> = {
+  claude: ['.claude', 'skills'],
+  cursor: ['.cursor', 'skills'],
+  command: ['.commandcode', 'skills'],
+};
+
+/** Harnesses that already execute Claude's settings.json hooks. Writing a
+ * second copy would run every hook twice. Everyone else uses a different
+ * hook schema, so nothing is translated into it. */
+const INHERITS_CLAUDE_HOOKS = new Set(['claude', 'grok']);
+
+/** `inherits` already runs Claude's hook files. `different` uses another
+ * schema, which is not rewritten. */
+export function hookShare(command: string): 'inherits' | 'different' {
+  return INHERITS_CLAUDE_HOOKS.has(command) ? 'inherits' : 'different';
+}
+
+const HOOK_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'SessionStart', 'Stop'] as const;
+
+export interface ProvisionResult {
+  mcpInstalled: string[];
+  mcpSkipped: string[];
+  skillsCopied: string[];
+  hooksAdded: number;
+  /** One line when something was written. Empty when the harness was already current. */
+  summary: string;
+}
+
+export interface ProvisionInput {
+  harness: AiLocalHarnessDefinition;
+  account?: AiHarnessAccount;
+  workspace?: string;
+  stateDir?: string;
+  home?: string;
+  /** Tests pass the writer. Production uses the harness's own mcp add. */
+  install?: typeof installMcpOnHarness;
+}
+
+function profileOf(account?: AiHarnessAccount): { env: string; path: string } | undefined {
+  const profile = account?.nativeProfile;
+  return profile ? { env: profile.env, path: profile.path } : undefined;
+}
+
+/** A profile that is a fake HOME keeps the dotted directory. A profile that
+ * is the vendor root (`QWEN_HOME` standing in for `~/.qwen`) drops it. */
+export function skillRoot(
+  parts: readonly string[], home: string, profile?: { env: string; path: string },
+): string {
+  if (!profile || profile.env === 'HOME') return join(profile?.path ?? home, ...parts);
+  return join(profile.path, ...parts.slice(1));
+}
+
+function specToEntry(spec: McpServerSpec): McpServerEntry {
+  if (spec.transport === 'stdio') return { name: spec.name, target: spec.command, ...(spec.args.length ? { args: spec.args } : {}) };
+  return { name: spec.name, target: spec.url };
+}
+
+/** Commands already declared for one event. A repeat of the same command is
+ * the same hook, whatever matcher group it sits in. */
+function hookCommands(config: HookConfig | undefined, event: typeof HOOK_EVENTS[number]): Set<string> {
+  const commands = new Set<string>();
+  for (const group of config?.[event] ?? []) {
+    for (const hook of group.hooks ?? []) {
+      if (typeof hook.command === 'string' && hook.command.trim()) commands.add(hook.command.trim());
+    }
+  }
+  return commands;
+}
+
+/** Append hook commands the file does not already run. Existing groups are
+ * not edited. Returns how many commands were added, and writes nothing when
+ * that number is zero. */
+export async function syncClaudeHookFile(file: string, incoming: HookConfig): Promise<number> {
+  let root: Record<string, unknown> = {};
+  const existingText = await readFile(file, 'utf8').catch(() => undefined);
+  if (existingText?.trim()) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(existingText); } catch { return 0; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 0;
+    root = parsed as Record<string, unknown>;
+  }
+  const current = root.hooks && typeof root.hooks === 'object' && !Array.isArray(root.hooks)
+    ? root.hooks as HookConfig
+    : {};
+  const merged: HookConfig = { ...current };
+  let added = 0;
+  for (const event of HOOK_EVENTS) {
+    const have = hookCommands(current, event);
+    const groups = [];
+    for (const group of incoming[event] ?? []) {
+      const fresh = (group.hooks ?? []).filter((hook) => typeof hook.command === 'string' && hook.command.trim() && !have.has(hook.command.trim()));
+      if (!fresh.length) continue;
+      added += fresh.length;
+      groups.push({ ...(group.matcher ? { matcher: group.matcher } : {}), hooks: fresh });
+    }
+    if (groups.length) merged[event] = [...(merged[event] ?? []), ...groups];
+  }
+  if (!added) return 0;
+  root.hooks = merged;
+  await mkdir(join(file, '..'), { recursive: true });
+  await writeFile(file, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
+  return added;
+}
+
+async function copySkill(skill: Skill, directory: string): Promise<boolean> {
+  if (skill.name.includes('/') || skill.name.includes('\\') || skill.name === '..') return false;
+  const destination = join(directory, skill.name);
+  if (await stat(destination).then(() => true, () => false)) return false;
+  const source = await realpath(skill.dir).catch(() => skill.dir);
+  const realDest = await realpath(directory).catch(() => directory);
+  if (source === destination || source.startsWith(`${realDest}/`)) return false;
+  await mkdir(directory, { recursive: true });
+  await cp(skill.dir, destination, { recursive: true });
+  return true;
+}
+
+/** Install what this harness is missing. Safe to call on every turn: a name
+ * that is already present is not written again. */
+export async function provisionChosenHarness(input: ProvisionInput): Promise<ProvisionResult> {
+  const home = input.home ?? homedir();
+  const stateDir = input.stateDir ?? stateDirectory();
+  const profile = profileOf(input.account);
+  const workspace = input.workspace?.trim() || process.cwd();
+  const mcpInstalled: string[] = [];
+  const mcpSkipped: string[] = [];
+  const skillsCopied: string[] = [];
+  let hooksAdded = 0;
+
+  const loaded = await loadMcpServers(stateDir);
+  const present = await vendorMcpServerNames(input.harness.command, home, profile);
+  for (const spec of loaded.servers) {
+    if (present.unreadable) { mcpSkipped.push(spec.name); continue; }
+    if (present.known && present.names.has(spec.name)) continue;
+    if (!present.known && await alreadyProvisioned(stateDir, input, spec.name)) continue;
+    const result = await (input.install ?? installMcpOnHarness)(input.harness, specToEntry(spec), input.account);
+    if (result.ok) {
+      mcpInstalled.push(spec.name);
+      if (!present.known) await rememberProvisioned(stateDir, input, spec.name);
+    } else if (result.detail && /already|exists|duplicate/i.test(result.detail)) {
+      if (!present.known) await rememberProvisioned(stateDir, input, spec.name);
+    } else mcpSkipped.push(spec.name);
+  }
+
+  const userDirParts = USER_SKILL_DIR[input.harness.command];
+  if (userDirParts) {
+    const catalog = await discoverSkills({ cwd: workspace, stateDir, homeDir: home });
+    const userDir = skillRoot(userDirParts, home, profile);
+    const projectParts = PROJECT_SKILL_DIR[input.harness.command];
+    const projectDir = projectParts ? join(workspace, ...projectParts) : userDir;
+    for (const skill of catalog.skills) {
+      const directory = skill.source === 'project' || skill.source === 'project-claude' ? projectDir : userDir;
+      try {
+        if (await copySkill(skill, directory)) skillsCopied.push(skill.name);
+      } catch {
+        // One skill that cannot be copied must not stop the turn, or the
+        // ones that can.
+      }
+    }
+  }
+
+  // inherits: already running. different: another schema, left untouched.
+  if (hookShare(input.harness.command) === 'inherits') hooksAdded = 0;
+
+  const parts = [
+    mcpInstalled.length ? `Installed ${mcpInstalled.length} MCP server${mcpInstalled.length === 1 ? '' : 's'} into ${input.harness.displayName}` : '',
+    skillsCopied.length ? `copied ${skillsCopied.length} skill${skillsCopied.length === 1 ? '' : 's'}` : '',
+    hooksAdded ? `added ${hooksAdded} hook${hooksAdded === 1 ? '' : 's'}` : '',
+  ].filter(Boolean);
+  return { mcpInstalled, mcpSkipped, skillsCopied, hooksAdded, summary: parts.join(', ') };
+}
+
+function provisionKey(input: ProvisionInput, name: string): string {
+  return `${input.harness.command}\0${input.account?.id ?? ''}\0${name}`;
+}
+
+async function readMarker(stateDir: string): Promise<Record<string, true>> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(stateDir, 'mcp-provision.json'), 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, true> : {};
+  } catch { return {}; }
+}
+
+/** A harness whose config file ClikCode cannot read still must not be given
+ * the same server on every turn. The marker is only that brake. */
+async function alreadyProvisioned(stateDir: string, input: ProvisionInput, name: string): Promise<boolean> {
+  return provisionKey(input, name) in await readMarker(stateDir);
+}
+
+async function rememberProvisioned(stateDir: string, input: ProvisionInput, name: string): Promise<void> {
+  const marker = await readMarker(stateDir);
+  marker[provisionKey(input, name)] = true;
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(join(stateDir, 'mcp-provision.json'), `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+}

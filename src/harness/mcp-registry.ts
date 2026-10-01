@@ -1,11 +1,11 @@
 /**
- * One MCP server, added once, installed into every harness that has MCP.
+ * One MCP server, recorded once, installed into a harness when that provider
+ * is chosen and the server is not already there.
  *
  * ClikCode does not host these servers and does not proxy them: the harness
  * process connects to an MCP server itself, so the only way to give a harness
- * a tool is to write it into that harness's own configuration. What ClikCode
- * can remove is the repetition -- the same server registered by hand in
- * nineteen places, once per harness, and again per isolated account profile.
+ * a tool is to write it into that harness's own configuration. The shared list
+ * lives in ClikCode's mcp.json. A harness that is never opened is left alone.
  *
  * The write goes through each harness's own `mcp add`, not through its config
  * file. A config format is a private detail a vendor may change between
@@ -257,8 +257,10 @@ interface McpInstallResult { harness: string; account?: string; ok: boolean; det
 /** Registers `entry` with one harness, under one account's own profile.
  *
  * Failures are reported, never thrown: one harness refusing a server is not a
- * reason for the other eighteen to go without it. */
-async function installMcpServer(
+ * reason for the turn to stop. The caller has already checked the name is
+ * absent; this does not look, and a second call would overwrite a config-file
+ * harness. */
+export async function installMcpOnHarness(
   harness: AiLocalHarnessDefinition, entry: McpServerEntry, account?: AiHarnessAccount,
 ): Promise<McpInstallResult> {
   const label = { harness: harness.command, ...(account?.label ? { account: account.label } : {}) };
@@ -291,41 +293,11 @@ async function installMcpServer(
   }
 }
 
-/** Registers `entry` everywhere it can go: every installed harness with a
- * recorded grammar, once per account that has its own isolated profile.
- *
- * One account per harness where none is isolated, because a harness without
- * profile isolation has a single configuration and writing it twice would
- * just repeat the same work.
- */
-export async function installMcpServerEverywhere(
-  entry: McpServerEntry, accounts: readonly AiHarnessAccount[],
-): Promise<McpInstallResult[]> {
-  const harnesses = await harnessesAcceptingMcp();
-  const results: McpInstallResult[] = [await recordForClikCodeAgent(entry)];
-  for (const harness of harnesses) {
-    const profiles = harness.profileEnv
-      ? accounts.filter((account) => account.provider === harness.provider && account.nativeProfile)
-      : [];
-    const targets: Array<AiHarnessAccount | undefined> = profiles.length ? profiles : [undefined];
-    for (const account of targets) {
-      // Sequential on purpose: these write vendor config files, and two
-      // processes rewriting one file at once is how a config is lost.
-      results.push(await installMcpServer(harness, entry, account));
-    }
-  }
-  return results;
-}
-
 /** ClikCode's own agent (the Gateway and local routes) has no vendor config
  * to write into, so the server is recorded in ClikCode's state directory, in
  * the same `mcpServers` shape and through the same merge that preserves
- * whatever else the file holds. See agent/mcp/config.ts, which reads it. */
-async function recordForClikCodeAgent(entry: McpServerEntry): Promise<McpInstallResult> {
-  try {
-    await writeMcpConfigEntry(mcpConfigFilePath(stateDirectory()), MCP_SERVERS_KEY, entry);
-    return { harness: 'clikcode', ok: true };
-  } catch (error) {
-    return { harness: 'clikcode', ok: false, detail: error instanceof Error ? error.message : 'could not write config' };
-  }
+ * whatever else the file holds. See agent/mcp/config.ts, which reads it.
+ * Choosing a provider later copies a missing name into that harness. */
+export async function recordSharedMcpServer(entry: McpServerEntry): Promise<void> {
+  await writeMcpConfigEntry(mcpConfigFilePath(stateDirectory()), MCP_SERVERS_KEY, entry);
 }

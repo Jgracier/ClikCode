@@ -229,18 +229,22 @@ vendor can read another vendor's memory, so the new tool is sent the
 conversation so far as context. On a long thread that costs tokens and a few
 seconds. Nothing else changes.
 
-## One MCP server, every tool
+## One MCP server, whichever tool you choose
 
 Tools that support MCP each want it configured their own way. Add a server
-once and ClikCode installs it into all of them, in each one's spelling:
+once. ClikCode's own agent uses it immediately. Another harness gets it the
+first time you choose that provider, and only if that name is not already
+there:
 
 ```sh
-clikcode mcp targets                        # who would receive it, and how
-clikcode mcp add postgres -- npx -y pg-mcp  # send it to all of them
+clikcode mcp targets                        # how each harness would receive it
+clikcode mcp add postgres -- npx -y pg-mcp  # record it; install on choose
 ```
 
 ClikCode does not host or proxy these servers. Each tool talks to them
-directly, exactly as it would if you had configured it by hand.
+directly, exactly as it would if you had configured it by hand. Skills follow
+the same rule. Hooks are copied only when that harness reads the same hook
+file Claude does; Claude and Grok already do.
 
 ## Everyday commands
 
