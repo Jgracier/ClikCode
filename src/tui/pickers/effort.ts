@@ -21,7 +21,7 @@ export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): 
       { label: 'Default', detail: `· the model decides${current ? '' : ' · current'}`, value: 'default' },
       ...GATEWAY_EFFORTS.map((value) => ({ label: settingLabel(value), detail: value === current ? '· current' : value === 'none' ? '· least reasoning the model allows' : undefined, value })),
     ]);
-    if (selected) await applyToChat(id, 'effort', selected);
+    if (selected) { await applyToChat(id, 'effort', selected); rl.notice?.(`Effort set to ${settingLabel(selected === 'default' ? '' : selected)}`); }
     return;
   }
   if (session.route === 'clikcode-local') throw new Error('ClikCode Local does not publish a reasoning-effort control yet.');
@@ -38,5 +38,5 @@ export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): 
     { label: 'Default', detail: `· ${harness?.displayName ?? 'the harness'} decides${session.effort ? '' : ' · current'}`, value: 'default' },
     ...efforts.map((value) => ({ label: settingLabel(value), detail: value === session.effort ? '· current' : undefined, value })),
   ]);
-  if (selected) await applyToChat(id, 'effort', selected);
+  if (selected) { await applyToChat(id, 'effort', selected); rl.notice?.(`Effort set to ${settingLabel(selected === 'default' ? '' : selected)}`); }
 }

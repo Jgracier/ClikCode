@@ -36,7 +36,8 @@ import { commandDuringTurn, enqueueCommandLine } from '../../tui/slash/queue.js'
 import { impliedHarnessCommand } from '../../tui/slash/infer-provider.js';
 import { aiHarnessSelect } from './harness.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
-import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
+import { harnessModelLabel, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
+import { settingLabel } from '../../tui/pickers/setting-scope.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, nativeAvailableCommands, persistentTransports } from '../../turn/vendor-process.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../../turn/turn-journal.js';
@@ -787,9 +788,27 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               }
               return args ? viaHeadless(text) : { id: await interactiveAccountPicker(rl, id) ?? id };
             },
-            model: async () => args ? viaHeadless(text) : interactiveModelPicker(rl, id),
-            effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),
-            permissions: async () => args ? viaHeadless(text) : interactivePermissionPicker(rl, id),
+            // A value typed or chosen from the palette says what it set, the
+            // way the pickers do.
+            model: async () => {
+              if (!args) return interactiveModelPicker(rl, id);
+              const outcome = await viaHeadless(text);
+              const model = (await readState()).sessions.find((item) => item.id === (outcome.id ?? id))?.model;
+              if (model) rl.notice?.(`Model set to ${commandHarness ? harnessModelLabel(commandHarness, model) : model}`);
+              return outcome;
+            },
+            effort: async () => {
+              if (!args) return interactiveEffortPicker(rl, id);
+              const outcome = await viaHeadless(text);
+              rl.notice?.(`Effort set to ${settingLabel(args.trim().toLowerCase() === 'default' ? '' : args.trim().toLowerCase())}`);
+              return outcome;
+            },
+            permissions: async () => {
+              if (!args) return interactivePermissionPicker(rl, id);
+              const outcome = await viaHeadless(text);
+              rl.notice?.(`Permissions set to ${settingLabel(args.trim().toLowerCase())}`);
+              return outcome;
+            },
             options: async () => interactiveHarnessOptionPicker(rl, id),
             capabilities: async () => {
               const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');

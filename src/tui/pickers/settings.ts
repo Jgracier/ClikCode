@@ -52,6 +52,8 @@ function defaultActions(harness: AiLocalHarnessDefinition | undefined, key: Defa
 
 export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompter, startId: string): Promise<string | undefined> {
   let id = startId;
+  // Back from a sub-menu lands on the row it was opened from.
+  let returnTo: string | undefined;
   for (;;) {
     const state = await readState();
     const session = state.sessions.find((item) => item.id === id);
@@ -145,8 +147,9 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
       if (scope === 'global') await aiSettingsSetGlobal(key, value, false);
       else if (harness) await aiSettingsSetProvider(harness.command, key, value, false);
       rl.panel?.('Default saved', `${settingLabel(key)} ${scope === 'global' ? 'for every harness' : `for ${harness?.displayName}`}: ${value}`);
-    });
+    }, returnTo === undefined ? undefined : { startAt: returnTo });
     if (selected === undefined) return id;
+    returnTo = selected;
     if (selected === 'resume') {
       const picked = await interactiveSessionPicker(rl, id);
       if (picked) id = 'new' in picked ? await newConversation(id) : picked.id;

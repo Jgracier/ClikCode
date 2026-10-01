@@ -110,6 +110,8 @@ export async function interactiveAccountPicker(
       rl.panel?.('Verify this account', verificationNotice(pending));
     }
     await aiSessionCommand(id, `/settings account ${selected.accountId}`);
+    const chosen = providerAccounts.find((account) => account.id === selected.accountId);
+    if (chosen) rl.notice?.(`Using ${chosen.label}`);
     return id;
   }
 }

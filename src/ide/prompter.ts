@@ -68,6 +68,9 @@ export class IdePrompter implements HarnessPrompter {
     onAction?: (value: T, action: string) => Promise<void>,
     settings?: {
       onBack?: () => void;
+      /** The row to start on: the current value, or the row a sub-menu was
+       * opened from. Absent or not listed, the first. */
+      startAt?: T;
       onEscape?: () => void;
       refreshedOptions?: () => readonly PickerOption<T>[];
       refresh?: Promise<unknown> | readonly Promise<unknown>[];
