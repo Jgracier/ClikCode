@@ -13,7 +13,7 @@ import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
-import { activityOutput } from '../protocol/activity-events.js';
+import { activityOutput, editDiffFromInput } from '../protocol/activity-events.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
 import { spawnPortable } from './spawn.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
@@ -139,14 +139,11 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   const completed = ['completed', 'failed'].includes(status);
   const content: Json[] = Array.isArray(update.content) ? update.content : [];
   const diffEntries = content.filter((entry) => entry?.type === 'diff');
-  // A new file has no old text. Rendering `removed: ['']` would show a phantom
-  // deleted blank line, so an absent side is an empty list.
-  // The changed lines, through the same line diff ClikCode's own agent
-  // uses -- not both texts whole.
   // Every file the call changed, each its own (a fragment's lines are not
-  // numbered: ACP sends the replaced text, not the file).
-  const diff = diffEntries.length ? diffEntries.flatMap((entry) => eventDiff(String(entry.oldText ?? ''), String(entry.newText ?? ''),
-    typeof entry.path === 'string' && entry.path ? { path: entry.path } : {})) : undefined;
+  // numbered: ACP sends the replaced text, not the file). An agent that sends
+  // no diff content still says what it is replacing in its input.
+  const fromContent = diffEntries.flatMap((entry) => eventDiff(String(entry.oldText ?? ''), String(entry.newText ?? ''),
+    typeof entry.path === 'string' && entry.path ? { path: entry.path } : {}));
   const outputText = content
     .flatMap((entry) => entry?.type === 'content' && entry.content?.type === 'text' && typeof entry.content.text === 'string' ? [entry.content.text as string] : [])
     .join('\n');
@@ -154,6 +151,8 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   const output = activityOutput(outputText, { tail: true });
   const classified = acpToolClass(update);
   const rawOutput = update.rawOutput && typeof update.rawOutput === 'object' ? update.rawOutput as Record<string, unknown> : undefined;
+  const diff = fromContent.length ? fromContent
+    : classified.category === 'edit' ? editDiffFromInput(update.rawInput && typeof update.rawInput === 'object' ? update.rawInput : undefined) : undefined;
   return {
     kind: status === 'failed' ? 'tool-error' : completed ? 'tool-done' : 'tool-start',
     label: acpToolLabel(update, classified),
@@ -161,7 +160,7 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
     ...(typeof update.toolCallId === 'string' ? { id: update.toolCallId } : {}),
     ...(acpParentToolId(update) ? { parentId: acpParentToolId(update)! } : {}),
     ...output,
-    ...(diff ? { diff } : {}),
+    ...(diff?.length ? { diff } : {}),
     ...(completed ? commandOutcome(rawOutput) : {}),
   };
 }

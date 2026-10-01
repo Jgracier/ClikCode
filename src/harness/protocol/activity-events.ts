@@ -7,7 +7,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import { claudeShaped, JsonRecord, opencodeShaped, asRecord } from './json-lines.js';
 import { eventDiff, unifiedEventDiff } from '../../agent/line-diff.js';
-import { categoryOf, formatToolRow, toolCategory, toolLabel } from './tools.js';
+import { categoryOf, formatToolRow, toolLabel } from './tools.js';
 
 /** How much of a tool's work a transcript row shows. Enough to recognise the
  * edit or command at a glance without the trail crowding out the answer. */
@@ -126,31 +126,43 @@ const THOUGHT_LABEL_CHARS = 240;
  * replaces the streamed thought rather than adding a second. */
 export const claudeThinkingId = (messageId: string): string => `thinking:${messageId}`;
 
+const first = (record: JsonRecord, keys: readonly string[]): string | undefined =>
+  keys.map((key) => record[key]).find((value): value is string => typeof value === 'string');
+
+/** The change an edit or write tool's own input describes, whatever the
+ * harness calls its fields -- Claude's old_string/new_string, OpenCode's
+ * oldString/newString, Amp's
+ * old_str/new_str, Pi's oldText/newText, a write's content or file_text, a
+ * multi-edit's `edits`. A replacement is a fragment of the file, so its
+ * lines are not numbered; a write is the whole file, so they are. */
+export function editDiffFromInput(input: JsonRecord | undefined): HarnessActivityEvent['diff'] {
+  if (!input) return undefined;
+  const path = first(input, ['file_path', 'path', 'filePath', 'target_file', 'filename', 'abs_path']);
+  const at = path ? { path } : {};
+  const replace = (record: JsonRecord) => {
+    const before = first(record, ['old_string', 'oldString', 'old_str', 'oldText', 'old_text', 'search']);
+    const after = first(record, ['new_string', 'newString', 'new_str', 'newText', 'new_text', 'replace']);
+    return before !== undefined && after !== undefined ? eventDiff(before, after, at) : [];
+  };
+  const edits = Array.isArray(input.edits) ? input.edits.flatMap((edit) => (asRecord(edit) ? replace(asRecord(edit)!) : [])) : [];
+  const diff = [...replace(input), ...edits];
+  if (diff.length) return diff;
+  const content = first(input, ['content', 'file_text', 'contents']);
+  return content !== undefined && path ? eventDiff('', content, { ...at, numbered: true }) : undefined;
+}
+
+/** What every parser says about a tool call from its name and input: its
+ * label, its kind of work, and -- for an edit -- the change. One place, so
+ * a harness whose stream carries the input gets the same row as any other. */
+export function toolFacts(name: string, input: JsonRecord | undefined, command: string): Pick<HarnessActivityEvent, 'label' | 'category' | 'agent' | 'diff'> {
+  const classified = categoryOf(name, input, command);
+  const diff = classified.category === 'edit' ? editDiffFromInput(input) : undefined;
+  return { label: toolLabel(name, input, classified.category), ...classified, ...(diff?.length ? { diff } : {}) };
+}
+
 /** One Claude-shaped `tool_use` block. */
 export function claudeToolStart(tool: JsonRecord, command: string): NativeActivityEvent {
-  const name = String(tool.name ?? 'tool');
-  const input = asRecord(tool.input);
-  const identity = typeof tool.id === 'string' ? { id: tool.id } : {};
-  // Verified against a real session transcript: Edit's input carries
-  // old_string/new_string verbatim, Write carries the full new file as
-  // `content` with no prior text to diff against.
-  // Through the same line diff ClikCode's own agent uses, so an edit shows
-  // the lines that changed rather than both texts whole.
-  if (name === 'Edit' && typeof input?.old_string === 'string' && typeof input?.new_string === 'string') {
-    return {
-      kind: 'tool-start', label: toolLabel(name, input, 'edit'), category: toolCategory(name, input, true), ...identity,
-      // A fragment of the file: its lines are not numbered.
-      diff: eventDiff(input.old_string, input.new_string, typeof input.file_path === 'string' ? { path: input.file_path } : {}),
-    };
-  }
-  if (name === 'Write' && typeof input?.content === 'string') {
-    return {
-      kind: 'tool-start', label: toolLabel(name, input, 'edit'), category: toolCategory(name, input, true), ...identity,
-      diff: eventDiff('', input.content, { numbered: true, ...(typeof input.file_path === 'string' ? { path: input.file_path } : {}) }),
-    };
-  }
-  const classified = categoryOf(name, input, command);
-  return { kind: 'tool-start', label: toolLabel(name, input, classified.category), ...classified, ...identity };
+  return { kind: 'tool-start', ...toolFacts(String(tool.name ?? 'tool'), asRecord(tool.input), command), ...(typeof tool.id === 'string' ? { id: tool.id } : {}) };
 }
 
 /** Every activity one record describes. A single Claude message routinely
@@ -229,8 +241,7 @@ function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[
       // Start and error read the same: `args` is in hand either way, and a
       // tool that FAILED is the one a reader most wants identified.
       const kind = call?.status === 'error' ? 'tool-error' as const : 'tool-start' as const;
-      const classified = categoryOf(name, args, command);
-      return [{ kind, label: toolLabel(name, args, classified.category), ...classified, ...identity }];
+      return [{ kind, ...toolFacts(name, args, command), ...identity }];
     }
     if (block?.type === 'toolResponse') {
       const result = asRecord(block.toolResult);
@@ -269,12 +280,10 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       // that merely reported progress twice would be mistaken for one still
       // waiting. See turn/pending-work.ts.
       const stepIndex = step.step_index;
-      const classified = categoryOf(name, parameters, harness.command);
       return {
         kind: /error|fail/i.test(state) ? 'tool-error' : state === 'DONE' ? 'tool-done' : 'tool-start',
-        label: toolLabel(name, parameters, classified.category),
+        ...toolFacts(name, parameters, harness.command),
         ...(typeof stepIndex === 'number' ? { id: `step-${stepIndex}` } : {}),
-        ...classified,
       };
     }
   }
@@ -347,11 +356,10 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   if (/mcp_tool_call|tool_use|tool_call/.test(itemType) && /started|completed/.test(type)) {
     const name = typeof item?.server === 'string' && typeof item?.tool === 'string' ? `mcp__${item.server}__${item.tool}` : String(item?.name ?? item?.server ?? 'tool');
     const args = asRecord(item?.arguments) ?? asRecord(item?.input);
-    const classified = categoryOf(name, args, harness.command);
     return {
       kind: type.endsWith('completed')
         ? (item?.status === 'failed' || item?.status === 'error' ? 'tool-error' : 'tool-done')
-        : 'tool-start', label: toolLabel(name, args, classified.category), ...classified,
+        : 'tool-start', ...toolFacts(name, args, harness.command),
       ...(typeof item?.id === 'string' ? { id: item.id } : {}),
     };
   }
@@ -367,10 +375,9 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     const name = String(part?.tool ?? 'tool');
     const status = String(state?.status ?? '');
     const output = typeof state?.output === 'string' ? cappedActivityOutput(state.output) : {};
-    const classified = categoryOf(name, asRecord(state?.input), harness.command);
     return {
       kind: /error|fail/i.test(status) ? 'tool-error' : status === 'completed' ? 'tool-done' : 'tool-start',
-      label: toolLabel(name, asRecord(state?.input), classified.category), ...classified,
+      ...toolFacts(name, asRecord(state?.input), harness.command),
       ...(typeof part?.callID === 'string' ? { id: part.callID } : typeof part?.id === 'string' ? { id: part.id } : {}),
       ...output,
     };
@@ -421,9 +428,9 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       const name = String(record.toolName ?? 'tool');
       const id = typeof record.toolCallId === 'string' && record.toolCallId ? record.toolCallId : undefined;
       const args = asRecord(record.args);
-      const classified = categoryOf(name, args, harness.command);
-      const label = !id ? formatToolRow(name, undefined, classified.category) : start || args ? toolLabel(name, args, classified.category) : 'tool';
-      return { kind: 'tool-start', label, ...classified, ...(id ? { id } : {}) };
+      const facts = toolFacts(name, args, harness.command);
+      const label = !id ? formatToolRow(name, undefined, facts.category) : start || args ? facts.label : 'tool';
+      return { kind: 'tool-start', ...facts, label, ...(id ? { id } : {}) };
     };
     if (type === 'tool_execution_start') return piTool(value, true);
     if (type === 'tool_execution_end') return { ...piTool(value, false), kind: value.isError === true || value.error ? 'tool-error' : 'tool-done' };
