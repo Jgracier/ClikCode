@@ -24,6 +24,7 @@ import { recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { harnessStatePath } from '../session/state/paths.js';
 import { maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { usesFallbackTurn, vendorBackgroundTurnHandlerFor } from './vendor-process.js';
+import { turnCancelledError } from '../agent/cancellation.js';
 
 /** With no session worker to show a background turn, let finished turns wait
  * briefly on their still-running background tasks. */
@@ -242,7 +243,7 @@ export async function runVendorCliAttempt(input: {
       run.liveInput?.setSteerHandler(undefined);
     }
   }
-  if (turnOutput.interrupted) throw Object.assign(new Error('Stopped'), { code: 'ERR_TURN_CANCELLED' });
+  if (turnOutput.interrupted) throw turnCancelledError();
   let cliResult = nativeTurnResult(cliHarness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });
   // Aider's stdout is its banner, the answer and a cost footer; its own
   // chat history file holds the answer alone (see events/aider.ts).
