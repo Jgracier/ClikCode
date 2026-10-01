@@ -36,6 +36,10 @@ export interface OptionPickerHost {
 
 export interface OptionPickerSettings {
   onBack?: () => void;
+  /** The row to start on: the current value, or the row a sub-menu was
+   * opened from. Absent or not listed, the first. Sub-pickers start at
+   * the top, hence never here. */
+  startAt?: never;
   onEscape?: () => void;
   refreshedOptions?: () => readonly PickerOption<never>[];
   refresh?: Promise<unknown> | readonly Promise<unknown>[];
@@ -62,6 +66,9 @@ export function runOptionPicker<T>(
   onAction?: (value: T, action: string) => Promise<void>,
   settings?: {
     onBack?: () => void;
+    /** The row to start on: the current value, or the row a sub-menu was
+     * opened from. Absent or not listed, the first. */
+    startAt?: T;
     onEscape?: () => void;
     refreshedOptions?: () => readonly PickerOption<T>[];
     refresh?: Promise<unknown> | readonly Promise<unknown>[];
@@ -73,7 +80,14 @@ export function runOptionPicker<T>(
   return new Promise((resolveSelection) => {
     host.setSelecting(true);
     let query = '';
-    let selected = 0;
+    const same = (left: T, right: T): boolean => Object.is(left, right)
+      || (typeof left === 'object' && typeof right === 'object' && JSON.stringify(left) === JSON.stringify(right));
+    // Without a row named, the one marked "· current" -- every picker that
+    // sets something marks the value in force -- so Enter on opening keeps
+    // it rather than changing it to whatever happens to be listed first.
+    const marked = options.findIndex((option) => /(?:^|·)\s*current\s*(?:·|$)/.test(option.detail ?? ''));
+    let selected = settings?.startAt === undefined ? Math.max(0, marked)
+      : Math.max(0, options.findIndex((option) => same(option.value, settings.startAt as T)));
     let stopInput: () => void = () => {};
     // Section headings take a row each, so a short list counts them too.
     const headings = options.filter((option, index) => option.group && option.group !== options[index - 1]?.group).length;

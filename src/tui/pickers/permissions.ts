@@ -68,5 +68,5 @@ export async function interactivePermissionPicker(rl: HarnessPrompter, id: strin
   const selected = await chooseOption(rl, 'Choose permissions', supported.map((value) => ({
     label: value[0].toUpperCase() + value.slice(1), detail: `· ${descriptions[value]}${value === current ? ' · current' : ''}`, value,
   })));
-  if (selected) await applyToChat(id, 'permissions', selected);
+  if (selected) { await applyToChat(id, 'permissions', selected); rl.notice?.(`Permissions set to ${selected[0]!.toUpperCase()}${selected.slice(1)}`); }
 }

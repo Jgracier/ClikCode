@@ -2104,6 +2104,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.cursorShown = undefined;
   }
 
+  notice(text: string): void {
+    this.showTransientNotice(text, 4000, () => this.repaint());
+    this.repaint();
+  }
+
   private showTransientNotice(text: string, durationMs: number, redraw: () => void): void {
     this.clearTransientNotice();
     this.transientNotice = text;
@@ -2210,6 +2215,27 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // show a scrollable slice of a longer list; capping the list before
       // it ever got there defeated that.
       const matches = () => commandPaletteMatches(value, commands);
+      // The row that runs is the row that is highlighted. When what was typed
+      // names a command outright (`/new`), that command's row starts
+      // highlighted, wherever its group ranks it -- so Enter and Right Arrow,
+      // which both run the highlighted row, run what was typed.
+      const highlightFor = (text: string): number => {
+        const typed = exactPaletteCommand(text, commands)?.toLowerCase();
+        if (!typed) return 0;
+        const rows = commandPaletteMatches(text, commands);
+        const at = rows.findIndex((row) => row.value.toLowerCase() === typed || row.aliases?.some((alias) => alias.toLowerCase() === typed));
+        return Math.max(0, at);
+      };
+      // Running a command clears the palette and the typed command first, so
+      // whatever it opens next -- a picker, a sign-in -- never has the
+      // finished list and its `/command` left on screen around it.
+      const runCommand = (line: string): void => {
+        value = '';
+        cursor = 0;
+        selected = 0;
+        draw();
+        finish(line);
+      };
       let stopInput: () => void = () => {};
       const draw = (): void => {
         const options = commandPaletteMatches(value, commands);
@@ -2326,30 +2352,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           if (continued) { value = continued.value; cursor = continued.cursor; return draw(); }
           // A value from the command's own list: what was typed wins when it
           // IS a value, otherwise the highlighted one.
-          if (completing) return finish(completedCommandLine(value, commands, selected));
-          if (options.length && value.startsWith('/') && !value.includes(' ')) {
-            // What was typed wins when it names a command outright: `/new`
-            // must run /new even while a better-ranked row is highlighted.
-            const command = exactPaletteCommand(value, commands) ?? options[selected].value;
-            const entry = commands.find((candidate) => candidate.value.toLowerCase() === command.toLowerCase());
-            // A command whose argument is chosen from a real list (model,
-            // effort, permissions, account, resume) opens that list instead
-            // of running with no argument -- choosing "/model" must show the
-            // models, not silently apply the current one and close the
-            // palette on a bare command name.
-            if (entry?.argValues) {
-              value = `${command} `;
-              cursor = value.length;
-              selected = 0;
-              return draw();
-            }
-            // Deliberately NOT cleared here. Blanking the region on submit
-            // leaves the screen empty for however long the command takes to
-            // produce its first frame, which read as "the composer vanished".
-            // The palette rows stay up for the moment in between and are
-            // replaced by whatever the command paints next.
-            return finish(command);
-          }
+          if (completing) return runCommand(completedCommandLine(value, commands, selected));
+          // The highlighted command, bare. One that takes a value (model,
+          // effort, permissions, account, resume) opens its own picker, titled
+          // and starting on the current value; the values are listed here
+          // only once one is being typed (`/model op`).
+          if (options.length && value.startsWith('/') && !value.includes(' ')) return runCommand(options[selected].value);
+          if (value.startsWith('/')) return runCommand(value);
           return finish(value);
         }
         if (key === '\t' && options.length) {
@@ -2405,21 +2414,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           return draw();
         }
         if (key === '\u001b[C') {
-          if (completing && cursor >= value.length) return finish(completedCommandLine(value, commands, selected));
-          if (options.length && value.startsWith('/') && !value.includes(' ')) {
-            // Right Arrow is deliberately identical to Enter, including the
-            // decision above not to blank the region while the command runs,
-            // and the same exception for a command whose argument is chosen
-            // from a real list rather than typed free text.
-            const command = options[selected].value;
-            if (options[selected].argValues) {
-              value = `${command} `;
-              cursor = value.length;
-              selected = 0;
-              return draw();
-            }
-            return finish(command);
-          }
+          // Right Arrow is deliberately identical to Enter.
+          if (completing && cursor >= value.length) return runCommand(completedCommandLine(value, commands, selected));
+          if (options.length && value.startsWith('/') && !value.includes(' ')) return runCommand(options[selected].value);
           const paletteValue = composerRightArrowValue(value, options.length > 0, settings?.rightArrowPalette);
           if (paletteValue) {
             value = paletteValue;
@@ -2442,7 +2439,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // Everything else is text editing, shared with the waiting composer.
         const edited = editComposer(value, cursor, key);
         if (!edited.changed) return;
-        if (edited.value !== value) selected = 0;
+        if (edited.value !== value) selected = highlightFor(edited.value);
         value = edited.value;
         cursor = edited.cursor;
         draw();
@@ -2477,6 +2474,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onAction?: (value: T, action: string) => Promise<void>,
     settings?: {
       onBack?: () => void;
+      /** The row to start on: the current value, or the row a sub-menu was
+       * opened from. Absent or not listed, the first. */
+      startAt?: T;
       onEscape?: () => void;
       refreshedOptions?: () => readonly PickerOption<T>[];
       refresh?: Promise<unknown> | readonly Promise<unknown>[];

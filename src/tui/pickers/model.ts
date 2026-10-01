@@ -171,7 +171,10 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   // read as a per-conversation decision, unlike effort/permissions/failover,
   // which are more often "how I always want this provider to behave" and
   // genuinely benefit from a scope choice.
-  if (value) await aiSessionCommand(id, typed !== undefined ? `/model --any ${value}` : `/model ${value}`);
+  if (value) {
+    await aiSessionCommand(id, typed !== undefined ? `/model --any ${value}` : `/model ${value}`);
+    rl.notice?.(`Model set to ${harness ? harnessModelLabel(harness, value) : value}`);
+  }
 }
 
 /** A Gateway conversation's picker: the Gateway's own list for this account,

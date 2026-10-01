@@ -58,6 +58,9 @@ export interface HarnessPrompter {
     onAction?: (value: T, action: string) => Promise<void>,
     settings?: {
       onBack?: () => void;
+      /** The row to start on: the current value, or the row a sub-menu was
+       * opened from. Absent or not listed, the first. */
+      startAt?: T;
       onEscape?: () => void;
       refreshedOptions?: () => readonly PickerOption<T>[];
       refresh?: Promise<unknown> | readonly Promise<unknown>[];
@@ -79,6 +82,9 @@ export interface HarnessPrompter {
   approval?(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'>;
   activityEvent?(event: HarnessActivityEvent): void;
   panel?(title: string, body: string): void;
+  /** A one-line confirmation under the composer that clears itself:
+   * "Effort set to High". Where nothing can show one, nothing is said. */
+  notice?(text: string): void;
   close(): void;
 }
 
