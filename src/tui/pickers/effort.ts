@@ -11,7 +11,7 @@ import { applyToChat, settingLabel } from './setting-scope.js';
 import { GATEWAY_EFFORTS, gatewayEffort } from '../../gateway/options.js';
 
 export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (isGatewayService(session)) {

@@ -33,7 +33,7 @@ export function sessionProviderHasUsage(accounts: readonly AiHarnessAccount[], p
 }
 
 export async function sameProviderCanTakeTurn(id: string): Promise<boolean> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   return session ? sessionProviderHasUsage(state.accounts, session.provider) : false;
 }
@@ -54,7 +54,9 @@ export function resumeInCandidates(
 /** Returns the new conversation's id, or undefined when there is nowhere to
  * go or the user backs out (the chat then stays as it was). */
 export async function interactiveResumeInPicker(rl: HarnessPrompter, id: string, prompt: string): Promise<string | undefined> {
-  const state = await readState();
+  // Index for every chat's last model; this chat's transcript is not needed
+  // to list other harnesses with usage left.
+  const state = await readState({ transcripts: [] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return undefined;
   // Another provider is the answer only when this one has nothing left.

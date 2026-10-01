@@ -24,7 +24,7 @@ import { chooseOption } from './choose.js';
 
 /** Makes the account just added (by label) the conversation's own. */
 export async function useAddedAccount(id: string, harness: AiLocalHarnessDefinition, label: string): Promise<string> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const added = state.accounts.find((account) => account.provider === harness.provider && account.label === label);
   if (added) await aiSessionCommand(id, `/settings account ${added.id}`);
   return id;
@@ -35,7 +35,7 @@ export async function interactiveAccountPicker(
   id: string,
 ): Promise<string | undefined> {
   for (;;) {
-    const state = await readState();
+    const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
     if (!session) throw new Error(`AI session "${id}" was not found`);
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
@@ -182,7 +182,7 @@ async function addApiKeyAccount(rl: HarnessPrompter, harness: AiLocalHarnessDefi
       await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
     }
   }
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
   const label = `${harness.displayName} (${envName})`;
   const finalLabel = state.accounts.some((account) => account.label === label) ? `${label} ${existingForProvider + 1}` : label;
@@ -252,7 +252,7 @@ export async function addAccountForHarness(rl: HarnessPrompter, harness: AiLocal
  * nested PickerOptions. Non-destructive actions open with Tab; destructive
  * deleteAction values open only from Delete and are confirmed by select(). */
 export async function manageAccountAction(rl: HarnessPrompter, accountId: string, action: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const account = state.accounts.find((item) => item.id === accountId);
   const harness = account ? localHarnessForProvider(account.provider) : undefined;
   if (!account || !harness) return;

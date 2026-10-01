@@ -20,7 +20,7 @@ export async function interactiveHarnessOptionPicker(rl: HarnessPrompter, id: st
 
 /** One pass of the list; false when the user left it. */
 async function harnessOptionPickerOnce(rl: HarnessPrompter, id: string): Promise<boolean> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
@@ -38,7 +38,7 @@ async function harnessOptionPickerOnce(rl: HarnessPrompter, id: string): Promise
   // same setting had two interfaces that could disagree.
   const current = (item: { id: string }): unknown => session.harnessOptions?.[item.id];
   const save = async (optionId: string, raw: string): Promise<void> => {
-    const fresh = await readState();
+    const fresh = await readState({ transcripts: [id] });
     const target = fresh.sessions.find((item) => item.id === id);
     if (!target) return;
     // `default` (or `-` typed) clears the option: the harness's own default

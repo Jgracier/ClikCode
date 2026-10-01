@@ -36,7 +36,7 @@ import { commandDuringTurn, enqueueCommandLine } from '../../tui/slash/queue.js'
 import { impliedHarnessCommand } from '../../tui/slash/infer-provider.js';
 import { aiHarnessSelect } from './harness.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
-import { harnessModelLabel, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
+import { harnessModelLabel, resolveNativeModel, warmNativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { settingLabel } from '../../tui/pickers/setting-scope.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, nativeAvailableCommands, persistentTransports } from '../../turn/vendor-process.js';
@@ -135,13 +135,16 @@ const BOARD_COMMANDS: readonly PickerOption<string>[] = [
 // the terminal restore handler tears down the UI and exits the client, while
 // its detached worker can finish an in-flight turn and serve a reconnect.
 
-/** The index, after any chat that predates the row summary has been summarized.
- *  That pass is once per install; every later open reads the index only. */
+/** The index for launch / resume. Chats that predate the row summary are
+ * summarized in the background; the board already does the same. Waiting here
+ * made the first open after an upgrade pay for every transcript before the
+ * composer appeared. */
 async function stateForNavigation(): Promise<HarnessState> {
   const state = await readState({ transcripts: [] });
-  if (!state.sessions.some((session) => !session.listChecked && !isBlankConversation(session))) return state;
-  await backfillListFacts();
-  return readState({ transcripts: [] });
+  if (state.sessions.some((session) => !session.listChecked && !isBlankConversation(session))) {
+    void backfillListFacts().catch(() => undefined);
+  }
+  return state;
 }
 
 export async function aiSessionOpenDefault(config: Conf, options: { continue?: boolean } = {}): Promise<void> {
@@ -287,6 +290,18 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   stateChanged = true;
   if (stateChanged) await writeState(state);
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
+  // Warm `/model` while the composer is up, so the first open is not a wait.
+  // Re-warmed when the chat's provider or account changes (see the loop).
+  let warmedCatalogKey = '';
+  const warmCatalogFor = (target: HarnessSession, targetState: HarnessState): void => {
+    const key = `${target.nativeHarness ?? ''}\0${target.provider ?? ''}\0${target.accountId ?? ''}`;
+    if (key === warmedCatalogKey) return;
+    warmedCatalogKey = key;
+    const harness = target.nativeHarness ? localHarnessForCommand(target.nativeHarness)
+      : target.provider ? localHarnessForProvider(target.provider) : undefined;
+    warmNativeModelCatalog(harness, target.accountId ? targetState.accounts.find((item) => item.id === target.accountId) : undefined);
+  };
+  warmCatalogFor(session, state);
   if (rl.render) rl.render(session, initialAccount, selectionNotice);
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
   const refreshUsage = (target: HarnessSession, targetState: HarnessState): void => {
@@ -398,6 +413,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const latestState = await readState({ transcripts: [id] });
         const latest = latestState.sessions.find((item) => item.id === id);
         if (!latest) break;
+        warmCatalogFor(latest, latestState);
         // Whatever the last command or turn did to the conversation this
         // terminal shows, it holds a local model for that one alone.
         await reconcileLocalModelLeases(latest);
@@ -740,7 +756,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             }
             if (!rl.select) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
             const chosen = await interactiveEnginePicker(config, rl, id) ?? id;
-            const chosenState = await readState();
+            const chosenState = await readState({ transcripts: [chosen] });
             if (sessionHarness(chosenState.sessions.find((item) => item.id === chosen))) {
               await enqueueCommandLine(chosen, commandLine);
             }
@@ -804,7 +820,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             model: async () => {
               if (!args) return interactiveModelPicker(rl, id);
               const outcome = await viaHeadless(text);
-              const model = (await readState()).sessions.find((item) => item.id === (outcome.id ?? id))?.model;
+              const model = (await readState({ transcripts: [outcome.id ?? id] })).sessions.find((item) => item.id === (outcome.id ?? id))?.model;
               if (model) rl.notice?.(`Model set to ${commandHarness ? harnessModelLabel(commandHarness, model) : model}`);
               return outcome;
             },

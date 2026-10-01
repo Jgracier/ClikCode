@@ -92,7 +92,8 @@ export function modelRow(
 }
 
 export async function interactiveModelPicker(rl: HarnessPrompter, id: string): Promise<void> {
-  const state = await readState();
+  // Index + this chat: the picker never needs every other transcript.
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   if (isGatewayService(session)) return gatewayModelPicker(rl, id, session.model ?? null);

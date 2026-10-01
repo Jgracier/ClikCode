@@ -32,6 +32,7 @@ import { frameRowBudget } from './render/frame-budget.js';
 import { runOptionPicker, type OptionPickerHost } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
+import { reseedStartIndex } from './render/reseed-window.js';
 import { steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { highlightSelectionAt, orderedRange, selectedText, selectionAction, selectionIsEmpty, type MouseAction, type Selection } from './render/selection.js';
@@ -1397,8 +1398,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       if (this.emitted.pendingReseed()) {
         // The first frame of the process, of a newly opened session, or at a
-        // new width writes the conversation once -- ALL of it: the transcript
-        // is the only place it can be scrolled back through.
+        // new width writes a recent window of the conversation -- enough to
+        // fill the viewport and scroll a little. A full-history rewrite made
+        // opening a long chat wait on every message before anything drew.
         this.emitted.reseeded();
         this.turnTranscript.reset();
       }
@@ -1415,9 +1417,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       applyReseed();
       resume = this.emitted.resume(persistedMessages);
     }
-    const { firstUnwritten, materializedPendingTurn } = resume;
+    let { firstUnwritten, materializedPendingTurn } = resume;
     // Cleared below once the live answer has been consumed, so it stays a let.
     let liveAssistant = resume.liveAssistant;
+    // A reseed of a long chat only paints a recent window. Older messages are
+    // marked written so the seam stays honest; they are not in
+    // alternateTranscript (same trade-off as its row cap). The first frame
+    // then costs O(viewport), not O(history).
+    if (reseeding && firstUnwritten === 0 && persistedMessages.length > 0) {
+      const budget = Math.max(targetHeight * 3, 96);
+      const from = reseedStartIndex(persistedMessages, budget);
+      if (from > 0) {
+        for (let index = 0; index < from; index += 1) this.emitted.wrote(persistedMessages[index]!);
+        this.emitted.settle(from);
+        firstUnwritten = from;
+        if (liveAssistant !== undefined && liveAssistant < from) liveAssistant = undefined;
+      }
+    }
 
     emit(standaloneActivity(firstUnwritten));
     let turnStart = firstUnwritten;

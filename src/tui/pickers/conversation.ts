@@ -43,7 +43,7 @@ async function newAgentRouteConversation(
   config: Conf, rl: HarnessPrompter, currentId: string, route: 'gateway' | 'clikcode-local',
 ): Promise<string> {
   if (route === 'gateway') await ensureGatewayLogin(config, rl);
-  const state = await readState();
+  const state = await readState({ transcripts: [currentId] });
   const current = state.sessions.find((item) => item.id === currentId);
   if (!current) throw new Error(`AI session "${currentId}" was not found`);
   if (current.route === route) return current.id;
@@ -79,7 +79,7 @@ async function newAgentRouteConversation(
 export async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id: string, selected: string): Promise<string> {
   if (selected === '__gateway__') return newAgentRouteConversation(config, rl, id, 'gateway');
   if (selected === '__clikcode_local__') return newAgentRouteConversation(config, rl, id, 'clikcode-local');
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
   // In place whenever there is nothing to branch. This required no harness

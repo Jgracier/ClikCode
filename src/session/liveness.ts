@@ -32,7 +32,7 @@
 import { hostname } from 'node:os';
 import type { HarnessSession } from './model.js';
 import { sessionClaimIsLive } from './claim.js';
-import { readWorkerRecord } from '../worker/registry.js';
+import { listWorkerRecords } from '../worker/registry.js';
 
 /** Whether a worker process exists for a session id. Supplied by the caller so
  *  one filesystem pass answers for a whole list. */
@@ -55,21 +55,25 @@ export function sessionIsLive(
   return sessionClaimIsLive(session, now, host) || workerIsLive(session.id);
 }
 
-/** Which sessions still have a worker process behind them: one directory pass
- *  for the whole list, so every session is judged against one snapshot. */
+/** Which sessions still have a worker process behind them.
+ *
+ * Reads the worker directory once and checks those PIDs. Passing every chat
+ * and opening each chat's record was O(conversations) for a handful of live
+ * workers; the directory is O(workers). `sessions` is kept so callers that
+ * already hold a list need not change; it is not used to decide which records
+ * to open. */
 export async function liveWorkerSessions(
-  sessions: readonly HarnessSession[],
+  _sessions?: readonly HarnessSession[],
 ): Promise<(sessionId: string) => boolean> {
   const live = new Set<string>();
-  await Promise.all(sessions.map(async (session) => {
-    const record = await readWorkerRecord(session.id).catch(() => undefined);
-    if (!record) return;
+  const records = await listWorkerRecords().catch(() => []);
+  await Promise.all(records.map(async (record) => {
     try {
       process.kill(record.pid, 0);
-      live.add(session.id);
+      live.add(record.sessionId);
     } catch (error) {
       // EPERM means it exists and belongs to someone else, which still counts.
-      if ((error as NodeJS.ErrnoException).code === 'EPERM') live.add(session.id);
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') live.add(record.sessionId);
     }
   }));
   return (sessionId: string) => live.has(sessionId);

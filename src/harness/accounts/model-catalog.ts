@@ -275,6 +275,18 @@ function defaultModelCatalogFallback(
   return { models: [...models] };
 }
 
+/** Fire-and-forget fill of the model cache so `/model` is warm when opened.
+ * Called when a chat opens and when its provider or account changes. A warm
+ * cache makes the picker instant; a cold one still waits briefly inside
+ * nativeModelCatalogForPicker. */
+export function warmNativeModelCatalog(
+  harness: AiLocalHarnessDefinition | undefined,
+  account?: AiHarnessAccount,
+): void {
+  if (!harness) return;
+  void nativeModelCatalog(harness, account).catch(() => undefined);
+}
+
 /** The model list for a picker that is about to open.
  *
  * A warm cache returns instantly. A cold one used to return `account.models`
@@ -342,7 +354,9 @@ async function syncAccountModels(accountId: string, models: readonly string[]): 
   try {
     const { readState } = await import('../../session/state/read.js');
     const { writeState } = await import('../../session/state/write.js');
-    const state = await readState();
+    // Accounts only: opening every transcript for a background model sync
+    // was paying the full library cost on every cold catalog.
+    const state = await readState({ transcripts: [] });
     const account = state.accounts.find((item) => item.id === accountId);
     // An empty answer is a discovery that failed, not a vendor with no
     // models: it must not wipe what the account had.

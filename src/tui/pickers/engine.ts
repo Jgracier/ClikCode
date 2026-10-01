@@ -20,7 +20,7 @@ export async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter,
     const available = await Promise.all(allLocalHarnesses()
       .filter((harness) => harnessCanRunTurns(harness))
       .map(async (harness) => ({ harness, inspection: await inspectNativeHarnessForPicker(harness) })));
-    const state = await readState();
+    const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
     if (!session) throw new Error(`AI session "${id}" was not found`);
     const gatewayConnected = Boolean(getApiKeyForUrl(config, getApiUrl(config)));
@@ -53,7 +53,7 @@ export async function autoSelectSessionHarness(id: string): Promise<boolean> {
     installedCache.set(harness.command, inspection.installed);
     return inspection.installed;
   };
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return false;
   if (session.nativeHarness) return true;
