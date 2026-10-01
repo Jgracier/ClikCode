@@ -25,6 +25,20 @@ describe('shared ACP adapter contract', () => {
     expect(JSON.parse(result.text)).toEqual(['initialize', 'session/new', ...(authAt === 'session/new' ? ['authenticate', 'session/new', 'session/prompt'] : ['session/prompt', 'authenticate', 'session/prompt'])]);
   });
 
+  it('fails an image turn before the prompt when the agent takes no images, so the CLI can run it', async () => {
+    const agent = `
+      const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+      let buf = '';
+      process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
+        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+        if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: { promptCapabilities: { image: false } } } });
+        else send({ id: m.id, error: { code: -32601, message: 'not expected: ' + m.method } });
+      } });
+    `;
+    await expect(runAcpTurn({ binary: process.execPath, command: 'agent', argv: ['-e', agent], cwd: process.cwd(),
+      prompt: 'look', environment: {}, permissionMode: 'ask', images: ['screenshot.png'] })).rejects.toMatchObject({ acpUnsupportedImages: true });
+  });
+
   it('sets model, permission mode, and effort over ACP before prompting', async () => {
     const agent = `
       const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');

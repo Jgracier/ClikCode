@@ -50,6 +50,5 @@ describe('Cline', () => {
     const { harnessTurnTransport } = await import('../transport/select.js');
     const cline = AI_LOCAL_HARNESSES.find((harness) => harness.command === 'cline')!;
     expect(harnessTurnTransport(cline)).toBe('acp');
-    expect(harnessTurnTransport(cline, true, { acpImages: true })).toBe('acp');
   });
 });
