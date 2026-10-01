@@ -266,6 +266,18 @@ SCENARIOS = {
         ],
         'watch': ['clean and release', 'Answers: reject, reject.', 'use pnpm instead', 'Releasing with pnpm now.'],
     },
+    # A long paste is a placeholder in the composer, and the whole text is
+    # what is sent; the placeholder never reaches the transcript.
+    'paste-placeholder': {
+        'turns': [{'blocks': ['Paste received: {received}.']}],
+        'steps': [
+            ('keys', 'look at this '), ('keys', '\x1b[200~' + '\n'.join(f'pasted row {n}' for n in range(1, 13)) + '\x1b[201~'),
+            ('wait_for', '[Pasted text #1 +12 lines]', 5), ('keys', '\r'),
+            ('wait_for', 'Paste received:', 30), ('settle', 2),
+        ],
+        'watch': [], 'ever': ['› look at this [Pasted text #1 +12 lines]'], 'final_once': ['Paste received: whole.'],
+        'final_contains': ['pasted row 12'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
