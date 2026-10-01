@@ -64,6 +64,14 @@ import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
 
+/** A setting changed: stamp the session, store the state, and show the
+ * settings panel -- in the terminal, the status line it re-renders. */
+async function saveSettings(state: HarnessState, session: HarnessSession): Promise<void> {
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
+  return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+}
+
 function undoUnavailableMessage(session: HarnessSession): string {
   const harness = sessionHarness(session);
   const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : harness?.displayName ?? 'This provider';
@@ -107,9 +115,7 @@ async function localModelCommand(session: HarnessSession, value: string): Promis
   if (!current) throw new Error(`AI session "${session.id}" was not found`);
   current.model = model;
   if (current.reported?.model) delete current.reported.model;
-  current.updatedAt = new Date().toISOString();
-  await writeState(state);
-  return emitHarnessOutput({ panel: 'settings', session: current });
+  return saveSettings(state, current);
 }
 
 /** What one slash command did, for a caller that must follow it. */
@@ -177,9 +183,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     } else setSessionHarnessOption(session, harness!, 'permissions', value);
     // Same as /model: the reported mode described the previous request.
     if (session.reported?.permissionMode) delete session.reported.permissionMode;
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
-    return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+    return saveSettings(state, session);
   },
   history: async ({ session }) => {
     return emitHarnessOutput({ panel: 'history', messages: sessionTranscriptMessages(session) });
@@ -287,9 +291,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         });
       }
       session.model = trusted && !isAutomaticModelWord(value) ? value : await chooseGatewayModel(value);
-      session.updatedAt = new Date().toISOString();
-      await writeState(state);
-      return emitHarnessOutput({ panel: 'settings', session });
+      return saveSettings(state, session);
     }
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     // No value: show what there is to choose from, which is what
@@ -350,9 +352,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         throw new Error(`usage: /effort <${['default', ...GATEWAY_EFFORTS].join('|')}>`);
       }
       session.effort = value === 'default' ? GATEWAY_DEFAULT_EFFORT : value;
-      session.updatedAt = new Date().toISOString();
-      await writeState(state);
-      return emitHarnessOutput({ panel: 'settings', session });
+      return saveSettings(state, session);
     }
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (!harness) throw new Error('Choose a provider before setting effort.');
@@ -361,9 +361,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // flag only for a non-empty effort).
     if (value === 'default') session.effort = '';
     else setSessionHarnessOption(session, harness, 'effort', value, (await effortChoicesFor(harness, account, session.model)).values);
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
-    return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+    return saveSettings(state, session);
   },
   fast: async ({ state, session, words }) => {
     if (!isGatewayService(session)) throw new Error('Speed is a ClikDeploy Gateway choice: it picks among the providers of one model.');
@@ -372,9 +370,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (on === undefined) throw new Error('usage: /fast [on|off]');
     if (on) session.speed = 'fast';
     else delete session.speed;
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
-    return emitHarnessOutput({ panel: 'settings', session });
+    return saveSettings(state, session);
   },
   sessions: async ({ id, state, session, words }) => {
     const action = words.shift()?.toLowerCase();
@@ -484,9 +480,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     } else {
       throw new Error(`unknown setting: ${setting}`);
     }
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
-    return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
+    return saveSettings(state, session);
   },
   accounts: async ({ id, state, session, words }) => {
     // `/account work` and `/accounts use work` are one command: a word that
