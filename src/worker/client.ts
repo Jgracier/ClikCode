@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
-import { conversationHolder, currentWorkerBuild, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
+import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
 import { readState } from '../session/state/read.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 
@@ -153,6 +153,13 @@ function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined
 async function usableWorker(sessionId: string): Promise<WorkerRuntimeRecord | undefined> {
   const record = await findRunningWorker(sessionId);
   if (!record) return undefined;
+  return (await retireIfStale(record)) ?? undefined;
+}
+
+/** Asks one worker to step down when its recorded build is not this process's.
+ * Returns the record when it must be kept (same build, or busy), undefined
+ * when it is gone and a replacement may be spawned. */
+async function retireIfStale(record: WorkerRuntimeRecord): Promise<WorkerRuntimeRecord | undefined> {
   const build = currentWorkerBuild();
   // Unknown own build: nothing to compare, so nothing is retired.
   if (!build || record.build === build) return record;
@@ -161,8 +168,23 @@ async function usableWorker(sessionId: string): Promise<WorkerRuntimeRecord | un
   if (answer === 'retired') return (await socketReleased(record)) ? undefined : record;
   // A worker from before `retire`: the journal is the only evidence left of
   // what it is doing. These age out as their conversations go idle.
-  if (await turnInFlight(sessionId)) return record;
+  if (await turnInFlight(record.sessionId)) return record;
   return (await retireWorker(record)) ? undefined : record;
+}
+
+/** Asks every worker still running a different build to step down. Idle ones
+ * exit now; busy ones exit when their turn ends. Called when Left opens the
+ * board and when this window notices a rebuild -- otherwise a chat you never
+ * reopen would keep the old code for its whole idle lifetime. */
+export async function retireStaleWorkers(): Promise<void> {
+  const build = currentWorkerBuild();
+  if (!build) return;
+  const records = await listWorkerRecords();
+  await Promise.all(records.map(async (record) => {
+    if (record.build === build) return;
+    if (!await workerIsReachable(record.socketPath)) return;
+    await retireIfStale(record);
+  }));
 }
 
 /** An existing worker's record, only if it is genuinely still there --

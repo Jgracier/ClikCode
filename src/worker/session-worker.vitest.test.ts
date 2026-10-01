@@ -10,7 +10,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { forceStoreSession, unforceStoreSession } from '../session/ephemeral.js';
-import { WorkerClient } from './client.js';
+import { WorkerClient, retireStaleWorkers } from './client.js';
 import { readWorkerRecord, takeConversation, workerIsReachable, writeWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 
@@ -168,6 +168,40 @@ describe('session worker (real spawned process, real socket)', () => {
     // kept: session-worker-waiting.vitest.test.ts.)
     expect((await readWorkerRecord(session.id))?.pid).not.toBe(before?.pid);
   });
+
+  it('retireStaleWorkers steps down every idle worker on another build', async () => {
+    // Left on the board, and the rebuild notice, both call this: chats you
+    // never reopen must not keep the old code for the idle timeout.
+    const first = await isolatedSession();
+    // Same home as `first`: a second isolatedSession() would replace
+    // CLIKCODE_HOME and hide the first worker from the sweep.
+    const state = await readState();
+    const now = new Date().toISOString();
+    const second: HarnessSession = {
+      id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: null, model: null,
+      effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    };
+    state.sessions.push(second);
+    forceStoreSession(second.id);
+    await writeState(state);
+    spawnedSessionIds.push(second.id);
+
+    const clientA = await WorkerClient.attach(first.id);
+    const clientB = await WorkerClient.attach(second.id);
+    spawnedClients.push(clientA, clientB);
+    await clientA.initialSnapshot;
+    await clientB.initialSnapshot;
+    const beforeA = (await readWorkerRecord(first.id))!;
+    const beforeB = (await readWorkerRecord(second.id))!;
+    expect(beforeA.build).toBeTruthy();
+    clientA.close();
+    clientB.close();
+    await writeWorkerRecord({ ...beforeA, build: 'a-different-build' });
+    await writeWorkerRecord({ ...beforeB, build: 'a-different-build' });
+    await retireStaleWorkers();
+    expect(await workerIsReachable(beforeA.socketPath, 200)).toBe(false);
+    expect(await workerIsReachable(beforeB.socketPath, 200)).toBe(false);
+  }, 15_000);
 
   it('keeps a message typed as the turn ended, instead of dropping it', async () => {
     // The race: Enter during the last moment of a turn, and the steer lands

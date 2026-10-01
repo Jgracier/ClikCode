@@ -130,6 +130,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * model is owed -- because replacing it would lose that work. Clients do
    * not; an idle window simply attaches to the replacement next time. */
   let retireWhenIdle = false;
+  /** The entry this process loaded. Re-stat'd while idle: a rebuild changes
+   * mtime/size, and a worker nobody has reattached to would otherwise keep
+   * the old code for its whole IDLE_EXIT_MS lifetime. */
+  const spawnedBuild = currentWorkerBuild();
   const retireBlocker = (): string | undefined => {
     if (turnRunning || draining) return 'a turn is running';
     if (vendorBackground.busy) return 'vendor background work is running';
@@ -147,6 +151,14 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // A newer build asked for this worker while it was busy: the moment it is
     // not, it goes, and the next window to need one starts that build.
     if (retireWhenIdle && !retireBlocker()) { void shutdown('replaced by a newer ClikCode build'); return; }
+    // Nobody attached, nothing running, and the entry on disk is no longer
+    // what this process loaded: leave now so the next open gets a fresh
+    // worker. An attached window is left alone -- its own attach or a board
+    // sweep asks for retirement; killing under a live prompt is worse.
+    if (spawnedBuild && observer.attachedCount === 0 && !retireBlocker()) {
+      const live = currentWorkerBuild();
+      if (live && live !== spawnedBuild) { void shutdown('replaced by a newer ClikCode build'); return; }
+    }
     if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
     if (runningShellCount(agentSession) > 0) {
       const oldest = Math.min(...[...agentSession.shells.values()].filter((shell) => shell.status === 'running').map((shell) => shell.startedAt));
@@ -567,6 +579,11 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT', () => { void shutdown('SIGINT'); });
   scheduleIdleExit();
+  // A rebuild while this worker sits idle with nobody attached: scheduleIdleExit
+  // only runs on attach/detach/turn edges otherwise, so without this a stale
+  // worker would wait out the full idle timeout before noticing.
+  const buildWatch = setInterval(() => scheduleIdleExit(), 15_000);
+  buildWatch.unref();
   // A notification a previous worker recorded but never ran.
   void drainQueue().catch(() => undefined);
 }
