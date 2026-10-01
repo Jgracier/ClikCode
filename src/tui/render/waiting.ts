@@ -2,11 +2,10 @@
  * conversation lines are still live. */
 
 import chalk from 'chalk';
-import type { HarnessActivityEvent } from '../../harness/prompter.js';
-import { isAgentToolName } from '../../harness/protocol/tools.js';
 import { terminalCellWidth, visibleSlice } from './width.js';
 import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from './usage-words.js';
-export { appendThought, type Thought } from '../../harness/protocol/activity-view.js';
+export { appendThought, formatElapsed, liveWaitKind, type Thought } from '../../harness/protocol/activity-view.js';
+import { formatElapsed } from '../../harness/protocol/activity-view.js';
 
 export { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent };
 
@@ -14,14 +13,6 @@ export { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent };
  * edits stay in the waiting band; these two get a moving row in the chat.
  * A call already classified as a shell command stays a command even when
  * its text happens to start with an agent-shaped word. */
-export function liveWaitKind(event: HarnessActivityEvent): 'command' | 'agent' | undefined {
-  if (event.kind !== 'tool-start') return undefined;
-  if (event.agent) return 'agent';
-  if (event.category !== 'run' && isAgentToolName(event.label)) return 'agent';
-  if (event.category === 'run') return 'command';
-  return undefined;
-}
-
 /** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
  * the same compact shape without changing its dimensions. */
 export function waitingSpinnerFrame(frame: number): [boolean[], boolean[], boolean[], boolean[]] {
@@ -53,12 +44,6 @@ export function rightLabeledRule(width: number, label?: string): string {
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
 }
 
-/** `42s`, then `3m 5s`: the waiting band's clock and a running call's. */
-export function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
 /** One open call, drawn under the answer that is still streaming. A command
  * or a sub-agent says so; any other tool is just its own label. The row is
  * repainted, not appended, and the status line is a different place. A call
@@ -73,7 +58,6 @@ export function runningChatLine(label: string, frame: number, kind: 'command' | 
   return `  ${spinner}  ${verb}${label}${timer}`;
 }
 
-/** The reasoning shown on its one live row. */
 /** A live response must end on content, not its decorative separator. On a
  * short mobile viewport the last replaceable row may be the only row visible. */
 export function liveConversationLines(lines: readonly string[], live: boolean): string[] {

@@ -5,6 +5,9 @@
 
 import type { FileDiff, DiffLine } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
+import { visibleSlice } from '../../tui/render/width.js';
+import { TOOL_CATEGORY } from './tool-category.js';
+import { isAgentToolName } from './tools.js';
 
 /** How much of a tool's work a transcript row shows. Enough to recognise the
  * edit or command at a glance without the trail crowding out the answer. */
@@ -151,4 +154,113 @@ export function childActivity(current: string | undefined, event: HarnessActivit
   if (event.kind === 'tool-start' || event.kind === 'thinking') return event.label;
   if (event.kind === 'tool-done' || event.kind === 'tool-error') return undefined;
   return current;
+}
+
+export type OpenTool = { label: string; category?: ToolCategory; agent?: boolean };
+
+/** What the status line says while a call runs: the category's verb, and
+ * what it is working on when the label names it -- `Read(src/app.ts)` is
+ * "reading app.ts", `Bash(npm test)` is "running tests", a codex command
+ * label `git status` is "running git". A label that names nothing gets the
+ * bare verb rather than a guess. */
+export function toolStatusVerb(tool: OpenTool): string {
+  const name = tool.label.split('(')[0]!.trim();
+  if (tool.agent || (tool.category !== 'run' && isAgentToolName(tool.label))) return 'waiting on agent';
+  const argument = /^[^(]*\((.*)\)$/s.exec(tool.label)?.[1]?.trim();
+  const subject = (value: string, width = 32): string => visibleSlice(value, width);
+  switch (tool.category) {
+    case 'run': {
+      const command = argument ?? tool.label;
+      if (/(?:^|[\s/])(?:test|tests|vitest|jest|pytest|mocha|rspec|phpunit)\b|\btest:/.test(command)) return 'running tests';
+      const program = command.split(/\s+/).find((word) => word && !/^\w+=/.test(word) && word !== 'sudo');
+      return program ? `running ${subject(program.split('/').pop() || program, 24)}` : 'running';
+    }
+    case 'read':
+    case 'edit': {
+      const verb = TOOL_CATEGORY[tool.category].verb;
+      const path = argument?.split(/[\s,]+/)[0];
+      const file = path?.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+      return file ? `${verb} ${subject(file)}` : verb;
+    }
+    case 'search':
+    case 'fetch':
+      return TOOL_CATEGORY[tool.category].verb;
+    default:
+      return name ? `running ${subject(name, 24)}` : 'running';
+  }
+}
+
+/** Derive the status from the whole in-flight tool set rather than the most
+ * recent provider event. A reasoning summary or one parallel completion must
+ * not claim the agent is merely thinking while another tool is still live. */
+export function activityLifecyclePhase(
+  activeTools: ReadonlyMap<string, OpenTool>, event: HarnessActivityEvent,
+): { activeTools: Map<string, OpenTool>; phase: string; category?: ToolCategory } {
+  const next = new Map(activeTools);
+  const key = event.id ?? event.label;
+  if (event.kind === 'tool-start') {
+    // A progress frame for an open call (more output, a status beat) often
+    // carries no name -- the placeholder "tool" -- and no category. It keeps
+    // what the call's start said, or the band went from "running tests" to
+    // "running tool" the moment output arrived.
+    const prior = event.id ? next.get(key) : undefined;
+    next.set(key, {
+      label: event.label === 'tool' && prior ? prior.label : event.label,
+      ...(event.category ?? prior?.category ? { category: (event.category ?? prior?.category)! } : {}),
+      ...(event.agent || prior?.agent ? { agent: true } : {}),
+    });
+  }
+  else if (event.kind === 'tool-done' || event.kind === 'tool-error') {
+    if (!next.delete(key) && !event.id) {
+      const matchingKey = [...next].reverse().find(([, tool]) => tool.label === event.label)?.[0];
+      if (matchingKey) next.delete(matchingKey);
+    }
+  }
+  const running = [...next.values()];
+  const current = running[running.length - 1];
+  if (!current) return { activeTools: next, phase: 'thinking' };
+  // The newest open call is what the status line names.
+  return {
+    activeTools: next, phase: toolStatusVerb(current),
+    ...(current.category ? { category: current.category } : {}),
+  };
+}
+
+/** How a running call is drawn: a command and a sub-agent say so (and spin
+ * in their own colour); anything else is just its label. */
+export function liveWaitKind(event: Pick<HarnessActivityEvent, 'kind' | 'agent' | 'category' | 'label'>): 'command' | 'agent' | undefined {
+  if (event.kind !== 'tool-start') return undefined;
+  if (event.agent) return 'agent';
+  if (event.category !== 'run' && isAgentToolName(event.label)) return 'agent';
+  if (event.category === 'run') return 'command';
+  return undefined;
+}
+
+/** Silence this long while nothing is running and nothing is being asked
+ * reads as a stall, not as work. */
+export const STALL_MS = 15_000;
+
+/** `42s`, then `3m 5s`: the waiting band's clock and a running call's. */
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+/** A finished call's run time: `3.4s`, `12s`, `2m 05s`. */
+export function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  return `${minutes}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, '0')}s`;
+}
+
+/** What follows a finished call: a non-zero exit and a run of a second or
+ * more -- the exceptions, since every call exits 0 in under a second. */
+export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'exitCode' | 'durationMs'>): { parts: string[]; failed: boolean } | undefined {
+  if (event.kind !== 'tool-done' && event.kind !== 'tool-error') return undefined;
+  const failed = event.kind === 'tool-error' || (event.exitCode !== undefined && event.exitCode !== 0);
+  const parts = [
+    ...(event.exitCode !== undefined && event.exitCode !== 0 ? [`exit ${event.exitCode}`] : []),
+    ...(event.durationMs !== undefined && event.durationMs >= 1000 ? [formatDuration(event.durationMs)] : []),
+  ];
+  return parts.length ? { parts, failed } : undefined;
 }

@@ -13,15 +13,7 @@
 
 import chalk from 'chalk';
 import type { ToolCategory } from '../prompter.js';
+import { TOOL_CATEGORY } from './tool-category.js';
 
-export const TOOL_CATEGORY_STYLE: Record<ToolCategory, {
-  paint: (text: string) => string; verb: string; glyph: string;
-  /** How a folded run of these reads once it has settled. */
-  folded: (count: number) => string;
-}> = {
-  read: { paint: (text) => chalk.blue(text), verb: 'reading', glyph: '◇', folded: (n) => `read ${n} files` },
-  edit: { paint: (text) => chalk.magenta(text), verb: 'editing', glyph: '◆', folded: (n) => `edited ${n} files` },
-  run: { paint: (text) => chalk.yellow(text), verb: 'running', glyph: '▸', folded: (n) => `ran ${n} commands` },
-  search: { paint: (text) => chalk.cyan(text), verb: 'searching', glyph: '◈', folded: (n) => `searched ${n} times` },
-  fetch: { paint: (text) => chalk.green(text), verb: 'fetching', glyph: '↓', folded: (n) => `fetched ${n} pages` },
-};
+export const TOOL_CATEGORY_STYLE: Record<ToolCategory, (typeof TOOL_CATEGORY)[ToolCategory] & { paint: (text: string) => string }> =
+  Object.fromEntries(Object.entries(TOOL_CATEGORY).map(([category, facts]) => [category, { ...facts, paint: (text: string) => chalk[facts.colour](text) }])) as never;
