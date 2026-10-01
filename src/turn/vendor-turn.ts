@@ -14,7 +14,6 @@ import { interruptedTurnFailoverPrompt } from './interrupted-turn-prompt.js';
 import { carryNativeSession } from '../session/carry.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
-import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';

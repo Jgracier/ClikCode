@@ -4,7 +4,7 @@
 
 import { visibleSlice } from '../../tui/render/width.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
-import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
+import type { HarnessActivityEvent } from '../prompter.js';
 import { claudeShaped, JsonRecord, opencodeShaped, asRecord } from './json-lines.js';
 import { eventDiff, unifiedEventDiff } from '../../agent/line-diff.js';
 import { categoryOf, formatToolRow, toolLabel } from './tools.js';
