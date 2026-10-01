@@ -29,7 +29,7 @@ import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivity
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { tensedLabel, turnStatus, turnSummary } from '../harness/protocol/turn-flow.js';
 import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
@@ -57,6 +57,9 @@ import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { appendThought, composerUsageLabel, formatElapsed, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, runningChatLine, waitingSpinnerGlyph, type Thought } from './render/waiting.js';
 
 const EXIT_CONFIRM_MS = 2000;
+
+/** A turn this long ends on its summary line even if it ran no tools. */
+const END_SUMMARY_MS = 10_000;
 
 /** Ctrl+S during a turn: stop it and send the typed (or queued) message as
  * the next turn at once. Ctrl+Enter, what Codex and Cursor use, is not a
@@ -242,6 +245,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private sendNow?: { text: string; taken: boolean };
   /** Long pastes held as placeholders so far, for the next one's number. */
   private pasteCount = 0;
+  /** Whether the turn being stopped took messages: a real turn, not a wait
+   * on a download or a shell command. */
+  private waitingSubmitWas = false;
+  /** The line a turn ended on, owed to the transcript once. */
+  private pendingTurnSummary?: string;
   /** "Tell it instead" is being typed; the draft the composer held before. */
   private tellingInstead?: { draft: string; cursor: number };
   private approvalRestoreLabel?: string;
@@ -865,6 +873,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaiting(false);
     this.submittedPrompt = submittedPrompt;
     if (this.sendNow?.taken) this.sendNow = undefined;
+    // A summary its turn never got to write (it ended with no answer) is
+    // not this turn's.
+    this.pendingTurnSummary = undefined;
     // Following again the very turn this window stepped out of, with nothing
     // redrawn in between: what it wrote is in scrollback, so it carries on
     // from there rather than starting the turn's view over beneath it.
@@ -995,11 +1006,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaitingInput = undefined;
     if (this.waitingLabel) this.resumeInput = undefined;
     this.cancelWaiting = undefined;
+    this.waitingSubmitWas = Boolean(this.waitingSubmit);
     this.waitingSubmit = undefined;
     this.waitingCommand = undefined;
     this.leaveWaiting = undefined;
     this.waitingCancelled = false;
     this.settleApprovals();
+    // A turn that did real work ends on a line saying how long it took and
+    // what it changed (Codex). Only a real turn -- one that took messages --
+    // and only its end: stepping out of it is not.
+    if (this.waitingLabel && this.waitingSubmitWas && !this.steppedOut) this.pendingTurnSummary = this.endOfTurnSummary();
+    this.waitingSubmitWas = false;
     this.waitingLabel = '';
     this.thought = undefined;
     // Anything typed during the turn and not submitted is still the user's
@@ -1017,6 +1034,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // client's copy any longer would draw it twice.
     this.submittedPrompt = undefined;
     if (refresh && !this.closed) this.repaint({ keepPalette: false });
+  }
+
+  /** The end-of-turn line, or nothing for a turn that ran no tools and took
+   * under END_SUMMARY_MS. */
+  private endOfTurnSummary(): string | undefined {
+    const ms = turnElapsedMs(this.clock, Date.now());
+    const calls = this.activityEntries.filter((entry) => entry.event && entry.anchor >= this.activityAnchor
+      && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor);
+    if (!calls.length && ms < END_SUMMARY_MS) return undefined;
+    return turnSummary({ ms, diffs: calls.flatMap((entry) => (entry.event?.diff?.length ? [entry.event.diff] : [])) });
   }
 
   phase(message: string): void {
@@ -1613,6 +1640,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       });
       emit(step.finished);
       liveConversation.push(...step.live);
+    }
+    // The turn's last line, once its answer has settled above it. Retired
+    // like every other row, exactly once: it is dropped as it is written.
+    const answered = persistedMessages.length > this.activityAnchor && persistedMessages[persistedMessages.length - 1]?.role === 'assistant';
+    if (this.pendingTurnSummary && !this.waitingLabel && (hasTransientAssistant || answered)) {
+      emit(['', `  ${chalk.dim(`─ ${this.pendingTurnSummary} ─`)}`, '']);
+      this.pendingTurnSummary = undefined;
     }
     for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user
