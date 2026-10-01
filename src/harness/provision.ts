@@ -168,9 +168,15 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
 
   const loaded = await loadMcpServers(stateDir);
   const present = await vendorMcpServerNames(input.harness.command, home, profile);
+  // Grok reads ~/.claude.json unless [compat.claude] mcps is turned off, so a
+  // name Claude already has is already available. Adding it again connects twice.
+  const grokClaudeMcp = input.harness.command === 'grok' && await grokImports(home, 'mcps')
+    ? await vendorMcpServerNames('claude', home)
+    : undefined;
   for (const spec of loaded.servers) {
     if (present.unreadable) { mcpSkipped.push(spec.name); continue; }
     if (present.known && present.names.has(spec.name)) continue;
+    if (grokClaudeMcp?.names.has(spec.name)) continue;
     if (!present.known && await alreadyProvisioned(stateDir, input, spec.name)) continue;
     const result = await (input.install ?? installMcpOnHarness)(input.harness, specToEntry(spec), input.account);
     if (result.ok) {
@@ -187,7 +193,10 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
     const userDir = skillRoot(userDirParts, home, profile);
     const projectParts = PROJECT_SKILL_DIR[input.harness.command];
     const projectDir = projectParts ? join(workspace, ...projectParts) : userDir;
+    const grokSeesClaudeSkills = input.harness.command === 'grok' && await grokImports(home, 'skills');
     for (const skill of catalog.skills) {
+      // Those two sources are the directories Grok scans on its own.
+      if (grokSeesClaudeSkills && (skill.source === 'user-claude' || skill.source === 'project-claude')) continue;
       const directory = skill.source === 'project' || skill.source === 'project-claude' ? projectDir : userDir;
       try {
         if (await copySkill(skill, directory)) skillsCopied.push(skill.name);
@@ -207,6 +216,14 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
     hooksAdded ? `added ${hooksAdded} hook${hooksAdded === 1 ? '' : 's'}` : '',
   ].filter(Boolean);
   return { mcpInstalled, mcpSkipped, skillsCopied, hooksAdded, summary: parts.join(', ') };
+}
+
+/** Grok's compat.claude flags default to on. An explicit false is the only off. */
+async function grokImports(home: string, flag: 'mcps' | 'skills' | 'hooks'): Promise<boolean> {
+  const text = await readFile(join(home, '.grok', 'config.toml'), 'utf8').catch(() => '');
+  const section = text.match(/\[compat\.claude\][^\[]*/);
+  if (!section) return true;
+  return !new RegExp(`^${flag}\\s*=\\s*false\\s*$`, 'm').test(section[0]);
 }
 
 function provisionKey(input: ProvisionInput, name: string): string {

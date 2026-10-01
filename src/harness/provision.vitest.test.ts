@@ -10,6 +10,7 @@ import { vendorMcpServerNames } from '../agent/mcp/import.js';
 import { writeMcpConfigEntry } from './mcp-registry.js';
 
 const cursor = allLocalHarnesses().find((item) => item.command === 'cursor')!;
+const grok = allLocalHarnesses().find((item) => item.command === 'grok')!;
 
 function account(home: string): AiHarnessAccount {
   return {
@@ -112,6 +113,23 @@ describe('where a harness keeps what it was given', () => {
     expect(known.known).toBe(true);
     expect([...known.names]).toEqual([]);
     expect((await vendorMcpServerNames('aider', '/no/such/home')).known).toBe(false);
+  });
+
+  it('does not give Grok an MCP server or skill Claude already provides', async () => {
+    const { home, state, workspace } = await layout();
+    await mkdir(join(home, '.claude', 'skills', 'from-claude'), { recursive: true });
+    await writeFile(join(home, '.claude', 'skills', 'from-claude', 'SKILL.md'), '---\nname: from-claude\ndescription: Already visible\n---\n\nThere.\n');
+    await mkdir(join(state, 'skills', 'only-here'), { recursive: true });
+    await writeFile(join(state, 'skills', 'only-here', 'SKILL.md'), '---\nname: only-here\ndescription: Not in Claude\n---\n\nHere.\n');
+    await writeFile(join(home, '.claude.json'), JSON.stringify({ mcpServers: { 'mc-brain': { command: 'npx' } } }));
+    await writeFile(join(state, 'mcp.json'), JSON.stringify({ mcpServers: { 'mc-brain': { command: 'npx', args: ['-y', 'mcp-remote'] } } }));
+    const result = await provisionChosenHarness({
+      harness: grok, workspace, stateDir: state, home,
+      install: async () => { throw new Error('should not install a server Grok already reads'); },
+    });
+    expect(result.mcpInstalled).toEqual([]);
+    expect(result.skillsCopied).toEqual(['only-here']);
+    expect(await readFile(join(home, '.grok', 'skills', 'only-here', 'SKILL.md'), 'utf8')).toContain('Not in Claude');
   });
 
   it('names who already runs Claude\'s hooks', () => {
