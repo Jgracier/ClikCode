@@ -184,6 +184,40 @@ SCENARIOS = {
         'watch': [], 'final_once': ['part2 ok', 'part11 ok', 'All twelve parts pass.'],
         'never': ['Interrupted turn activity'],
     },
+    # The slash menu, a step at a time. Choosing a command that takes a value
+    # opens its own titled picker -- the typed command gone, never left under
+    # it -- starting on the current value, and the change is confirmed.
+    'slash-command-opens-picker': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/effort'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Reasoning effort', 10), ('settle', 0.5),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'Effort set to High', 10)],
+        'watch': [], 'ever': ['❯ Medium  · current', 'Effort set to High'],
+        'never_together': [('› /effort', 'Reasoning effort'), ('Tab complete · Enter run', 'Reasoning effort')],
+    },
+    # What runs is what is highlighted: a typed command starts highlighted,
+    # and its picker replaces it.
+    'typed-command-highlighted': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 1)],
+        'watch': [], 'ever': ['❯ /account'],
+        'never_together': [('› /account', 'Grok Build accounts'), ('Tab complete · Enter run', 'Grok Build accounts')],
+    },
+    # Back from a sub-menu lands on the row it was opened from, with no
+    # spinner or empty composer flashed on the way into the list.
+    'settings-back-lands-on-row': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Failover', 10), ('settle', 0.5),
+                  ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+                  ('wait_for', 'Choose a model', 10), ('settle', 0.5), ('keys', '\x1b[D'), ('settle', 1.5)],
+        'watch': [], 'final_contains': ['❯ Model'], 'never': ['finding Grok Build models'],
+    },
+    # A sign-in leaves one line saying how it went, never a "signing in"
+    # line that stays.
+    'sign-in-outcome': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('settle', 1)],
+        'watch': [], 'final_contains': ['signed in to Grok Build'], 'never': ['signing in to Grok Build'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -201,8 +235,13 @@ def run(name, spec, entry, keep):
     shutil.copy(os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-grok.mjs'), os.path.join(fakebin, binary))
     os.chmod(os.path.join(fakebin, binary), 0o755)
     node = os.path.realpath(shutil.which('node'))
+    # Its own npm prefix: a harness ClikCode installs during a scenario (an
+    # ACP adapter) must land in the scenario, never in the global node_modules
+    # of the node running it.
+    npm_prefix = os.path.join(root, 'npm')
     env = {
-        'PATH': ':'.join([fakebin, os.path.dirname(node), '/usr/bin', '/bin']),
+        'PATH': ':'.join([fakebin, os.path.join(npm_prefix, 'bin'), os.path.dirname(node), '/usr/bin', '/bin']),
+        'npm_config_prefix': npm_prefix,
         'HOME': home, 'CLIKCODE_HOME': state, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
         'FAKE_TURNS': json.dumps(spec['turns']), 'FAKE_STATE': os.path.join(root, 'turn-counter'),
         'FAKE_FAMILY': spec.get('family', 'claude'), 'FAKE_LOG': os.path.join(root, 'argv.log'),
@@ -238,7 +277,7 @@ def run(name, spec, entry, keep):
         return until is None
 
     problems = []
-    pump(5)
+    pump(spec.get('startup', 5))
     typed_at = None
     for step in spec['steps']:
         if step[0] == 'type':
@@ -339,6 +378,11 @@ def run(name, spec, entry, keep):
     for phrase in spec.get('never', []):
         shown = [t for t, text in frames if phrase in text]
         if shown: problems.append(f'shown in {len(shown)} frame(s), first at {shown[0]:.2f}s, and never should be: {phrase!r}')
+    for phrase in spec.get('ever', []):
+        if not any(phrase in text for _, text in frames): problems.append(f'never on screen: {phrase!r}')
+    for left, right in spec.get('never_together', []):
+        both = [t for t, text in frames if left in text and right in text]
+        if both: problems.append(f'{left!r} and {right!r} on screen together in {len(both)} frame(s), first at {both[0]:.2f}s')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     for phrase in spec.get('final_once', []):

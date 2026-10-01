@@ -279,9 +279,13 @@ export async function interactiveSessionPicker(
   })
     .then((found) => { discovered = found; })
     .finally(() => { discovering = false; earlyLanded(); });
-  const refreshes = [early, discovery];
+  // The "Looking for chats from other CLIs…" row is for a search worth
+  // waiting on. Most finish in milliseconds, and the row flashed in and out.
+  let slowDiscovery = false;
+  const slow = new Promise<void>((resolveSlow) => { setTimeout(resolveSlow, 400).unref(); }).then(() => { slowDiscovery = true; });
+  const refreshes = [early, discovery, slow];
   let listRevision = 0;
-  let built: { discovering: boolean; discovered: AdoptableNativeSession[]; revision: number; options: PickerOption<string>[] } | undefined;
+  let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; options: PickerOption<string>[] } | undefined;
   // Conversations written before the summary existed get one after the list
   // is already up. The redraw copies the new previews onto the rows it holds.
   refreshes.push(backfillListFacts().then(async () => {
@@ -381,7 +385,7 @@ export async function interactiveSessionPicker(
     }
     // On the board its composer is how a conversation starts.
     if (!onBoard) options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
-    if (discovering) {
+    if (discovering && slowDiscovery) {
       options.push({
         label: discovered.length ? '  Refreshing chats from other CLIs…' : '  Looking for chats from other CLIs…',
         detail: discovered.length ? '· showing what they listed last time' : '· your ClikCode conversations are listed above',
@@ -395,8 +399,8 @@ export async function interactiveSessionPicker(
   // landing, so the rows are rebuilt only then -- not all five hundred of
   // them per arrow press.
   const buildOptions = (): PickerOption<string>[] => {
-    if (built && built.discovering === discovering && built.discovered === discovered && built.revision === listRevision) return built.options;
-    built = { discovering, discovered, revision: listRevision, options: buildFresh() };
+    if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision) return built.options;
+    built = { discovering, slow: slowDiscovery, discovered, revision: listRevision, options: buildFresh() };
     return built.options;
   };
 
