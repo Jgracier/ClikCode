@@ -4,7 +4,7 @@
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import type { HarnessSession } from '../../session/model.js';
-import { claudeStreamReading, claudeStreamUsage, codexRateLimitsReading, recentReadingByLabel } from './usage-probes.js';
+import { claudeStreamReading, codexRateLimitsReading } from './usage-probes.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, UsageWindow, nativeUsageCache, usageCacheKey, usageReading, usageWindow } from './usage-reading.js';
 
 /** Quota a harness reports on its own stream, recognised by the SHAPE of the
@@ -61,11 +61,6 @@ function streamQuotaReadingFromLine(lineText: string): UsageReading | undefined 
 /** Harnesses whose quota arrives on their turn stream. Every harness is read
  * by shape, so this says "this one reports for itself", nothing more: it is
  * what tells the caller not to ask an endpoint for what the harness gives. */
-const NATIVE_STREAM_USAGE: Readonly<Partial<Record<string, (lineText: string) => string | undefined>>> = {
-  claude: claudeStreamUsage,
-};
-
-/** Structured counterpart of NATIVE_STREAM_USAGE. */
 export const NATIVE_STREAM_USAGE_READINGS: Readonly<Partial<Record<string, (lineText: string) => UsageReading | undefined>>> = {
   claude: claudeStreamReading,
 };
@@ -102,18 +97,14 @@ export async function recordNativeStreamUsage(session: HarnessSession, lineText:
   if (!session.nativeHarness) return undefined;
   // By shape first, so a harness reporting quota in a known form is read
   // whether or not anyone has registered it by name.
-  const structured = streamQuotaReadingFromLine(lineText)
-    ?? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness]?.(lineText);
-  return recordDerivedUsage(session, structured ?? NATIVE_STREAM_USAGE[session.nativeHarness]?.(lineText));
+  return recordDerivedUsage(session, streamQuotaReadingFromLine(lineText)
+    ?? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness]?.(lineText));
 }
 
 /** Publish a reading the harness gave us for free during a turn, from whichever
- * transport it arrived on -- a stdout line, or an app-server notification.
- * Accepts a structured reading (preferred) or just its label. */
-export async function recordDerivedUsage(session: HarnessSession, usage: string | UsageReading | undefined): Promise<string | undefined> {
-  if (!usage) return undefined;
-  const reading: UsageReading = typeof usage === 'string' ? recentReadingByLabel.get(usage) ?? { windows: [], label: usage } : usage;
-  if (!reading.label) return undefined;
+ * transport it arrived on -- a stdout line, or an app-server notification. */
+export async function recordDerivedUsage(session: HarnessSession, reading: UsageReading | undefined): Promise<string | undefined> {
+  if (!reading?.label) return undefined;
   const cacheKey = usageCacheKey(session.nativeHarness, session.accountId, session.nativeSessionId);
   await publishUsageReading(cacheKey, session.accountId, reading).catch(() => undefined);
   return reading.label;

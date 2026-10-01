@@ -7,18 +7,14 @@ vi.mock('../../runtime/lazy-bridge.js', async (original) => ({
 }));
 
 const { claude, grok, amp } = vi.hoisted(() => ({
-  claude: vi.fn(async () => '5h 10% left'),
-  amp: vi.fn(async () => '$9.05 credits left'),
+  claude: vi.fn(async () => ({ windows: [], label: '5h 10% left' })),
+  amp: vi.fn(async () => ({ windows: [], label: '$9.05 credits left' })),
   grok: vi.fn(async () => ({ windows: [{ name: 'weekly', usedPercent: 0, resetsAt: '2999-01-01T00:00:00.000Z' }], label: 'weekly 100% left' })),
 }));
-vi.mock('./usage-probes.js', async (original) => {
-  const grokLabel = async () => 'weekly 100% left';
-  return {
-    ...(await original<typeof import('./usage-probes.js')>()),
-    NATIVE_USAGE_PROBES: { claude, grok: grokLabel, amp },
-    NATIVE_USAGE_READING_PROBES: { grok: { label: grokLabel, reading: grok } },
-  };
-});
+vi.mock('./usage-probes.js', async (original) => ({
+  ...(await original<typeof import('./usage-probes.js')>()),
+  NATIVE_USAGE_PROBES: { claude, grok, amp },
+}));
 vi.mock('../../session/state/write.js', () => ({ writeState: vi.fn(async () => undefined) }));
 
 const { cachedAccountUsageLabel, nativeUsageReading } = await import('./account-usage.js');

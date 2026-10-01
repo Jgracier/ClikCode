@@ -61,7 +61,3 @@ export async function grokUsageReading(_session: HarnessSession, environment: Re
     (request) => request('_x.ai/billing', { format: 'credits' }));
   return grokBillingReading(result);
 }
-
-export async function grokUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
-  return (await grokUsageReading(session, environment))?.label;
-}
