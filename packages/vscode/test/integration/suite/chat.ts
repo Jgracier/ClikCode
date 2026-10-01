@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import type { ClikCodeApi } from '../../../src/extension';
-import { activate, click, key, openProviderList, pickProviderModel, query, screenshot, sleep, type, until, waitFor } from './helpers';
+import { activate, click, key, openProviderList, paste, pickProviderModel, query, screenshot, sleep, type, until, waitFor } from './helpers';
 
 export function chatSuite(): void {
   describe('ClikCode in VS Code', () => {
@@ -153,6 +153,24 @@ export function chatSuite(): void {
       const [question, answer] = done.messages.slice(-2);
       assert.match(question!.content, /`hello\.ts` line 1:\n```typescript\nexport const greeting/);
       assert.match(answer!.content, /greeting/);
+    });
+
+    it('turns pasted lines copied from a file into a reference, and leaves other text as typed', async () => {
+      const [folder] = vscode.workspace.workspaceFolders ?? [];
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder!.uri, 'math.ts'));
+      const editor = await vscode.window.showTextDocument(document);
+      // Selecting is not sending: nothing appears in the chat for it.
+      editor.selection = new vscode.Selection(0, 0, 2, 1);
+      await sleep(500);
+      assert.strictEqual((await query(api, '.attachment')).count, 0, 'a selection alone attaches nothing');
+      await type(api, '#composer-input', '');
+      await paste(api, '#composer-input', document.getText(editor.selection));
+      await waitFor(api, '.attachment', 'the reference chip', 10_000, (found) => /math\.ts:1-3/.test(found.text));
+      assert.strictEqual((await query(api, '#composer-input')).value, '', 'the lines are a reference, not pasted text');
+      await paste(api, '#composer-input', 'just some\nnotes');
+      await waitFor(api, '#composer-input', 'other text pasted as typed', 10_000, (found) => found.value === 'just some\nnotes');
+      await type(api, '#composer-input', '');
+      await click(api, '.attachment button');
     });
 
     it('resumes a conversation from the history list', async () => {

@@ -8,7 +8,7 @@ import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } 
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import type { Mention } from '../webview-protocol';
-import { openFileLine, problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
+import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { estimatedTokens, formatTurnUsage, titleCase } from './format';
 import { AccountMenu, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
@@ -22,8 +22,6 @@ export interface ComposerHandle {
   insert(text: string): void;
   setDraft(text: string): void;
   mention(mention: Mention): void;
-  /** The editor's current selection (none: nothing selected). */
-  selection(mention: Mention | undefined): void;
   /** Opens the account menu under the message box. */
   accounts(): void;
 }
@@ -33,7 +31,6 @@ interface Attachment { key: string; kind: 'selection' | 'image'; label: string; 
 const sameRange = (left: Mention | undefined, right: Mention): boolean =>
   left?.path === right.path && left.startLine === right.startLine && left.endLine === right.endLine;
 
-const lineCount = (mention: Mention): number => (mention.endLine ?? 1) - (mention.startLine ?? 1) + 1;
 
 /** The command list, for the conversation on the provider and model it had
  * when read: another provider has other commands (its own skills, its own
@@ -78,17 +75,16 @@ export function tokenAtCaret(text: string, caret: number): { kind: '@' | '/'; qu
   return undefined;
 }
 
-/** What is sent: the typed text, then each attached selection as a fenced
- * block, the editor's context (`context`: the open file, or its selection,
- * and the problems VS Code reports there), then each pasted image's path
- * (ClikCode attaches image paths it finds in a message). */
-export function composeMessage(text: string, attachments: ReadonlyArray<{ kind: 'selection' | 'image' | 'context'; mention?: Mention; path?: string }>): string {
+/** What is sent: the typed text, then each referenced range of lines as a
+ * fenced block (with the problems VS Code reports in it), then each image's
+ * path (ClikCode attaches image paths it finds in a message). */
+export function composeMessage(text: string, attachments: ReadonlyArray<{ kind: 'selection' | 'image'; mention?: Mention; path?: string }>): string {
   const blocks = attachments.flatMap((attachment) => {
     if (attachment.kind === 'image' && attachment.path) return [attachment.path];
     const mention = attachment.mention;
     if (!mention) return [];
     const problems = mention.problems?.length ? [problemsBlock(mention.label, mention.problems)] : [];
-    if (!mention.text) return attachment.kind === 'context' ? [openFileLine(mention.label), ...problems] : [`@${mention.label}`];
+    if (!mention.text) return [`@${mention.label}`];
     return [selectionBlock({ path: mention.label, languageId: mention.languageId ?? '', startLine: mention.startLine ?? 1, endLine: mention.endLine ?? 1, text: mention.text }), ...problems];
   });
   return [text.trim(), ...blocks].filter(Boolean).join('\n\n');
@@ -104,9 +100,6 @@ export function Composer(props: {
   const [text, setText] = useState(saved().draft ?? '');
   const [caret, setCaret] = useState(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  /** The editor's selection, sent with the next message unless excluded; a
-   * message takes it once, and a new selection offers it again. */
-  const [selection, setSelection] = useState<{ mention: Mention; included: boolean }>();
   const [menu, setMenu] = useState<Menu>();
   const [suggestions, setSuggestions] = useState<ListRow[]>([]);
   const [dismissedToken, setDismissedToken] = useState<string>();
@@ -147,7 +140,6 @@ export function Composer(props: {
         update(`${text}${spacer}@${mention.label} `);
       }
     },
-    selection: (mention) => setSelection(mention ? { mention, included: true } : undefined),
     accounts: () => setMenu('account'),
   };
 
@@ -228,18 +220,13 @@ export function Composer(props: {
   }, [tokenKey, token?.query, model.sessionId, model.providerId, model.model]);
 
   const send = (): void => {
-    const offered = selection?.included && !attachments.some((item) => sameRange(item.mention, selection.mention))
-      ? [{ kind: 'context' as const, mention: selection.mention }] : [];
     if (!text.trim() && !attachments.length) return;
-    const message = composeMessage(text, [...attachments, ...offered]);
+    const message = composeMessage(text, attachments);
     if (!message || !connected) return;
     post({ type: 'send', text: message, id: uid() });
     recall.current = undefined;
     setText('');
     setAttachments([]);
-    // The selection went with this message, offered or attached: the next
-    // one does not take it again unless asked.
-    if (selection?.included) setSelection({ mention: selection.mention, included: false });
     save({ draft: '' });
     setSuggestions([]);
   };
@@ -301,11 +288,42 @@ export function Composer(props: {
     }
   };
 
+  /** A reference to lines, as a chip: `interactive.ts:50-51`. */
+  const attachLines = (mention: Mention): void => {
+    if (attachments.some((item) => sameRange(item.mention, mention))) return;
+    const range = `${mention.startLine}${mention.endLine !== mention.startLine ? `-${mention.endLine}` : ''}`;
+    setAttachments((items) => [...items, { key: uid(), kind: 'selection', label: `${mention.label.split(/[\\/]/).pop()}:${range}`, mention }]);
+  };
+
+  /** Text typed in at the caret, as a paste would have put it. */
+  const insertAtCaret = (value: string): void => {
+    const element = textarea.current;
+    const start = element?.selectionStart ?? text.length;
+    const end = element?.selectionEnd ?? text.length;
+    update(`${text.slice(0, start)}${value}${text.slice(end)}`, start + value.length);
+  };
+
+  /** A paste is what it refers to: an image is attached; lines copied from a
+   * file become a reference to those lines, and copied files references to
+   * them (pastedReference); anything else is the text itself. */
   const onPaste = (event: ClipboardEvent): void => {
-    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
-    if (!files.length) return;
+    const images = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
+    if (images.length) { event.preventDefault(); attachImages(images); return; }
+    const pasted = event.clipboardData?.getData('text/uri-list') || event.clipboardData?.getData('text/plain') || '';
+    if (!pasted.includes('\n') && !/^file:\/\//i.test(pasted.trim())) return;
     event.preventDefault();
-    attachImages(files);
+    request<{ lines?: Mention; files?: Mention[] }>({ method: 'paste', text: pasted }).then((found) => {
+      if (found.lines) { attachLines(found.lines); return; }
+      if (found.files?.length) {
+        for (const file of found.files.filter((item) => item.image)) {
+          setAttachments((items) => [...items, { key: uid(), kind: 'image', label: file.label.split(/[\\/]/).pop() ?? file.label, path: file.path }]);
+        }
+        const others = found.files.filter((item) => !item.image);
+        if (others.length) insertAtCaret(`${others.map((item) => `@${item.label}`).join(' ')} `);
+        return;
+      }
+      insertAtCaret(pasted);
+    }, () => insertAtCaret(pasted));
   };
 
   /** Dropped on the message box: files from the Explorer or a tab (VS Code
@@ -393,22 +411,6 @@ export function Composer(props: {
         {showSuggestions ? (
           <div class="popover suggestions" role="dialog" aria-label={token?.kind === '/' ? 'Commands' : 'Files'}>
             <KeyList id="suggestions" rows={suggestions} label={token?.kind === '/' ? 'Commands' : 'Files'} inputRef={textarea as unknown as { current: HTMLInputElement | null }} onEscape={() => setDismissedToken(tokenKey)} />
-          </div>
-        ) : null}
-        {selection && !attachments.some((item) => sameRange(item.mention, selection.mention)) ? (
-          <div class={`selection-context${selection.included ? '' : ' excluded'}`}>
-            <button type="button" class="link small" aria-pressed={selection.included}
-              title={`${selection.mention.text ? 'The selection' : 'The open file'}${selection.mention.problems?.length ? ' and its problems' : ''} ${selection.included ? 'will be sent with your next message. Click to leave it out.' : 'is left out. Click to include it.'}`}
-              onClick={() => setSelection({ ...selection, included: !selection.included })}>
-              <Icon name={selection.included ? 'eye' : 'eye-closed'} />
-              {selection.mention.text
-                ? <span>{lineCount(selection.mention)} line{lineCount(selection.mention) === 1 ? '' : 's'} selected</span>
-                : <span>{selection.mention.label.split(/[\\/]/).pop()}</span>}
-              {selection.mention.text ? <span class="muted">{selection.mention.label.split(/[\\/]/).pop()}</span> : null}
-              {selection.mention.problems?.length ? (
-                <span class="context-problems" title={selection.mention.problems.join('\n')}><Icon name="warning" />{selection.mention.problems.length}</span>
-              ) : null}
-            </button>
           </div>
         ) : null}
         {attachments.length ? (

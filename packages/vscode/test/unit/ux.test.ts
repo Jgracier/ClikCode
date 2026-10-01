@@ -151,26 +151,24 @@ describe('slash menu', () => {
 });
 
 describe('editor context', () => {
-  it('sends the open file and its problems, or a selection with the problems in it', () => {
+  it('sends referenced lines as a block with the problems VS Code reports in them', () => {
     const problems = ["line 3 error: Cannot find name 'x'. (ts 2304)"];
-    expect(composeMessage('fix it', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'a.ts', problems } }]))
-      .toBe("fix it\n\nOpen in the editor: `a.ts`\n\nVS Code reports this problem in `a.ts`:\n- line 3 error: Cannot find name 'x'. (ts 2304)");
-    const selected = composeMessage('why', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'a.ts', startLine: 3, endLine: 3, text: 'x', languageId: 'typescript', problems } }]);
+    const selected = composeMessage('why', [{ kind: 'selection', mention: { path: '/w/a.ts', label: 'a.ts', startLine: 3, endLine: 3, text: 'x', languageId: 'typescript', problems } }]);
     expect(selected).toContain('`a.ts` line 3:');
     expect(selected).toContain('VS Code reports this problem');
   });
 
-  it('splits the context back off what was typed, for the bubble and for recall', () => {
-    const sent = composeMessage('fix it', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'src/a.ts', problems: ['line 1 error: x', 'line 2 warning: y'] } }]);
-    expect(splitEditorContext(sent)).toEqual({ text: 'fix it', file: 'src/a.ts', problems: 2, selections: [] });
+  it('splits references back off what was typed, for the bubble and for recall', () => {
+    // An older message, sent with the open file as context.
+    const older = "fix it\n\nOpen in the editor: `src/a.ts`\n\nVS Code reports these problems in `src/a.ts`:\n- line 1 error: x\n- line 2 warning: y";
+    expect(splitEditorContext(older)).toEqual({ text: 'fix it', file: 'src/a.ts', problems: 2, selections: [] });
     expect(splitEditorContext('just text\n\nmore')).toEqual({ text: 'just text\n\nmore', problems: 0, selections: [] });
     // A selection with blank lines inside its code is one block.
     const withSelection = composeMessage('why?', [{ kind: 'selection', mention: { path: '/w/a.ts', label: 'src/a.ts', startLine: 2, endLine: 5, text: 'a\n\nb', languageId: 'ts' } }]);
     expect(splitEditorContext(withSelection)).toEqual({ text: 'why?', problems: 0, selections: ['a.ts:2-5'] });
-    expect(promptHistory([{ role: 'user', content: sent }])).toEqual(['fix it']);
+    expect(promptHistory([{ role: 'user', content: older }])).toEqual(['fix it']);
   });
 });
-
 describe('conversation list', () => {
   const chat = (patch: Partial<{ sessionId: string; approvals: number; unread: boolean }>) => ({ sessionId: 'a', approvals: 0, unread: false, ...patch });
   it('marks a conversation another chat shows: a waiting approval first, then an unseen finish', () => {

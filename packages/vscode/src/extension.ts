@@ -8,7 +8,7 @@ import { chatModelLabel, providerDisplayName, type ChatModel } from './model';
 import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND, supportsSecondarySidebar } from './compat';
 import { DiffDocuments } from './ui';
 import { registerCustomAcpCommands } from './custom-acp';
-import { mentionFromEditor, mentionFromUri } from './mentions';
+import { mentionFromEditor, mentionFromUri, rememberSelections } from './mentions';
 import type { WebviewMenu } from './webview-protocol';
 
 /** What activate() returns: used by the integration tests, and a stable
@@ -27,7 +27,7 @@ export interface ClikCodeApi {
   /** Each tab chat's state, oldest first. */
   tabStates(): ChatModel[];
   /** Integration tests: read or drive the active chat's page. */
-  probe(action: 'query' | 'click' | 'type' | 'key', selector: string, text?: string): Promise<unknown>;
+  probe(action: 'query' | 'click' | 'type' | 'key' | 'paste', selector: string, text?: string): Promise<unknown>;
 }
 
 /** The status bar item: ClikCode's name and what it is doing; provider,
@@ -211,6 +211,8 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
 
   registerCustomAcpCommands(context);
   context.subscriptions.push(
+    // What was selected in files, so a paste of it becomes a reference.
+    rememberSelections(),
     log, status, sidebar,
     sidebar.onDidChange(paint),
     new vscode.Disposable(() => { for (const controller of tabs.values()) controller.dispose(); }),

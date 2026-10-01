@@ -161,7 +161,7 @@ function probe(message: Extract<ToWebview, { type: 'probe' }>): unknown {
   const elements = [...document.querySelectorAll<HTMLElement>(message.selector)];
   const element = elements[0];
   if (message.action === 'query') {
-    return { count: elements.length, text: element?.innerText ?? element?.textContent ?? '', texts: elements.slice(0, 50).map((item) => item.innerText ?? item.textContent ?? ''), disabled: (element as HTMLButtonElement | undefined)?.disabled ?? false };
+    return { count: elements.length, text: element?.innerText ?? element?.textContent ?? '', texts: elements.slice(0, 50).map((item) => item.innerText ?? item.textContent ?? ''), disabled: (element as HTMLButtonElement | undefined)?.disabled ?? false, value: (element as HTMLTextAreaElement | undefined)?.value };
   }
   if (!element) {
     return { ok: false, error: `nothing matches ${message.selector} (page: ${document.body.innerText.slice(0, 300).replace(/\s+/g, ' ')})` };
@@ -177,6 +177,12 @@ function probe(message: Extract<ToWebview, { type: 'probe' }>): unknown {
     return { ok: true };
   }
   element.focus();
+  if (message.action === 'paste') {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData('text/plain', message.text ?? '');
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+    return { ok: true };
+  }
   element.dispatchEvent(new KeyboardEvent('keydown', { key: message.text ?? 'Enter', bubbles: true, cancelable: true }));
   return { ok: true };
 }
@@ -215,7 +221,6 @@ function App(): JSX.Element {
       case 'setDraft': composer.current?.setDraft(message.text); return;
       case 'insert': composer.current?.insert(message.text); return;
       case 'mention': requestAnimationFrame(() => composer.current?.mention(message.mention)); return;
-      case 'selection': composer.current?.selection(message.mention); return;
       case 'focus': requestAnimationFrame(() => composer.current?.focus()); return;
       case 'show': showMenu(message.menu); return;
       case 'ui-request': setQuestions((items) => [...items.filter((item) => item.id !== message.id), { id: message.id, request: message.request }]); return;

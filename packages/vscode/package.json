@@ -459,21 +459,6 @@
           ],
           "default": "continue",
           "description": "What the chat shows when it opens."
-        },
-        "clikcode.editorContext": {
-          "type": "string",
-          "enum": [
-            "file",
-            "selection",
-            "off"
-          ],
-          "default": "file",
-          "enumDescriptions": [
-            "Offer the selection, or with nothing selected the open file, with the problems VS Code reports there.",
-            "Offer only a selection (and the problems in it).",
-            "Offer nothing from the editor."
-          ],
-          "description": "What from the editor goes with your next message. It shows above the message box, where one click leaves it out."
         }
       }
     },

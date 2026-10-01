@@ -16,6 +16,8 @@ export interface Mention {
   /** What VS Code's Problems panel reports in it (in the selection, for a
    * selection): `line 12 error: Cannot find name 'x'. (ts 2304)`. */
   problems?: string[];
+  /** A file that is an image: attached as one, not mentioned. */
+  image?: boolean;
 }
 
 /** A row of the conversations list, as the extension answers `query
@@ -33,8 +35,6 @@ export type ToWebview =
   | { type: 'setDraft'; text: string }
   | { type: 'insert'; text: string }
   | { type: 'mention'; mention: Mention }
-  /** The active editor's selection, or none: offered with the next message. */
-  | { type: 'selection'; mention?: Mention }
   | { type: 'focus' }
   | { type: 'show'; menu: WebviewMenu }
   /** The answer to a `request`. */
@@ -44,7 +44,7 @@ export type ToWebview =
   | { type: 'ui-update'; id: string; items: readonly IdePickItem[] }
   | { type: 'ui-cancel'; id: string }
   /** Integration tests only (extensionMode Test): read or drive the DOM. */
-  | { type: 'probe'; id: string; action: 'query' | 'click' | 'type' | 'key'; selector: string; text?: string };
+  | { type: 'probe'; id: string; action: 'query' | 'click' | 'type' | 'key' | 'paste'; selector: string; text?: string };
 
 export type WebviewRequest =
   | { method: 'query'; query: IdeQueryName; provider?: string; network?: boolean }
@@ -60,6 +60,8 @@ export type WebviewRequest =
   /** Files dropped on the composer (from the Explorer or an editor tab) as
    * @-mentions, by their URIs. */
   | { method: 'mentions'; uris: string[] }
+  /** Pasted text, asked whether it refers to copied lines or files. */
+  | { method: 'paste'; text: string }
   /** An image pasted into the composer, saved where the agent can read it. */
   | { method: 'saveImage'; name: string; dataBase64: string };
 
