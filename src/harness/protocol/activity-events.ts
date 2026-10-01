@@ -257,8 +257,38 @@ function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[
   });
 }
 
+/** Cursor CLI's stream-json (cursor-agent 2026.09.26): `tool_call` started /
+ * completed records whose `tool_call` is the call's protobuf message, either
+ * `{ tool: { case, value } }` or keyed by the case (`shellToolCall`,
+ * `readToolCall`, `editToolCall`, …), with `value.args` and `value.result`
+ * (`success` or `error`); and `thinking` deltas. They were all ignored, so
+ * Cursor's CLI turns had no tool rows. */
+function cursorActivity(value: JsonRecord): NativeActivityEvent | undefined {
+  if (value.type === 'thinking' && typeof value.text === 'string' && value.text) return { kind: 'thinking', label: value.text };
+  if (value.type !== 'tool_call') return undefined;
+  const call = asRecord(value.tool_call);
+  const tagged = asRecord(call?.tool);
+  const [kind, body] = typeof tagged?.case === 'string' ? [tagged.case, asRecord(tagged.value)] : Object.entries(call ?? {}).map(([key, entry]) => [key, asRecord(entry)] as const)[0] ?? [];
+  if (!kind) return undefined;
+  const result = asRecord(body?.result);
+  const success = asRecord(result?.success);
+  const error = asRecord(result?.error) ?? asRecord(result?.failure);
+  const text = [success?.stdout, success?.stderr, success?.output, success?.content, error?.stderr, error?.message, error?.error]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0).join('\n');
+  const exitCode = [success?.exitCode, error?.exitCode].find((code): code is number => typeof code === 'number');
+  const done = value.subtype === 'completed';
+  return {
+    kind: done ? (error || (exitCode ?? 0) !== 0 ? 'tool-error' : 'tool-done') : 'tool-start',
+    ...toolFacts(String(kind).replace(/ToolCall$/, ''), asRecord(body?.args), 'cursor'),
+    ...(typeof value.call_id === 'string' ? { id: value.call_id } : {}),
+    ...(done && text ? activityOutput(text, { tail: true }) : {}),
+    ...(done && exitCode !== undefined ? { exitCode } : {}),
+  };
+}
+
 function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecord): NativeActivityEvent | undefined {
   const type = String(value.type ?? '');
+  if (harness.command === 'cursor') return cursorActivity(value);
   if (harness.command === 'antigravity' && value.event === 'step_update') {
     const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
     if (step?.step_type === 'tool') {
