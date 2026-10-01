@@ -21,7 +21,6 @@ import { mentionFromEditor, mentionFromUri, searchWorkspaceFiles } from './menti
 import type { Mention } from './webview-protocol';
 
 const POST_INTERVAL_MS = 40;
-const STRUCTURED_REVISION = 2;
 
 export interface ControllerHost {
   log: vscode.OutputChannel;
@@ -168,7 +167,7 @@ export class ClikCodeController implements vscode.Disposable {
       this.turnEnded(previous);
       this.dropSentImages(next);
     }
-    if (next.connection === 'ready' && (next.revision ?? 1) >= STRUCTURED_REVISION && next.sessionId) {
+    if (next.connection === 'ready' && next.sessionId) {
       const key = [next.sessionId, next.providerId, next.model, next.account, next.effort, next.permissions].join('|');
       if (key !== this.refreshedFor) {
         this.refreshedFor = key;
@@ -243,7 +242,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   private async readStructured(onlyAccount: boolean): Promise<void> {
     const bridge = this.bridge;
-    if (!bridge?.running || (this.model.revision ?? 1) < STRUCTURED_REVISION) return;
+    if (!bridge?.running) return;
     const sessionId = this.model.sessionId;
     const [settings, providers, accounts] = await Promise.all([
       onlyAccount ? Promise.resolve(this.model.chatSettings) : bridge.call<IdeChatSettings>({ type: 'query', query: 'chat-settings' }, 30_000).catch(() => undefined),
@@ -614,7 +613,7 @@ export class ClikCodeController implements vscode.Disposable {
   async conversations(start = false): Promise<IdeConversation[] | undefined> {
     if (start) await this.ensureStarted();
     const bridge = this.bridge;
-    if (!bridge?.running || (this.model.revision ?? 1) < STRUCTURED_REVISION) return undefined;
+    if (!bridge?.running) return undefined;
     return bridge.call<IdeConversation[]>({ type: 'query', query: 'conversations' }, 30_000);
   }
 
@@ -680,7 +679,6 @@ export class ClikCodeController implements vscode.Disposable {
       await this.open(request.mode, request.sessionId);
       return undefined;
     }
-    if ((this.model.revision ?? 1) < STRUCTURED_REVISION) throw new Error('Update ClikCode to use this (npm install -g clikcode@latest).');
     if (request.method === 'query') {
       return bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, 120_000);
     }

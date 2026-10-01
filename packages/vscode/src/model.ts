@@ -93,8 +93,8 @@ export interface LiveTurn {
 
 export interface ChatModel {
   connection: 'starting' | 'ready' | 'stopped' | 'error';
-  /** IDE protocol revision the bridge speaks: 2 and up has the structured
-   * queries the provider menu, history and accounts screens are built on. */
+  /** IDE protocol revision the bridge speaks (compat.ts refuses one older
+   * than the structured queries the panel's menus are built on). */
   revision?: number;
   connectionError?: string;
   /** What the banner offers besides Retry: install ClikCode, update it (too
@@ -143,7 +143,7 @@ export interface ChatModel {
   busy?: string;
   /** A message typed during the turn and what became of it. */
   submissions: Array<{ id: string; text: string; disposition?: string }>;
-  /** Read by the extension after each change of conversation (revision 2). */
+  /** Read by the extension after each change of conversation. */
   chatSettings?: IdeChatSettings;
   provider?: IdeProvider;
   currentAccount?: IdeAccount;

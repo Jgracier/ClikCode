@@ -17,12 +17,17 @@ export type Remedy = 'install' | 'update-clikcode' | 'update-extension';
 export type Compatibility = { ok: true } | { ok: false; remedy: Exclude<Remedy, 'install'>; message: string };
 
 /** Judges the bridge by its `ready` event. */
-export function bridgeCompatibility(ready: { version: string; protocol?: unknown }, supported: { version: number; oldestSupported: number } = IDE_PROTOCOL): Compatibility {
+export function bridgeCompatibility(
+  ready: { version: string; protocol?: unknown; revision?: unknown },
+  supported: { version: number; oldestSupported: number; oldestRevision?: number } = IDE_PROTOCOL,
+): Compatibility {
   const protocol = typeof ready.protocol === 'number' && Number.isInteger(ready.protocol) ? ready.protocol : 0;
-  if (protocol < supported.oldestSupported) {
+  const revision = typeof ready.revision === 'number' && Number.isInteger(ready.revision) ? ready.revision : 1;
+  if (protocol < supported.oldestSupported || revision < (supported.oldestRevision ?? 1)) {
+    const has = protocol < supported.oldestSupported ? `bridge protocol ${protocol || 'none'}; it needs ${supported.oldestSupported} or newer` : `bridge revision ${revision}; it needs ${supported.oldestRevision} or newer`;
     return {
       ok: false, remedy: 'update-clikcode',
-      message: `ClikCode ${ready.version} is too old for this extension (bridge protocol ${protocol || 'none'}; it needs ${supported.oldestSupported} or newer). Update ClikCode: ${INSTALL_HELP}`,
+      message: `ClikCode ${ready.version} is too old for this extension (${has}). Update ClikCode: ${INSTALL_HELP}`,
     };
   }
   if (protocol > supported.version) {
