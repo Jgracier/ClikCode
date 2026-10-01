@@ -102,7 +102,7 @@ export function nativeActivityPhaseFromValue(harness: AiLocalHarnessDefinition, 
   if (!value) return undefined;
   const type = String(value.type ?? '');
   const itemType = String(asRecord(value.item)?.type ?? '');
-  if (harness.command === 'antigravity' && value.event === 'step_update') {
+  if (harness.parser === 'antigravity' && value.event === 'step_update') {
     const step = asRecord(value.step_update);
     if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string') return 'generating response';
   }

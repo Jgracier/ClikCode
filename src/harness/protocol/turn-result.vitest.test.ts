@@ -35,7 +35,7 @@ describe('native harness turn results', () => {
   });
 
   it('reassembles Goose assistant message chunks', () => {
-    const goose = { ...codex, command: 'goose', displayName: 'Goose', turn: { ...codex.turn, responseFields: ['text'] } };
+    const goose = { ...codex, command: 'goose', displayName: 'Goose', parser: 'goose' as const, turn: { ...codex.turn, responseFields: ['text'] } };
     const stdout = [
       { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Hello ' }] } },
       { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'world.' }] } },

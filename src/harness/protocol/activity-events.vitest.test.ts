@@ -32,10 +32,10 @@ describe('incremental native tool activity', () => {
   });
 
   it('pairs Claude tool starts and partial results by tool-use id', () => {
-    const start = parseNativeActivityEvent({ ...codex, command: 'claude' }, JSON.stringify({
+    const start = parseNativeActivityEvent({ ...codex, command: 'claude', parser: 'claude-stream-json' }, JSON.stringify({
       type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'git status' } }] },
     }));
-    const done = parseNativeActivityEvent({ ...codex, command: 'claude' }, JSON.stringify({
+    const done = parseNativeActivityEvent({ ...codex, command: 'claude', parser: 'claude-stream-json' }, JSON.stringify({
       type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'clean' }] },
     }));
     // The target belongs in the label: a bare `Bash` says nothing about what
@@ -92,7 +92,7 @@ describe('incremental native tool activity', () => {
   });
 
   it('renders a Claude edit as the lines that changed, not both texts whole', () => {
-    const event = parseNativeActivityEvent({ ...codex, command: 'claude' }, JSON.stringify({
+    const event = parseNativeActivityEvent({ ...codex, command: 'claude', parser: 'claude-stream-json' }, JSON.stringify({
       type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Edit', input: { file_path: 'a.ts', old_string: 'one\ntwo\nthree', new_string: 'one\n2\nthree' } }] },
     }));
     expect(event).toMatchObject({ label: 'Edit a.ts' });
