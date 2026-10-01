@@ -4,7 +4,6 @@
  * compatibility fallback for products without ACP. */
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
-import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import type { AiHarnessAcpDefinition, AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
@@ -15,11 +14,11 @@ import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { activityOutput, editDiffFromInput } from '../protocol/activity-events.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
-import { spawnPortable } from './spawn.js';
-import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
-import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
-import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
-import { createTurnWatchdog, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
+import { turnCancelledError } from '../../agent/cancellation.js';
+import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
+import { BackgroundTurnChannel } from './background-turn.js';
+import { turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
+import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 
 type Json = Record<string, any>;
 
@@ -27,7 +26,6 @@ type Json = Record<string, any>;
  * only these; everything else still reaches the user. */
 const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'think', 'fetch']);
 const DETAIL_LINE_CAP = 12;
-const CANCEL_SETTLE_MS = 2000;
 /** How long an agent that said it is retrying a rate-limited call gets to
  * make progress before the turn is given up as throttled. Vibe backs off for
  * minutes after one `_session/retrying`, with nothing on the wire meanwhile;
@@ -39,8 +37,6 @@ export const ACP_RATE_LIMIT_GRACE_MS = 30_000;
  * terminal extension, as codex-acp does) rather than a fenced text block with
  * no exit code. An agent that does not know the key ignores it. */
 const ACP_CLIENT_CAPABILITIES = { _meta: { terminal_output: true } };
-
-type AcpSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
 export interface AcpTurnInput extends HarnessTurnObserver {
   binary: string;
@@ -88,15 +84,6 @@ export interface AcpSession {
    * session/cancel within two seconds. */
   cancel(): void;
   close(): Promise<void>;
-}
-
-interface AcpSessionOptions {
-  spawn?: AcpSpawn;
-  /** Receives work the agent does between ClikCode turns. */
-  backgroundTurns?: VendorBackgroundTurnHandler;
-  /** Watchdog budgets (see turn-watchdog.ts); tests shorten them. */
-  idleMs?: number;
-  toolIdleMs?: number;
 }
 
 export function acpResponseDelta(update: Json): string | undefined {
@@ -411,14 +398,10 @@ const TURN_BOOKKEEPING_UPDATES: ReadonlySet<string> = new Set(['usage_update', '
 const toolRunning = (update: Json): boolean => update.status === 'pending' || update.status === 'in_progress' || update.status === undefined;
 const toolSettled = (update: Json): boolean => update.status === 'completed' || update.status === 'failed';
 
-class AcpSessionImpl implements AcpSession {
-  private live?: LiveAgent;
-  private turn?: ActiveTurn;
-  private background?: BackgroundRun;
+class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, BackgroundRun> implements AcpSession {
   /** Tool calls the agent started and has not settled, within the turn or
    * background turn that is receiving updates. */
   private readonly pendingTools = new Map<string, string>();
-  private settling?: Promise<void>;
   private sessionId?: string;
   private lastCumulativeChunks = false;
   /** The live session's running totals as the agent last reported them
@@ -427,176 +410,73 @@ class AcpSessionImpl implements AcpSession {
    * process: an agent that restores its totals on load says so before the
    * prompt, and one that does not (Hermes) starts again from zero. */
   private sessionTotals: TurnUsage = {};
-  private isClosed = false;
-  private readonly spawn: AcpSpawn;
-  private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
-  private readonly idleMs?: number;
-  private readonly toolIdleMs?: number;
 
-  constructor(options: AcpSessionOptions) {
-    this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
-    this.onBackgroundTurn = options.backgroundTurns;
-    this.idleMs = options.idleMs;
-    this.toolIdleMs = options.toolIdleMs;
+  constructor(options: PersistentSessionOptions) {
+    super(options, 'ACP');
   }
 
   async runTurn(input: AcpTurnInput): Promise<AcpTurnResult> {
-    if (this.isClosed) throw new Error(`${input.command} ACP session is closed`);
-    if (this.turn) throw new Error(`${input.command} ACP session already has an active turn`);
+    this.assertIdle(`${input.command} ACP`);
     const argv = acpSpawnArgv(input);
     if (!argv) throw new Error(`${input.command} has no ACP adapter`);
-    // From here on the user's turn receives what the agent says.
-    this.finishBackground('superseded');
     this.lastCumulativeChunks = input.acp?.cumulativeChunks === true;
-    let fail!: (error: Error) => void;
-    const failure = new Promise<never>((_, reject) => { fail = reject; });
-    failure.catch(() => undefined);
+    const { failure, fail } = turnFailure();
     const turn: ActiveTurn = {
       input, observer: input, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: {}, promptStarted: false, done: false, fail,
     };
-    this.turn = turn;
-    const onAbort = (): void => this.cancelTurn(turn);
-    input.signal?.addEventListener('abort', onAbort, { once: true });
-    try {
-      if (this.settling) await this.settling;
-      if (input.signal?.aborted) throw turnCancelledError();
-      const flow = this.flow(turn, argv);
-      flow.catch(() => undefined);
-      return await Promise.race([flow, failure]);
-    } catch (error) {
-      const failureError = error instanceof Error ? error : new Error(String(error));
+    return this.runActive(turn, input.signal, failure, () => this.flow(turn, argv), {
       // After a failure the child's protocol state is unknown. Drop it; the
       // next turn respawns and resumes. Cancellation settles on its own path.
-      if (!isTurnCancelled(failureError)) this.dropLive(failureError);
-      throw failureError;
-    } finally {
-      turn.done = true;
-      turn.watchdog?.stop();
-      if (turn.throttled) clearTimeout(turn.throttled);
-      input.signal?.removeEventListener('abort', onAbort);
-      if (this.turn === turn) this.turn = undefined;
-      this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
-      // ACP defines the answer to session/prompt as the end of the turn: a
-      // tool call it left unsettled is not waited for (agents do leave some,
-      // and waiting would hold a background turn open for the whole ceiling).
-      // Anything the agent reports about it later opens a background turn.
-      this.pendingTools.clear();
-    }
-  }
-
-  cancel(): void {
-    if (this.turn) this.cancelTurn(this.turn);
-  }
-
-  async close(): Promise<void> {
-    this.isClosed = true;
-    if (this.turn) this.cancelTurn(this.turn);
-    this.finishBackground('closed');
-    this.pendingTools.clear();
-    if (this.settling) await this.settling;
-    const live = this.live;
-    this.live = undefined;
-    if (!live) return;
-    live.peer.rejectPending(new Error('ACP session closed'));
-    await live.peer.shutdown();
-  }
-
-  private cancelTurn(turn: ActiveTurn): void {
-    if (turn.done) return;
-    turn.done = true;
-    const live = this.live;
-    if (live && turn.prompt && turn.sessionId) {
-      // The agent answers the prompt with stopReason `cancelled` once it has
-      // unwound. Give it two seconds so the session stays resumable.
-      live.peer.notify('session/cancel', { sessionId: turn.sessionId });
-      const prompt = turn.prompt;
-      this.settling = new Promise<void>((resolve) => {
-        const timer = setTimeout(() => { if (this.live === live) this.dropLive(turnCancelledError()); resolve(); }, CANCEL_SETTLE_MS);
-        void prompt.then(() => undefined, () => undefined).then(() => { clearTimeout(timer); resolve(); });
-      }).finally(() => { this.settling = undefined; });
-    } else if (live) {
-      // Mid-setup there is nothing to cancel politely.
-      this.dropLive(turnCancelledError());
-    }
-    turn.fail(turnCancelledError());
-  }
-
-  private dropLive(error: Error): void {
-    const live = this.live;
-    if (!live) return;
-    this.live = undefined;
-    this.finishBackground('closed');
-    this.pendingTools.clear();
-    live.peer.rejectPending(error);
-    void live.peer.shutdown();
-  }
-
-  private watchdog(onIdle: (afterMs: number) => void): TurnWatchdog {
-    return createTurnWatchdog({
-      ...(this.idleMs !== undefined ? { idleMs: this.idleMs } : {}),
-      ...(this.toolIdleMs !== undefined ? { toolIdleMs: this.toolIdleMs } : {}),
-      onIdle,
+      failed: (error) => this.dropLive(error),
+      ended: () => {
+        if (turn.throttled) clearTimeout(turn.throttled);
+        this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
+        // ACP defines the answer to session/prompt as the end of the turn: a
+        // tool call it left unsettled is not waited for (agents do leave some,
+        // and waiting would hold a background turn open for the whole ceiling).
+        // Anything the agent reports about it later opens a background turn.
+        this.pendingTools.clear();
+      },
     });
   }
 
-  /** Open a background turn and hand it to the owner. Without an owner the
-   * agent's out-of-turn updates are not surfaced, exactly as before. */
+  protected clearPending(): void {
+    this.pendingTools.clear();
+  }
+
+  protected interrupt(turn: ActiveTurn, live: LiveAgent): boolean {
+    const prompt = turn.prompt;
+    if (!prompt || !turn.sessionId) return false;
+    // The agent answers the prompt with stopReason `cancelled` once it has
+    // unwound. Give it two seconds so the session stays resumable.
+    live.peer.notify('session/cancel', { sessionId: turn.sessionId });
+    this.settleCancel(live, (settled) => void prompt.then(() => undefined, () => undefined).then(settled));
+    return true;
+  }
+
+  /** Open a background turn for the agent's out-of-turn updates. */
   private openBackground(): BackgroundRun | undefined {
-    if (!this.onBackgroundTurn || this.isClosed) return undefined;
-    if (this.background && !this.background.channel.done) return this.background;
-    const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
-    const run: BackgroundRun = { channel, observer: channel.observer, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: { ...this.sessionTotals } };
-    run.watchdog = this.watchdog(() => {
-      if (this.background !== run) return;
-      this.pendingTools.clear();
-      this.finishBackground('idle-timeout');
+    return this.openBackgroundRun(() => {
+      const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
+      return { channel, observer: channel.observer, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: { ...this.sessionTotals } };
     });
-    this.background = run;
-    try { this.onBackgroundTurn(channel); } catch { /* fail-open-ok: the owner's bookkeeping */ }
-    return run;
-  }
-
-  private finishBackground(ended: BackgroundTurnEnd): void {
-    const run = this.background;
-    if (!run) return;
-    this.background = undefined;
-    run.watchdog?.stop();
-    run.channel.finish(ended);
   }
 
   private ensureLive(input: AcpTurnInput, argv: readonly string[]): LiveAgent {
-    const key = JSON.stringify([input.binary, argv, input.cwd, input.environment]);
-    if (this.live && !this.live.peer.closed && this.live.key === key) return this.live;
     // Model, effort and permission flags are launch arguments: a change means
     // a new child, which then resumes the same session.
-    if (this.live) this.dropLive(new Error(`${input.command} ACP restarted`));
-    const detached = process.platform !== 'win32';
-    const child = this.spawn(input.binary, argv, {
-      cwd: input.cwd, env: { ...process.env, ...input.environment }, stdio: ['pipe', 'pipe', 'pipe'], detached,
-    });
-    const live: LiveAgent = {
-      key,
-      peer: new JsonRpcPeer(child, {
+    return this.liveFor(JSON.stringify([input.binary, argv, input.cwd, input.environment]), `${input.command} ACP restarted`, {
+      binary: input.binary, argv, cwd: input.cwd, environment: input.environment,
+      peer: {
         label: `${input.command} ACP`,
-        detached,
         onRequest: (method, params) => method === 'session/request_permission' ? this.permission(params) : undefined,
         onNotification: (method, params) => {
           if (method === 'session/update') this.update(params);
           else if (method === '_session/retrying') this.retrying(params);
           else if (method === '_kiro.dev/metadata') this.kiroMetadata(params);
         },
-        onClose: (error) => {
-          if (this.live === live) {
-            this.live = undefined;
-            this.finishBackground('closed');
-            this.pendingTools.clear();
-          }
-          if (this.turn && !this.turn.done) this.turn.fail(error);
-        },
-      }),
-    };
-    this.live = live;
-    return live;
+      },
+    }, {});
   }
 
   private async flow(turn: ActiveTurn, argv: readonly string[]): Promise<AcpTurnResult> {
@@ -988,17 +868,10 @@ class AcpSessionImpl implements AcpSession {
 /** One agent process kept alive across turns: initialize once, open or resume
  * the session once, then one session/prompt per turn. If the child dies (or
  * its launch arguments change) the next turn respawns and resumes. */
-export function createAcpSession(options: AcpSessionOptions = {}): AcpSession {
+export function createAcpSession(options: PersistentSessionOptions = {}): AcpSession {
   return new AcpSessionImpl(options);
 }
 
-export async function runAcpTurn(input: AcpTurnInput, options: AcpSessionOptions = {}): Promise<AcpTurnResult> {
-  if (!acpSpawnArgv(input)) throw new Error(`${input.command} has no ACP adapter`);
-  const session = createAcpSession(options);
-  try {
-    return await session.runTurn(input);
-  } finally {
-    // Shutdown is graceful (up to seconds); the caller already has its answer.
-    void session.close().catch(() => undefined);
-  }
+export function runAcpTurn(input: AcpTurnInput, options: PersistentSessionOptions = {}): Promise<AcpTurnResult> {
+  return runOneTurn(createAcpSession(options), input);
 }

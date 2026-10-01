@@ -26,7 +26,7 @@ interface JsonRpcRequestOptions {
   onId?: (id: number) => void;
 }
 
-interface JsonRpcPeerOptions {
+export interface JsonRpcPeerOptions {
   /** Human label used in error messages, e.g. `copilot ACP`. */
   label: string;
   /** ACP requires the `jsonrpc: "2.0"` member; Codex app-server omits it. */

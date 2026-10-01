@@ -1,8 +1,6 @@
 import { activityOutput } from '../protocol/activity-events.js';
-import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { spawnPortable } from './spawn.js';
-import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
-import { JSONRPC_SETUP_TIMEOUT_MS, JsonRpcPeer } from './jsonrpc-peer.js';
+import { turnCancelledError } from '../../agent/cancellation.js';
+import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
@@ -10,8 +8,9 @@ import { commandOutcome, fileChangeActivity, thoughtLabel } from '../protocol/ac
 import { categoryOf, commandText, formatToolRow, toolLabel } from '../protocol/tools.js';
 import { asRecord } from '../protocol/json-lines.js';
 import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
-import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
-import { createTurnWatchdog, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
+import { BackgroundTurnChannel } from './background-turn.js';
+import { turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
+import { CANCEL_SETTLE_MS, PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -36,7 +35,6 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
 }
 
 type CodexErrorKind = 'quota' | 'auth' | 'other';
-type CodexSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
 export interface CodexSession {
   runTurn(input: CodexAppServerTurnInput): Promise<CodexAppServerTurnResult>;
@@ -45,15 +43,6 @@ export interface CodexSession {
   /** Interrupt the active turn; the child survives if it acknowledges in 2s. */
   cancel(): void;
   close(): Promise<void>;
-}
-
-interface CodexSessionOptions {
-  spawn?: CodexSpawn;
-  /** Receives work the vendor does between ClikCode turns. */
-  backgroundTurns?: VendorBackgroundTurnHandler;
-  /** Watchdog budgets (see turn-watchdog.ts); tests shorten them. */
-  idleMs?: number;
-  toolIdleMs?: number;
 }
 
 interface CodexAppServerTurnResult {
@@ -227,7 +216,6 @@ function codexPlanEntries(params: JsonObject): HarnessPlanEntry[] {
     : [];
 }
 
-const INTERRUPT_SETTLE_MS = 2000;
 const OUTPUT_EMIT_INTERVAL_MS = 150;
 const OUTPUT_BUFFER_LIMIT = 4000;
 
@@ -286,78 +274,44 @@ interface BackgroundRun extends Stream {
  * has not completed, or a sub-agent thread that is active. */
 interface PendingWork { label: string; turnId?: string }
 
-class CodexSessionImpl implements CodexSession {
-  private live?: LiveServer;
-  private turn?: ActiveTurn;
-  private background?: BackgroundRun;
+class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, BackgroundRun> implements CodexSession {
   private readonly pendingWork = new Map<string, PendingWork>();
-  private settling?: Promise<void>;
   private turnCompletedWaiter?: () => void;
   private threadId?: string;
   private lastPermissionMode: AiHarnessPermissionMode = 'ask';
-  private isClosed = false;
-  private readonly spawn: CodexSpawn;
-  private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
-  private readonly idleMs?: number;
-  private readonly toolIdleMs?: number;
 
-  constructor(options: CodexSessionOptions) {
-    this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
-    this.onBackgroundTurn = options.backgroundTurns;
-    this.idleMs = options.idleMs;
-    this.toolIdleMs = options.toolIdleMs;
+  constructor(options: PersistentSessionOptions) {
+    super(options, 'Codex');
   }
 
   async runTurn(input: CodexAppServerTurnInput): Promise<CodexAppServerTurnResult> {
-    if (this.isClosed) throw new Error('Codex session is closed');
-    if (this.turn) throw new Error('Codex session already has an active turn');
-    // From here on the user's turn receives what the vendor says.
-    this.finishBackground('superseded');
+    this.assertIdle('Codex');
     this.lastPermissionMode = input.permissionMode;
-    let fail!: (error: Error) => void;
+    const { failure, fail } = turnFailure();
     let complete!: (error?: Error) => void;
-    const failure = new Promise<never>((_, reject) => { fail = reject; });
-    failure.catch(() => undefined);
     const completion = new Promise<void>((resolve, reject) => { complete = (error) => error ? reject(error) : resolve(); });
     completion.catch(() => undefined);
     const turn: ActiveTurn = {
       input, observer: input, done: false, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
       items: new Map(), output: new Map(), thoughts: new Map(), complete, fail,
     };
-    this.turn = turn;
-    const onAbort = (): void => this.cancelTurn(turn);
-    input.signal?.addEventListener('abort', onAbort, { once: true });
-    let succeeded = false;
-    try {
-      if (this.settling) await this.settling;
-      if (input.signal?.aborted) throw turnCancelledError();
-      const flow = this.flow(turn, completion);
-      flow.catch(() => undefined);
-      const result = await Promise.race([flow, failure]);
-      succeeded = true;
-      return result;
-    } catch (error) {
-      const failureError = error instanceof Error ? error : new Error(String(error));
-      if (!isTurnCancelled(failureError)) {
+    return this.runActive(turn, input.signal, failure, () => this.flow(turn, completion), {
+      failed: (error) => {
         // Prefer the server's structured error over the transport's message.
-        Object.assign(failureError, codexErrorKind(turn.lastError ?? failureError));
+        Object.assign(error, codexErrorKind(turn.lastError ?? error));
         // A failed *turn* leaves a healthy server; anything else is unknown.
-        if (!(failureError as { codexTurnFailed?: boolean }).codexTurnFailed) this.dropLive(failureError);
-      }
-      throw failureError;
-    } finally {
-      turn.done = true;
-      turn.watchdog?.stop();
-      input.onSteerReady?.(undefined);
-      input.signal?.removeEventListener('abort', onAbort);
-      if (this.turn === turn) this.turn = undefined;
-      // A turn/steer in flight when the turn ends is never answered.
-      this.live?.peer.rejectPending(new Error('Codex turn ended'), (method) => method !== 'turn/interrupt');
-      // A reply can be written while a shell or a sub-agent it started is
-      // still running. That work is reported as a background turn; after a
-      // failed or stopped turn nothing is known to be running any more.
-      if (!succeeded) { this.pendingWork.clear(); this.settleBackground(); } else if (this.pendingWork.size && this.live) this.openBackground('background-work', undefined, turn.items);
-    }
+        if (!(error as { codexTurnFailed?: boolean }).codexTurnFailed) this.dropLive(error);
+      },
+      ended: (succeeded) => {
+        input.onSteerReady?.(undefined);
+        // A turn/steer in flight when the turn ends is never answered.
+        this.live?.peer.rejectPending(new Error('Codex turn ended'), (method) => method !== 'turn/interrupt');
+        // A reply can be written while a shell or a sub-agent it started is
+        // still running. That work is reported as a background turn; after a
+        // failed or stopped turn nothing is known to be running any more.
+        if (!succeeded) { this.pendingWork.clear(); this.settleBackground(); } else if (this.pendingWork.size && this.live) this.openBackground('background-work', undefined, turn.items);
+      },
+    });
   }
 
   async steer(text: string): Promise<void> {
@@ -367,89 +321,35 @@ class CodexSessionImpl implements CodexSession {
     await live.peer.request('turn/steer', codexSteerParams(turn.threadId, turn.turnId, text), { timeoutMs: JSONRPC_SETUP_TIMEOUT_MS });
   }
 
-  cancel(): void {
-    if (this.turn) this.cancelTurn(this.turn);
-  }
-
-  async close(): Promise<void> {
-    this.isClosed = true;
-    if (this.turn) this.cancelTurn(this.turn);
-    this.finishBackground('closed');
+  protected clearPending(): void {
     this.pendingWork.clear();
-    if (this.settling) await this.settling;
-    const live = this.live;
-    this.live = undefined;
-    if (!live) return;
-    live.peer.rejectPending(new Error('Codex session closed'));
-    await live.peer.shutdown();
   }
 
-  private cancelTurn(turn: ActiveTurn): void {
-    if (turn.done) return;
-    turn.done = true;
-    const live = this.live;
-    if (live && turn.threadId && turn.turnId) {
-      // Let Codex unwind and persist the interrupted turn: up to two seconds
-      // for turn/completed before the process is terminated.
-      this.settling = new Promise<void>((resolve) => {
-        const timer = setTimeout(() => { this.turnCompletedWaiter = undefined; if (this.live === live) this.dropLive(turnCancelledError()); resolve(); }, INTERRUPT_SETTLE_MS);
-        this.turnCompletedWaiter = () => { clearTimeout(timer); this.turnCompletedWaiter = undefined; resolve(); };
-      }).finally(() => { this.settling = undefined; });
-      live.peer.request('turn/interrupt', { threadId: turn.threadId, turnId: turn.turnId }, { timeoutMs: INTERRUPT_SETTLE_MS }).catch(() => undefined);
-    } else if (live) {
-      this.dropLive(turnCancelledError());
-    }
-    turn.fail(turnCancelledError());
+  protected interrupt(turn: ActiveTurn, live: LiveServer): boolean {
+    if (!turn.threadId || !turn.turnId) return false;
+    // Let Codex unwind and persist the interrupted turn: up to two seconds
+    // for turn/completed before the process is terminated.
+    this.settleCancel(live, (settled) => {
+      this.turnCompletedWaiter = () => { this.turnCompletedWaiter = undefined; settled(); };
+    }, () => { this.turnCompletedWaiter = undefined; });
+    live.peer.request('turn/interrupt', { threadId: turn.threadId, turnId: turn.turnId }, { timeoutMs: CANCEL_SETTLE_MS }).catch(() => undefined);
+    return true;
   }
 
-  private dropLive(error: Error): void {
-    const live = this.live;
-    if (!live) return;
-    this.live = undefined;
-    this.finishBackground('closed');
-    this.pendingWork.clear();
-    live.peer.rejectPending(error);
-    void live.peer.shutdown();
+  protected closedTurnError(turn: ActiveTurn, error: Error): Error {
+    return typeof turn.lastError?.message === 'string' ? new Error(turn.lastError.message) : error;
   }
 
-  private watchdog(onIdle: (afterMs: number) => void): TurnWatchdog {
-    return createTurnWatchdog({
-      ...(this.idleMs !== undefined ? { idleMs: this.idleMs } : {}),
-      ...(this.toolIdleMs !== undefined ? { toolIdleMs: this.toolIdleMs } : {}),
-      onIdle,
-    });
-  }
-
-  /** Open a background turn and hand it to the owner. Without an owner the
-   * vendor's out-of-turn work is not surfaced, exactly as before. */
+  /** Open a background turn for the vendor's out-of-turn work. */
   private openBackground(reason: 'vendor-turn' | 'background-work', vendorTurnId?: string, items?: Map<string, JsonObject>): BackgroundRun | undefined {
-    if (!this.onBackgroundTurn || this.isClosed) return undefined;
-    if (this.background && !this.background.channel.done) return this.background;
-    const channel = new BackgroundTurnChannel('codex-app-server', reason);
-    const run: BackgroundRun = {
-      channel, observer: channel.observer, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
-      items: new Map([...(items ?? [])].filter(([id]) => this.pendingWork.has(`item:${id}`))), output: new Map(), thoughts: new Map(),
-      ...(vendorTurnId ? { vendorTurnId } : {}),
-    };
-    run.watchdog = this.watchdog(() => {
-      if (this.background !== run) return;
-      // The ceiling ends the background turn, not the server: whatever is
-      // still running can report into the next turn.
-      this.pendingWork.clear();
-      this.finishBackground('idle-timeout');
-    });
-    for (const key of this.pendingWork.keys()) run.watchdog.toolStarted(key);
-    this.background = run;
-    try { this.onBackgroundTurn(channel); } catch { /* fail-open-ok: the owner's bookkeeping */ }
-    return run;
-  }
-
-  private finishBackground(ended: BackgroundTurnEnd): void {
-    const run = this.background;
-    if (!run) return;
-    this.background = undefined;
-    run.watchdog?.stop();
-    run.channel.finish(ended);
+    return this.openBackgroundRun(() => {
+      const channel = new BackgroundTurnChannel('codex-app-server', reason);
+      return {
+        channel, observer: channel.observer, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
+        items: new Map([...(items ?? [])].filter(([id]) => this.pendingWork.has(`item:${id}`))), output: new Map(), thoughts: new Map(),
+        ...(vendorTurnId ? { vendorTurnId } : {}),
+      };
+    }, (watchdog) => { for (const key of this.pendingWork.keys()) watchdog.toolStarted(key); });
   }
 
   private settleBackground(): void {
@@ -469,38 +369,17 @@ class CodexSessionImpl implements CodexSession {
   }
 
   private ensureLive(input: CodexAppServerTurnInput, threadKey: string): LiveServer {
-    const key = JSON.stringify([input.binary, input.cwd, input.environment ?? {}, threadKey]);
-    if (this.live && !this.live.peer.closed && this.live.key === key) return this.live;
     // Approval policy, sandbox and config are fixed when a thread is opened:
     // changing them means a fresh server that resumes the thread.
-    if (this.live) this.dropLive(new Error('Codex app-server restarted'));
-    const detached = process.platform !== 'win32';
-    const child = this.spawn(input.binary, ['app-server', '--stdio'], {
-      cwd: input.cwd, env: { ...process.env, ...input.environment }, stdio: ['pipe', 'pipe', 'pipe'], detached,
-    });
-    const live: LiveServer = {
-      key, initialized: false,
-      peer: new JsonRpcPeer(child, {
+    return this.liveFor(JSON.stringify([input.binary, input.cwd, input.environment ?? {}, threadKey]), 'Codex app-server restarted', {
+      binary: input.binary, argv: ['app-server', '--stdio'], cwd: input.cwd, environment: input.environment,
+      peer: {
         label: 'Codex app-server',
         jsonrpcVersion: false,
-        detached,
         onRequest: (method, params) => this.serverRequest(method, params),
         onNotification: (method, params) => this.notification(method, params),
-        onClose: (error) => {
-          if (this.live === live) {
-            this.live = undefined;
-            this.finishBackground('closed');
-            this.pendingWork.clear();
-          }
-          const turn = this.turn;
-          if (!turn || turn.done) return;
-          const reason = typeof turn.lastError?.message === 'string' ? new Error(turn.lastError.message) : error;
-          turn.fail(reason);
-        },
-      }),
-    };
-    this.live = live;
-    return live;
+      },
+    }, { initialized: false });
   }
 
   private async flow(turn: ActiveTurn, completion: Promise<void>): Promise<CodexAppServerTurnResult> {
@@ -815,7 +694,7 @@ class CodexSessionImpl implements CodexSession {
 /** One app-server kept alive across turns: initialize once, open or resume the
  * thread once, then one turn/start per turn. If the child dies (or its thread
  * settings change) the next turn respawns and resumes the thread. */
-export function createCodexSession(options: CodexSessionOptions = {}): CodexSession {
+export function createCodexSession(options: PersistentSessionOptions = {}): CodexSession {
   return new CodexSessionImpl(options);
 }
 
@@ -823,12 +702,6 @@ export function createCodexSession(options: CodexSessionOptions = {}): CodexSess
  * `codex exec --json`, app-server publishes real agent-message deltas and
  * server-initiated approval requests, both of which a rich terminal client
  * must handle to preserve streaming and permission semantics together. */
-export async function runCodexAppServerTurn(input: CodexAppServerTurnInput, options: CodexSessionOptions = {}): Promise<CodexAppServerTurnResult> {
-  const session = createCodexSession(options);
-  try {
-    return await session.runTurn(input);
-  } finally {
-    // Shutdown is graceful (up to seconds); the caller already has its answer.
-    void session.close().catch(() => undefined);
-  }
+export function runCodexAppServerTurn(input: CodexAppServerTurnInput, options: PersistentSessionOptions = {}): Promise<CodexAppServerTurnResult> {
+  return runOneTurn(createCodexSession(options), input);
 }
