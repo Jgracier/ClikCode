@@ -34,11 +34,6 @@ export function previewLinesFor(category?: ToolCategory): number {
   return category ? CATEGORY_PREVIEW_LINES[category] : ACTIVITY_PREVIEW_LINES;
 }
 
-function capDiffLines(text: string, max: number): { lines: string[]; truncated: number } {
-  const all = text.split(/\r?\n/);
-  return { lines: all.slice(0, max), truncated: Math.max(0, all.length - max) };
-}
-
 /** Lines of tool output an event carries -- more than any row shows, so the
  * renderer can choose what to show (first lines, or a command's last). */
 export const EVENT_OUTPUT_LINES = 20;
@@ -101,7 +96,6 @@ export function fileChangeActivity(changes: unknown): { label: string; category:
  * activity belongs to a subagent (Claude's `parent_tool_use_id`). Structurally
  * a HarnessActivityEvent, so it can be passed anywhere one is accepted. */
 export type NativeActivityEvent = HarnessActivityEvent & { parentId?: string };
-
 
 function blockText(content: unknown): string {
   if (typeof content === 'string') return content;
