@@ -70,7 +70,14 @@ export type IdeRequest =
   | { type: 'refresh' }
   | { type: 'close' };
 
-export interface IdeSlashCommand { command: string; description: string; argHint?: string; group?: string }
+export interface IdeSlashCommand {
+  command: string; description: string; argHint?: string; group?: string;
+  /** Other names the command answers to. */
+  aliases?: readonly string[];
+  /** The values its argument takes (models, effort levels, accounts, chats),
+   * as the terminal's palette completes them when the list was read. */
+  argValues?: ReadonlyArray<{ value: string; label?: string; detail?: string }>;
+}
 
 // ---- revision 2: structured data for the editor's screens -----------------
 

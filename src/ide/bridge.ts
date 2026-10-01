@@ -48,6 +48,8 @@ import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { routeSlashInput, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../tui/slash/registry.js';
 import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
 import { commandDuringTurn, enqueueCommandLine, slashLineIsCommand } from '../tui/slash/queue.js';
+import { withArgValues } from '../tui/slash/arg-values.js';
+import type { PaletteEntry } from '../tui/command-palette.js';
 import { impliedHarnessCommand } from '../tui/slash/infer-provider.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
 import { customCommandPrompt } from '../session/custom-commands.js';
@@ -72,7 +74,7 @@ import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
 import type { WorkerEvent } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
-import { encodeTerminalSpec, IDE_PROTOCOL, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
+import { encodeTerminalSpec, IDE_PROTOCOL, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeSlashCommand, type IdeTerminalSpec } from './protocol.js';
 import { sessionEvent } from './session-event.js';
 import { selectProviderConversation } from '../tui/pickers/conversation.js';
 import {
@@ -809,8 +811,16 @@ export class IdeBridge {
         case 'slash-commands': {
           const { session: current } = await this.current();
           const harness = sessionHarness(current);
-          const rows = slashPalette(current, harness, slashExtrasFor(current, harness));
-          answer(rows.map((row) => ({ command: row.value, description: row.detail, ...(row.argHint ? { argHint: row.argHint } : {}), group: row.group })));
+          // The terminal palette's own values (withArgValues): the vendor
+          // lists fill in as they load, so a later query has more.
+          const rows: PaletteEntry[] = withArgValues(slashPalette(current, harness, slashExtrasFor(current, harness)), current, harness, state);
+          answer(rows.map((row) => {
+            const values = row.argValues?.();
+            return {
+              command: row.value, description: row.detail ?? '', ...(row.argHint ? { argHint: row.argHint } : {}), group: row.group,
+              ...(row.aliases?.length ? { aliases: row.aliases } : {}), ...(values?.length ? { argValues: values } : {}),
+            } satisfies IdeSlashCommand;
+          }));
           return;
         }
         case 'providers': answer(await providerList(this.config, state, session)); return;
