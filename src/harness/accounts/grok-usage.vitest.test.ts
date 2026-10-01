@@ -20,19 +20,19 @@ describe('grok plan allowance (_x.ai/billing)', () => {
   it('reads a fresh week, where the zero percent is omitted, as 0% used -- as the TUI does', () => {
     expect(grokBillingReading(billing)).toEqual({
       windows: [{ name: 'weekly', usedPct: 0, resetsAt: '2026-10-05T23:16:51.066Z' }],
-      label: 'weekly 100% left',
+      label: 'Weekly 100% left',
     });
   });
 
   it('reads the used percentage once the week has spend', () => {
     const spent = { ...billing, config: { ...billing.config, creditUsagePercent: 37.5 } };
-    expect(grokBillingReading(spent)?.label).toBe('weekly 63% left');
+    expect(grokBillingReading(spent)?.label).toBe('Weekly 63% left');
     expect(grokBillingReading(spent)?.windows[0]?.usedPct).toBe(37.5);
   });
 
   it('names a monthly period', () => {
     const monthly = { config: { ...billing.config, creditUsagePercent: 100, currentPeriod: { ...billing.config.currentPeriod, type: 'USAGE_PERIOD_TYPE_MONTHLY' } } };
-    expect(grokBillingReading(monthly)?.label).toBe('monthly 0% left');
+    expect(grokBillingReading(monthly)?.label).toBe('Monthly 0% left');
   });
 
   it('invents nothing without a current period', () => {
