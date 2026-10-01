@@ -270,7 +270,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       const output = eventOutputPreview(result.output);
       input.onActivity?.({
         kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
-        ...(output ? { output } : {}), ...(result.diff ? { diff: result.diff } : {}),
+        ...output, ...(result.diff ? { diff: result.diff } : {}),
         ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
         ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
       });
@@ -297,7 +297,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       if (now - lastEmit < STREAM_EVENT_INTERVAL_MS) return;
       lastEmit = now;
       const output = eventOutputPreview(streamed);
-      if (output) input.onActivity?.({ kind: 'tool-start', label, id: call.id, output, ...category });
+      if (output) input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...output, ...category });
     });
 
     const verdict = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: turnRules.current, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });

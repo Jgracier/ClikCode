@@ -216,11 +216,12 @@ export function capHeadTail(text: string, maxBytes: number = OUTPUT_CAPS.toolOut
   return { text: `${head}\n\n… [${dropped} bytes truncated${note ? `; ${note}` : ''}] …\n\n${tail}`, truncated: true };
 }
 
-/** Bounded, secret-masked tail for HarnessActivityEvent.output. */
-export function eventOutputPreview(text: string): string[] | undefined {
+/** Bounded, secret-masked tail for HarnessActivityEvent.output: the newest
+ * lines, with the count of earlier ones for the renderer to report. */
+export function eventOutputPreview(text: string): { output: string[]; outputOmitted?: number; outputTail: true } | undefined {
   const trimmed = redactSecrets(text).replace(/\r?\n$/, '');
   if (!trimmed.trim()) return undefined;
   const lines = trimmed.split(/\r?\n/);
   const tail = lines.slice(-OUTPUT_CAPS.eventOutputLines).map((line) => line.length > OUTPUT_CAPS.eventLineChars ? `${line.slice(0, OUTPUT_CAPS.eventLineChars)}…` : line);
-  return lines.length > tail.length ? [`… ${lines.length - tail.length} earlier line${lines.length - tail.length === 1 ? '' : 's'}`, ...tail] : tail;
+  return { output: tail, ...(lines.length > tail.length ? { outputOmitted: lines.length - tail.length } : {}), outputTail: true };
 }

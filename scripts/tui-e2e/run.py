@@ -218,6 +218,16 @@ SCENARIOS = {
         'steps': [('settle', 1)],
         'watch': [], 'final_contains': ['signed in to Grok Build'], 'never': ['signing in to Grok Build'],
     },
+    # A command that prints while it runs: its newest lines show under the
+    # spinner, and stay -- the last of them, earlier ones counted -- once a
+    # completion that carries no output of its own settles the row.
+    'streamed-tool-output': {
+        'env': {'FAKE_DELAY_MS': '60'},
+        'turns': [{'streamed_tool': {'lines': [f'test file {n} passed' for n in range(1, 9)], 'ms': 700}, 'blocks': ['All the tests pass.']}],
+        'steps': [('type', 'run the tests'), ('wait_for', 'All the tests pass.', 40), ('settle', 2)],
+        'watch': [], 'ever': ['test file 3 passed'],
+        'final_contains': ['test file 8 passed', 'earlier lines'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],

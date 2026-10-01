@@ -29,6 +29,12 @@ export interface HarnessActivityEvent {
   id?: string;
   /** Bounded partial/final tool output supplied by the native event stream. */
   output?: string[];
+  /** Lines of output the producer dropped to bound `output`; the renderer
+   * counts them in its "… N more lines" rather than a fake line saying so. */
+  outputOmitted?: number;
+  /** `output` is the END of the tool's output (a running command's newest
+   * lines), so the omitted lines came before it. Otherwise it is the start. */
+  outputTail?: boolean;
   /** Only ever populated where the harness's own JSON genuinely carries the
    * before/after text (confirmed so far: Claude Code's Edit/Write tool_use
    * blocks) -- never synthesized from a "files updated" style event that

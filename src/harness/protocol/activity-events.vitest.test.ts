@@ -13,10 +13,12 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'call-1', type: 'command_execution', command: 'git status', aggregated_output: 'one\ntwo\nthree\nfour' },
     }));
-    expect(event).toEqual({ kind: 'tool-done', label: '$ git status', category: 'run', id: 'call-1', output: ['one', 'two', 'three', '… 1 more line'] });
-    // Summary plus the captured output: a row shows enough of the command's
-    // result to recognise it without opening anything.
-    expect(renderActivityLine(event!)).toHaveLength(5);
+    // The whole output is carried (it is short); the row decides what shows.
+    expect(event).toEqual({ kind: 'tool-done', label: '$ git status', category: 'run', id: 'call-1', output: ['one', 'two', 'three', 'four'] });
+    // A command shows its LAST lines, the earlier ones counted above them --
+    // the result of a command is at its end.
+    const rows = renderActivityLine(event!).map((row) => row.replace(/\u001b\[[0-9;]*m/g, '').trim());
+    expect(rows.slice(1)).toEqual(['… 1 earlier line', 'two', 'three', 'four']);
   });
 
   it('renders failed command completions as failures rather than green done events', () => {

@@ -30,7 +30,6 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
     ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
     : `${mark}${chalk.dim(event.label)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
   if (!event.diff) {
-    const output = event.output ?? [];
     // Budgeted by kind: a read's row already names the file, so repeating its
     // contents underneath says nothing the label did not.
     const budget = previewLinesFor(event.category);
@@ -38,10 +37,7 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
     // Counting what is not shown ("… 3 more lines" under a filename) is
     // noise about noise -- strictly worse than the single clean row.
     if (budget === 0) return [summary];
-    const visible = output.slice(0, budget);
-    const hidden = output.length - visible.length;
-    return [summary, ...visible.map((line) => `    ${chalk.dim(line)}`),
-      ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : [])];
+    return [summary, ...outputPreviewRows(event, budget)];
   }
   // Budget both halves of an edit rather than filling it from the top: a large
   // deletion would otherwise consume the whole preview and hide every added
@@ -59,6 +55,22 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
     ...added.slice(0, addedShown).map((line) => `    ${chalk.green(`+ ${line}`)}`),
     ...(hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} more line${hidden === 1 ? '' : 's'}`)}`] : []),
   ];
+}
+
+/** A tool's output under its row, at most `budget` lines. A command's result
+ * is at its end, and so is all a producer kept of a long stream
+ * (`outputTail`), so those show their LAST lines, the earlier ones counted
+ * above them; anything else shows its first lines, the rest counted below.
+ * Showing the first of a kept tail put a long command's middle on screen. */
+export function outputPreviewRows(event: HarnessActivityEvent, budget: number): string[] {
+  const output = event.output ?? [];
+  if (!output.length || budget <= 0) return [];
+  const fromEnd = event.outputTail === true || (event.category === 'run' && !event.outputOmitted);
+  const visible = fromEnd ? output.slice(-budget) : output.slice(0, budget);
+  const hidden = output.length - visible.length + (event.outputOmitted ?? 0);
+  const note = hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} ${fromEnd ? 'earlier' : 'more'} line${hidden === 1 ? '' : 's'}`)}`] : [];
+  const rows = visible.map((line) => `    ${chalk.dim(line)}`);
+  return fromEnd ? [...note, ...rows] : [...rows, ...note];
 }
 
 /** `(exit 2, 3.4s)` after a finished call, from what the harness reported.

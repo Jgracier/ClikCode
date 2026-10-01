@@ -59,6 +59,13 @@ export function upsertActivityEvent(
       ...(normalized.category ? {} : prior.event?.category ? { category: prior.event.category } : {}),
       ...(normalized.agent ? {} : prior.event?.agent ? { agent: prior.event.agent } : {}),
       ...(normalized.diff ? {} : prior.event?.diff ? { diff: prior.event.diff } : {}),
+      // Likewise its output: a completion that carries none (most do not)
+      // used to erase every line the running tool had streamed.
+      ...(normalized.output?.length || !prior.event?.output?.length ? {} : {
+        output: prior.event.output,
+        ...(prior.event.outputOmitted ? { outputOmitted: prior.event.outputOmitted } : {}),
+        ...(prior.event.outputTail ? { outputTail: true } : {}),
+      }),
     };
     next[matchIndex] = { ...prior, event: effective, lines: renderActivityLine(effective).map((line) => line.trim()) };
   } else {
@@ -132,11 +139,18 @@ export function activityLifecyclePhase(
 ): { activeTools: Map<string, OpenTool>; phase: string; category?: ToolCategory } {
   const next = new Map(activeTools);
   const key = event.id ?? event.label;
-  if (event.kind === 'tool-start') next.set(key, {
-    label: event.label,
-    ...(event.category ? { category: event.category } : {}),
-    ...(event.agent ? { agent: true } : {}),
-  });
+  if (event.kind === 'tool-start') {
+    // A progress frame for an open call (more output, a status beat) often
+    // carries no name -- the placeholder "tool" -- and no category. It keeps
+    // what the call's start said, or the band went from "running tests" to
+    // "running tool" the moment output arrived.
+    const prior = event.id ? next.get(key) : undefined;
+    next.set(key, {
+      label: event.label === 'tool' && prior ? prior.label : event.label,
+      ...(event.category ?? prior?.category ? { category: (event.category ?? prior?.category)! } : {}),
+      ...(event.agent || prior?.agent ? { agent: true } : {}),
+    });
+  }
   else if (event.kind === 'tool-done' || event.kind === 'tool-error') {
     if (!next.delete(key) && !event.id) {
       const matchingKey = [...next].reverse().find(([, tool]) => tool.label === event.label)?.[0];
