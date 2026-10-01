@@ -9,7 +9,7 @@ import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, conversationAttention, emptyModel, localNote, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, conversationAttention, emptyModel, localNote, sendNowPlan, typedDuringTurn, type ChatModel } from './model';
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
@@ -51,6 +51,11 @@ export class ClikCodeController implements vscode.Disposable {
   private refreshedFor = '';
   private lastAutoRestart = 0;
   private readonly subscriptions: vscode.Disposable[] = [];
+  /** A queued message being sent now (sendNowPlan): taken out of the queue,
+   * then the turn is stopped, and it is sent once the worker says the turn
+   * has stopped. */
+  private sendingNow: { id: string; text: string; sessionId?: string; stage: 'unqueuing' | 'stopping' } | undefined;
+  private sendNowTimer: NodeJS.Timeout | undefined;
   /** Pasted images: path -> sent in a message yet. */
   private readonly images = new Map<string, boolean>();
   private imageDir: Promise<string> | undefined;
@@ -124,6 +129,11 @@ export class ClikCodeController implements vscode.Disposable {
       this.turnEnded(previous);
       this.dropSentImages(next);
     }
+    // The message being sent now has left the queue: only now is the turn
+    // stopped, so the queue cannot hand it to the next turn as well.
+    const pending = this.sendingNow;
+    if (pending && next.sessionId !== pending.sessionId) this.dropSendNow();
+    else if (pending?.stage === 'unqueuing' && !next.queued.some((item) => item.id === pending.id)) this.stopForSendNow();
     if (next.connection === 'ready' && next.sessionId) {
       const key = [next.sessionId, next.providerId, next.model, next.account, next.effort, next.permissions].join('|');
       if (key !== this.refreshedFor) {
@@ -439,7 +449,51 @@ export class ClikCodeController implements vscode.Disposable {
       const lost = this.model.submissions.find((item) => item.id === event.id);
       if (lost) this.post({ type: 'insert', text: lost.text });
     }
-    if (event.type === 'waiting-stop') for (const id of [...this.shownDiffs]) this.forgetDiff(id);
+    if (event.type === 'waiting-stop') {
+      for (const id of [...this.shownDiffs]) this.forgetDiff(id);
+      // The turn a queued message interrupted has stopped (or ended on its
+      // own first): it goes now.
+      const pending = this.sendingNow;
+      if (pending && pending.sessionId === this.model.sessionId) {
+        this.dropSendNow();
+        void this.send(pending.text);
+      }
+    }
+  }
+
+  /** "Send now" on a queued message: the running turn is interrupted and
+   * this message goes next (sendNowPlan). */
+  sendNow(id: string): void {
+    const item = this.model.queued.find((entry) => entry.id === id);
+    const plan = sendNowPlan(this.model, id);
+    if (!item || !plan || this.sendingNow) return;
+    if (plan === 'stop') { this.cancel(false); return; }
+    this.bridge?.send({ type: 'unqueue', id });
+    if (plan === 'send') { void this.send(item.text); return; }
+    this.sendingNow = { id, text: item.text, sessionId: this.model.sessionId, stage: 'unqueuing' };
+    // A worker that never says the queue changed still has the turn stopped.
+    this.sendNowTimer = setTimeout(() => this.stopForSendNow(), 3_000);
+  }
+
+  private stopForSendNow(): void {
+    const pending = this.sendingNow;
+    if (!pending || pending.stage !== 'unqueuing') return;
+    if (this.sendNowTimer) clearTimeout(this.sendNowTimer);
+    this.sendNowTimer = undefined;
+    if (!this.model.running) {
+      // The turn ended on its own meanwhile: nothing to stop.
+      this.dropSendNow();
+      void this.send(pending.text);
+      return;
+    }
+    this.sendingNow = { ...pending, stage: 'stopping' };
+    this.cancel(false);
+  }
+
+  private dropSendNow(): void {
+    if (this.sendNowTimer) clearTimeout(this.sendNowTimer);
+    this.sendNowTimer = undefined;
+    this.sendingNow = undefined;
   }
 
   hasApproval(id: string): boolean {
@@ -669,6 +723,9 @@ export class ClikCodeController implements vscode.Disposable {
       case 'unqueue':
         this.bridge?.send({ type: 'unqueue', id: message.id });
         return;
+      case 'sendNow':
+        this.sendNow(message.id);
+        return;
       case 'approve':
         this.approve(message.id, message.approved);
         return;
@@ -708,6 +765,7 @@ export class ClikCodeController implements vscode.Disposable {
     this.disposed = true;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.postTimer) clearTimeout(this.postTimer);
+    this.dropSendNow();
     for (const subscription of this.subscriptions) subscription.dispose();
     this.dropQuestions();
     this.bridge?.dispose();
