@@ -255,14 +255,14 @@ function gb(bytes: number): string {
  * Q4_0 and MXFP4 use the Q4_K figure (similar kernels, unmeasured);
  * others take a middling value. */
 const CPU_PROMPT_RATE: readonly [RegExp, number][] = [
-  [/IQ[1-3]/i, 79], [/Q3_K/i, 136], [/Q[45]_K|Q4_0|Q4_1|MXFP4/i, 264], [/Q[68]/i, 200], [/BF16|F16/i, 60],
+  [/IQ[1-3]/i, 79], [/Q3_K/i, 136], [/Q[45]_K|Q4_0|Q4_1|MXFP4|Q4\b/i, 264], [/Q[68]/i, 200], [/BF16|F16/i, 60],
 ];
 
 /** Weight bandwidth llama.cpp reached generating on that machine: writing
  * speed times bytes read per token, about 40 GB/s (a STREAM test shows
  * 46-55; the rest is overhead). Dual-channel DDR5 is the common desktop
  * and laptop case; it is only a starting point until measured. */
-const CPU_WEIGHT_BANDWIDTH = 40e9;
+export const CPU_WEIGHT_BANDWIDTH = 40e9;
 
 /** Apple Silicon memory bandwidth by tier (base / Pro / Max / Ultra), at
  * the ~75% llama.cpp achieves on it. */
