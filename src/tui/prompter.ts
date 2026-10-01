@@ -2250,14 +2250,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // the transcript immediately reclaims any previously reserved rows.
         this.paint(value, [], 0, prompt, cursor);
       };
-      const finish = (answer: string): void => {
-        if (finished) return;
+      let finished = false;
+      /** The prompt is over, however it ended: the keyboard and the read
+       * modes are given back, once. False when it had already ended. */
+      const release = (): boolean => {
+        if (finished) return false;
         finished = true;
         this.paletteActive = false;
         stopInput();
         output.write(`${popReadModes()}\u001b[?25h`);
         this.cursorShown = true;
         this.resumeInput = undefined;
+        return true;
+      };
+      const finish = (answer: string): void => {
+        if (!release()) return;
         this.clearTransientNotice();
         if (answer) this.panelState = undefined;
         // The submitted line is the conversation's now. Leaving it in the
@@ -2266,7 +2273,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
         resolveQuestion(answer);
       };
-      let finished = false;
       // Opt-in, not a default: this same question() drives the persistent
       // chat composer too, where Esc doing nothing is the existing,
       // intentional behavior (there's nothing to "cancel" mid-draft the way
@@ -2276,25 +2282,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // { cancellable: true } and get a real rejection to catch, instead of
       // an empty string indistinguishable from "accepted the default".
       const cancel = (): void => {
-        if (finished) return;
-        finished = true;
-        this.paletteActive = false;
-        stopInput();
-        output.write(`${popReadModes()}\u001b[?25h`);
-        this.cursorShown = true;
+        if (!release()) return;
         rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
       };
       // Something other than the keyboard needs the screen: a turn this
       // window did not start is running (worker/turn-bridge.ts). The draft is
       // kept for the next prompt, and the caller is told why it ended.
       const interrupt = (): void => {
-        if (finished) return;
-        finished = true;
-        this.paletteActive = false;
-        stopInput();
-        output.write(`${popReadModes()}\u001b[?25h`);
-        this.cursorShown = true;
-        this.resumeInput = undefined;
+        if (!release()) return;
         if (value) this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${value}` : value;
         rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
       };
