@@ -76,12 +76,17 @@ describe('what a live session is doing', () => {
     expect(sessionActivity(session({ pendingTurn: turn }), workerFor('session-1'), NOW, HOST)).toBe('working');
   });
 
+  it('is working while the index still carries a live turn', () => {
+    expect(sessionActivity(session({ listTurn: { startedAt: turn.startedAt, prompt: turn.prompt } }), workerFor('session-1'), NOW, HOST)).toBe('working');
+  });
+
   it('is idle while a live session sits between turns', () => {
     expect(sessionActivity(session(), workerFor('session-1'), NOW, HOST)).toBe('idle');
   });
 
   it('is nothing for a crashed turn, whose journal outlives its process on purpose', () => {
     expect(sessionActivity(session({ pendingTurn: turn }), noWorkers, NOW, HOST)).toBeUndefined();
+    expect(sessionActivity(session({ listTurn: { startedAt: turn.startedAt, prompt: turn.prompt } }), noWorkers, NOW, HOST)).toBeUndefined();
   });
 
   it('is nothing for a chat the user closed, even with a worker still exiting', () => {

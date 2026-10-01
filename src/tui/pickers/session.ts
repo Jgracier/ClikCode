@@ -17,9 +17,10 @@ import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { backfillListFacts } from '../../session/list-backfill.js';
-import { listedPending } from '../../session/list-facts.js';
+import { listedPending, reconcileListTurns } from '../../session/list-facts.js';
 
 import { sessionFilePath } from '../../session/store/paths.js';
+import { readSessionTranscript } from '../../session/store/transcripts.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
@@ -166,8 +167,10 @@ function nativeValue(command: string, nativeId: string, accountId: string | unde
 /** Selected while discovery is still running: wait for it, then reopen. */
 const PENDING_DISCOVERY_VALUE = '__discovering__';
 const WORKING_GROUP = 'Working';
-const HERE_GROUP = 'This folder';
-const ELSEWHERE_GROUP = 'Other folders';
+const ACTIVE_GROUP = 'Active';
+const PAST_GROUP = 'Past';
+/** A chat counts as Active when something happened on it in this window. */
+const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
 const NEW_CONVERSATION_VALUE = '__new__';
 const MANAGE_ACTIONS = [
   { label: 'Rename', value: 'rename' },
@@ -175,11 +178,17 @@ const MANAGE_ACTIONS = [
   { label: 'Archive', value: 'archive' },
 ] as const;
 
-/** A running turn first, then this folder, then everywhere else. */
+/** Generating first, then Active (last 24 hours), then Past. */
 function sectionRank(section: string): number {
   if (section === WORKING_GROUP) return 0;
-  if (section === HERE_GROUP) return 1;
+  if (section === ACTIVE_GROUP) return 1;
   return 2;
+}
+
+function recencySection(updatedAt: string, now: number): typeof ACTIVE_GROUP | typeof PAST_GROUP {
+  const at = Date.parse(updatedAt);
+  if (!Number.isNaN(at) && now - at < ACTIVE_WITHIN_MS) return ACTIVE_GROUP;
+  return PAST_GROUP;
 }
 
 /** One list for finding a conversation and managing it.
@@ -229,12 +238,19 @@ export async function interactiveSessionPicker(
     .filter((session) => (session.id === currentId && !onBoard) || !isBlankConversation(session))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const workspace = current?.workspace ?? process.cwd();
-  // Read once, as the list opens: whether a worker is behind each chat is one
-  // pass over the registry, and the list is a snapshot either way.
-  const workerIsLive = await liveWorkerSessions(sessions);
+  // Whether a worker is behind each chat. Re-checked while the board stays
+  // open, so a turn that finishes mid-list drops out of Working.
+  let workerIsLive = await liveWorkerSessions(sessions);
   // Per conversation, not per chat: a provider handoff leaves the older
   // chat's worker running for a while, and it is still this conversation.
   const openedAt = Date.now();
+  const readPending = async (id: string) => (await readSessionTranscript(id))?.pendingTurn;
+  // Index `listTurn` outlives a finished turn when the clear was missed, and
+  // an idle worker keeps the process live -- the board then spins forever.
+  // Confirm against the journal before anything is drawn as generating.
+  if (await reconcileListTurns(sessions, workerIsLive, readPending)) {
+    await writeState(state).catch(() => undefined);
+  }
   const activityByRoot = new Map<string, { activity: 'working' | 'idle'; pending?: NonNullable<HarnessSession['pendingTurn']> }>();
   // The index turn has no `updatedAt` (that changes on every token). The
   // transcript file's mtime is the same clock the live journal uses.
@@ -253,7 +269,7 @@ export async function interactiveSessionPicker(
       const root = conversationIdFor(session);
       // The chat open here is active by definition; a claim only says whether
       // someone ELSE holds it, so it would not show up by liveness alone.
-      const activity = sessionActivity(session, workerIsLive, openedAt) ?? (session.id === currentId ? 'idle' : undefined);
+      const activity = sessionActivity(session, workerIsLive, Date.now()) ?? (session.id === currentId ? 'idle' : undefined);
       if (!activity || activityByRoot.get(root)?.activity === 'working') continue;
       const pending = listedPending(session, paceAt.get(session.id));
       activityByRoot.set(root, activity === 'working' ? { activity, ...(pending ? { pending } : {}) } : { activity });
@@ -286,6 +302,23 @@ export async function interactiveSessionPicker(
   const refreshes = [early, discovery, slow];
   let listRevision = 0;
   let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; options: PickerOption<string>[] } | undefined;
+  /** Re-check workers and drop finished turns. The board redraws while any
+   * row still has `working`, so the next frame picks this up and the spinner
+   * stops when the turn is over. */
+  let activityRefresh: Promise<void> | undefined;
+  const refreshActivity = (): void => {
+    if (activityRefresh) return;
+    activityRefresh = (async () => {
+      workerIsLive = await liveWorkerSessions(sessions);
+      if (await reconcileListTurns(sessions, workerIsLive, readPending)) {
+        await writeState(state).catch(() => undefined);
+      }
+      await notePace(sessions);
+      fillActivity();
+      listRevision += 1;
+      built = undefined;
+    })().finally(() => { activityRefresh = undefined; });
+  };
   // Conversations written before the summary existed get one after the list
   // is already up. The redraw copies the new previews onto the rows it holds.
   refreshes.push(backfillListFacts().then(async () => {
@@ -306,6 +339,10 @@ export async function interactiveSessionPicker(
     for (let index = sessions.length - 1; index >= 0; index -= 1) {
       const session = sessions[index]!;
       if ((session.id !== currentId || onBoard) && isBlankConversation(session)) sessions.splice(index, 1);
+    }
+    // Backfill can put a stale index turn back; scrub against the journal.
+    if (await reconcileListTurns(sessions, workerIsLive, readPending)) {
+      await writeState(state).catch(() => undefined);
     }
     await notePace(sessions);
     fillActivity();
@@ -345,8 +382,7 @@ export async function interactiveSessionPicker(
         option.detail = `${option.detail ?? ''} · active in another terminal`;
       }
       const updatedAt = Date.parse(session.updatedAt);
-      const here = !session.workspace || session.workspace === workspace;
-      const section = pending ? WORKING_GROUP : here ? HERE_GROUP : ELSEWHERE_GROUP;
+      const section = pending ? WORKING_GROUP : recencySection(session.updatedAt, openedAt);
       const block = trackedBlocks.get(root) ?? { sortKey: -Infinity, options: [], section };
       block.sortKey = Math.max(block.sortKey, Number.isNaN(updatedAt) ? -Infinity : updatedAt);
       if (section === WORKING_GROUP) block.section = WORKING_GROUP;
@@ -357,7 +393,9 @@ export async function interactiveSessionPicker(
       ...trackedBlocks.values(),
       ...discovered.map(({ harness, item, accountId }) => ({
         sortKey: item.updatedAtMs ?? -Infinity,
-        section: item.workspace && item.workspace !== workspace ? ELSEWHERE_GROUP : HERE_GROUP,
+        section: item.updatedAtMs !== undefined && openedAt - item.updatedAtMs < ACTIVE_WITHIN_MS
+          ? ACTIVE_GROUP
+          : PAST_GROUP,
         options: [{
           label: `   ${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
           detail: `· not yet in ClikCode${ADOPTED_TRANSCRIPT_READERS[harness.command] ? '' : ' · opens without earlier messages'}${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
@@ -368,8 +406,7 @@ export async function interactiveSessionPicker(
       })),
     ];
     optionBlocks.sort((left, right) => sectionRank(left.section) - sectionRank(right.section) || right.sortKey - left.sortKey);
-    // Working first, then this folder, then other folders. Each section is
-    // headed with its size. Provider hops stay behind Tab.
+    // Working (generating) first, then Active (last 24 hours), then Past.
     const sizes = new Map<string, number>();
     for (const block of optionBlocks) sizes.set(block.section, (sizes.get(block.section) ?? 0) + block.options.length);
     const options: PickerOption<string>[] = optionBlocks.flatMap((block) => block.options.map((option) => ({
@@ -397,9 +434,17 @@ export async function interactiveSessionPicker(
   // Asked for on every keypress (the list redraws, and a picker re-reads its
   // rows each time). Nothing it reads changes between keys except discovery
   // landing, so the rows are rebuilt only then -- not all five hundred of
-  // them per arrow press.
+  // them per arrow press. A spinning row also re-checks the journal so the
+  // spinner stops when that turn ends.
+  let lastActivityAt = 0;
   const buildOptions = (): PickerOption<string>[] => {
-    if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision) return built.options;
+    if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision) {
+      if (built.options.some((row) => row.working) && Date.now() - lastActivityAt >= 1_000) {
+        lastActivityAt = Date.now();
+        refreshActivity();
+      }
+      return built.options;
+    }
     built = { discovering, slow: slowDiscovery, discovered, revision: listRevision, options: buildFresh() };
     return built.options;
   };

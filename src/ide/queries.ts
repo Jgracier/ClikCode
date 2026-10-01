@@ -30,11 +30,13 @@ import {
 import { localModelChoices } from '../local-models/index.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
-import { conversationPreview, transcriptWasLoaded } from '../session/list-facts.js';
+import { conversationPreview, reconcileListTurns, transcriptWasLoaded } from '../session/list-facts.js';
 import { compareProviders, conversationIdFor, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
 import { sessionClaimIsLive } from '../session/claim.js';
 import { liveWorkerSessions, sessionActivity } from '../session/liveness.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { readSessionTranscript } from '../session/store/transcripts.js';
+import { writeState } from '../session/state/write.js';
 import { sessionModelLabel } from '../harness/output.js';
 import { modelRow } from '../tui/pickers/model.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
@@ -46,6 +48,8 @@ export const GATEWAY_ID = 'gateway';
 export const LOCAL_ID = 'clikcode-local';
 /** How long the editor's model menu waits for a harness to list its models. */
 const IDE_MODEL_DISCOVERY_WAIT_MS = 45_000;
+/** Same cutoff the terminal board uses for Active vs Past. */
+const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
 
 function harnessOf(session: HarnessSession | undefined): AiLocalHarnessDefinition | undefined {
   if (!session || isClikCodeAgent(session)) return undefined;
@@ -144,12 +148,18 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
 }
 
 /** The conversations /resume lists: one row per conversation (its latest
- * chat), running ones first, then by recency. */
+ * chat). Generating first, then Active (last 24 hours), then Past. */
 export async function conversationList(state: HarnessState, currentId: string | undefined): Promise<IdeConversation[]> {
   const sessions = state.sessions
     .filter((session) => session.status !== 'archived' || session.id === currentId)
     .filter((session) => session.id === currentId || !isBlankConversation(session));
-  const live = await liveWorkerSessions(sessions);
+  let live = await liveWorkerSessions(sessions);
+  // Same scrub as the terminal board: a stale index turn behind an idle
+  // worker must not keep the row pulsing.
+  if (await reconcileListTurns(sessions, live, async (id) => (await readSessionTranscript(id))?.pendingTurn)) {
+    await writeState(state).catch(() => undefined);
+    live = await liveWorkerSessions(sessions);
+  }
   const now = Date.now();
   const byRoot = new Map<string, HarnessSession[]>();
   for (const session of sessions) {
@@ -178,14 +188,21 @@ export async function conversationList(state: HarnessState, currentId: string | 
       updatedAt: latest.updatedAt,
       messages: opened ? messages.length : (latest.listMessageCount ?? 0),
       ...(last ? { preview: last.slice(0, 140) } : {}),
+      // Only a live generating turn is `working` (animated). An idle worker
+      // still marks the row, but Active vs Past is by recency, not liveness.
       ...(activity ?? (isCurrent ? 'idle' : undefined) ? { activity: activity ?? 'idle' } : {}),
       current: isCurrent,
       elsewhere: !isCurrent && group.some((session) => sessionClaimIsLive(session)),
       history: group.length,
     });
   }
-  const rank = (row: IdeConversation): number => (row.activity === 'working' ? 0 : row.activity === 'idle' ? 1 : 2);
-  return rows.sort((left, right) => rank(left) - rank(right) || right.updatedAt.localeCompare(left.updatedAt));
+  const sectionRank = (row: IdeConversation): number => {
+    if (row.activity === 'working') return 0;
+    const at = Date.parse(row.updatedAt);
+    if (!Number.isNaN(at) && now - at < ACTIVE_WITHIN_MS) return 1;
+    return 2;
+  };
+  return rows.sort((left, right) => sectionRank(left) - sectionRank(right) || right.updatedAt.localeCompare(left.updatedAt));
 }
 
 function windowsOf(windows: readonly UsageWindow[] | undefined): IdeUsageWindow[] {

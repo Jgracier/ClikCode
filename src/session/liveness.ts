@@ -75,12 +75,15 @@ export async function liveWorkerSessions(
   return (sessionId: string) => live.has(sessionId);
 }
 
-/** What a live session is doing: `working` while a turn is in flight, `idle`
- *  when something holds it open between turns, undefined when nothing does.
+/** What a live session is doing: `working` while a turn is in flight
+ * (generating), `idle` when something holds it open between turns, undefined
+ * when nothing does.
  *
- *  A turn in flight is the turn journal, `pendingTurn` -- but only behind a
- *  live process. A crash leaves the journal behind on purpose (it is how the
- *  turn is recovered), so on its own it would show a dead chat as working. */
+ * A turn in flight is the turn journal -- `pendingTurn` on a loaded
+ * transcript, or `listTurn` on the index. Either is only trusted behind a
+ * live process: a crash leaves the journal behind on purpose (recovery), so
+ * on its own it would animate a dead chat. Stale `listTurn` behind an idle
+ * worker is scrubbed when the list opens (see reconcileListTurns). */
 export function sessionActivity(
   session: HarnessSession,
   workerIsLive: WorkerLiveness,
@@ -88,7 +91,5 @@ export function sessionActivity(
   host = hostname(),
 ): 'working' | 'idle' | undefined {
   if (!sessionIsLive(session, workerIsLive, now, host)) return undefined;
-  // `listTurn` is the same journal, kept on the index so the list did not
-  // have to open the transcript. A dead worker still returns above.
   return session.pendingTurn || session.listTurn ? 'working' : 'idle';
 }
