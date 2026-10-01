@@ -71,11 +71,15 @@ export async function nativeUsageReading(
   if (entry?.failed && Number.isFinite(entry.at) && Date.now() - entry.at < NATIVE_USAGE_FAILURE_TTL_MS && !options.network) {
     return entry.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
-  // A harness that reports only through its probe cannot refresh the figure
-  // itself, so a turn STARTED on the account since the reading makes it old
-  // news. Started, not ended: a reading a turn published about itself (Codex's
-  // rate-limit notification) is taken after its start and stays current.
-  const turnSinceReading = entry !== undefined && !reportsOnStream && account !== undefined
+  // A turn STARTED on the account since the reading makes it old news.
+  // Started, not ended: a reading a turn published about itself (Codex's
+  // rate-limit notification, Claude Code's rate_limit_event) is taken after
+  // its start and stays current. This used to exempt harnesses that report on
+  // their stream, but Claude Code over ACP passes its rate limits on only
+  // when a turn has already reported token usage -- a one-call turn never
+  // does -- so its figure froze until the window reset. Its probe is free now,
+  // so it is simply asked again.
+  const turnSinceReading = entry !== undefined && account !== undefined
     && state.invocations.some((invocation) => invocation.accountId === account.id
       && Date.parse(invocation.at) - invocation.latencyMs > entry.at);
   // A credit balance (Auggie, Amp, Kilo) has no window to say how long it

@@ -10,7 +10,7 @@ import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
 import type { NativeUsageProbe } from '../definition.js';
 import type { HarnessSession } from '../../session/model.js';
-import { UsageReading, UsageWindow, usageReading, usageWindow, usageWindowName } from './usage-reading.js';
+import { UsageReading, UsageWindow, claudeRateLimitReading, claudeUsageCommandReading, usageReading, usageWindow, usageWindowName } from './usage-reading.js';
 
 /** The Claude probe runs a real (tiny) turn, so it waits on the model, not on
  * a local file: measured at ~1.7s to the rate_limit_event, with room for a
@@ -102,63 +102,27 @@ async function codexUsageReading(_session: HarnessSession, environment: Readonly
   return codexRateLimitsReading(response?.rateLimits);
 }
 
-/** Claude Code's quota, asked of Claude Code, for one specific account.
- *
- * The CLI exposes no usage flag or subcommand (checked: `claude --help` lists
- * agents/attach/auth/auto-mode/doctor/gateway/import/install/logs/mcp/plugin
- * and nothing for usage). What it does do is report both windows on the turn
- * stream, so the probe is the smallest possible turn -- and because it runs
- * under this account's own CLAUDE_CONFIG_DIR, the figure is that account's,
- * not whichever one happens to own ~/.claude.
- *
- * Measured against the live CLI: `system` at +0.6s, `assistant` and
- * `rate_limit_event` together at +1.7s. The event lands after the model has
- * already answered, so stopping early saves nothing -- the child is killed
- * once the figure is in hand purely to avoid waiting on teardown.
- *
- * This costs a token round-trip to measure a token budget, which is why only
- * an explicit request runs it: opening the account picker, or `/usage`. Every
- * ordinary paint reads what the last real turn already reported.
- */
+/** Claude Code's quota, asked of Claude Code, for one specific account: its
+ * own `/usage`, run in print mode. That is a local command -- no model call,
+ * cost 0 and zero tokens, measured at ~3.8s -- so, unlike the one-token turn
+ * this used to run, it may run on any refresh and the composer is not blank
+ * until something asks. `--no-session-persistence`: a probe is not a chat.
+ * It runs under this account's own CLAUDE_CONFIG_DIR, so the figure is that
+ * account's. Every turn then keeps it current from the rate-limit data the
+ * turn itself carries (claudeStreamReading, or the ACP adapter's
+ * `_claude/rateLimit`). */
 async function claudeUsageProbe(session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
   return (await claudeUsageReading(session, environment))?.label;
 }
 
 async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
-  const binary = harnessBinary('claude');
-  return new Promise<UsageReading | undefined>((resolveUsage) => {
-    // --no-session-persistence: a probe is not a conversation, and without it
-    // every reading left a "hi" chat in the account's resume list.
-    const child = spawn(binary, ['-p', 'hi', '--verbose', '--output-format', 'stream-json', '--no-session-persistence'], {
-      stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...environment },
-    });
-    let buffer = '';
-    let settled = false;
-    const finish = (value?: UsageReading): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      terminatePortable(child);
-      resolveUsage(value);
-    };
-    const timer = setTimeout(() => finish(), NATIVE_USAGE_PROBE_TIMEOUT_MS);
-    child.stdout!.setEncoding('utf8');
-    child.stdout!.on('data', (chunk: string) => {
-      buffer += chunk;
-      let newline = buffer.indexOf('\n');
-      while (newline !== -1) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        const reading = claudeStreamReading(line);
-        if (reading?.label) { finish(reading); return; }
-        newline = buffer.indexOf('\n');
-      }
-    });
-    // fail-open-ok: a probe that cannot run reports no figure. Usage is
-    // decoration and must never block or fail a turn.
-    child.once('error', () => finish());
-    child.once('exit', () => finish());
-  });
+  const harness = localHarnessForCommand('claude');
+  if (!harness) return undefined;
+  try {
+    const output = await captureNativeHarnessOutput(harness, ['-p', '/usage', '--output-format', 'json', '--no-session-persistence'], environment, NATIVE_USAGE_PROBE_TIMEOUT_MS);
+    const result = (JSON.parse(output) as { result?: unknown }).result;
+    return typeof result === 'string' ? claudeUsageCommandReading(result) : undefined;
+  } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
 }
 
 /** Claude Code reports both quota windows on its own stream-json output, on
@@ -182,16 +146,9 @@ export function claudeStreamReading(lineText: string): UsageReading | undefined 
     // turn's own output is read elsewhere and is unaffected.
     return undefined;
   }
-  const record = parsed as {
-    type?: unknown;
-    rate_limit_info?: { unifiedWindows?: Record<string, { utilization?: unknown; resetsAt?: unknown; resets_at?: unknown } | undefined> };
-  };
+  const record = parsed as { type?: unknown; rate_limit_info?: unknown };
   if (record.type !== 'rate_limit_event') return undefined;
-  const windows = record.rate_limit_info?.unifiedWindows;
-  if (!windows) return undefined;
-  const window = (name: string, value?: { utilization?: unknown; resetsAt?: unknown; resets_at?: unknown }): UsageWindow | undefined =>
-    usageWindow(name, typeof value?.utilization === 'number' ? value.utilization * 100 : undefined, value?.resetsAt ?? value?.resets_at);
-  return usageReading([window('5h', windows.five_hour), window('weekly', windows.seven_day)]);
+  return claudeRateLimitReading(record.rate_limit_info);
 }
 
 export function claudeStreamUsage(lineText: string): string | undefined {
@@ -259,7 +216,7 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsagePro
 /** Probes that cost a model turn. Only an explicit ask (`/usage`, the account
  * picker, `accounts status`) runs one; every other probe is a free local or
  * API read and may run on a passive paint. */
-export const BILLED_USAGE_PROBES: ReadonlySet<string> = new Set(['claude']);
+export const BILLED_USAGE_PROBES: ReadonlySet<string> = new Set();
 
 type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
 
