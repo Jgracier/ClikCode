@@ -19,7 +19,7 @@ export interface Mention {
 }
 
 /** Screens the webview shows besides the chat. */
-export type WebviewScreen = 'chat' | 'history' | 'accounts' | 'settings';
+export type WebviewScreen = 'chat' | 'history' | 'accounts';
 
 export type ToWebview =
   | { type: 'model'; model: ChatModel }

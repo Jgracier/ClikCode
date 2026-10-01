@@ -115,7 +115,7 @@ function MoreMenu({ model, onClose, onScreen }: { model: ChatModel; onClose: () 
   const rows: ListRow[] = [
     heading('Chat'),
     item('accounts', 'account', 'Accounts & usage', () => onScreen('accounts')),
-    item('settings', 'settings-gear', 'Chat settings', () => onScreen('settings')),
+    item('settings', 'settings-gear', 'Chat settings', () => post({ type: 'send', text: '/settings', id: uid() })),
     ...(model.route === 'local' && model.harness
       ? [item('tools', 'plug', 'MCP servers & tools', () => post({ type: 'send', text: '/settings tools', id: uid() }))] : []),
     item('commands', 'symbol-namespace', 'All commands', () => post({ type: 'send', text: '/help', id: uid() }), '/'),
@@ -204,11 +204,6 @@ function App(): JSX.Element {
   const showScreen = (next: WebviewScreen): void => {
     // Conversations are a list over the chat, not a screen of their own.
     if (next === 'history') { setScreen('chat'); setHistory(true); return; }
-    if (next === 'settings') {
-      setScreen('chat');
-      post({ type: 'send', text: '/settings', id: uid() });
-      return;
-    }
     setScreen(next);
     if (next === 'chat') requestAnimationFrame(() => composer.current?.focus());
   };
