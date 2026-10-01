@@ -16,7 +16,7 @@ import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
 import { resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withVendorTerminal } from '../account.js';
-import { deriveAccountLabel } from '../../harness/accounts/labels.js';
+import { deriveAccountLabel, nameAccount } from '../../harness/accounts/labels.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
@@ -98,16 +98,9 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       // never one under an isolated CLAUDE_CONFIG_DIR-style directory.
       // Falls back to the harness's own name if derivation finds nothing
       // (OpenCode, Hermes and Copilot keep no identity anywhere on disk --
-      // checked), AND if the derived label would collide with
-      // an account that already exists under a different provider (the
-      // same real person's email showing up on two harnesses is entirely
-      // possible and not a bug) -- labels must stay globally unique, and a
-      // bare harness name always is, by construction. It used to be
-      // "X default", which read as a placeholder row in /account rather than
-      // as the one account that harness actually has.
-      const derived = await deriveAccountLabel(harness, undefined);
-      const label = derived && !state.accounts.some((item) => item.label.toLowerCase() === derived.toLowerCase())
-        ? derived : harness.displayName;
+      // checked). It used to be "X default", which read as a placeholder row
+      // in /account rather than as the one account that harness actually has.
+      const label = nameAccount(state.accounts, harness, await deriveAccountLabel(harness, undefined) ?? harness.displayName);
       const account: AiHarnessAccount = {
         id: randomUUID(), provider: harness.provider, label, authKind: 'vendor-cli',
         models: [], status: 'ready', credentialRef: `native:${harness.binary}:default`,

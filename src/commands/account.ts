@@ -24,7 +24,7 @@ import { writeState } from '../session/state/write.js';
 import { accountUsageLabel } from '../harness/accounts/account-usage.js';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
-import { deriveAccountLabel, firstUnusedAccountLabel } from '../harness/accounts/labels.js';
+import { deriveAccountLabel, nameAccount } from '../harness/accounts/labels.js';
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
 import { authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
 import { captureMistralVibeCredential } from '../harness/accounts/mistral-vibe-identity.js';
@@ -37,16 +37,6 @@ type EmitHarnessOutput = (payload: Record<string, unknown>) => void;
 let emitHarnessOutput: EmitHarnessOutput = () => {};
 
 export function setEmitHarnessOutput(fn: EmitHarnessOutput): void { emitHarnessOutput = fn; }
-
-function distinctAccountLabel(provider: string, preferred: string, state: HarnessState, exceptId?: string): string {
-  const used = (label: string): boolean => state.accounts.some((account) => account.id !== exceptId
-    && account.provider === provider && account.label.toLowerCase() === label.toLowerCase());
-  if (!used(preferred)) return preferred;
-  for (let suffix = 2; ; suffix++) {
-    const candidate = `${preferred} (${suffix})`;
-    if (!used(candidate)) return candidate;
-  }
-}
 
 export async function aiAccountsList(): Promise<void> {
   const state = await readState();
@@ -168,7 +158,7 @@ export async function syncAccountIdentityAfterLogin(
     }
     return existingMatch;
   }
-  account.label = distinctAccountLabel(harness.provider, derived, state, account.id);
+  account.label = nameAccount(state.accounts, harness, derived, account.id);
   await writeState(state);
   return account;
 }
@@ -177,9 +167,8 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   const state = await readState();
-  const placeholder = firstUnusedAccountLabel(harness.displayName, state.accounts);
   const explicit = label?.trim();
-  let accountLabel = explicit || placeholder;
+  let accountLabel = explicit || nameAccount(state.accounts, harness);
   if (!accountLabel) throw new Error('account label cannot be empty');
   // Same scoping for the up-front duplicate check: an explicit label that is
   // already in use on a DIFFERENT provider is not a conflict.
@@ -205,16 +194,9 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
     : undefined;
   if (singleSlotExisting) {
     await loginNativeHarness(harness, {});
-    if (!explicit) {
-      const derived = await deriveAccountLabel(harness, undefined);
-      if (derived && !state.accounts.some((account) => account.id !== singleSlotExisting.id && account.label.toLowerCase() === derived.toLowerCase())) {
-        singleSlotExisting.label = derived;
-      }
-    }
-    singleSlotExisting.status = 'ready';
-    await writeState(state);
-    emitHarnessOutput({ status: 'connected', harness: harness.command, account: singleSlotExisting.label, credentialBoundary: 'local-only' });
-    return singleSlotExisting.label;
+    const signedIn = await syncAccountIdentityAfterLogin(harness, singleSlotExisting, state);
+    emitHarnessOutput({ status: 'connected', harness: harness.command, account: signedIn.label, credentialBoundary: 'local-only' });
+    return signedIn.label;
   }
   const accountId = randomUUID();
   const profilePath = harness.profileEnv
@@ -298,11 +280,10 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
         if (verifyNotice) emitHarnessOutput({ panel: 'error', message: verifyNotice });
         return existingMatch.label;
       }
-      accountLabel = distinctAccountLabel(harness.provider, derived, state);
+      accountLabel = nameAccount(state.accounts, harness, derived);
     }
   }
   let verifyNotice: string | undefined;
-  accountLabel = distinctAccountLabel(harness.provider, accountLabel, state);
   const created: AiHarnessAccount = { id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) };
   verifyNotice = recordVerification(created, loginError);
   state.accounts.push(created);

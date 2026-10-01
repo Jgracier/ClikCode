@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { deriveAccountLabel } from './labels.js';
+import { deriveAccountLabel, nameAccount } from './labels.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const cursor = { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', binary: 'cursor-agent' } as AiLocalHarnessDefinition;
@@ -34,5 +34,25 @@ describe('Cursor account names', () => {
   it('names nothing when no sign-in saved an email', async () => {
     root = await mkdtemp(join(tmpdir(), 'cursor-label-'));
     expect(await deriveAccountLabel(cursor, root)).toBeUndefined();
+  });
+});
+
+describe('account naming at sign-in', () => {
+  const codex = { provider: 'openai', displayName: 'Codex' };
+  const accounts = [
+    { id: '1', provider: 'openai', label: 'Codex 2' },
+    { id: '2', provider: 'openai', label: 'a@example.com' },
+    { id: '3', provider: 'anthropic', label: 'b@example.com' },
+  ];
+
+  it('numbers a placeholder with the first number nobody holds', () => {
+    expect(nameAccount(accounts, codex)).toBe('Codex 1');
+    expect(nameAccount([...accounts, { id: '4', provider: 'openai', label: 'codex 1' }], codex)).toBe('Codex 3');
+  });
+
+  it('keeps an email unique within one provider only', () => {
+    expect(nameAccount(accounts, codex, 'b@example.com')).toBe('b@example.com');
+    expect(nameAccount(accounts, codex, 'A@example.com')).toBe('A@example.com (2)');
+    expect(nameAccount(accounts, codex, 'a@example.com', '2')).toBe('a@example.com');
   });
 });

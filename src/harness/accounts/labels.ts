@@ -158,20 +158,24 @@ export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, prof
   return undefined;
 }
 
-/** Starts the vendor-owned login flow and records only a local opaque profile reference.
- * With no explicit label, the final name is decided *after* login completes: a
- * numbered placeholder is picked first (so an explicit-label caller and duplicate
- * checks upfront still behave as before), but if deriveAccountLabel finds real
- * account info once the credential file actually exists, that replaces the
- * placeholder -- removing the old interactive "Account name [...]" prompt this
- * used to require without falling back to an arbitrary made-up name. */
-/** "Codex 2" after removing "Codex 1" of two used to collide with the surviving
- * "Codex 2" (the number was just count + 1) and fail the login with "already
- * exists". The first number nobody holds is always free. */
-export function firstUnusedAccountLabel(displayName: string, accounts: readonly Pick<AiHarnessAccount, 'label'>[]): string {
-  const taken = new Set(accounts.map((account) => account.label.toLowerCase()));
-  for (let number = 1; ; number += 1) {
-    const candidate = `${displayName} ${number}`;
-    if (!taken.has(candidate.toLowerCase())) return candidate;
+/** The one naming rule, applied only when an account signs in or is
+ * created: a label is unique among one provider's accounts, ignoring case
+ * (the same person's email on two harnesses is two real accounts).
+ * `preferred` is the email the sign-in revealed or the name the user gave; a
+ * taken one gets " (2)", " (3)", ... Without one, the harness's numbered
+ * placeholder: "Codex 2" after removing "Codex 1" of two used to collide with
+ * the surviving "Codex 2" (the number was just count + 1), so it is the first
+ * number nobody holds. */
+export function nameAccount(
+  accounts: readonly Pick<AiHarnessAccount, 'id' | 'provider' | 'label'>[],
+  harness: Pick<AiLocalHarnessDefinition, 'provider' | 'displayName'>,
+  preferred?: string, exceptId?: string,
+): string {
+  const used = (label: string): boolean => accounts.some((account) => account.id !== exceptId
+    && account.provider === harness.provider && account.label.toLowerCase() === label.toLowerCase());
+  if (preferred && !used(preferred)) return preferred;
+  for (let number = preferred ? 2 : 1; ; number += 1) {
+    const candidate = preferred ? `${preferred} (${number})` : `${harness.displayName} ${number}`;
+    if (!used(candidate)) return candidate;
   }
 }
