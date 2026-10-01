@@ -40,8 +40,13 @@ export function shouldRequestTitle(session: Pick<HarnessSession, 'name' | 'title
 /** Spend the conversation's single title request on this turn, if eligible. */
 export function prepareSessionTitle(
   session: Pick<HarnessSession, 'name' | 'titleAttempts'>, prompt: string,
-): { prompt: string; stream?: StreamingTitle } {
-  if (!shouldRequestTitle(session)) return { prompt };
+): { prompt: string; stream: StreamingTitle } {
+  // Every turn's reply goes through a title stream. Only the turn that asked
+  // keeps the title it finds; on every other turn the stream just strips one.
+  // A vendor harness keeps its whole history, so a model that opened its first
+  // reply with the tag tends to open later replies with it too -- unasked --
+  // and without this that tag went straight to the screen.
+  if (!shouldRequestTitle(session)) return { prompt, stream: new StreamingTitle({ naming: false }) };
   session.titleAttempts = (session.titleAttempts ?? 0) + 1;
   return { prompt: withTitleRequest(prompt), stream: new StreamingTitle() };
 }
@@ -74,15 +79,23 @@ export function titleStreamForAttempt(
   current: StreamingTitle | undefined,
   prompt: string,
   session: Pick<HarnessSession, 'titleAttempts'>,
-): StreamingTitle | undefined {
+): StreamingTitle {
   if (current?.title) return current;
   if (promptAsksForTitle(prompt)) {
-    current?.restart();
-    return current ?? new StreamingTitle();
+    if (current?.naming) {
+      current.restart();
+      return current;
+    }
+    return new StreamingTitle();
   }
   // The request was already sent on the original attempt. A retry that replaces
-  // it must not make the next user turn ask for a title again.
-  return undefined;
+  // it must not make the next user turn ask for a title again -- but the reply
+  // may still open with a tag, which is stripped, not kept.
+  if (current && !current.naming) {
+    current.restart();
+    return current;
+  }
+  return new StreamingTitle({ naming: false });
 }
 
 const OPEN = '<clikcode-title>';
@@ -93,7 +106,8 @@ function titleRequest(): string {
   return `\n\n${OPEN}Before anything else, on its very first line, reply with `
     + `${OPEN}a title${CLOSE} — at most ${SESSION_TITLE_MAX} characters, naming what this `
     + `conversation is about (not what it literally says). Then answer normally. `
-    + `The line is removed before the user sees your reply.${CLOSE}`;
+    + `The line is removed before the user sees your reply. This is asked once: `
+    + `do this in this reply only, and never start any later reply with a title.${CLOSE}`;
 }
 
 export function withTitleRequest(prompt: string): string {
@@ -145,9 +159,16 @@ export class StreamingTitle {
   private buffer = '';
   private settled = false;
   private found?: string;
+  /** False on turns that did not ask for a title: the tag is still stripped
+   * from the reply, but what it said is not this chat's name. */
+  readonly naming: boolean;
 
-  /** The title, once the stream has produced one. */
-  get title(): string | undefined { return this.found; }
+  constructor(options: { naming?: boolean } = {}) {
+    this.naming = options.naming ?? true;
+  }
+
+  /** The title, once the stream has produced one (only on the turn that asked). */
+  get title(): string | undefined { return this.naming ? this.found : undefined; }
 
   /** What the caller may show, or undefined while the head is still in doubt. */
   push(text: string, mode: 'append' | 'replace'): string | undefined {
