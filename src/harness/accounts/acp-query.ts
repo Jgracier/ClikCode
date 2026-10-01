@@ -66,7 +66,9 @@ export async function acpDiscoverySession(
   const previous = kept[key];
   const reopen = capabilities.sessionCapabilities?.resume ? 'session/resume' : capabilities.loadSession ? 'session/load' : undefined;
   if (previous && reopen) {
-    try { return await request(reopen, { sessionId: previous, cwd, mcpServers: [] }); } catch { /* gone: start another */ }
+    // A load or resume answers without the id it was given; it is put back,
+    // so a caller can address the reopened session.
+    try { return { sessionId: previous, ...await request(reopen, { sessionId: previous, cwd, mcpServers: [] }) }; } catch { /* gone: start another */ }
   }
   const started = await request('session/new', { cwd, mcpServers: [] });
   if (reopen && typeof started.sessionId === 'string' && started.sessionId) {

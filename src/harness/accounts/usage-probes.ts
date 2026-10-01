@@ -4,7 +4,7 @@
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { auggieUsageLabel } from '../auggie-usage.js';
 import { grokUsageProbe, grokUsageReading } from './grok-usage.js';
-import { ampUsageProbe, copilotUsageProbe, copilotUsageReading, cursorUsageProbe, cursorUsageReading, kiloUsageProbe, kimiUsageProbe, kimiUsageReading } from './cli-usage-probes.js';
+import { ampUsageProbe, commandCodeUsageProbe, commandCodeUsageReading, copilotUsageProbe, copilotUsageReading, cursorUsageProbe, cursorUsageReading, kiloUsageProbe, kimiUsageProbe, kimiUsageReading, kiroUsageProbe, kiroUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -252,6 +252,8 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsagePro
   amp: ampUsageProbe,
   kilo: kiloUsageProbe,
   cursor: cursorUsageProbe,
+  kiro: kiroUsageProbe,
+  command: commandCodeUsageProbe,
 };
 
 /** Probes that cost a model turn. Only an explicit ask (`/usage`, the account
@@ -271,4 +273,6 @@ export const NATIVE_USAGE_READING_PROBES: Readonly<Partial<Record<string, { labe
   copilot: { label: copilotUsageProbe, reading: copilotUsageReading },
   kimi: { label: kimiUsageProbe, reading: kimiUsageReading },
   cursor: { label: cursorUsageProbe, reading: cursorUsageReading },
+  kiro: { label: kiroUsageProbe, reading: kiroUsageReading },
+  command: { label: commandCodeUsageProbe, reading: commandCodeUsageReading },
 };
