@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyEvent, emptyModel, sendNowPlan, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { commandWindow, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
-import type { HarnessSession, IdeEvent } from '../../src/protocol';
+import { turnChanges, unwindChanges } from '../../src/text';
+import type { FileDiff, HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', route: 'local', accountId: null, provider: 'opencode', model: 'opencode/big-pickle', effort: 'medium',
@@ -30,6 +31,32 @@ describe('how long the model has thought', () => {
     vi.setSystemTime(9_000);
     const closed = applyEvent(tool, activity({ kind: 'tool-done', id: 't', label: 'Read a.ts' }));
     expect(closed.live!.thinkingSince).toBe(9_000);
+  });
+});
+
+describe("a turn's changes, together", () => {
+  const edit = (path: string, from: string, to: string, change?: FileDiff['change']): FileDiff => ({
+    path, additions: 1, removals: 1, ...(change ? { change } : {}),
+    lines: [{ kind: 'same', text: 'top' }, { kind: 'removed', text: from }, { kind: 'added', text: to }],
+  });
+
+  it('groups finished calls by file, in the order made', () => {
+    const files = turnChanges([
+      { kind: 'tool-done', diff: [edit('a.ts', 'x', 'y')] }, { kind: 'tool-error', diff: [edit('b.ts', 'x', 'y')] },
+      { kind: 'tool-done', diff: [edit('a.ts', 'y', 'z'), { additions: 1, removals: 0, lines: [] }] },
+    ]);
+    expect([...files.keys()]).toEqual(['a.ts']);
+    expect(files.get('a.ts')).toHaveLength(2);
+  });
+
+  it('undoes every change to a file, newest first, back to how the turn found it', () => {
+    expect(unwindChanges('top\nz\nend', [edit('a.ts', 'x', 'y'), edit('a.ts', 'y', 'z')])).toEqual({ before: 'top\nx\nend', whole: true, created: false });
+    expect(unwindChanges('top\nz', [{ path: 'n.ts', change: 'add', additions: 2, removals: 0, lines: [] }, edit('n.ts', 'y', 'z')])).toEqual({ before: '', whole: true, created: true });
+  });
+
+  it('is not whole when the file changed since, or is gone', () => {
+    expect(unwindChanges('top\nedited by hand', [edit('a.ts', 'x', 'y')]).whole).toBe(false);
+    expect(unwindChanges(undefined, [edit('a.ts', 'x', 'y')]).whole).toBe(false);
   });
 });
 
