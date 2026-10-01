@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { FileDiff } from '../../agent/line-diff.js';
-import { DIFF_PREVIEW_LINES, diffPreview, diffTotals, outputPreview, previewLinesFor } from './activity-view.js';
+import { activityOutcome, DIFF_PREVIEW_LINES, diffPreview, diffTotals, outputPreview, previewLinesFor } from './activity-view.js';
 import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
 import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
@@ -91,22 +91,10 @@ export function outputPreviewRows(event: HarnessActivityEvent, budget: number): 
   return fromEnd ? [...note, ...rows] : [...rows, ...note];
 }
 
-/** `(exit 2, 3.4s)` after a finished call, from what the harness reported.
- * An exit of 0 and a sub-second run are what every call looks like, so only
- * the exceptions are spelled out. */
+/** `(exit 2, 3.4s)` after a finished call (activityOutcome). */
 function outcomeSuffix(event: HarnessActivityEvent): string | undefined {
-  if (event.kind !== 'tool-done' && event.kind !== 'tool-error') return undefined;
-  const parts = [
-    ...(event.exitCode !== undefined && event.exitCode !== 0 ? [`exit ${event.exitCode}`] : []),
-    ...(event.durationMs !== undefined && event.durationMs >= 1000 ? [formatDuration(event.durationMs)] : []),
-  ];
-  return parts.length ? `(${parts.join(', ')})` : undefined;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  return `${minutes}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, '0')}s`;
+  const outcome = activityOutcome(event);
+  return outcome ? `(${outcome.parts.join(', ')})` : undefined;
 }
 
 export function nativeActivityPhaseFromValue(harness: AiLocalHarnessDefinition, parsed: unknown): 'generating response' | undefined {

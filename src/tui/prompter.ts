@@ -28,6 +28,7 @@ import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock,
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows } from '../harness/protocol/activity-line.js';
+import { STALL_MS } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
@@ -72,7 +73,6 @@ const SPIN_MS = 300;
 /** No delta and no event for this long, with no tool running and no
  * approval up, and the band says so: the spinner stops and turns yellow and
  * the clock says for how long nothing has arrived. */
-const STALL_MS = 15_000;
 
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 

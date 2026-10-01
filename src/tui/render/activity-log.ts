@@ -7,9 +7,9 @@ import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
 import { mergeActivity, sameCall } from '../../harness/protocol/activity-view.js';
-import type { HarnessActivityEvent, ToolCategory } from '../../harness/prompter.js';
+export { activityLifecyclePhase, toolStatusVerb } from '../../harness/protocol/activity-view.js';
+import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
-import { isAgentToolName } from '../../harness/protocol/tools.js';
 
 /** One rendered activity row and where it belongs: the message index it was
  * reported under, and -- for a row produced inside a turn -- the response
@@ -85,76 +85,6 @@ export function rebaseActivityOffsets(
     && entry.responseOffset > commonPrefix
     ? { ...entry, responseOffset: commonPrefix }
     : entry);
-}
-
-type OpenTool = { label: string; category?: ToolCategory; agent?: boolean };
-
-/** What the status line says while a call runs: the category's verb, and
- * what it is working on when the label names it -- `Read(src/app.ts)` is
- * "reading app.ts", `Bash(npm test)` is "running tests", a codex command
- * label `git status` is "running git". A label that names nothing gets the
- * bare verb rather than a guess. */
-export function toolStatusVerb(tool: OpenTool): string {
-  const name = tool.label.split('(')[0]!.trim();
-  if (tool.agent || (tool.category !== 'run' && isAgentToolName(tool.label))) return 'waiting on agent';
-  const argument = /^[^(]*\((.*)\)$/s.exec(tool.label)?.[1]?.trim();
-  const subject = (value: string, width = 32): string => visibleSlice(value, width);
-  switch (tool.category) {
-    case 'run': {
-      const command = argument ?? tool.label;
-      if (/(?:^|[\s/])(?:test|tests|vitest|jest|pytest|mocha|rspec|phpunit)\b|\btest:/.test(command)) return 'running tests';
-      const program = command.split(/\s+/).find((word) => word && !/^\w+=/.test(word) && word !== 'sudo');
-      return program ? `running ${subject(program.split('/').pop() || program, 24)}` : 'running';
-    }
-    case 'read':
-    case 'edit': {
-      const verb = TOOL_CATEGORY_STYLE[tool.category].verb;
-      const path = argument?.split(/[\s,]+/)[0];
-      const file = path?.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
-      return file ? `${verb} ${subject(file)}` : verb;
-    }
-    case 'search':
-    case 'fetch':
-      return TOOL_CATEGORY_STYLE[tool.category].verb;
-    default:
-      return name ? `running ${subject(name, 24)}` : 'running';
-  }
-}
-
-/** Derive the status from the whole in-flight tool set rather than the most
- * recent provider event. A reasoning summary or one parallel completion must
- * not claim the agent is merely thinking while another tool is still live. */
-export function activityLifecyclePhase(
-  activeTools: ReadonlyMap<string, OpenTool>, event: HarnessActivityEvent,
-): { activeTools: Map<string, OpenTool>; phase: string; category?: ToolCategory } {
-  const next = new Map(activeTools);
-  const key = event.id ?? event.label;
-  if (event.kind === 'tool-start') {
-    // A progress frame for an open call (more output, a status beat) often
-    // carries no name -- the placeholder "tool" -- and no category. It keeps
-    // what the call's start said, or the band went from "running tests" to
-    // "running tool" the moment output arrived.
-    const prior = event.id ? next.get(key) : undefined;
-    next.set(key, {
-      label: event.label === 'tool' && prior ? prior.label : event.label,
-      ...(event.category ?? prior?.category ? { category: (event.category ?? prior?.category)! } : {}),
-      ...(event.agent || prior?.agent ? { agent: true } : {}),
-    });
-  }
-  else if (event.kind === 'tool-done' || event.kind === 'tool-error') {
-    if (!next.delete(key) && !event.id) {
-      const matchingKey = [...next].reverse().find(([, tool]) => tool.label === event.label)?.[0];
-      if (matchingKey) next.delete(matchingKey);
-    }
-  }
-  const running = [...next.values()];
-  const current = running[running.length - 1];
-  if (!current) return { activeTools: next, phase: 'thinking' };
-  // The newest open call is what the status line names.
-  return {
-    activeTools: next, phase: toolStatusVerb(current),
-    ...(current.category ? { category: current.category } : {}),
-  };
 }
 
 /** Fold a run of same-kind tool rows that have nothing to show into one.
