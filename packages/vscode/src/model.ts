@@ -34,6 +34,9 @@ export interface Activity extends Pick<HarnessActivityEvent,
   /** How much of the answer had streamed when the call began: where it sits
    * between the answer's paragraphs while the turn runs. */
   offset?: number;
+  /** When it came among the turn's calls and thoughts: their order where no
+   * text came between them. */
+  seq?: number;
 }
 
 export interface Note {
@@ -76,7 +79,7 @@ export interface TurnTrace {
 
 /** One settled thought: what it said, where in the answer it came, and for
  * how long it went on ("Thought for 4s", as Claude Code and Codex say). */
-export interface ThoughtEntry { text: string; offset: number; ms: number }
+export interface ThoughtEntry { text: string; offset: number; ms: number; seq: number }
 
 export interface LiveTurn {
   text: string;
@@ -85,11 +88,12 @@ export interface LiveTurn {
   /** The thought being had now, accumulated as the terminal does, and where
    * and when it began. */
   thought?: Thought;
-  thoughtStart?: { offset: number; at: number };
+  thoughtStart?: { offset: number; at: number; seq: number };
   /** Earlier thoughts of this turn, each where it happened. */
   reasoning: ThoughtEntry[];
   activities: Activity[];
-  /** Rows made so far: the key of a call that came without an id. */
+  /** Calls and thoughts begun so far: each one's place in their order, and
+   * the key of a call that came without an id. */
   seen: number;
   /** The calls still open, and what the newest is doing ("running tests",
    * "editing app.ts") -- the terminal's own status rule. */
@@ -304,12 +308,13 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
     activities[index] = asActivity(prior.key, merged, {
       ...(prior.startedAt ? { startedAt: prior.startedAt } : {}),
       ...(prior.offset !== undefined ? { offset: prior.offset } : {}),
+      ...(prior.seq !== undefined ? { seq: prior.seq } : {}),
       ...(prior.child && merged.kind === 'tool-start' ? { child: prior.child } : {}),
     });
     return { ...live, activities };
   }
   const seen = live.seen + 1;
-  const row = asActivity(event.id ?? `#${seen}`, event, { startedAt: Date.now(), offset });
+  const row = asActivity(event.id ?? `#${seen}`, event, { startedAt: Date.now(), offset, seq: seen });
   return { ...live, seen, activities: [...live.activities, row].slice(-MAX_ACTIVITIES) };
 }
 
@@ -324,15 +329,17 @@ function withThought(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
   if (!next || next === live.thought) return live;
   const fresh = !live.thought || live.thought.id !== next.id;
   const before = fresh ? settled(live) : live;
-  return { ...before, thought: next, ...(fresh ? { thoughtStart: { offset: live.text.length, at: Date.now() } } : {}) };
+  // A thought takes its place in the order when it begins, not when it is
+  // settled -- the call it led to is settled after it.
+  return { ...before, thought: next, ...(fresh ? { seen: before.seen + 1, thoughtStart: { offset: live.text.length, at: Date.now(), seq: before.seen + 1 } } : {}) };
 }
 
 /** The thought being had, settled in its place: a tool started, the answer
  * began, or a new reasoning item took over. */
 function settled(live: LiveTurn): LiveTurn {
   if (!live.thought) return live;
-  const start = live.thoughtStart ?? { offset: live.text.length, at: Date.now() };
-  return { ...live, thought: undefined, thoughtStart: undefined, reasoning: [...live.reasoning, { text: live.thought.text, offset: start.offset, ms: Date.now() - start.at }] };
+  const start = live.thoughtStart ?? { offset: live.text.length, at: Date.now(), seq: live.seen };
+  return { ...live, thought: undefined, thoughtStart: undefined, reasoning: [...live.reasoning, { text: live.thought.text, offset: start.offset, ms: Date.now() - start.at, seq: start.seq }] };
 }
 
 /** The status line follows the work, as in the terminal: the newest open
@@ -534,4 +541,20 @@ export function typedDuringTurn(model: ChatModel, id: string, text: string): Cha
 
 export function localNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel {
   return withNote(model, note);
+}
+
+export type TurnMark = { offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string };
+
+/** A turn's calls, thoughts and steered messages in the order they happened:
+ * by where in the answer they came, then -- where no text came between
+ * them -- by which began first. A message sent into the turn goes after
+ * whatever was already at its place. */
+export function turnMarks(
+  text: string, activities: readonly Activity[], thoughts: readonly ThoughtEntry[], steers: ReadonlyArray<{ text: string; offset: number }>,
+): TurnMark[] {
+  return [
+    ...thoughts.map((thought) => ({ offset: Math.min(thought.offset, text.length), seq: thought.seq, thought })),
+    ...activities.map((activity, index) => ({ offset: Math.min(activity.offset ?? 0, text.length), seq: activity.seq ?? index, activity })),
+    ...steers.map((steer) => ({ offset: Math.min(steer.offset, text.length), seq: Number.MAX_SAFE_INTEGER, steer: steer.text })),
+  ].sort((left, right) => left.offset - right.offset || left.seq - right.seq);
 }

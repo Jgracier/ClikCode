@@ -11,7 +11,7 @@ import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
-import type { Activity, Approval, ChatModel, LiveTurn, Note, ThoughtEntry, TurnTrace } from '../model';
+import { turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
 import { pathIn, titleCase } from './format';
@@ -305,12 +305,7 @@ function TurnFlow(props: {
   workspace?: string; live?: { startedAt: number }; cacheKey?: string; userIndex?: number;
 }): JSX.Element {
   const { text } = props;
-  type Mark = { offset: number; activity?: Activity; thought?: ThoughtEntry; steer?: string };
-  const marks: Mark[] = [
-    ...props.thoughts.map((thought) => ({ offset: Math.min(thought.offset, text.length), thought })),
-    ...props.activities.map((activity) => ({ offset: Math.min(activity.offset ?? 0, text.length), activity })),
-    ...props.steers.map((steer) => ({ offset: Math.min(steer.offset, text.length), steer: steer.text })),
-  ].sort((left, right) => left.offset - right.offset);
+  const marks = turnMarks(text, props.activities, props.thoughts, props.steers);
   const parts: JSX.Element[] = [];
   let at = 0;
   let run: Activity[] = [];
