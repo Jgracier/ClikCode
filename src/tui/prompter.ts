@@ -210,10 +210,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private transientNoticeTimer?: NodeJS.Timeout;
   private turnUsage?: TurnUsage;
   private thought?: Thought;
-  /** The last frame's live rows and where the band's own row sits in them,
-   * so a tick that changes only the clock redraws that row and nothing else. */
-  private lastLiveFrame?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean };
-  private waitingRow?: { index: number; width: number; columns: number };
   private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
   private streamingBlocks = createStreamingBlockParser();
@@ -820,7 +816,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.waitingTimer = undefined;
       if (!this.waitingLabel || this.closed) return;
       if (this.waitingTickFast) this.waitingFrame++;
-      if (this.waitingTickFast || !this.repaintWaitingRow()) this.updateWaiting();
+      // A tick that changes only the clock costs that one row: the frame
+      // writes only the rows that differ from the last.
+      this.updateWaiting();
       this.scheduleWaitingTick();
     }, delay);
     this.waitingTimer.unref();
@@ -857,22 +855,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return quiet >= STALL_MS ? quiet : 0;
   }
 
-  /** Redraw only the band's own row, when that is the only row a tick
-   * changes: nothing animating and no call running (whose row has a timer),
-   * nothing else waiting to be painted, and the screen as the last frame
-   * left it. Returns false when a full frame is needed instead. */
-  private repaintWaitingRow(): boolean {
-    const at = this.waitingRow;
-    const frame = this.lastLiveFrame;
-    if (!at || !frame || this.activeTools.size || this.responsePaintTimer || this.pendingLive || this.resizePaintTimer
-      || this.suspended || this.selecting || this.paletteActive || at.columns !== (output.columns || 0)) return false;
-    const live = [...frame.live];
-    live[at.index] = `  ${visibleSlice(this.waitingLine(), at.width)}`;
-    this.lastLiveFrame = { ...frame, live };
-    this.renderFrame([], live, frame.cursorRow, frame.cursorColumn, frame.hideCursor);
-    return true;
-  }
-
   /** What the next prompt's composer opens with: a message that never
    * reached its turn, a cancelled one the worker hands back, or a `/`. */
   restoreDraft(value: string): void { this.queuedDraft = value; }
@@ -895,7 +877,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   stopWaiting(refresh = true): void {
     if (this.waitingTimer) clearTimeout(this.waitingTimer);
     this.waitingTimer = undefined;
-    this.waitingRow = undefined;
     this.stopWaitingInput?.();
     this.stopWaitingInput = undefined;
     if (this.waitingLabel) this.resumeInput = undefined;
@@ -1532,7 +1513,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       footer.push(`  ${chalk.dim(visibleSlice(palette?.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
     }
     footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
-    const waitingFooterRow = waitingRows ? footer.length + 1 : -1;
     if (waitingRows) {
       footer.push('', `  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }
@@ -1598,9 +1578,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // composer" is actually describing.
     const cursorRow = Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
     const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
-    const waitingIndex = waitingFooterRow < 0 ? -1 : liveConversationRows + waitingFooterRow - overflow;
-    this.waitingRow = waitingIndex >= 0 ? { index: waitingIndex, width: Math.max(1, inner), columns: output.columns || 0 } : undefined;
-    this.lastLiveFrame = { live, cursorRow, cursorColumn, hideCursor: Boolean(palette?.hideCursor) };
     this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
   }
 
@@ -2169,7 +2146,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * composer here left its borders/status rows alive while the selected slash
    * command ran, which looked like a composer floating above blank space. */
   private clearInteractiveFrame(): void {
-    this.waitingRow = undefined;
     this.renderFrame([], [], 0, 1, true);
   }
 
