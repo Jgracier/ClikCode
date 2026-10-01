@@ -7,7 +7,7 @@ import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 import { commandOutcome, fileChangeActivity, thoughtLabel } from '../protocol/activity-events.js';
-import { categoryOf, formatToolRow, toolLabel } from '../protocol/tools.js';
+import { categoryOf, commandText, formatToolRow, toolLabel } from '../protocol/tools.js';
 import { asRecord } from '../protocol/json-lines.js';
 import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from './background-turn.js';
@@ -80,10 +80,9 @@ export function codexSteerParams(threadId: string, turnId: string, text: string)
 }
 
 
+/** Codex's command, when it names one (an empty string or argv does not). */
 function codexCommandText(command: unknown): string | undefined {
-  if (typeof command === 'string' && command) return command;
-  if (Array.isArray(command) && command.length) return command.map(String).join(' ');
-  return undefined;
+  return (typeof command === 'string' || Array.isArray(command)) && command.length ? commandText(command) : undefined;
 }
 
 export function codexActivityForItem(item: JsonObject, completed: boolean): HarnessActivityEvent | undefined {
