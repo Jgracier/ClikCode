@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { estimatedTokens, formatTurnUsage } from './usage-line';
 
 describe('the turn usage line', () => {
+  it('shows a percentage-only context and a credit cost (Kiro)', () => {
+    expect(formatTurnUsage({ contextPercent: 1.232, credits: 0.0287 })).toBe('1.2% context · 0.029 credits');
+    expect(formatTurnUsage({ contextUsed: 9000, contextWindow: 200_000, contextPercent: 4.5 })).toBe('9.0k/200k context');
+  });
+
   it('is empty until the harness reports something', () => {
     expect(formatTurnUsage()).toBe('');
     expect(formatTurnUsage({})).toBe('');

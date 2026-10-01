@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createAcpSession } from './acp-client.js';
 import type { TurnUsage } from '../protocol/turn-usage.js';
 
-type Step = { update?: Record<string, unknown>; answer?: Record<string, unknown> };
+type Step = { update?: Record<string, unknown>; notify?: { method: string; params: Record<string, unknown> }; answer?: Record<string, unknown> };
 
 /** `prompts[n]` is what the agent does for the nth session/prompt; `onLoad`
  * is what it replays when asked to session/load. */
@@ -21,7 +21,7 @@ function agent(prompts: Step[][], onLoad: Record<string, unknown>[] = [], starte
       if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
       else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1', ...started } });
       else if (m.method === 'session/load') { onLoad.forEach(update); send({ id: m.id, result: {} }); }
-      else if (m.method === 'session/prompt') { for (const s of prompts[n++] ?? []) { if (s.update) update(s.update); if (s.answer) send({ id: m.id, result: s.answer }); } }
+      else if (m.method === 'session/prompt') { for (const s of prompts[n++] ?? []) { if (s.update) update(s.update); if (s.notify) send(s.notify); if (s.answer) send({ id: m.id, result: s.answer }); } }
     } });
   `;
 }
@@ -69,6 +69,19 @@ describe('ACP usage reported as session totals', () => {
     const [, second] = await turns([[{ update: chunk('a'), answer: answer(14_349, 29, 91_636_800, 14_386) }], [{ update: chunk('b'), answer: answer(14_407, 26, 90_011_600, 14_440) }]], { started });
     expect(second).toMatchObject({ input: 14_407, output: 26, cacheRead: 1664, reasoning: 25, contextUsed: 14_440, contextWindow: 256_000 });
     expect(second!.costUsd).toBeCloseTo(0.0090011600, 10);
+  });
+
+  // kiro-cli 2.23.1, captured live: no tokens anywhere; `_kiro.dev/metadata`
+  // carries the context share and, once per turn, its credits.
+  it('Kiro: context share and credits from its metadata notification', async () => {
+    const metadata = (params: Record<string, unknown>) => ({ notify: { method: '_kiro.dev/metadata', params: { sessionId: 's1', reasoning: { support: 'unavailable' }, ...params } } });
+    const [turn] = await turns([[
+      { update: chunk('PONG') }, metadata({ contextUsagePercentage: 3.58 }),
+      metadata({ contextUsagePercentage: 1.23, meteringUsage: [{ value: 0.0287, unit: 'credit', unitPlural: 'credits' }], turnDurationMs: 1217 }),
+      { answer: { stopReason: 'end_turn' } },
+    ]]);
+    expect(turn).toMatchObject({ contextPercent: 1.23, stopReason: 'completed' });
+    expect(turn!.credits).toBeCloseTo(0.0287, 6);
   });
 
   it('an undeclared prompt usage stays the turn\'s own', async () => {

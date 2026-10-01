@@ -31,6 +31,12 @@ export interface TurnUsage {
   contextWindow?: number;
   /** Tokens the conversation occupied at the latest model call. */
   contextUsed?: number;
+  /** Share of the context window in use, 0-100, for a vendor that reports
+   *  only that (Kiro's `contextUsagePercentage`). */
+  contextPercent?: number;
+  /** What the turn cost in the vendor's own credits, for a vendor that
+   *  bills in credits rather than dollars (Kiro's `meteringUsage`). */
+  credits?: number;
   stopReason?: TurnStopReason;
 }
 
@@ -69,10 +75,10 @@ export function addTurnUsage(carried: TurnUsage | undefined, latest: TurnUsage |
   if (!carried) return latest;
   if (!latest) return carried;
   const summed: TurnUsage = { ...carried };
-  for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens', 'costUsd'] as const) {
+  for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens', 'costUsd', 'credits'] as const) {
     if (latest[key] !== undefined) summed[key] = (carried[key] ?? 0) + latest[key]!;
   }
-  for (const key of ['contextWindow', 'contextUsed', 'stopReason'] as const) {
+  for (const key of ['contextWindow', 'contextUsed', 'contextPercent', 'stopReason'] as const) {
     if (latest[key] !== undefined) (summed as Record<string, unknown>)[key] = latest[key];
   }
   return summed;

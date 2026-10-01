@@ -31,12 +31,17 @@ const { AI_LOCAL_HARNESSES, HOME_REDIRECT_ENV_DEFAULTS } = createRequire(import.
 const argv = process.argv.slice(2);
 const split = argv.indexOf('--');
 if (split < 0 || split === argv.length - 1) {
-  console.error('usage: node scripts/vendor-sandbox.mjs [--auth <harness>]... -- <command> [args...]');
+  console.error('usage: node scripts/vendor-sandbox.mjs [--auth <harness>]... [--link <~/path>]... -- <command> [args...]');
   process.exit(2);
 }
 const auth = [];
+// Extra home-relative files to link in, for a harness whose sign-in the
+// catalog does not declare (Cursor's ~/.config/cursor/auth.json, Kiro's
+// ~/.local/share/kiro-cli/data.sqlite3, Hermes's ~/.hermes/auth.json).
+const links = [];
 for (let index = 0; index < split; index += 1) {
   if (argv[index] === '--auth' && argv[index + 1]) auth.push(argv[++index]);
+  else if (argv[index] === '--link' && argv[index + 1]) links.push(argv[++index]);
   else { console.error(`unknown option: ${argv[index]}`); process.exit(2); }
 }
 
@@ -71,13 +76,17 @@ for (const command of auth) {
   if (!harness) { console.error(`no harness named ${command}`); process.exit(2); }
   const files = harness.authFiles ?? [];
   if (!files.length) console.error(`${command} declares no sign-in files; it runs signed out here`);
-  for (const { path } of files) {
-    const from = expand(path, realHome);
-    if (!existsSync(from)) continue;
-    const to = expand(path, home);
-    mkdirSync(dirname(to), { recursive: true });
-    symlinkSync(from, to);
-  }
+  for (const { path } of files) link(path);
+}
+for (const path of links) link(path.startsWith('~') ? path : `~/${path}`);
+
+/** Link one sign-in path; a catalog may list the same file twice (Cline). */
+function link(path) {
+  const from = expand(path, realHome);
+  const to = expand(path, home);
+  if (!existsSync(from) || existsSync(to)) return;
+  mkdirSync(dirname(to), { recursive: true });
+  symlinkSync(from, to);
 }
 
 mkdirSync(home, { recursive: true });

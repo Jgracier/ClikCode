@@ -495,6 +495,7 @@ export async function sendVendorTurn(input: {
       ...(usage?.cacheRead !== undefined ? { cacheReadTokens: usage.cacheRead } : {}),
       ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
       ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+      ...(usage?.credits !== undefined ? { credits: usage.credits } : {}),
       latencyMs: Date.now() - startedAt,
     };
     state.invocations.push(invocation);
