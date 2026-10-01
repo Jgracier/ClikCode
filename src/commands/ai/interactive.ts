@@ -498,7 +498,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           await followRunning(terminal, runningTurn.prompt, queued?.text);
           continue;
         }
-        if (queued?.kind === 'command') {
+        // Ctrl+S during the turn that just stopped: this message, now, ahead
+        // of anything queued.
+        const sendNow = terminal?.takeSendNow();
+        if (sendNow) {
+          line = sendNow;
+        } else if (queued?.kind === 'command') {
           fromQueuedCommand = true;
           // A slash command typed while the turn was running. It runs as the
           // command it is, with the screen to itself -- which is why it waited
