@@ -2,7 +2,7 @@
  * silent harness has stopped, and the caps on how much of its output is
  * kept. */
 
-import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
+import { killProcessTreePortable, spawnPortable as spawn } from '../spawn.js';
 import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
 import { firstUsefulLine } from '../../protocol/stderr-line.js';
@@ -275,13 +275,7 @@ export async function captureNativeHarnessTurn(
     const toolIdleLimit = options.toolIdleTimeoutMs ?? DEFAULT_TOOL_IDLE_TIMEOUT_MS;
     const controller = options.idleController as BoundIdleController | undefined;
     const tailLimit = Math.max(1024, options.retainTailLimit ?? TURN_OUTPUT_TAIL_LIMIT);
-    const forward = (signal: NodeJS.Signals): void => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      if (process.platform !== 'win32' && child.pid) {
-        try { process.kill(-child.pid, signal); return; } catch { /* fall back to the direct child */ }
-      }
-      terminatePortable(child, signal);
-    };
+    const forward = (signal: NodeJS.Signals): void => killProcessTreePortable(child, signal, true);
     const later = (delayMs: number, signal: NodeJS.Signals): void => {
       const timer = setTimeout(() => forward(signal), delayMs);
       timer.unref();
