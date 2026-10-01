@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { toCliErrorMessage } from './message.js';
-import { ERROR_CATALOG } from './catalog.js';
+import { ERROR_CATALOG } from './problem-json.js';
 
 /**
  * A real production problem+json 404, byte-for-byte as

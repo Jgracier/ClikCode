@@ -89,22 +89,9 @@ export interface ProblemJson {
   details?: ProblemDetails;
 }
 
-/** The slice of an ERROR_CATALOG entry the decoder can enrich from. */
-export interface ProblemCatalogEntry {
-  message: string;
-  remediation?: string;
-  httpStatus?: number;
-}
-
 export interface ParseProblemJsonOptions {
   /** HTTP status of the response the body came from — used when the body omits one. */
   status?: number;
-  /**
-   * ERROR_CATALOG, injected rather than imported (see the header). Supplies
-   * `title`/`remediation` for envelopes that carry a code but no prose — which
-   * is every `{ success, error }` envelope body.
-   */
-  catalog?: Readonly<Record<string, ProblemCatalogEntry>>;
 }
 
 function str(value: unknown): string | undefined {
@@ -153,9 +140,10 @@ export function parseProblemJson(
   const root = record(body);
   if (!root) return null;
 
-  const catalog = options.catalog;
-  const enrich = (code: string | undefined): ProblemCatalogEntry | undefined =>
-    code && catalog ? catalog[code] : undefined;
+  // ERROR_CATALOG supplies `title`/`remediation` for envelopes that carry a
+  // code but no prose -- which is every `{ success, error }` envelope body.
+  const enrich = (code: string | undefined): ErrorCatalogEntry | undefined =>
+    code ? ERROR_CATALOG[code] : undefined;
 
   // ── 1. RFC 7807 ───────────────────────────────────────────────────────────
   const rfcCode = str(root.code);
@@ -229,10 +217,10 @@ export function parseProblemJson(
   code = code ?? str(root.code);
   // A legacy body whose `error` IS a catalog code ("APP_NOT_FOUND") — several
   // routes do exactly this — becomes the catalogued sentence, not the token.
-  const asCode = catalog && catalog[title] ? title : undefined;
+  const asCode = enrich(title) ? title : undefined;
   if (asCode) {
     code = asCode;
-    title = catalog![asCode]!.message;
+    title = ERROR_CATALOG[asCode]!.message;
   }
   const entry = enrich(code);
   const problem: ProblemJson = {

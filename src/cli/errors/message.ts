@@ -1,9 +1,4 @@
-import {
-  ERROR_CATALOG,
-  parseProblemJson,
-  problemJsonMessage,
-  type ProblemJson,
-} from './catalog.js';
+import { parseProblemJson, problemJsonMessage, type ProblemJson } from './problem-json.js';
 
 /**
  * Decode the platform's error contract off a thrown HTTP error.
@@ -25,10 +20,7 @@ function decodeProblem(error: unknown): ProblemJson | null {
   const e = error as { response?: { data?: unknown; status?: number } } | null;
   const response = e?.response;
   if (!response) return null;
-  return parseProblemJson(response.data, {
-    status: Number(response.status) || undefined,
-    catalog: ERROR_CATALOG,
-  });
+  return parseProblemJson(response.data, { status: Number(response.status) || undefined });
 }
 
 /**
