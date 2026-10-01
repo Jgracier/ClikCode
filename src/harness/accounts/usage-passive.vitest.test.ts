@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as catalog from '@clikcode/router/ai-local-harness';
+
+vi.mock('../../runtime/lazy-bridge.js', async (original) => ({
+  ...(await original<typeof import('../../runtime/lazy-bridge.js')>()),
+  localHarnessForProvider: catalog.localHarnessForProvider,
+}));
 
 const { claude, grok, amp } = vi.hoisted(() => ({
   claude: vi.fn(async () => '5h 10% left'),
@@ -15,7 +21,7 @@ vi.mock('./usage-probes.js', async (original) => {
 });
 vi.mock('../../session/state/write.js', () => ({ writeState: vi.fn(async () => undefined) }));
 
-const { nativeUsageReading } = await import('./account-usage.js');
+const { cachedAccountUsageLabel, nativeUsageReading } = await import('./account-usage.js');
 const { nativeUsageCache } = await import('./usage-reading.js');
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 
@@ -25,6 +31,18 @@ const stateWith = (invocations: HarnessState['invocations'] = []): HarnessState 
 beforeEach(() => { nativeUsageCache.clear(); claude.mockClear(); grok.mockClear(); amp.mockClear(); });
 
 describe('usage on a passive paint', () => {
+  it('shows each account its own shared usage, including a fresh credit balance', () => {
+    const now = Date.now();
+    const state = { accounts: [
+      { ...account, id: 'one', provider: 'augment', usage: { at: new Date(now).toISOString(), label: '$9 credits left' } },
+      { ...account, id: 'two', provider: 'augment', usage: { at: new Date(now).toISOString(), label: '$2 credits left' } },
+    ], sessions: [], invocations: [] } as unknown as HarnessState;
+    expect(cachedAccountUsageLabel(state.accounts[0]!, state)).toBe('$9 credits left');
+    expect(cachedAccountUsageLabel(state.accounts[1]!, state)).toBe('$2 credits left');
+    state.accounts[0]!.usage = { at: new Date(now - 6 * 60_000).toISOString(), label: '$9 credits left' };
+    expect(cachedAccountUsageLabel(state.accounts[0]!, state)).toBeUndefined();
+  });
+
   it('never runs a billed probe (a real Claude Code turn) without an explicit ask', async () => {
     const session = { id: 's', nativeHarness: 'claude', accountId: 'a' } as HarnessSession;
     expect(await nativeUsageReading(session, stateWith())).toBeUndefined();

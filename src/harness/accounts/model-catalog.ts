@@ -71,9 +71,8 @@ export function modelIdFromLabel(harness: AiLocalHarnessDefinition, models: read
  * away. So the key is those identities: any change and the entry simply does
  * not match, however recent it is; no change and it stays good indefinitely.
  *
- * The one input no file can witness is a vendor's `models` command, which
- * asks a server whose list can change on its own. Only harnesses that declare
- * one get a time limit, and only for that reason. */
+ * The one input no file can witness is a vendor's model list over CLI or ACP,
+ * which may change on its server. Those lists get a time limit. */
 interface CatalogMemoEntry {
   at: number;
   fingerprint: string;
@@ -121,8 +120,12 @@ export function resetModelCatalogMemo(): void {
 
 const modelCatalogCache = new Map<string, { at: number; fingerprint: string; result: ModelCatalogResult }>();
 
-/** For `modelDiscoveryArgv` only: how long a server-sourced list is trusted. */
+/** How long a server-sourced CLI or ACP model list is trusted. */
 const SERVER_LIST_TTL_MS = 300_000;
+
+function serverModelList(harness: AiLocalHarnessDefinition): boolean {
+  return Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false && harness.command !== 'hermes'));
+}
 
 async function fileIdentity(path: string | undefined): Promise<string> {
   if (!path) return '-';
@@ -214,7 +217,7 @@ async function cachedCatalog(
   if (!cached) return undefined;
   if (cached.fingerprint !== await catalogFingerprint(harness, account)) return undefined;
   if (harness.acp && cached.result.models.length === 0) return undefined;
-  const isExpired = Boolean(harness.modelDiscoveryArgv && Date.now() - cached.at >= SERVER_LIST_TTL_MS);
+  const isExpired = serverModelList(harness) && Date.now() - cached.at >= SERVER_LIST_TTL_MS;
   if (isExpired && !options?.allowStale) return undefined;
   return cached.result;
 }
@@ -254,7 +257,7 @@ export async function nativeModelCatalogForPicker(
 ): Promise<ModelCatalogResult> {
   const cached = await cachedCatalog(harness, account, { allowStale: true });
   if (cached) {
-    if (harness.modelDiscoveryArgv && !(await cachedCatalog(harness, account))) {
+    if (serverModelList(harness) && !(await cachedCatalog(harness, account))) {
       nativeModelCatalog(harness, account).catch(() => undefined);
     }
     return cached;

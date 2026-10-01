@@ -26,8 +26,8 @@ export async function nativeUsageReading(
   // probe also made every reading that harness had already given unreadable.
   const reportsOnStream = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  // Twenty-one of the twenty-four harnesses publish no usage at all. For those
-  // the figure is LEARNED from this account's own history -- see
+  // Harnesses without a native quota probe or stream reading can learn a
+  // figure from this account's own history -- see
   // usage-learning.ts. It needs no probe, no network and no cache (it is
   // arithmetic over invocations we already store), so it short-circuits ahead
   // of all of that. It returns undefined until the account has actually hit
@@ -177,19 +177,23 @@ export async function accountUsageReading(
 }
 
 /** What the harness last reported for this account, if it is still true.
- *
- * The picker renders from this immediately and asks the harness in the
- * background, so opening it never waits. Same rule as the read above: a
- * reading stands until the soonest window it describes resets, and a reading
- * with no window is not shown at all rather than shown forever. */
+ * The picker reads the in-process cache and the account record shared by
+ * other ClikCode processes. Windows expire at their reset; balances have a
+ * short TTL because the vendor gives no reset time. */
 export function cachedAccountUsageLabel(account: AiHarnessAccount, state: HarnessState): string | undefined {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
   if (!harness) return undefined;
   void state;
   const reported = nativeUsageCache.get(usageCacheKey(harness.command, account.id));
-  if (!reported || reported.failed || !(reported.windows?.length ?? 0)) return undefined;
-  return usageReadingIsCurrent(reported) ? reported.label : undefined;
+  const shared = account.usage as AccountUsageReading | undefined;
+  const sharedAt = Date.parse(shared?.at ?? '');
+  const latest = shared && Number.isFinite(sharedAt) && (!reported || sharedAt > reported.at)
+    ? { at: sharedAt, label: shared.label, failed: shared.failed, windows: shared.windows }
+    : reported;
+  if (!latest || latest.failed || latest.label === undefined) return undefined;
+  if (latest.windows?.length) return usageReadingIsCurrent(latest) ? latest.label : undefined;
+  return Date.now() - latest.at < BALANCE_READING_TTL_MS ? latest.label : undefined;
 }
 
 /** Accounts that were out of quota and may not be any more, on a harness
