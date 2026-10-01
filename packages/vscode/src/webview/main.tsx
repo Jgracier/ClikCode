@@ -331,8 +331,13 @@ function App(): JSX.Element {
         {model.approvals[0] ? (
           // One at a time, as the terminal asks: the rest wait their turn.
           <div class="approvals">
-            <ApprovalCard key={model.approvals[0].id} approval={model.approvals[0]} workspace={model.workspace} waiting={model.approvals.length - 1}
-              onAnswer={(value) => post({ type: 'approve', id: model.approvals[0]!.id, approved: value })} />
+            <ApprovalCard key={model.approvals[0].id} approval={model.approvals[0]} workspace={model.workspace} position={1} total={model.approvals.length}
+              onAnswer={(value, note) => {
+                post({ type: 'approve', id: model.approvals[0]!.id, approved: value });
+                // Denied with a note: the note goes into the running turn, as
+                // a message typed during it does (a steer).
+                if (note) post({ type: 'send', text: note, id: uid() });
+              }} />
           </div>
         ) : null}
         <Composer model={model} handle={composer} onError={setError} />

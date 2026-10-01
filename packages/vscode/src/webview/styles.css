@@ -261,6 +261,14 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 /* Keys do nothing for the first moments; the buttons say so. */
 .approval.guarded .approval-actions button { opacity: 0.6; }
 .approval-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+.approval-count { margin-left: auto; font-weight: normal; white-space: nowrap; }
+.approval-count + .approval-diff { margin-left: 0; }
+.approval-note { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.approval-note-input {
+  flex: 1; min-width: 0; padding: 4px 8px; border-radius: var(--radius-small); font: inherit;
+  color: var(--vscode-input-foreground); background: var(--input); border: 1px solid var(--vscode-input-border, var(--border));
+}
+.approval-note-input:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
 
 /* ---- composer ---- */
 .composer-wrap { padding: 6px var(--gap) 8px; flex: none; display: flex; flex-direction: column; gap: 6px; }
