@@ -22,7 +22,7 @@ import type { ClientCommand, WorkerEvent } from '../worker/protocol.js';
 export type { ClientCommand, WorkerEvent };
 export { IDE_PROTOCOL } from './protocol-version.js';
 
-/** One row of a quick pick. `actions` and `deleteAction` are the row's Tab
+/** One row of a picker. `actions` and `deleteAction` are the row's Tab
  * and Delete actions in the terminal picker; `inline` is a setting cycled in
  * place. */
 export interface IdePickItem {

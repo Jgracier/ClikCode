@@ -3,8 +3,8 @@
  * Settings, the account manager, harness options, tools and MCP servers,
  * the conversation list with its row actions -- every picker ClikCode's
  * terminal has reaches the editor as a `ui-request` with the same rows. They
- * open here as a sheet over the chat (quick picks only when no chat is on
- * screen), with the terminal's keys: arrows, Enter, ← back, Esc out; a row's
+ * open here as a sheet over the chat (brought on screen first when it is
+ * out of sight), with the terminal's keys: arrows, Enter, ← back, Esc out; a row's
  * actions as buttons, a setting with a few values as a segmented control. */
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';

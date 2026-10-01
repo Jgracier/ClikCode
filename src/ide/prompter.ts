@@ -1,4 +1,4 @@
-/** The terminal pickers, answered by the editor's quick picks.
+/** The terminal pickers, answered by the editor's own picker sheet.
  *
  * Every picker in tui/pickers takes a HarnessPrompter and ends in the same
  * command a typed slash line runs; this prompter makes the editor one more

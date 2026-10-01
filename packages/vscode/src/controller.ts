@@ -15,7 +15,7 @@ import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type R
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { applyHunks, fileHunks } from './text';
 import { readFile } from 'node:fs/promises';
-import { BridgeQuestion, DiffDocuments, fileNameIn, runInTerminal } from './ui';
+import { DiffDocuments, fileNameIn, runInTerminal } from './ui';
 import type { FromWebview, ToWebview, WebviewRequest } from './webview-protocol';
 import { mentionFromEditor, mentionFromUri, searchWorkspaceFiles } from './mentions';
 import type { Mention } from './webview-protocol';
@@ -37,7 +37,6 @@ export class ClikCodeController implements vscode.Disposable {
   private model: ChatModel = emptyModel();
   private readonly changed = new vscode.EventEmitter<ChatModel>();
   readonly onDidChange = this.changed.event;
-  private readonly questions = new Map<string, BridgeQuestion>();
   /** Pickers drawn in a webview, and which one. */
   private readonly panelQuestions = new Map<string, WebviewSurface>();
   /** Approvals whose change is open in a diff editor. */
@@ -412,8 +411,6 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   private dropQuestions(): void {
-    for (const question of this.questions.values()) question.dispose();
-    this.questions.clear();
     for (const [id, surface] of this.panelQuestions) surface.post({ type: 'ui-cancel', id });
     this.panelQuestions.clear();
   }
@@ -422,10 +419,9 @@ export class ClikCodeController implements vscode.Disposable {
     this.setModel(applyEvent(this.model, event));
     switch (event.type) {
       case 'ui-request':
-        this.ask(event.id, event.request);
+        void this.ask(event.id, event.request);
         return;
       case 'ui-update':
-        this.questions.get(event.id)?.update(event.items);
         this.panelQuestions.get(event.id)?.post({ type: 'ui-update', id: event.id, items: event.items });
         return;
       case 'sign-in': {
@@ -458,21 +454,17 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
-  /** A terminal picker: drawn in the chat when the chat is on screen, as a
-   * quick pick otherwise. */
-  private ask(id: string, request: IdeUiRequest): void {
+  /** A terminal picker, drawn in the chat as a sheet: the chat is brought
+   * on screen first when it is out of sight. */
+  private async ask(id: string, request: IdeUiRequest): Promise<void> {
+    if (!this.front()?.visible) await this.host.reveal(this);
     const surface = this.front();
-    if (surface?.visible && surface.ready) {
-      this.panelQuestions.set(id, surface);
-      surface.post({ type: 'ui-request', id, request });
+    if (!surface) {
+      this.bridge?.send({ type: 'ui-response', id, result: { cancelled: true } });
       return;
     }
-    const question = new BridgeQuestion(request, (result) => {
-      this.questions.delete(id);
-      this.bridge?.send({ type: 'ui-response', id, result });
-    });
-    this.questions.set(id, question);
-    question.show();
+    this.panelQuestions.set(id, surface);
+    surface.post({ type: 'ui-request', id, request });
   }
 
   private onWorkerEvent(event: WorkerEvent): void {
