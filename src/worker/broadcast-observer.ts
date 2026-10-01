@@ -42,7 +42,7 @@ export class BroadcastObserver implements TurnObserver {
    * sees -- not a re-derivation, a read of the one copy this class owns. */
   private liveText = '';
   private waitingLabel = '';
-  /** Mirrors TerminalHarnessPrompter.turnOutputStarted(): true once ANY
+  /** True once ANY
    * visible content -- an answer token or a tool activity line -- has
    * streamed for the turn currently in flight. What a cancel handler needs
    * to decide between preserveInterruptedTurn (something real to keep) and

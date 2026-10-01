@@ -18,6 +18,8 @@ describe('ClikCode compatibility', () => {
 
   it('accepts the bridge protocol this extension was built against', () => {
     expect(bridgeCompatibility({ version: '1.2.3', protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision })).toEqual({ ok: true });
+    // A newer bridge is judged newer whatever revision it reports, or none.
+    expect(bridgeCompatibility({ version: '9.0.0', protocol: IDE_PROTOCOL.version + 1 })).toMatchObject({ ok: false, remedy: 'update-extension' });
     expect(bridgeCompatibility({ version: '1.2.3', protocol: IDE_PROTOCOL.oldestSupported, revision: IDE_PROTOCOL.oldestRevision })).toEqual({ ok: true });
   });
 

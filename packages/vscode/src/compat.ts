@@ -23,17 +23,19 @@ export function bridgeCompatibility(
 ): Compatibility {
   const protocol = typeof ready.protocol === 'number' && Number.isInteger(ready.protocol) ? ready.protocol : 0;
   const revision = typeof ready.revision === 'number' && Number.isInteger(ready.revision) ? ready.revision : 1;
+  // Newer than this extension knows first: a future bridge may not say its
+  // revision the way this one reads it.
+  if (protocol > supported.version) {
+    return {
+      ok: false, remedy: 'update-extension',
+      message: `ClikCode ${ready.version} speaks bridge protocol ${protocol}, newer than this extension knows (${supported.version}). Update the ClikCode extension.`,
+    };
+  }
   if (protocol < supported.oldestSupported || revision < (supported.oldestRevision ?? 1)) {
     const has = protocol < supported.oldestSupported ? `bridge protocol ${protocol || 'none'}; it needs ${supported.oldestSupported} or newer` : `bridge revision ${revision}; it needs ${supported.oldestRevision} or newer`;
     return {
       ok: false, remedy: 'update-clikcode',
       message: `ClikCode ${ready.version} is too old for this extension (${has}). Update ClikCode: ${INSTALL_HELP}`,
-    };
-  }
-  if (protocol > supported.version) {
-    return {
-      ok: false, remedy: 'update-extension',
-      message: `ClikCode ${ready.version} speaks bridge protocol ${protocol}, newer than this extension knows (${supported.version}). Update the ClikCode extension.`,
     };
   }
   return { ok: true };
