@@ -303,10 +303,9 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 /* Usage as the terminal words it ("5h 96% left · Weekly 18% left"): plain
    while there is room, red once a window is spent. */
 .composer-usage {
-  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 24px; padding: 0 6px;
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 24px; line-height: 24px; padding: 0 6px;
   border: none; border-radius: var(--radius-small); background: transparent; color: var(--muted); font-size: 0.88em;
 }
-.composer-usage:hover { background: var(--vscode-toolbar-hoverBackground, var(--hover)); color: var(--vscode-foreground); }
 .composer-usage.spent { color: var(--vscode-errorForeground, var(--err)); }
 @container (max-width: 380px) { .composer-usage { display: none; } }
 .chip-button {
@@ -335,7 +334,14 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
   display: inline-flex; align-items: center; gap: 4px; padding: 1px 2px 1px 7px; border-radius: 4px; font-size: 0.9em;
   border: 1px solid var(--border); background: var(--subtle);
 }
-.composer-status { display: flex; align-items: center; gap: 10px; font-size: 0.88em; min-height: 18px; padding: 0 4px; }
+.composer-status { position: relative; display: flex; align-items: center; gap: 6px; font-size: 0.88em; min-height: 18px; padding: 0 4px; }
+.status-account .codicon-chevron-down { font-size: 10px; opacity: 0.7; }
+.status-account.open { background: var(--hover); color: var(--vscode-foreground); }
+.effort-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 10px 6px; }
+.effort-title { margin-right: 4px; font-size: 0.9em; }
+.effort-option { padding: 2px 8px; border-radius: var(--radius-small); border: 1px solid var(--border); background: none; color: var(--vscode-foreground); font-size: 0.9em; }
+.effort-option:hover { background: var(--hover); }
+.effort-option.on { background: var(--vscode-button-background); border-color: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 .status-account { display: inline-flex; align-items: center; gap: 6px; min-width: 0; background: none; border: none; padding: 1px 4px; margin-left: -4px; border-radius: 4px; color: var(--muted); }
 .status-account:hover { background: var(--hover); color: var(--vscode-foreground); }
 .status-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14em; }

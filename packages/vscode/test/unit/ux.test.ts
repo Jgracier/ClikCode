@@ -6,6 +6,7 @@ import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../..
 import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { noticeLevel } from '../../src/text';
 import { conversationState } from '../../src/conversation-state';
+import { modelWithEffort } from '../../src/webview/picker';
 import { splitEditorContext } from '../../src/editor-context';
 import { inlineStep } from '../../src/webview/sheet';
 import { pathIn, relativeTime, resetIn } from '../../src/webview/format';
@@ -195,5 +196,14 @@ describe('conversation list', () => {
     expect(conversationState({ id: 'a', activity: 'working' }, [])).toBe('working');
     expect(conversationState({ id: 'a', activity: 'idle' }, [chat({ unread: true })])).toBe('unread');
     expect(conversationState({ id: 'a', activity: 'idle' }, [chat({ sessionId: 'b', approvals: 1 })])).toBe('idle');
+  });
+});
+
+describe('model and effort chip', () => {
+  it('names them together, the model alone while it decides', () => {
+    expect(modelWithEffort('opus', 'medium')).toBe('Opus Medium');
+    expect(modelWithEffort('gpt-5.5', 'high')).toBe('gpt-5.5 High');
+    expect(modelWithEffort('opus', 'default')).toBe('Opus');
+    expect(modelWithEffort(undefined, undefined)).toBe('Default model');
   });
 });

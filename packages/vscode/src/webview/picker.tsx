@@ -4,7 +4,7 @@
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
-import type { IdeChoice, IdeModels, IdeProvider } from '../protocol';
+import type { IdeAccount, IdeAccounts, IdeChoice, IdeModels, IdeProvider } from '../protocol';
 import { request } from './bus';
 import { modelLabel, titleCase } from './format';
 import { Icon, KeyList, Popover, Switch, type ListRow } from './ui';
@@ -160,6 +160,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
         <input ref={input} type="text" value={search} placeholder={drill ? 'Search or type a model id…' : 'Search providers…'}
           aria-label={drill ? 'Search models' : 'Search providers'} aria-controls="picker-list" onInput={(event) => setSearch((event.target as HTMLInputElement).value)} />
       </div>
+      {drill && props.model.chatSettings?.effort ? <EffortBar model={props.model} onError={props.onError} /> : null}
       {error ? <div class="picker-error">{error}</div> : null}
       {drill && models?.error ? <div class="picker-error">{models.error}</div> : null}
       {!providers && !error ? <div class="picker-loading"><Icon name="loading" spin /> Loading providers…</div> : null}
@@ -216,6 +217,75 @@ export function ModeMenu(props: { model: ChatModel; onClose: () => void; onError
 export function effortLabel(value: string | undefined): string {
   return !value || value === 'default' ? 'Default' : titleCase(value);
 }
+
+/** The chip's words for model and effort together, as Claude Code's picker
+ * says them: `Opus Medium`; the model alone while the model decides. */
+export function modelWithEffort(modelName: string | undefined, effort: string | undefined): string {
+  const name = modelName && /^[a-z]+$/.test(modelName) ? titleCase(modelName) : modelName ?? 'Default model';
+  return !effort || effort === 'default' ? name : `${name} ${effortLabel(effort)}`;
+}
+
+/** Effort, chosen beside the model in the same menu: picking one keeps the
+ * menu open, so a model and its effort are set together. */
+function EffortBar(props: { model: ChatModel; onError: (message: string) => void }): JSX.Element {
+  const effort = props.model.chatSettings?.effort;
+  const [current, setCurrent] = useState(effort?.current ?? 'default');
+  useEffect(() => { setCurrent(effort?.current ?? 'default'); }, [effort?.current]);
+  const values = ['default', ...(effort?.choices ?? [])];
+  return (
+    <div class="effort-bar" role="radiogroup" aria-label="Reasoning effort">
+      <span class="effort-title muted">Effort</span>
+      {values.map((value) => (
+        <button key={value} type="button" role="radio" aria-checked={value === current} class={`effort-option${value === current ? ' on' : ''}`}
+          title={value === 'default' ? 'The model decides' : `${effortLabel(value)} reasoning effort`}
+          onClick={() => { setCurrent(value); choose({ kind: 'effort', value }).catch((failure: Error) => props.onError(failure.message)); }}>
+          {effortLabel(value)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The accounts of the chat's own provider, as a short list: choosing one
+ * moves the chat onto it; another can be added for the same provider. */
+export function AccountMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
+  const [data, setData] = useState<IdeAccounts>();
+  useEffect(() => {
+    request<IdeAccounts>({ method: 'query', query: 'accounts' }).then(setData, (failure: Error) => props.onError(failure.message));
+  }, []);
+  const providerId = props.model.providerId;
+  const currentProvider = data?.accounts.find((item) => item.current)?.provider;
+  const mine = (data?.accounts ?? []).filter((item) => (item.harness ? item.harness === providerId : item.provider === currentProvider));
+  const addable = data?.addable.find((item) => item.provider === providerId);
+  const rows: ListRow[] = mine.map((account) => ({
+    key: account.id,
+    onSelect: () => { props.onClose(); if (!account.current) choose({ kind: 'account', accountId: account.id }).catch((failure: Error) => props.onError(failure.message)); },
+    render: () => (
+      <div class="row">
+        <span class="row-check">{account.current ? <Icon name="check" /> : account.problem ? <Icon name="warning" /> : null}</span>
+        <span class="row-main"><span class="row-label">{account.label}</span>
+          <span class="row-detail">{account.problem ? ACCOUNT_PROBLEM[account.problem] : account.usage?.label ?? ''}</span></span>
+      </div>
+    ),
+  }));
+  if (addable) {
+    rows.push({
+      key: 'add', onSelect: () => { props.onClose(); choose({ kind: 'add-account', provider: addable.provider }).catch((failure: Error) => props.onError(failure.message)); },
+      render: () => <div class="row"><span class="row-check"><Icon name="add" /></span><span class="row-main"><span class="row-label">Add account</span></span></div>,
+    });
+  }
+  return (
+    <Popover label="Accounts" onClose={props.onClose} class="menu" id="account-menu">
+      <div class="menu-title">{data?.accounts.find((item) => item.current)?.providerName ?? 'Accounts'}</div>
+      {!data ? <div class="picker-loading"><Icon name="loading" spin /> Loading accounts…</div>
+        : <KeyList rows={rows} label="Accounts" onEscape={props.onClose} emptyText="No accounts for this provider." />}
+    </Popover>
+  );
+}
+
+const ACCOUNT_PROBLEM: Record<NonNullable<IdeAccount['problem']>, string> = {
+  verify: 'needs verifying', reauth: 'signed out', 'out-of-usage': 'out of usage',
+};
 
 export function EffortMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
   const effort = props.model.chatSettings?.effort;

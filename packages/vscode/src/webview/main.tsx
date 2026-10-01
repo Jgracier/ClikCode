@@ -351,7 +351,7 @@ function App(): JSX.Element {
               onAnswer={(value) => post({ type: 'approve', id: model.approvals[0]!.id, approved: value })} />
           </div>
         ) : null}
-        <Composer model={model} handle={composer} onError={setError} onOpenScreen={showScreen} />
+        <Composer model={model} handle={composer} onError={setError} />
       </main>
       {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)} setInlineTarget={(target) => { inlineTarget.current = target; }} /> : null}
       {error ? <Toast message={error} onClose={() => setError(undefined)} /> : null}
