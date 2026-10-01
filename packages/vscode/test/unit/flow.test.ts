@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { applyEvent, emptyModel, sendNowPlan, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { commandWindow, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
@@ -30,6 +30,26 @@ describe('how long the model has thought', () => {
     vi.setSystemTime(9_000);
     const closed = applyEvent(tool, activity({ kind: 'tool-done', id: 't', label: 'Read a.ts' }));
     expect(closed.live!.thinkingSince).toBe(9_000);
+  });
+});
+
+describe('send a queued message now', () => {
+  const queued = [
+    { id: 'a', text: 'first', command: false }, { id: 'n', text: 'done', command: false, notification: true }, { id: 'b', text: 'second', command: false },
+  ];
+
+  it('stops the turn only, for the queue head: the queue sends it next itself', () => {
+    expect(sendNowPlan({ queued, running: true }, 'a')).toBe('stop');
+  });
+
+  it('takes a later one out of the queue, stops the turn, and sends it after', () => {
+    expect(sendNowPlan({ queued, running: true }, 'b')).toBe('unqueue-and-stop');
+  });
+
+  it('just sends it with nothing running; never a notification or one already gone', () => {
+    expect(sendNowPlan({ queued, running: false }, 'b')).toBe('send');
+    expect(sendNowPlan({ queued, running: true }, 'n')).toBeUndefined();
+    expect(sendNowPlan({ queued, running: true }, 'gone')).toBeUndefined();
   });
 });
 
