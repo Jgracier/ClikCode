@@ -7,7 +7,7 @@
  * copy of that logic that could drift from it.
  */
 import { randomUUID } from 'node:crypto';
-import type { HarnessPrompter, PickerOption } from '../harness/prompter.js';
+import type { HarnessPrompter, PickerOption, PickerSettings } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import type { IdeEvent, IdePickItem, IdeUiRequest, IdeUiResult } from './protocol.js';
 import { sessionEvent } from './session-event.js';
@@ -66,15 +66,7 @@ export class IdePrompter implements HarnessPrompter {
     title: string,
     options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
-    settings?: {
-      onBack?: () => void;
-      /** The row to start on: the current value, or the row a sub-menu was
-       * opened from. Absent or not listed, the first. */
-      startAt?: T;
-      onEscape?: () => void;
-      refreshedOptions?: () => readonly PickerOption<T>[];
-      refresh?: Promise<unknown> | readonly Promise<unknown>[];
-    },
+    settings?: PickerSettings<T>,
   ): Promise<T | undefined> {
     let current = options;
     let refresh = settings?.refresh;

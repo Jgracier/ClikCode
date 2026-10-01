@@ -24,7 +24,7 @@ import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
-import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, ToolCategory } from '../harness/prompter.js';
+import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows } from '../harness/protocol/activity-line.js';
@@ -2506,17 +2506,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     title: string,
     options: readonly PickerOption<T>[],
     onAction?: (value: T, action: string) => Promise<void>,
-    settings?: {
-      onBack?: () => void;
-      /** The row to start on: the current value, or the row a sub-menu was
-       * opened from. Absent or not listed, the first. */
-      startAt?: T;
-      onEscape?: () => void;
-      refreshedOptions?: () => readonly PickerOption<T>[];
-      refresh?: Promise<unknown> | readonly Promise<unknown>[];
-      /** Rows the list may use, when more than the default suits it. */
-      rows?: number;
-    },
+    settings?: PickerSettings<T>,
   ): Promise<T | undefined> {
     return runOptionPicker<T>(this.pickerHost(), title, options, onAction, settings);
   }

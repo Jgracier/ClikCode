@@ -4,7 +4,7 @@
 
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
-import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
+import type { HarnessPrompter, PickerOption, PickerSettings } from '../../harness/prompter.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 
 export async function chooseOption<T>(
@@ -12,17 +12,7 @@ export async function chooseOption<T>(
   title: string,
   options: readonly PickerOption<T>[],
   onAction?: (value: T, action: string) => Promise<void>,
-  settings?: {
-    onBack?: () => void;
-    /** The row to start on: the current value, or the row a sub-menu was
-     * opened from. Absent or not listed, the first. */
-    startAt?: T;
-    onEscape?: () => void;
-    refreshedOptions?: () => readonly PickerOption<T>[];
-    refresh?: Promise<unknown> | readonly Promise<unknown>[];
-    /** Rows the list may use, when more than the default suits it. */
-    rows?: number;
-  },
+  settings?: PickerSettings<T>,
 ): Promise<T | undefined> {
   if (options.length === 0) return undefined;
   if (rl.select) return rl.select(title, options, onAction, settings);
