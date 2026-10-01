@@ -164,6 +164,13 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .selection-context { display: flex; margin-bottom: 4px; font-size: 0.9em; }
 .selection-context .link { display: inline-flex; gap: 6px; align-items: center; }
 .selection-context.excluded .link { opacity: 0.6; text-decoration: line-through; }
+.context-meter { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0 2px; color: var(--muted); font-size: 0.9em; font-variant-numeric: tabular-nums; }
+.context-meter:hover { color: var(--vscode-foreground); }
+.context-track { fill: none; stroke: var(--border); stroke-width: 2; }
+.context-fill { fill: none; stroke: var(--vscode-textLink-foreground); stroke-width: 2; stroke-linecap: round; }
+.context-meter.warn .context-fill { stroke: var(--warn); }
+.context-meter.high .context-fill { stroke: var(--err); }
+.context-problems { display: inline-flex; gap: 2px; align-items: center; color: var(--warn); }
 .activity-outcome { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 .activity-outcome.failed { color: var(--err); }
 .activity-output {

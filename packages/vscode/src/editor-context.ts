@@ -23,6 +23,16 @@ export function selectionBlock(context: SelectionContext): string {
   return `\`${context.path}\` ${lines}:\n${fence}${language}\n${context.text.replace(/\s+$/, '')}\n${fence}`;
 }
 
+/** The file in front of the user, when nothing in it is selected. */
+export function openFileLine(path: string): string {
+  return `Open in the editor: \`${path}\``;
+}
+
+/** VS Code's own errors and warnings, under the selection or file they are in. */
+export function problemsBlock(path: string, problems: readonly string[]): string {
+  return `VS Code reports ${problems.length === 1 ? 'this problem' : 'these problems'} in \`${path}\`:\n${problems.map((problem) => `- ${problem}`).join('\n')}`;
+}
+
 export function questionWithSelection(question: string, context: SelectionContext): string {
   return `${question.trim()}\n\n${selectionBlock(context)}`;
 }

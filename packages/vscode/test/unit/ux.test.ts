@@ -164,3 +164,14 @@ describe('slash menu', () => {
     expect(commandPaletteMatches('/new', commands).map((row) => row.value)).toEqual(['/clear']);
   });
 });
+
+describe('editor context', () => {
+  it('sends the open file and its problems, or a selection with the problems in it', () => {
+    const problems = ["line 3 error: Cannot find name 'x'. (ts 2304)"];
+    expect(composeMessage('fix it', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'a.ts', problems } }]))
+      .toBe("fix it\n\nOpen in the editor: `a.ts`\n\nVS Code reports this problem in `a.ts`:\n- line 3 error: Cannot find name 'x'. (ts 2304)");
+    const selected = composeMessage('why', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'a.ts', startLine: 3, endLine: 3, text: 'x', languageId: 'typescript', problems } }]);
+    expect(selected).toContain('`a.ts` line 3:');
+    expect(selected).toContain('VS Code reports this problem');
+  });
+});

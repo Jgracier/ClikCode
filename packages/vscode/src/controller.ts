@@ -69,23 +69,36 @@ export class ClikCodeController implements vscode.Disposable {
     this.subscriptions.push(
       vscode.window.onDidChangeTextEditorSelection((event) => this.trackSelection(event.textEditor)),
       vscode.window.onDidChangeActiveTextEditor((editor) => { if (editor) this.trackSelection(editor); }),
+      // A fix (or a new error) in the file in front of the user changes what
+      // goes with the next message.
+      vscode.languages.onDidChangeDiagnostics((event) => {
+        const editor = vscode.window.activeTextEditor;
+        if (editor && event.uris.some((uri) => uri.toString() === editor.document.uri.toString())) this.trackSelection(editor);
+      }),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('clikcode.editorContext') && vscode.window.activeTextEditor) this.trackSelection(vscode.window.activeTextEditor);
+      }),
     );
     if (vscode.window.activeTextEditor) this.trackSelection(vscode.window.activeTextEditor);
   }
 
-  /** What is selected in the editor, as Claude Code offers it: settled for a
-   * moment before the pages hear of it, since a drag is a stream of events.
-   * A panel that is not a file (output, terminal, the chat tab itself) keeps
-   * the last file's selection. */
+  /** What is in front of the user in the editor, as Claude Code and Codex
+   * offer it: the selection, or with nothing selected the file itself, with
+   * the problems VS Code reports there. Settled for a moment before the pages
+   * hear of it, since a drag is a stream of events. A panel that is not a
+   * file (output, terminal, the chat tab itself) keeps the last file's. */
   private trackSelection(editor: vscode.TextEditor): void {
     const scheme = editor.document.uri.scheme;
     if (scheme !== 'file' && scheme !== 'untitled') return;
     if (this.selectionTimer) clearTimeout(this.selectionTimer);
     this.selectionTimer = setTimeout(() => {
       this.selectionTimer = undefined;
-      const next = editor.selection.isEmpty ? undefined : mentionFromEditor(editor);
+      const setting = vscode.workspace.getConfiguration('clikcode').get<'selection' | 'file' | 'off'>('editorContext', 'file');
+      const next = setting === 'off' || (setting === 'selection' && editor.selection.isEmpty) ? undefined
+        : mentionFromEditor(editor, true);
       const same = next?.path === this.selection?.path && next?.startLine === this.selection?.startLine
-        && next?.endLine === this.selection?.endLine && next?.text === this.selection?.text;
+        && next?.endLine === this.selection?.endLine && next?.text === this.selection?.text
+        && next?.problems?.join('\n') === this.selection?.problems?.join('\n');
       if (same) return;
       this.selection = next;
       // A page that is still loading is sent the current one when it is ready.
