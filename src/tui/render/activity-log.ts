@@ -1,6 +1,7 @@
 /** The activity log: one entry per tool call or assistant turn, upserted as
  * events arrive and rebased when the transcript above it grows. */
 
+import { asFileDiffs } from '../../agent/line-diff.js';
 import chalk from 'chalk';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
@@ -33,11 +34,15 @@ export function upsertActivityEvent(
   // renderActivityLine styles them, so the only escapes left in a row are the
   // color codes this UI added itself.
   const cleanLines = (lines: readonly string[]): string[] => lines.map((line) => sanitizeTerminalText(line, { singleLine: true }));
+  // A diff from an older build or an older saved turn is read in its own
+  // shape (asFileDiffs), never assumed to be the current one.
+  const { diff: rawDiff, ...rest } = event;
+  const files = asFileDiffs(rawDiff);
   const normalized: HarnessActivityEvent = {
-    ...event,
+    ...rest,
     label: visibleSlice(sanitizeTerminalText(event.label, { singleLine: true }).replace(/\s+/g, ' ').trim() || 'tool', 120),
     ...(event.output ? { output: cleanLines(event.output) } : {}),
-    ...(event.diff ? { diff: event.diff.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: cleanLines([line.text])[0]! })) })) } : {}),
+    ...(files?.length ? { diff: files.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: cleanLines([line.text])[0]! })) })) } : {}),
   };
   const matchIndex = (() => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {

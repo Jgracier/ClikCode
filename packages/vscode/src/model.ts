@@ -9,6 +9,7 @@
  * copy is the prompt this client just submitted, shown until the worker's
  * own snapshot carries it.
  */
+import { asFileDiffs } from '../../../src/agent/line-diff';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
@@ -210,7 +211,7 @@ function upsertActivity(activities: Activity[], event: HarnessActivityEvent): Ac
     label: stripAnsi(event.label),
     ...(event.category ? { category: event.category } : {}),
     ...(event.output?.length ? { output: event.output.map(stripAnsi) } : {}),
-    ...(event.diff?.length ? { diff: event.diff.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: stripAnsi(line.text) })) })) } : {}),
+    ...(asFileDiffs(event.diff)?.length ? { diff: asFileDiffs(event.diff)!.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: stripAnsi(line.text) })) })) } : {}),
     ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
     ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
   };

@@ -18,6 +18,18 @@ export interface FileDiff {
   omitted?: number;
 }
 
+/** A diff as an event carries it, from any build: a list of files now, the
+ * `{ removed, added }` lists before 2026-10-01 -- which turns already saved,
+ * and workers still running an older build, keep sending. Read as the old
+ * shape, `.map` threw and the conversation could not be opened. */
+export function asFileDiffs(diff: unknown): FileDiff[] | undefined {
+  if (Array.isArray(diff)) return diff.filter((file): file is FileDiff => Boolean(file) && Array.isArray((file as FileDiff).lines));
+  const legacy = diff as { removed?: unknown; added?: unknown } | undefined;
+  if (!legacy || !Array.isArray(legacy.removed) || !Array.isArray(legacy.added)) return undefined;
+  const lines = (side: unknown[], kind: 'removed' | 'added'): DiffLine[] => side.map((text) => ({ kind, text: String(text) }));
+  return [{ lines: [...lines(legacy.removed, 'removed'), ...lines(legacy.added, 'added')], additions: legacy.added.length, removals: legacy.removed.length }];
+}
+
 /** Lines of context kept around each change. */
 const DIFF_CONTEXT = 2;
 /** Most lines a file's diff carries; rows show fewer. */
