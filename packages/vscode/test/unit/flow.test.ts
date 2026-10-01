@@ -19,7 +19,7 @@ const begin = (): ChatModel => run([
 afterEach(() => { vi.useRealTimers(); });
 
 describe('how long the model has thought', () => {
-  it('counts from the turn start, and again from when its last call closed or its answer moved', () => {
+  it('counts from the turn start, and again from when its last call closed', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const started = begin();
@@ -30,8 +30,6 @@ describe('how long the model has thought', () => {
     vi.setSystemTime(9_000);
     const closed = applyEvent(tool, activity({ kind: 'tool-done', id: 't', label: 'Read a.ts' }));
     expect(closed.live!.thinkingSince).toBe(9_000);
-    vi.setSystemTime(12_000);
-    expect(applyEvent(closed, worker({ type: 'delta', text: 'Hi' })).live!.thinkingSince).toBe(12_000);
   });
 });
 
