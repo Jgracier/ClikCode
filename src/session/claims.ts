@@ -17,7 +17,9 @@ import { atomicWriteFile, ensurePrivateDirectory } from './store/files.js';
 import { pidIsAlive, withFileLock } from './store/locks.js';
 import { safeRecordFileName, stateDirectory } from './store/paths.js';
 
-/** Matches ai.ts's SESSION_CLAIM_TTL_MS; the heartbeat runs at a third of it. */
+/** How long a claim survives without a heartbeat. Generous enough that a busy
+ * turn never looks abandoned, short enough that a killed terminal frees its
+ * conversation quickly. The heartbeat runs at a third of it. */
 export const SESSION_CLAIM_TTL_MS = 90_000;
 /** A live local pid keeps its claim through a stalled heartbeat (suspended
  * laptop, SIGSTOP, a blocked event loop) but not forever: pids get reused. */
