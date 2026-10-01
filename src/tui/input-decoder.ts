@@ -220,6 +220,15 @@ export function onKeyBatchEnd(listener: () => void): () => void {
 
 export function inKeyBatch(): boolean { return keyBatchDepth > 0; }
 
+/** Focus reports (`CSI I` / `CSI O`) never reach a key handler; whoever
+ * cares whether the terminal is being looked at listens here. */
+const focusListeners = new Set<(focused: boolean) => void>();
+
+export function onTerminalFocus(listener: (focused: boolean) => void): () => void {
+  focusListeners.add(listener);
+  return () => { focusListeners.delete(listener); };
+}
+
 function listenForTerminalKeys(onKey: (key: string) => void): () => void {
   const decoder = new TerminalInputDecoder();
   let flushTimer: NodeJS.Timeout | undefined;
@@ -245,7 +254,11 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       if (CURSOR_POSITION_REPORT.test(key)) continue;
       // Focus in/out and OSC replies (theme notifications), likewise:
       // enabled for what they announce, not to be read.
-      if (FOCUS_EVENT.test(key) || key.startsWith('\u001b]')) continue;
+      if (FOCUS_EVENT.test(key)) {
+        for (const listener of [...focusListeners]) listener(key === '\u001b[I');
+        continue;
+      }
+      if (key.startsWith('\u001b]')) continue;
       // Answers to the questions the opening handshake asks: Primary DA comes
       // back as `CSI ? ... c`, XTVERSION as a DCS string. Neither is a key,
       // and a terminal that answers must not be able to type into the draft.

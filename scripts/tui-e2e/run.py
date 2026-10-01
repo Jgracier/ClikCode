@@ -33,6 +33,8 @@ SCENARIOS = {
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
         # A turn that ran a tool ends on one line saying so, written once.
         'final_once': ['Worked for'],
+        # Never looked away from: no notification.
+        'raw_never': ['the turn has finished'],
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
@@ -309,6 +311,21 @@ SCENARIOS = {
         'watch': ['start the long job', 'then do this', 'The queued one answered now.'],
         'never': ['The long job is finished.'],
     },
+    # The terminal around the UI: focus reports asked for and the shell's
+    # title saved on the way in; progress while the turn runs; a notification
+    # when it ends with the window unfocused for long enough; everything
+    # handed back on the way out.
+    'terminal-signals': {
+        'env': {'FAKE_DELAY_MS': '400'},
+        'turns': [TWO_BLOCKS],
+        'steps': [
+            ('type', 'please check the commit'), ('keys', '\x1b[O'),
+            ('wait_for', 'The final commit is live.', 30), ('settle', 2),
+        ],
+        'watch': ['please check the commit', 'The final commit is live.'],
+        'raw_in_order': ['\x1b[?1004h', '\x1b[22;0t', '\x1b]9;4;3;\x07', 'the turn has finished\x07\x07',
+                         '\x1b]9;4;0;\x07', '\x1b[?1004l', '\x1b[23;0t'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -478,6 +495,15 @@ def run(name, spec, entry, keep):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     for phrase in spec.get('final_once', []):
         if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
+    # Sequences the screen never shows (title, progress, focus, a
+    # notification), in the order they must have been written.
+    at = 0
+    for sequence in spec.get('raw_in_order', []):
+        found = bytes(raw).find(sequence.encode(), at)
+        if found < 0: problems.append(f'not written (after what came before it): {sequence!r}')
+        else: at = found + len(sequence)
+    for sequence in spec.get('raw_never', []):
+        if sequence.encode() in bytes(raw): problems.append(f'written, and never should be: {sequence!r}')
     if 'clipboard' in spec:
         import base64, re as regex
         copies = [base64.b64decode(m).decode('utf-8', 'replace') for m in regex.findall(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', bytes(raw))]
