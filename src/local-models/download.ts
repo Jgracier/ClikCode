@@ -48,10 +48,11 @@ export async function freeDiskBytes(directory: string): Promise<number | undefin
 }
 
 /** A model is gigabytes; failing at 90% for want of space wastes the wait.
- * 1 GB beyond the file itself keeps the disk usable afterwards. */
-export async function checkDiskSpace(directory: string, bytesNeeded: number): Promise<void> {
+ * `spareBytes` beyond the file itself (1 GB by default) keeps the disk usable
+ * afterwards. */
+export async function checkDiskSpace(directory: string, bytesNeeded: number, spareBytes = 1e9): Promise<void> {
   const free = await freeDiskBytes(directory);
-  const needed = bytesNeeded + 1e9;
+  const needed = bytesNeeded + spareBytes;
   if (free !== undefined && free < needed) {
     throw new Error(`Needs ${formatBytes(needed)} free on the disk holding ${directory}; ${formatBytes(free)} is free.`);
   }

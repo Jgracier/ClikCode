@@ -21,11 +21,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path';
 import { memoryStep, mergeFootprint, parseMeminfo, parseMemoryPressure, parseProcStatus, parseVmStatMac, parseVmstatSwapOut } from './memwatch.js';
 import { safeName, serversDir } from './paths.js';
-
-export function processAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
-}
+import { pidIsAlive } from '../session/store/locks.js';
 
 /** The command line of a process, to tell a live llama-server from a
  * recycled pid before stopping it. */
@@ -44,13 +40,42 @@ export function commandLine(pid: number): Promise<string> {
 
 export function serverDir(modelId: string): string { return join(serversDir(), safeName(modelId)); }
 function leasesDir(modelId: string): string { return join(serverDir(modelId), 'leases'); }
-function leaseName(pid: number, sessionId: string): string { return `${pid}-${safeName(sessionId)}.json`; }
+
+/** Lease files, one per process and session: `<pid>-<session>.json` in a
+ * directory of their holder's choosing (a model's server here, TurboFit's
+ * state directory for its runtime). */
+export function leaseFile(directory: string, sessionId: string): string {
+  return join(directory, `${process.pid}-${safeName(sessionId)}.json`);
+}
+
+export async function writeLeaseFile(directory: string, sessionId: string): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  await writeFile(leaseFile(directory, sessionId), JSON.stringify({ pid: process.pid, session: sessionId, at: new Date().toISOString() }));
+}
+
+/** Whether a live process holds a lease in `directory` -- for this session
+ * only, when one is named; other than this process, when `elsewhere`. */
+export async function leaseHeld(directory: string, options: { sessionId?: string; elsewhere?: boolean } = {}): Promise<boolean> {
+  const suffix = options.sessionId === undefined ? '' : `-${safeName(options.sessionId)}.json`;
+  for (const name of await readdir(directory).catch(() => [] as string[])) {
+    if (!name.endsWith(suffix)) continue;
+    const pid = Number(name.slice(0, name.indexOf('-')));
+    if (!(options.elsewhere && pid === process.pid) && pidIsAlive(pid)) return true;
+  }
+  return false;
+}
+
+/** This process's leases in one directory, removed synchronously -- for an
+ * exit handler, where nothing asynchronous runs. */
+export function removeOwnLeasesSync(directory: string): void {
+  let names: string[] = [];
+  try { names = readdirSync(directory); } catch { return; }
+  for (const name of names) if (name.startsWith(`${process.pid}-`)) rmSync(join(directory, name), { force: true });
+}
 
 /** This process's hold on a model's server for one session. */
 export async function writeLease(modelId: string, sessionId: string): Promise<void> {
-  await mkdir(leasesDir(modelId), { recursive: true });
-  await writeFile(join(leasesDir(modelId), leaseName(process.pid, sessionId)),
-    JSON.stringify({ pid: process.pid, session: sessionId, at: new Date().toISOString() }));
+  await writeLeaseFile(leasesDir(modelId), sessionId);
 }
 
 /** Whether a live process other than this one holds this session's lease on
@@ -59,32 +84,22 @@ export async function writeLease(modelId: string, sessionId: string): Promise<vo
  * one, so the model stops when the terminal does and not when the worker
  * eventually exits. */
 export async function sessionHeldElsewhere(modelId: string, sessionId: string): Promise<boolean> {
-  const suffix = `-${safeName(sessionId)}.json`;
-  for (const name of await readdir(leasesDir(modelId)).catch(() => [] as string[])) {
-    if (!name.endsWith(suffix)) continue;
-    const pid = Number(name.slice(0, name.indexOf('-')));
-    if (pid !== process.pid && processAlive(pid)) return true;
-  }
-  return false;
+  return leaseHeld(leasesDir(modelId), { sessionId, elsewhere: true });
 }
 
 /** Whether any live process holds a lease on a model. A server nobody
  * holds is only outliving its last lease (leaseGraceMs) and will stop. */
 export async function heldByLiveProcess(modelId: string): Promise<boolean> {
-  for (const name of await readdir(leasesDir(modelId)).catch(() => [] as string[])) {
-    if (processAlive(Number(name.slice(0, name.indexOf('-'))))) return true;
-  }
-  return false;
+  return leaseHeld(leasesDir(modelId));
 }
 
 /** Drop this process's leases for a session, on every model, except the
  * one named in `keep` (a session that moved to another model keeps only
  * its new one). */
 export async function removeLeases(sessionId: string, keep?: string): Promise<void> {
-  const name = leaseName(process.pid, sessionId);
   for (const model of await readdir(serversDir()).catch(() => [] as string[])) {
     if (model === (keep && safeName(keep))) continue;
-    await rm(join(serversDir(), model, 'leases', name), { force: true });
+    await rm(leaseFile(join(serversDir(), model, 'leases'), sessionId), { force: true });
   }
 }
 
@@ -93,12 +108,7 @@ export async function removeLeases(sessionId: string, keep?: string): Promise<vo
 export function removeAllOwnLeasesSync(): void {
   let models: string[] = [];
   try { models = readdirSync(serversDir()); } catch { return; }
-  for (const model of models) {
-    const directory = join(serversDir(), model, 'leases');
-    let names: string[] = [];
-    try { names = readdirSync(directory); } catch { continue; }
-    for (const name of names) if (name.startsWith(`${process.pid}-`)) rmSync(join(directory, name), { force: true });
-  }
+  for (const model of models) removeOwnLeasesSync(join(serversDir(), model, 'leases'));
 }
 
 export interface ServerRecord {
@@ -124,8 +134,8 @@ export async function readServerRecord(modelId: string): Promise<ServerRecord | 
  * left alone. */
 export async function sweepOrphan(modelId: string): Promise<void> {
   const record = await readServerRecord(modelId);
-  if (!record || processAlive(record.supervisorPid)) return;
-  if (processAlive(record.serverPid) && /llama-server/.test(await commandLine(record.serverPid))) {
+  if (!record || pidIsAlive(record.supervisorPid)) return;
+  if (pidIsAlive(record.serverPid) && /llama-server/.test(await commandLine(record.serverPid))) {
     await killTree(record.serverPid);
   }
   await rm(join(serverDir(modelId), 'supervisor.json'), { force: true });
@@ -137,8 +147,8 @@ async function killTree(pid: number): Promise<void> {
     return;
   }
   try { process.kill(pid, 'SIGTERM'); } catch { return; }
-  for (let waited = 0; waited < 10_000 && processAlive(pid); waited += 250) await new Promise((done) => setTimeout(done, 250));
-  if (processAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already gone. */ } }
+  for (let waited = 0; waited < 10_000 && pidIsAlive(pid); waited += 250) await new Promise((done) => setTimeout(done, 250));
+  if (pidIsAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* Already gone. */ } }
 }
 
 /** One start at a time per model, across processes: two sessions asking
@@ -159,7 +169,7 @@ export async function withStartLock<T>(modelId: string, work: () => Promise<T>, 
       const holder = await readFile(lock, 'utf8').then((text) => JSON.parse(text) as { pid?: number; at?: number }, () => undefined);
       const age = Date.now() - ((await stat(lock).catch(() => undefined))?.mtimeMs ?? 0);
       // An empty lock is one being written this instant; give it a moment.
-      const stale = holder ? !processAlive(Number(holder.pid)) || age > timeoutMs : age > 5000;
+      const stale = holder ? !pidIsAlive(Number(holder.pid)) || age > timeoutMs : age > 5000;
       if (stale) { await rm(lock, { force: true }); continue; }
       if (Date.now() - started > timeoutMs) throw new Error(`Timed out waiting for another ClikCode process to start ${modelId}.`);
       await new Promise((done) => setTimeout(done, 500));
@@ -503,14 +513,14 @@ export async function startSupervisor(config: SupervisorConfig): Promise<ServerR
 export async function stopServer(modelId: string): Promise<void> {
   const record = await readServerRecord(modelId);
   if (!record) return;
-  if (processAlive(record.supervisorPid)) {
+  if (pidIsAlive(record.supervisorPid)) {
     if (process.platform === 'win32') {
       // Windows has no SIGTERM to hand the supervisor, so its server is
       // stopped first and the supervisor then finds it gone.
       await killTree(record.serverPid);
     }
     try { process.kill(record.supervisorPid, 'SIGTERM'); } catch { /* Gone already. */ }
-    for (let waited = 0; waited < 15_000 && processAlive(record.supervisorPid); waited += 250) await new Promise((done) => setTimeout(done, 250));
+    for (let waited = 0; waited < 15_000 && pidIsAlive(record.supervisorPid); waited += 250) await new Promise((done) => setTimeout(done, 250));
   }
   await sweepOrphan(modelId);
 }

@@ -10,8 +10,8 @@
  * small supervisor, not systemd, launchd or Windows services. */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, rmSync } from 'node:fs';
-import { mkdir, readFile, readdir, rm, stat, statfs, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { nodeHttp } from '../../runtime/lazy-node.js';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -25,6 +25,10 @@ import {
 import {
   TURBOFIT_CPU_LANES_SCRIPT, TURBOFIT_CPU_LANE_SELECT_SCRIPT, TURBOFIT_CPU_TUNE_SCRIPT, TURBOFIT_PLAN_SCRIPT, TURBOFIT_SUPERVISOR_SCRIPT,
 } from './turbofit-scripts.js';
+import { checkDiskSpace, formatBytes } from '../../local-models/download.js';
+import { leaseFile, leaseHeld, removeOwnLeasesSync, writeLeaseFile } from '../../local-models/lifecycle.js';
+import { CPU_WEIGHT_BANDWIDTH, MIN_GENERATE_PER_SECOND, MIN_PROMPT_PER_SECOND, cpuPromptRate } from '../../local-models/choose.js';
+import { pidIsAlive } from '../../session/store/locks.js';
 
 /** Hermes model ids that run on TurboFit's local gateway. */
 export function isTurboFitModel(model: string | null | undefined): boolean {
@@ -254,27 +258,10 @@ async function buildRuntime(python: string, root: string, environment: Environme
   if (result.code !== 0) throw new Error(`Could not build TurboFit's runtime.\n${tail(result.output)}`);
 }
 
-/** A model is gigabytes; failing at 90% for want of space wastes the wait.
- * The download lands in the Hugging Face cache and is hard-linked into the
- * model root, so one copy's worth, plus room to spare. */
-async function checkDiskSpace(directory: string, bytes: number): Promise<void> {
-  let target = directory;
-  while (!existsSync(target) && join(target, '..') !== target) target = join(target, '..');
-  const disk = await statfs(target).catch(() => undefined);
-  if (!disk) return;
-  const free = disk.bavail * disk.bsize;
-  const needed = bytes + 2e9;
-  if (free < needed) throw new Error(`The model needs ${formatBytes(needed)} free and ${formatBytes(free)} is available on the disk holding ${directory}.`);
-}
-
 function hubCache(environment: Environment): string {
   const merged = { ...process.env, ...environment };
   if (merged.HF_HUB_CACHE) return merged.HF_HUB_CACHE;
   return join(merged.HF_HOME || join(turboFitHome(environment), '.cache', 'huggingface'), 'hub');
-}
-
-function formatBytes(bytes: number): string {
-  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`;
 }
 
 /** Downloads one file with TurboFit's downloader, which verifies it against
@@ -324,48 +311,27 @@ function gatewayRequest(method: 'GET' | 'POST', path: string, body?: unknown, ti
   });
 }
 
-function processAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
-}
-
 async function supervisorRunning(environment: Environment): Promise<boolean> {
   try {
     const record = JSON.parse(await readFile(join(stateDir(environment), 'clikcode-supervisor.json'), 'utf8')) as { pid?: number };
-    return processAlive(Number(record.pid));
+    return pidIsAlive(Number(record.pid));
   } catch { return false; }
 }
 
-function leaseFile(environment: Environment, sessionId: string): string {
-  return join(stateDir(environment), 'clikcode-leases', `${process.pid}-${sessionId.replace(/[^\w.-]/g, '_')}.json`);
-}
-
-/** This ClikCode process's hold on the runtime for one session. The
- * supervisor stops everything once no live process holds one. */
-async function writeLease(environment: Environment, sessionId: string): Promise<void> {
-  const file = leaseFile(environment, sessionId);
-  await mkdir(join(file, '..'), { recursive: true });
-  await writeFile(file, JSON.stringify({ pid: process.pid, session: sessionId, at: new Date().toISOString() }));
-}
+function leasesDir(environment: Environment): string { return join(stateDir(environment), 'clikcode-leases'); }
 
 /** Whether a live ClikCode process -- this one or another -- already holds
  * the runtime for this session. The interactive process takes the lease
  * before handing a turn to its worker; the worker, which outlives the
- * terminal, then joins it instead of holding one of its own. */
-async function sessionHeld(environment: Environment, sessionId: string): Promise<boolean> {
-  const suffix = `-${sessionId.replace(/[^\w.-]/g, '_')}.json`;
-  const directory = join(stateDir(environment), 'clikcode-leases');
-  for (const name of await readdir(directory).catch(() => [] as string[])) {
-    if (!name.endsWith(suffix)) continue;
-    if (processAlive(Number(name.slice(0, name.indexOf('-'))))) return true;
-  }
-  return false;
+ * terminal, then joins it instead of holding one of its own. The supervisor
+ * stops everything once no live process holds one. */
+function sessionHeld(environment: Environment, sessionId: string): Promise<boolean> {
+  return leaseHeld(leasesDir(environment), { sessionId });
 }
 
 /** Let go of the runtime for one session (its model moved off TurboFit). */
 export async function releaseTurboFitRuntime(account: AiHarnessAccount | undefined, sessionId: string): Promise<void> {
-  await rm(leaseFile(nativeProfileEnvironment(account?.nativeProfile), sessionId), { force: true });
+  await rm(leaseFile(leasesDir(nativeProfileEnvironment(account?.nativeProfile)), sessionId), { force: true });
 }
 
 async function startSupervisor(python: string, root: string, environment: Environment, backend: string): Promise<void> {
@@ -417,13 +383,11 @@ async function waitUntilServing(model: string, environment: Environment, owned: 
  * Every turn processes at least that much before the first word. */
 const HERMES_PROMPT_TOKENS = 25_000;
 
-/** What "usable with Hermes" means for a local model. At 50 tokens a second
- * Hermes' opening prompt takes about eight minutes, once: llama.cpp keeps the
- * shared prefix cached, so later turns read only what is new. 8 tokens a
- * second writes a paragraph in a few seconds. The Qwen 27B TurboFit picks for
- * a 48 GB machine reads 5 a second on a laptop CPU -- over an hour. */
-const MIN_PROMPT_PER_SECOND = 50;
-const MIN_GENERATE_PER_SECOND = 8;
+/* "Usable with Hermes" is ClikCode Local's bar (MIN_PROMPT_PER_SECOND,
+ * MIN_GENERATE_PER_SECOND). At 50 tokens a second Hermes' opening prompt
+ * takes about eight minutes, once: llama.cpp keeps the shared prefix cached,
+ * so later turns read only what is new. The Qwen 27B TurboFit picks for a
+ * 48 GB machine reads 5 a second on a laptop CPU -- over an hour. */
 
 export interface ModelCheck { toolCalls: boolean; promptPerSecond?: number; generatePerSecond?: number }
 
@@ -496,28 +460,15 @@ async function readCpuLanes(python: string, root: string, environment: Environme
   return JSON.parse(result.output.slice(marker + '\x00TURBOFIT_LANES'.length).split('\n')[0]!) as CpuLanes;
 }
 
-/** Prompt tokens a second per billion active parameters, by compression
- * format, measured with llama-bench on an 8-core Zen 4 (Ryzen 7 8745HS):
- * Q4_K 88 t/s at 3B active, Q3_K 5.0 at 27B, IQ3_XXS 2.9 at 27B. Kernels,
- * not size, set these -- IQ3_XXS is the smaller file and the slower read --
- * which is why a GPU figure cannot be scaled to a CPU one. Scaled by core
- * count; formats not measured take a middling value. Only an ordering: what
- * is chosen is measured before it is kept. */
-const PROMPT_RATE: readonly [RegExp, number][] = [
-  [/IQ[1-3]/i, 79], [/Q3_K/i, 136], [/Q[45]_K|Q4_0|Q4\b/i, 264], [/Q[68]/i, 200], [/[BF]F?16/i, 60],
-];
-/** Memory bandwidth llama.cpp reaches reading weights on that machine,
- * measured the same way: writing speed times the bytes each token reads
- * (13.2 GB x 3.3 t/s for the dense Qwen, 1.9 GB x 20.4 for Ornith's active
- * share) -- about 40 GB/s, the 46-55 GB/s a STREAM test shows less overhead. */
-const WEIGHT_BANDWIDTH = 40e9;
-
+/** Rates measured on an 8-core Zen 4 (cpuPromptRate, CPU_WEIGHT_BANDWIDTH),
+ * scaled by core count. Only an ordering: what is chosen is measured before
+ * it is kept. */
 export function estimateLane(lane: CpuLane, cores: number): { promptPerSecond: number; generatePerSecond: number } {
-  const rate = PROMPT_RATE.find(([pattern]) => pattern.test(lane.quant))?.[1] ?? 150;
+  const rate = cpuPromptRate(lane.quant);
   const activeShare = lane.totalB > 0 ? lane.activeB / lane.totalB : 1;
   return {
     promptPerSecond: (rate * cores / 8) / Math.max(0.1, lane.activeB),
-    generatePerSecond: WEIGHT_BANDWIDTH / Math.max(1, lane.mainBytes * activeShare),
+    generatePerSecond: CPU_WEIGHT_BANDWIDTH / Math.max(1, lane.mainBytes * activeShare),
   };
 }
 
@@ -716,16 +667,18 @@ async function runSelected(
     await buildRuntime(python, root, environment, runtime.runtime, backend, progress);
   }
   const missing = (plan.files ?? []).filter((file) => !file.present);
-  if (missing.length) await checkDiskSpace(plan.modelRoot ?? turboFitHome(environment), missing.reduce((sum, file) => sum + file.size, 0));
+  // The download lands in the Hugging Face cache and is hard-linked into the
+  // model root: one copy's worth, plus 2 GB to spare.
+  if (missing.length) await checkDiskSpace(plan.modelRoot ?? turboFitHome(environment), missing.reduce((sum, file) => sum + file.size, 0), 2e9);
   for (const [index, file] of missing.entries()) await downloadFile(python, root, environment, file, index, missing.length, progress);
 
   const leased = !await sessionHeld(environment, sessionId);
-  if (leased) await writeLease(environment, sessionId);
+  if (leased) await writeLeaseFile(leasesDir(environment), sessionId);
   try {
     return await startAndCheck(python, root, environment, backend, model, selected, selected !== before, progress);
   } catch (error) {
     // Not running for this session after all: nothing may stay up on its account.
-    if (leased) await rm(leaseFile(environment, sessionId), { force: true });
+    if (leased) await rm(leaseFile(leasesDir(environment), sessionId), { force: true });
     throw error;
   }
 }
@@ -798,11 +751,5 @@ export async function ensureTurboFitServing(
 /** Every lease this process holds, dropped as it exits -- the supervisor
  * would notice the dead process anyway; this just makes it immediate. */
 export function releaseTurboFitLeasesOnExit(): void {
-  const drop = (): void => {
-    const directory = join(stateDir({}), 'clikcode-leases');
-    try {
-      for (const name of readdirSync(directory)) if (name.startsWith(`${process.pid}-`)) rmSync(join(directory, name), { force: true });
-    } catch { /* No leases. */ }
-  };
-  process.once('exit', drop);
+  process.once('exit', () => removeOwnLeasesSync(leasesDir({})));
 }

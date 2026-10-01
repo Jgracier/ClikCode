@@ -26,7 +26,7 @@ import { probeHardware, type HardwareProfile } from './hardware.js';
 import { learnGpuReach, withKnownReach } from './gpu-reach.js';
 import { buildServerArgs, freePort, httpJson, threadPlan, usesMmap, waitForHealth } from './launch.js';
 import {
-  heldByLiveProcess, memoryStopFile, processAlive, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
+  heldByLiveProcess, memoryStopFile, readServerRecord, removeAllOwnLeasesSync, removeLeases, serverDir, sessionHeldElsewhere, startSupervisor, stopServer,
   sweepOrphan, withStartLock, writeLease, type MemoryEvent, type ServerRecord, type ShrinkStep,
 } from './lifecycle.js';
 import { footprintKey, latestMeasurement, machineKey, measureServer, readFootprints, readMeasurements, writeMeasurement } from './measure.js';
@@ -34,6 +34,7 @@ import { ensureModelFile, missingBytes } from './models.js';
 import { footprintsFile, preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
 import { prefixCacheDir } from './prefix-cache.js';
+import { pidIsAlive } from '../session/store/locks.js';
 
 export { LOCAL_MODEL_CATALOG, localModelLabel, resolveLocalModelId } from './catalog.js';
 export { prefixCacheFor } from './prefix-cache.js';
@@ -128,8 +129,8 @@ async function viewMachine(probed?: HardwareProfile): Promise<MachineView> {
  * which a caller waits for rather than starting a second one beside it. */
 async function liveServer(modelId: string): Promise<ServerRecord | undefined> {
   const record = await readServerRecord(modelId);
-  if (!record || !processAlive(record.supervisorPid)) return undefined;
-  if (!record.restarting && !processAlive(record.serverPid)) return undefined;
+  if (!record || !pidIsAlive(record.supervisorPid)) return undefined;
+  if (!record.restarting && !pidIsAlive(record.serverPid)) return undefined;
   return record;
 }
 
@@ -230,7 +231,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     // -- the fit would count the memory its own restart is about to take.
     const restarting = joinable;
     const label = catalogModel(restarting.modelId)?.label ?? restarting.modelId;
-    healthy = await waitForHealth(restarting.port, () => processAlive(restarting.supervisorPid),
+    healthy = await waitForHealth(restarting.port, () => pidIsAlive(restarting.supervisorPid),
       (seconds) => progress({ stage: 'start', message: `${label} is restarting smaller to leave memory for other programs… ${seconds}s` }))
       .then(() => true, () => false);
     joinable = await liveServer(restarting.modelId);
@@ -254,7 +255,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     const leaving = joinable;
     const label = catalogModel(leaving.modelId)?.label ?? leaving.modelId;
     const deadline = Date.now() + 60_000;
-    while (processAlive(leaving.supervisorPid) && Date.now() < deadline) {
+    while (pidIsAlive(leaving.supervisorPid) && Date.now() < deadline) {
       progress({ stage: 'start', message: `waiting for the previous ${label} to finish stopping…` });
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
@@ -346,7 +347,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
           },
         } : {}),
       });
-      await waitForHealth(port, () => processAlive(started.supervisorPid),
+      await waitForHealth(port, () => pidIsAlive(started.supervisorPid),
         (seconds) => progress({ stage: 'start', message: `loading ${model.label}… ${seconds}s` }));
       return started;
     } catch (error) {
@@ -358,7 +359,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
   });
   await removeLeases(options.sessionId, model.id);
   // One started by another process may still be loading.
-  await waitForHealth(record.port, () => processAlive(record.supervisorPid),
+  await waitForHealth(record.port, () => pidIsAlive(record.supervisorPid),
     (seconds) => progress({ stage: 'start', message: `loading ${model.label}… ${seconds}s` }));
 
   let measured = view.measurements[model.id];
