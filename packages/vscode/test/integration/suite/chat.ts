@@ -117,6 +117,7 @@ export function chatSuite(): void {
       await type(api, '#composer-input', 'Count slowly from 1 to 400, one number per line.');
       await click(api, '#send-button');
       await until(api, (state) => state.running, 'the turn to start', 120_000);
+      await screenshot('live', 2500);
       await key(api, '#composer-input', 'Escape');
       const before = { harness: api.state.harness, model: api.state.model };
       const stopped = await until(api, (state) => !state.running, 'the turn to stop', 120_000);

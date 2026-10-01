@@ -220,7 +220,6 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .thought-toggle:hover { color: var(--vscode-foreground); }
 .thought-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .stalled { display: inline-flex; gap: 4px; align-items: center; color: var(--warn); }
-.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-textLink-foreground); animation: pulse 1.4s ease-in-out infinite; flex: none; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .plan-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; background: var(--subtle); }
@@ -294,7 +293,6 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 }
 @container (max-width: 400px) {
   #effort-button .chip-text, #mode-button .chip-text { display: none; }
-  .chip-sub { display: none; }
 }
 @container (max-width: 330px) {
   .composer-footer #provider-button > .codicon, .composer-footer #model-button > .codicon { display: none; }
@@ -318,7 +316,6 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .chip-button:focus-visible { outline-offset: -1px; }
 .chip-button .codicon-chevron-down { font-size: 11px; opacity: 0.7; }
 .chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.chip-sub { color: var(--muted); }
 #provider-button, #model-button { color: var(--vscode-foreground); flex: 0 1 auto; }
 /* Provider and model share what room there is; neither drops below a readable stub. */
 #model-button { flex: 0 1 auto; }
@@ -403,14 +400,14 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .keylist-heading { padding: 8px 8px 3px; font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .keylist-row { border-radius: var(--radius-small); cursor: pointer; }
 .keylist-row.active { background: var(--vscode-quickInputList-focusBackground, var(--vscode-list-activeSelectionBackground)); color: var(--vscode-quickInputList-focusForeground, var(--vscode-list-activeSelectionForeground)); }
-.keylist-row.active .row-detail, .keylist-row.active .muted, .keylist-row.active .conversation-meta, .keylist-row.active .history-menu { width: min(460px, calc(100vw - 2 * var(--gap))); }
+.keylist-row.active .row-detail, .keylist-row.active .muted, .keylist-row.active .conversation-meta { color: inherit; opacity: 0.8; }
+.history-menu { width: min(460px, calc(100vw - 2 * var(--gap))); }
 .history-menu .conversation { align-items: center; gap: 8px; padding: 5px 8px; }
 .history-menu .conversation-dot { margin-top: 0; }
 .history-menu .conversation-meta { flex: none; max-width: 45%; }
 .history-menu .conversation .row-actions { top: 50%; transform: translateY(-50%); }
 .history-menu .keylist-row:hover .conversation-meta, .history-menu .keylist-row.active .conversation-meta { visibility: hidden; }
 .history-menu .conversation > .codicon { flex: none; width: 7px; font-size: 12px; display: flex; justify-content: center; }
-.conversation-preview { color: inherit; opacity: 0.8; }
 .keylist-row.disabled { opacity: 0.55; cursor: default; }
 .keylist-empty { padding: 12px; color: var(--muted); text-align: center; }
 .row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; min-height: 28px; }
@@ -465,11 +462,9 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .screen-title { flex: 1; min-width: 0; font-size: 1em; margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .screen:focus { outline: none; }
 .screen-tools { display: flex; gap: 2px; }
-.screen-search { margin: 8px var(--gap); }
-.screen:not(:has(.screen-search)) .screen-body { padding-top: var(--gap); }
+.screen-body { padding-top: var(--gap); }
 .screen-body { flex: 1; overflow-y: auto; padding: 0 var(--gap) 12px; display: flex; flex-direction: column; gap: 10px; }
 .screen-body > .keylist { padding: 0; flex: none; overflow: visible; }
-.screen-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; font-size: 0.9em; padding-top: 6px; border-top: 1px solid var(--border); }
 .conversation { display: flex; gap: 10px; padding: 8px; align-items: flex-start; }
 .conversation-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; flex: none; background: transparent; }
 .conversation-dot.working { background: var(--vscode-textLink-foreground); border-color: transparent; animation: pulse 1.4s ease-in-out infinite; }
@@ -477,7 +472,6 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .conversation-main { flex: 1; min-width: 0; }
 .conversation-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-meta { color: var(--muted); font-size: 0.88em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conversation-preview { color: var(--muted); font-size: 0.9em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; margin-top: 1px; }
 .rename { width: 100%; font: inherit; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--focus); background: var(--input); color: var(--vscode-input-foreground); }
 .group-head { display: flex; align-items: center; gap: 4px; font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 6px 2px 4px; }
 .group-head .link { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
@@ -515,3 +509,17 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 /* A narrow side bar keeps the three answers on one row; the keys still work. */
 .approval { container-type: inline-size; }
 @container (max-width: 300px) { .approval-actions kbd { display: none; } }
+
+/* The terminal's spinner and its tool colours, in the theme's own palette. */
+.spinner { display: inline-block; width: 2ch; font-family: var(--vscode-editor-font-family); line-height: 1; color: var(--muted); }
+.tone-cyan { color: var(--vscode-charts-blue, #3794ff); }
+.tone-yellow { color: var(--vscode-charts-yellow, #cca700); }
+.tone-blue { color: var(--vscode-symbolIcon-fileForeground, var(--vscode-charts-blue, #3794ff)); }
+.tone-magenta { color: var(--vscode-charts-purple, #b180d7); }
+.tone-green { color: var(--vscode-charts-green, #89d185); }
+.activity.done .activity-status:not(.tone-cyan):not(.tone-yellow):not(.tone-blue):not(.tone-magenta):not(.tone-green) { color: var(--muted); }
+.working .spinner { width: 2.2ch; }
+.plan-entry .spinner { width: 14px; margin-top: 1px; }
+.steer { display: flex; gap: 6px; align-items: baseline; margin: 4px 0; font-size: 0.93em; }
+.steer > span:first-of-type { white-space: pre-wrap; }
+.steer .muted { font-size: 0.9em; }

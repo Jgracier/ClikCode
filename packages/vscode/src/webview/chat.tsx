@@ -3,13 +3,18 @@
 import type { JSX } from 'preact';
 import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, outputPreview } from '../../../../src/harness/protocol/activity-view';
-import { approvalKeyAction } from '../../../../src/tui/render/approval-keys';
+import {
+  ACTIVITY_PREVIEW_LINES, activityOutcome, diffPreview, diffTotals, DIFF_PREVIEW_LINES, formatElapsed, LIVE_OUTPUT_LINES, liveWaitKind,
+  outputPreview, previewLinesFor, SPIN_MS, STALL_MS, waitingSpinnerGlyph,
+} from '../../../../src/harness/protocol/activity-view';
+import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
+import type { ToolCategory } from '../../../../src/harness/prompter';
+import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
-import type { Activity, Approval, ChatModel, LiveTurn as Live, Note, TurnTrace } from '../model';
+import type { Activity, Approval, ChatModel, LiveTurn, Note, TurnTrace } from '../model';
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
-import { duration, pathIn, titleCase } from './format';
+import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon } from './ui';
 import { splitEditorContext } from '../editor-context';
@@ -82,19 +87,33 @@ const UserMessage = memo(({ text: content }: { text: string }): JSX.Element => {
   );
 });
 
-const CATEGORY_ICON: Record<string, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
+const CATEGORY_ICON: Record<ToolCategory, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
 
+/** A call's icon and colour come from what it is (its category, or being a
+ * sub-agent), the same facts the terminal's glyph and colour come from. */
 function activityIcon(activity: Activity): string {
-  if (activity.kind === 'thinking') return 'lightbulb';
-  if (activity.category && CATEGORY_ICON[activity.category]) return CATEGORY_ICON[activity.category]!;
-  const verb = activity.label.split(/\s/)[0]?.toLowerCase() ?? '';
-  if (/^(read|view|open|cat|list|ls)/.test(verb)) return 'file';
-  if (/^(edit|write|update|create|patch|apply|delete)/.test(verb)) return 'edit';
-  if (/^(run|bash|shell|exec|command|\$)/.test(verb)) return 'terminal';
-  if (/^(search|grep|find|glob)/.test(verb)) return 'search';
-  if (/^(fetch|web|http|browse)/.test(verb)) return 'globe';
-  if (/^(task|agent|subagent)/.test(verb)) return 'hubot';
-  return 'tools';
+  if (activity.agent || liveWaitKind({ ...activity, kind: 'tool-start' }) === 'agent') return 'hubot';
+  return activity.category ? CATEGORY_ICON[activity.category] : 'tools';
+}
+
+function toneOf(activity: Activity): string {
+  if (activity.agent) return 'tone-cyan';
+  return activity.category ? `tone-${TOOL_CATEGORY[activity.category].colour}` : '';
+}
+
+/** The terminal's spinner, the same braille frames at the same rate: a
+ * command's in yellow, a sub-agent's in cyan, the turn's own still and
+ * yellow when nothing is arriving. Still under reduced motion. */
+const REDUCED_MOTION = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+export function Spinner({ tone = '', still = false }: { tone?: string; still?: boolean }): JSX.Element {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (still || REDUCED_MOTION) return undefined;
+    const timer = setInterval(() => setFrame((value) => value + 1), SPIN_MS);
+    return () => clearInterval(timer);
+  }, [still]);
+  return <span class={`spinner ${tone}`} aria-hidden="true">{waitingSpinnerGlyph(frame)}</span>;
 }
 
 /** A tool label with the path in it made a link to the file. */
@@ -113,18 +132,6 @@ function ActivityLabel({ label, workspace }: { label: string; workspace?: string
       {after}
     </span>
   );
-}
-
-/** What the terminal shows after a finished call: its non-zero exit and a run of a second or more -- the exceptions, since
- * every call exits 0 in under a second. */
-function activityOutcome(activity: Activity): { text: string; failed: boolean } | undefined {
-  if (activity.kind === 'tool-start' || activity.kind === 'thinking') return undefined;
-  const failed = activity.exitCode !== undefined && activity.exitCode !== 0;
-  const parts = [
-    ...(failed ? [`exit ${activity.exitCode}`] : []),
-    ...(activity.durationMs !== undefined && activity.durationMs >= 1000 ? [duration(activity.durationMs)] : []),
-  ];
-  return parts.length ? { text: parts.join(' · '), failed } : undefined;
 }
 
 /** An edit as the terminal shows it: per file (named when there are
@@ -182,7 +189,7 @@ const rowId = (activity: Activity): string => `${activity.key}@${activity.starte
  * the turn is not redrawn every second. */
 function Clock({ since }: { since: number }): JSX.Element | null {
   const now = useNow();
-  return now - since >= 1000 ? <span class="activity-outcome">{duration(now - since)}</span> : null;
+  return now - since >= 1000 ? <span class="activity-outcome">{formatElapsed(now - since)}</span> : null;
 }
 
 function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; workspace?: string; userIndex?: number }): JSX.Element {
@@ -190,10 +197,15 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   const [open, setOpenState] = useState(openRows.has(id));
   const setOpen = (value: boolean): void => { if (value) openRows.add(id); else openRows.delete(id); setOpenState(value); };
   const status = activity.kind === 'tool-start' ? 'running' : activity.kind === 'tool-error' ? 'error' : 'done';
-  // An edit shows its change (the edit IS the lines); anything else folds
-  // its output away until asked, as Claude Code's rows do.
-  const hasMore = Boolean(activity.output?.length || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines));
+  // What the terminal shows under a settled call: an edit's change, a
+  // command's or search's last lines, a fetch's first -- a read's row says
+  // all of it. The rest is one click away.
+  const budget = previewLinesFor(activity.category);
+  const preview = activity.output?.length && budget > 0 ? outputPreview(activity, budget) : undefined;
+  const hasMore = Boolean((activity.output?.length && (!preview || preview.hidden > 0))
+    || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines));
   const outcome = activityOutcome(activity);
+  const kind = status === 'running' ? liveWaitKind(activity) : undefined;
   const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
   const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
     event.stopPropagation();
@@ -202,13 +214,14 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   return (
     <div class={`activity ${status}`}>
       <div class="activity-line">
-        <span class="activity-status" aria-label={status}>
-          {status === 'running' ? <Icon name="loading" spin /> : status === 'error' ? <Icon name="error" /> : <Icon name={activityIcon(activity)} />}
+        <span class={`activity-status ${toneOf(activity)}`} aria-label={status}>
+          {status === 'running' ? <Spinner tone={kind === 'command' ? 'tone-yellow' : kind === 'agent' ? 'tone-cyan' : ''} />
+            : status === 'error' ? <Icon name="error" /> : <Icon name={activityIcon(activity)} />}
         </span>
         <ActivityLabel label={activity.label} workspace={workspace} />
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
-        {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{outcome.text}</span> : null}
+        {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{outcome.parts.join(' · ')}</span> : null}
         {activity.diff?.length && status !== 'running' ? (
           <span class="activity-actions">
             <button type="button" class="icon-button tiny" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={change('view')}><Icon name="diff" /></button>
@@ -226,6 +239,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
           long build is visibly working instead of a bare timer. */}
       {status === 'running' && !open && activity.output?.length ? <OutputView activity={{ ...activity, outputTail: true }} budget={LIVE_OUTPUT_LINES} /> : null}
       {activity.diff?.length ? <DiffView files={activity.diff} budget={open ? undefined : status === 'running' ? 0 : DIFF_PREVIEW_LINES} /> : null}
+      {status !== 'running' && !open && preview ? <OutputView activity={activity} budget={budget} /> : null}
       {open && activity.output?.length ? <OutputView activity={activity} budget={Number.MAX_SAFE_INTEGER} /> : null}
     </div>
   );
@@ -234,18 +248,18 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
 /** A finished turn's steps, folded to one line above its answer. */
 const TraceRow = memo(({ trace, workspace }: { trace: TurnTrace; workspace?: string }): JSX.Element => {
   const [open, setOpen] = useState(false);
-  const tools = trace.activities.filter((activity) => activity.kind !== 'thinking');
+  const tools = trace.activities;
   const failed = tools.filter((activity) => activity.kind === 'tool-error').length;
   const totals = diffTotals(tools.flatMap((activity) => activity.diff ?? []));
   const planDone = trace.plan?.filter((entry) => entry.status === 'completed').length ?? 0;
   const label = tools.length ? `${tools.length} step${tools.length === 1 ? '' : 's'}`
-    : trace.plan ? `Plan · ${planDone}/${trace.plan.length} done` : `Thought for ${duration(trace.endedAt - trace.startedAt)}`;
+    : trace.plan ? `Plan · ${planDone}/${trace.plan.length} done` : `Thought for ${formatElapsed(trace.endedAt - trace.startedAt)}`;
   return (
     <div class="trace">
       <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
         <span>{label}</span>
-        <span class="muted">{tools.length ? ` · ${duration(trace.endedAt - trace.startedAt)}` : ''}{tools.length && trace.plan ? ` · plan ${planDone}/${trace.plan.length}` : ''}{failed ? ` · ${failed} failed` : ''}</span>
+        <span class="muted">{tools.length ? ` · ${formatElapsed(trace.endedAt - trace.startedAt)}` : ''}{tools.length && trace.plan ? ` · plan ${planDone}/${trace.plan.length}` : ''}{failed ? ` · ${failed} failed` : ''}</span>
         {totals.additions || totals.removals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
       </button>
       {open ? (
@@ -282,7 +296,7 @@ const NoteView = memo(({ note }: { note: Note }): JSX.Element => {
 
 /** The plan, windowed around the step in progress as the terminal shows it;
  * the rest one click away. */
-function Plan({ plan, expanded = false }: { plan: ChatModel['plan']; expanded?: boolean }): JSX.Element {
+function Plan({ plan, expanded = false, running = false }: { plan: ChatModel['plan']; expanded?: boolean; running?: boolean }): JSX.Element {
   const [all, setAll] = useState(expanded);
   const { visible, done, hidden } = planWindow(plan);
   const rows = all ? plan.map((entry, index) => ({ entry, index })) : visible;
@@ -291,11 +305,13 @@ function Plan({ plan, expanded = false }: { plan: ChatModel['plan']; expanded?: 
       <div class="plan-head"><Icon name="checklist" /><span>Plan</span><span class="muted">{done}/{plan.length}</span></div>
       {rows.map(({ entry, index }) => (
         <div key={index} class={`plan-entry ${entry.status ?? ''}`}>
-          <Icon name={entry.status === 'completed' ? 'pass-filled' : entry.status === 'cancelled' ? 'circle-slash' : entry.status === 'in_progress' ? 'circle-large-filled' : 'circle-large'} />
+          {/* The step in progress moves with the turn, as the terminal's does. */}
+          {entry.status === 'in_progress' && running ? <Spinner tone="tone-cyan" />
+            : <Icon name={entry.status === 'completed' ? 'pass-filled' : entry.status === 'cancelled' ? 'circle-slash' : entry.status === 'in_progress' ? 'circle-large-filled' : 'circle-large'} />}
           <span>{entry.content}</span>
         </div>
       ))}
-      {hidden && !all ? <button type="button" class="more-steps" onClick={() => setAll(true)}><Icon name="ellipsis" /> {hidden} more step{hidden === 1 ? '' : 's'}</button> : null}
+      {hidden && !all ? <button type="button" class="more-steps" onClick={() => setAll(true)}><Icon name="ellipsis" /> {done}/{plan.length} done · {hidden} more</button> : null}
       {all && hidden ? <button type="button" class="more-steps" onClick={() => setAll(false)}><Icon name="fold-up" /> Show fewer</button> : null}
     </div>
   );
@@ -311,60 +327,90 @@ function useNow(): number {
   return now;
 }
 
+/** Rows of one run of calls shown before the earlier ones fold away. */
 const VISIBLE_ACTIVITIES = 6;
-/** Lines of a proposed change an approval shows, as in the terminal. */
-const APPROVAL_DIFF_LINES = 8;
-/** Silence this long reads as a stall, not as work. */
-const STALL_MS = 30_000;
 
-/** The working line: what the turn is doing, how long it has run, and a
- * stall named as one. Ticks on its own, once a second. */
-function Working({ live, elsewhere }: { live: Live | undefined; elsewhere: boolean }): JSX.Element {
+/** The working line, as the terminal's: what the turn is doing (the open
+ * call's verb, else the turn's phase), how long it has run, and a stall named
+ * as one -- never while a call runs or an approval waits, when silence is
+ * expected. Ticks on its own. */
+function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; elsewhere: boolean; asking: boolean }): JSX.Element {
   const now = useNow();
-  const label = live?.phase ?? live?.waitingLabel ?? 'starting';
-  const quiet = live ? now - (live.lastEventAt ?? live.startedAt) : 0;
-  const toolRunning = live?.activities.some((activity) => activity.kind === 'tool-start');
+  const label = asking ? 'waiting for approval' : live?.toolPhase ?? live?.phase ?? live?.waitingLabel ?? 'starting';
+  const quiet = live && !asking && !live.openTools.length ? now - (live.lastEventAt ?? live.startedAt) : 0;
+  const stalled = quiet >= STALL_MS;
   return (
     <div class="working" role="status">
-      <span class="pulse" aria-hidden="true" />
+      <Spinner tone={stalled ? 'tone-yellow' : 'tone-cyan'} still={stalled || asking} />
       <span class="working-label">{titleCase(label.replace(/(…|\.\.\.)$/, ''))}…</span>
-      <span class="muted">{live ? duration(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
-      {quiet >= STALL_MS ? <span class="stalled" title="Nothing has arrived from the agent for a while"><Icon name="warning" /> {toolRunning ? 'no output' : 'no response'} for {duration(quiet)}</span> : null}
-      <span class="muted working-hint">Esc to stop</span>
+      <span class="muted">{live ? formatElapsed(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
+      {stalled ? <span class="stalled" title="Nothing has arrived from the agent for a while">nothing received for {formatElapsed(quiet)}</span> : null}
+      {asking ? null : <span class="muted working-hint">Esc to stop</span>}
     </div>
   );
 }
 
-/** The thought being had, on one line as in the terminal; open, the whole
- * of this turn's reasoning so far. */
-function LiveThought({ live }: { live: Live }): JSX.Element | null {
+/** The thought being had, its newest words on one line as in the terminal;
+ * open, the whole of this turn's reasoning so far. */
+function LiveThought({ live }: { live: LiveTurn }): JSX.Element | null {
   const [open, setOpen] = useState(false);
   if (!live.thought) return null;
+  const text = live.thought.text;
   return (
     <div class={`thought${open ? ' open' : ''}`}>
       <button type="button" class="thought-toggle" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} onClick={() => setOpen(!open)}>
-        <Icon name="lightbulb" /><span class="thought-text">{live.thought.text}</span>
+        <Icon name="lightbulb" /><span class="thought-text">{text.length > 200 ? `…${text.slice(-200)}` : text}</span>
       </button>
-      {open ? <Reasoning thoughts={[...live.reasoning, live.thought.text]} /> : null}
+      {open ? <Reasoning thoughts={[...live.reasoning, text]} /> : null}
     </div>
   );
 }
 
-const LiveTurn = memo(({ live, workspace, elsewhere }: { live: Live | undefined; workspace?: string; elsewhere: boolean }): JSX.Element => {
+/** A run of calls between two paragraphs, its earlier rows folded once long. */
+function ActivityRun({ activities, workspace }: { activities: Activity[]; workspace?: string }): JSX.Element {
   const [showAll, setShowAll] = useState(false);
-  const activities = live?.activities ?? [];
   const hidden = showAll ? 0 : Math.max(0, activities.length - VISIBLE_ACTIVITIES);
   return (
+    <div class="activities">
+      {hidden ? <button type="button" class="more-steps" onClick={() => setShowAll(true)}><Icon name="ellipsis" /> {hidden} earlier step{hidden === 1 ? '' : 's'}</button> : null}
+      {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} />)}
+    </div>
+  );
+}
+
+/** The running turn as the terminal lays it out: each call (and each message
+ * sent into the turn) where it happened in the answer, the paragraphs around
+ * it, the newest still streaming; then the thought and the working line. */
+const LiveTurnView = memo(({ live, workspace, elsewhere, asking }: { live: LiveTurn | undefined; workspace?: string; elsewhere: boolean; asking: boolean }): JSX.Element => {
+  const text = live?.text ?? '';
+  type Mark = { offset: number; activity?: Activity; steer?: string };
+  const marks: Mark[] = [
+    ...(live?.activities ?? []).map((activity) => ({ offset: Math.min(activity.offset ?? 0, text.length), activity })),
+    ...(live?.steers ?? []).map((steer) => ({ offset: Math.min(steer.offset, text.length), steer: steer.text })),
+  ].sort((left, right) => left.offset - right.offset);
+  const parts: JSX.Element[] = [];
+  let at = 0;
+  let run: Activity[] = [];
+  const flushRun = (): void => {
+    if (run.length) parts.push(<ActivityRun key={`r${run[0]!.key}`} activities={run} workspace={workspace} />);
+    run = [];
+  };
+  for (const mark of marks) {
+    if (mark.offset > at && text.slice(at, mark.offset).trim()) {
+      flushRun();
+      parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(text.slice(at, mark.offset)) }} />);
+      at = mark.offset;
+    }
+    if (mark.activity) run.push(mark.activity);
+    else { flushRun(); parts.push(<div key={`s${mark.offset}-${mark.steer}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>); }
+  }
+  flushRun();
+  return (
     <div class="message assistant live" aria-busy="true">
-      {activities.length ? (
-        <div class="activities">
-          {hidden ? <button type="button" class="more-steps" onClick={() => setShowAll(true)}><Icon name="ellipsis" /> {hidden} earlier step{hidden === 1 ? '' : 's'}</button> : null}
-          {activities.slice(hidden).map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} />)}
-        </div>
-      ) : null}
-      {live?.text ? <LiveMarkdown key={live.startedAt} text={live.text} /> : null}
-      {live ? <LiveThought live={live} /> : null}
-      <Working live={live} elsewhere={elsewhere} />
+      {parts}
+      {text.slice(at) ? <LiveMarkdown key={`${live?.startedAt}-${at}`} text={text.slice(at)} /> : null}
+      {live && !asking ? <LiveThought live={live} /> : null}
+      <Working live={live} elsewhere={elsewhere} asking={asking} />
     </div>
   );
 });
@@ -402,7 +448,6 @@ const History = memo(({ sessionId, messages, traces, notes, workspace }: Pick<Ch
     }
     notesAt(index + 1);
   });
-  notes.forEach((note, position) => { if (note.after > messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
   return <>{parts}</>;
 });
 
@@ -411,12 +456,16 @@ export function Transcript({ model }: { model: ChatModel }): JSX.Element {
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
   // A plan is on screen while it has open steps; finished, it goes, and is
   // kept with its turn (planStillNeeded, as the terminal decides).
-  if (planStillNeeded(model.plan)) parts.push(<Plan key="plan" plan={model.plan} />);
-  if (model.running) parts.push(<LiveTurn key="live" live={model.live} workspace={model.workspace} elsewhere={!model.ownTurn} />);
+  if (planStillNeeded(model.plan)) parts.push(<Plan key="plan" plan={model.plan} running={model.running} />);
+  if (model.running) parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} elsewhere={!model.ownTurn} asking={model.approvals.length > 0} />);
+  // Notes from the running turn (an account switch, "Stopped") follow it.
+  model.notes.forEach((note, position) => { if (note.after > model.messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
   const queuedTexts = new Set(model.queued.map((item) => item.text));
+  const steered = new Set(model.live?.steers.map((steer) => steer.text));
   for (const submission of model.submissions) {
-    // A queued message is drawn once, from the stored queue under the composer.
-    if (submission.disposition === 'queued' || (!submission.disposition && queuedTexts.has(submission.text))) continue;
+    // A queued message is drawn once, from the stored queue under the
+    // composer; one the turn took is drawn in the turn, where it landed.
+    if (submission.disposition === 'queued' || (!submission.disposition && queuedTexts.has(submission.text)) || steered.has(submission.text)) continue;
     const said = submission.disposition === 'steered' ? 'Sent into this turn' : submission.disposition === 'queued' ? 'Queued for the next turn' : submission.disposition === 'error' ? 'Not sent' : 'Sending…';
     parts.push(<div key={`s${submission.id}`} class="submission"><Icon name="arrow-small-right" /><span class="muted">{said}:</span> <span>{submission.text}</span></div>);
   }
@@ -442,7 +491,7 @@ function relative(text: string, workspace: string | undefined): string {
 export function ApprovalCard({ approval, workspace, waiting, onAnswer }: { approval: Approval; workspace?: string; waiting: number; onAnswer: (value: boolean | 'always') => void }): JSX.Element {
   const shownAt = useRef(Date.now());
   const [guarded, setGuarded] = useState(true);
-  useEffect(() => { const timer = setTimeout(() => setGuarded(false), 400); return () => clearTimeout(timer); }, []);
+  useEffect(() => { const timer = setTimeout(() => setGuarded(false), APPROVAL_GUARD_MS); return () => clearTimeout(timer); }, []);
   const onKey = (event: KeyboardEvent): void => {
     if ((event.target as HTMLElement).tagName === 'TEXTAREA' || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key === 'Escape' ? '\u001b' : event.key === 'Enter' ? '\r' : event.key === 'Tab' ? '\t' : event.key;
@@ -452,7 +501,7 @@ export function ApprovalCard({ approval, workspace, waiting, onAnswer }: { appro
     event.stopPropagation();
     onAnswer(action === 'allow' ? true : action === 'always' ? 'always' : false);
   };
-  const answer = (value: boolean | 'always') => (): void => { if (Date.now() - shownAt.current >= 400) onAnswer(value); };
+  const answer = (value: boolean | 'always') => (): void => { if (Date.now() - shownAt.current >= APPROVAL_GUARD_MS) onAnswer(value); };
   return (
     <div class={`approval${guarded ? ' guarded' : ''}`} role="alertdialog" aria-label={`Approval: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
       <div class="approval-head">
@@ -461,7 +510,7 @@ export function ApprovalCard({ approval, workspace, waiting, onAnswer }: { appro
         {approval.diff?.length ? <button type="button" class="icon-button tiny approval-diff" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={() => post({ type: 'viewDiff', id: approval.id })}><Icon name="diff" /></button> : null}
       </div>
       {/* The change speaks for an edit; a command's words are its detail. */}
-      {approval.diff?.length ? <DiffView files={approval.diff} budget={APPROVAL_DIFF_LINES} />
+      {approval.diff?.length ? <DiffView files={approval.diff} budget={ACTIVITY_PREVIEW_LINES} />
         : approval.detail ? <pre class="approval-detail">{relative(approval.detail, workspace)}</pre> : null}
       <div class="approval-actions">
         <button type="button" class="primary" data-approve="yes" onClick={answer(true)}>Allow <kbd>y</kbd></button>
