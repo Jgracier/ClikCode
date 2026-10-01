@@ -40,10 +40,12 @@ export type IdeUiRequest =
   | { kind: 'input'; prompt: string };
 
 /** `index` is into the items last sent for this request (an update replaces
- * them); `action` is one of that row's action values, or its deleteAction's. */
+ * them); `action` is one of that row's action values, or its deleteAction's;
+ * `value`, for an inline row, the choice to set (absent: the next one, as
+ * the terminal's →). */
 export type IdeUiResult =
   | { cancelled: true; back?: boolean }
-  | { index: number; action?: string }
+  | { index: number; action?: string; value?: string }
   | { text: string };
 
 export type IdeRequest =

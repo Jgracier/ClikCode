@@ -105,7 +105,8 @@ export class IdePrompter implements HarnessPrompter {
       }
       if (option.inline) {
         const { choices, current: selected } = option.inline;
-        const next = choices[(choices.findIndex((choice) => choice.value === selected) + 1) % choices.length];
+        const next = choices.find((choice) => choice.value === result.value)
+          ?? choices[(choices.findIndex((choice) => choice.value === selected) + 1) % choices.length];
         if (next) await option.inline.apply(next.value);
         current = settings?.refreshedOptions?.()
           ?? current.map((item) => (item === option && next ? { ...item, inline: { ...option.inline!, current: next.value } } : item));

@@ -8,7 +8,6 @@ import { noticeLevel } from '../../src/text';
 import { conversationState } from '../../src/conversation-state';
 import { modelWithEffort } from '../../src/webview/picker';
 import { splitEditorContext } from '../../src/editor-context';
-import { inlineStep } from '../../src/webview/sheet';
 import { pathIn, relativeTime, resetIn } from '../../src/webview/format';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
@@ -81,20 +80,6 @@ describe('mentions', () => {
     expect(mentionScore('math/index.ts', 'math')).toBe(2);
     expect(mentionScore('src/my-app/tsconfig.json', 'mat')).toBe(3);
     expect(mentionScore('src/a.ts', 'zz')).toBeUndefined();
-  });
-});
-
-describe('segmented settings', () => {
-  const pick = (current: string) => ({
-    kind: 'pick' as const, title: 'Settings', canGoBack: false,
-    items: [{ label: 'Effort', inline: { current, choices: ['default', 'low', 'high'].map((value) => ({ label: value, value })) } }],
-  });
-  it('keeps cycling until the chosen value is reached', () => {
-    const target = { title: 'Settings', label: 'Effort', value: 'high', steps: 3 };
-    expect(inlineStep(target, pick('low'))).toEqual({ index: 0 });
-    expect(inlineStep(target, pick('high'))).toBe('done');
-    expect(inlineStep({ ...target, steps: 0 }, pick('low'))).toBe('done');
-    expect(inlineStep(undefined, pick('low'))).toBeUndefined();
   });
 });
 
