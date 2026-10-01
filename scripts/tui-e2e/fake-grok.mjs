@@ -51,6 +51,30 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       await sleep(ms);
       update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: result } }] });
     };
+    // `thought`: reasoning before anything else, a word at a time, then a
+    // pause with nothing arriving -- long enough to read the status line.
+    if (turn.thought) {
+      for (const piece of turn.thought.text.match(/\S+\s*/g) ?? []) {
+        await sleep(40);
+        update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: piece } });
+      }
+      await sleep(turn.thought.ms ?? 1500);
+    }
+    // `explore`: reads and searches in a row, each with what it found.
+    for (const [index, call] of (turn.explore ?? []).entries()) {
+      if (cancelled) break;
+      const toolCallId = `explore_${index}`;
+      update({ sessionUpdate: 'tool_call', toolCallId, title: call.title, kind: call.kind, status: 'in_progress', rawInput: call.input ?? {} });
+      await sleep(call.ms ?? 500);
+      update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: call.result } }] });
+    }
+    // `long_command`: a command whose whole output arrives with its end.
+    if (turn.long_command && !cancelled) {
+      const { lines, ms } = turn.long_command;
+      update({ sessionUpdate: 'tool_call', toolCallId: 'long_1', title: 'npm run build', kind: 'execute', status: 'in_progress', rawInput: { command: 'npm run build' } });
+      await sleep(ms ?? 800);
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 'long_1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: lines.join('\n') } }] });
+    }
     for (let index = 0; index < (turn.tools_first ?? 0) && !cancelled; index += 1) {
       await tool(`lead_${index}`, `npx vitest run part${index}`, `part${index} ok`, Number(process.env.FAKE_TOOL_MS ?? 600));
     }
