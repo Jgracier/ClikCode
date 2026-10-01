@@ -51,7 +51,7 @@ interface AccountFailureSignals {
 // "No API key found for provider …" and "No route-compatible authentication
 // source is configured for openai." are OpenClaw's (2026.9.6); "No access
 // token found for Nous Portal login." is Hermes's.
-const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected|headless mode requires existing settings|no (?:api[ _-]?key|access token) found|no (?:route-compatible )?authentication source is configured)/i;
+const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected|headless mode requires existing settings|no (?:api[ _-]?key|access token) found|no (?:route-compatible )?authentication source is configured|authentication[_ ]?error|incorrect api[ _-]?key|(?:invalid or )?missing api[ _-]?key|api key required|no api key (?:for|found)|no credentials (?:are )?(?:configured|found)|not signed in|no longer authenticated|please authenticate|needs authentication|re-?authenticate|authori[sz]ation (?:with .{0,40})?failed|invalid or expired|has expired\b|\bsign (?:in|up) (?:to|or) |run [`'"]?[\w-]+ login\b|run \/(?:login|auth)\b|no [\w ]{0,30}auth token found|\bPAID_MODEL_AUTH_REQUIRED\b)/i;
 // Both halves of "ran out" matter, because vendors write it either way
 // round. Captured verbatim from real refusals on this machine:
 //   antigravity  'RESOURCE_EXHAUSTED (code 429): Individual quota reached.
@@ -70,8 +70,8 @@ const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|faile
 // Cursor's own error codes (cursor-agent 2026.09.26's ErrorDetails enum):
 // FREE_USER_USAGE_LIMIT / PRO_USER_USAGE_LIMIT / USAGE_PRICING_REQUIRED for a
 // spent plan, *_RATE_LIMIT_EXCEEDED and RATE_LIMITED for throttling.
-const QUOTA_TEXT = /(?:\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|quota (?:exceeded|exhausted|reached)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
-const THROTTLE_TEXT = /(?:rate[ _]limit|\bRATE_LIMITED\b|too many requests|temporar(?:y|ily) throttled)/i;
+const QUOTA_TEXT = /(?:\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|\bPROMOTION_MODEL_LIMIT_REACHED\b|UsageLimitError\b|quota (?:has been |is )?(?:exceeded|exhausted|reached|used up)|quota\b[^.\n]{0,40}\bused up|quota to reset|(?:weekly|monthly|daily) (?:\w+ )?limit (?:has been )?reached|\bacu limit|usage (?:limit )?exceeded|usage (?:is )?(?:paused|frozen)|paused usage|insufficient[_ ](?:\w+ )?(?:balance|funds|credits?)|not enough credits|credits? (?:is |are )?(?:exhausted|depleted)|billing (?:issue|error)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
+const THROTTLE_TEXT = /(?:rate[ _-]?limit|\bRATE_LIMITED\b|too many requests|temporar(?:y|ily) throttled)/i;
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
  * came from: ClikCode sent `--effort` alongside `--model`, and Antigravity
@@ -94,7 +94,7 @@ const THROTTLE_TEXT = /(?:rate[ _]limit|\bRATE_LIMITED\b|too many requests|tempo
  *  the user was told "account failed" -- true but useless, since it names
  *  neither the problem nor the fix. Signing in again cannot help, which is
  *  why this is distinct from authentication-required. */
-const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|no valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual)/i;
+const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|no valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available)/i;
 const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
@@ -223,7 +223,8 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // no status field anywhere, so a turn that plainly ran out of money was
   // classified 'other' and never reached the failover path at all.
   const embeddedStatus = (text: string): number | undefined => {
-    const found = /(?:\bstatus[ :]+|"http_status"\s*:\s*)(\d{3})\b/i.exec(text)?.[1];
+    // "HTTP 402" too: OpenClaw's "request failed (provider billing issue, HTTP 402)".
+    const found = /(?:\bstatus[ :]+|"http_status"\s*:\s*|\bHTTP[ /](?:\d\.\d )?)(\d{3})\b/i.exec(text)?.[1];
     const code = found ? Number(found) : undefined;
     return code !== undefined && code >= 400 && code < 600 ? code : undefined;
   };
