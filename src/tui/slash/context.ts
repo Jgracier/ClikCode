@@ -6,7 +6,8 @@ import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { sessionNativeCommands } from '../../turn/vendor-process.js';
-import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
+import { allLocalHarnesses, harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
+import { compareProviders } from '../../session/options.js';
 import { type SlashExtras, type SlashRouteContext } from './registry.js';
 import { discoverCustomCommands, type CustomCommand } from '../../session/custom-commands.js';
 
@@ -32,7 +33,7 @@ export function slashExtrasFor(session: HarnessSession, harness: AiLocalHarnessD
     native: isClikCodeAgent(session) ? [] : sessionNativeCommands(session.id),
     custom: customCommandsFor(session, harness),
     harnesses: allLocalHarnesses().filter((item) => harnessCanRunTurns(item))
-      .map((item, index) => ({ item, index })).sort((a, b) => harnessTierRank(a.item) - harnessTierRank(b.item) || a.index - b.index)
+      .map((item, index) => ({ item, index })).sort((a, b) => compareProviders({ harness: a.item }, { harness: b.item }) || a.index - b.index)
       .map(({ item }) => ({ command: item.command, displayName: item.displayName })),
   };
 }
