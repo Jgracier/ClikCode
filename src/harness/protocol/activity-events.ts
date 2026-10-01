@@ -185,18 +185,37 @@ function claudeShapedActivity(value: JsonRecord, command: string): NativeActivit
   }
   if (type === 'user') {
     if (!Array.isArray(content)) return [];
-    return content.flatMap((part): NativeActivityEvent[] => {
-      const result = asRecord(part);
-      if (result?.type !== 'tool_result') return [];
+    const results = content.filter((part) => asRecord(part)?.type === 'tool_result');
+    // The record's own `tool_use_result` describes its (one) result: for a
+    // sub-agent, what it spent in all.
+    const totals = results.length === 1 ? subAgentTotals(asRecord(value.tool_use_result ?? value.toolUseResult)) : {};
+    return results.flatMap((part): NativeActivityEvent[] => {
+      const result = asRecord(part)!;
       const output = cappedActivityOutput(blockText(result.content));
       return [{
         kind: result.is_error === true ? 'tool-error' : 'tool-done', label: 'tool',
         ...(typeof result.tool_use_id === 'string' ? { id: result.tool_use_id } : {}),
-        ...output, ...parent,
+        ...output, ...totals, ...parent,
       }];
     });
   }
   return undefined;
+}
+
+/** A Claude Code Task result's totals -- `totalToolUseCount`,
+ * `totalTokens`, `totalDurationMs` -- as the parent row's tool uses, tokens
+ * and run time. The vendor's count replaces the one the display kept by
+ * counting the sub-agent's calls as they came. Nothing for any other result. */
+export function subAgentTotals(result: JsonRecord | undefined): Pick<HarnessActivityEvent, 'childTools' | 'childTokens' | 'durationMs'> {
+  const count = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
+  const tools = count(result?.totalToolUseCount);
+  const tokens = count(result?.totalTokens);
+  const duration = count(result?.totalDurationMs);
+  return {
+    ...(tools !== undefined ? { childTools: tools } : {}),
+    ...(tokens ? { childTokens: tokens } : {}),
+    ...(duration !== undefined && (tools !== undefined || tokens !== undefined) ? { durationMs: duration } : {}),
+  };
 }
 
 /** Goose stream-json: `{type:'message', message:{role, content:[...]}}` where

@@ -106,10 +106,11 @@ export function commandPreviewRows(preview: CommandPreview): string[] {
   return [...preview.head.map(row), ...note, ...preview.tail.map(row)];
 }
 
-/** `(exit 2, 3.4s)` after a finished call (activityOutcome). */
+/** `(exit 2 · 3.4s)`, `(12 tool uses · 30k tokens · 1m 05s)` after a
+ * finished call (activityOutcome). */
 function outcomeSuffix(event: HarnessActivityEvent): string | undefined {
   const outcome = activityOutcome(event);
-  return outcome ? `(${outcome.parts.join(', ')})` : undefined;
+  return outcome ? `(${outcome.parts.join(' · ')})` : undefined;
 }
 
 export function nativeActivityPhaseFromValue(harness: AiLocalHarnessDefinition, parsed: unknown): 'generating response' | undefined {

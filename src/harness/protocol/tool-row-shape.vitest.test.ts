@@ -100,7 +100,7 @@ describe('what a finished row adds', () => {
   const plain = (lines: string[]) => lines[0]!.replace(/\u001b\[[0-9;]*m/g, '');
 
   it('shows a non-zero exit code and a run of a second or more', () => {
-    expect(plain(renderActivityLine({ kind: 'tool-error', label: '$ npm test', category: 'run', exitCode: 2, durationMs: 3400 }))).toContain('failed (exit 2, 3.4s)');
+    expect(plain(renderActivityLine({ kind: 'tool-error', label: '$ npm test', category: 'run', exitCode: 2, durationMs: 3400 }))).toContain('failed (exit 2 · 3.4s)');
     expect(plain(renderActivityLine({ kind: 'tool-done', label: '$ make', category: 'run', exitCode: 0, durationMs: 95_000 }))).toMatch(/\$ make \(1m 35s\)$/);
   });
 
