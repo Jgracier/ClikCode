@@ -55,6 +55,8 @@ export type FromWebview =
   | { type: 'ready' }
   | { type: 'send'; text: string; id: string }
   | { type: 'cancel'; restoreDraft: boolean }
+  /** Take a queued message back before its turn. */
+  | { type: 'unqueue'; id: string }
   | { type: 'approve'; id: string; approved: boolean | 'always' }
   | { type: 'viewDiff'; id: string }
   /** A change a tool call made: shown in the diff editor, or undone.

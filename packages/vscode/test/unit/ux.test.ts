@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { applyEvent, emptyModel, type ChatModel } from '../../src/model';
 import { supportsSecondarySidebar } from '../../src/compat';
 import { mentionScore } from '../../src/text';
-import { composeMessage, tokenAtCaret } from '../../src/webview/composer';
+import { composeMessage, promptHistory, tokenAtCaret } from '../../src/webview/composer';
+import { noticeLevel } from '../../src/text';
 import { inlineStep } from '../../src/webview/sheet';
 import { pathIn, relativeTime, resetIn } from '../../src/webview/format';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
@@ -128,5 +129,21 @@ describe("a file change in an approval's preview", () => {
     expect(after).toContain('export function median(values: number[]): number {');
     expect(after.startsWith('export function mean')).toBe(true);
     expect(applyHunks('something else\n', fileHunks(diff!))).toBeUndefined();
+  });
+});
+
+describe('composer history and notice levels', () => {
+  it('recalls this conversation\'s prompts, oldest first, a repeat once', () => {
+    expect(promptHistory([
+      { role: 'user', content: 'one' }, { role: 'assistant', content: 'a' },
+      { role: 'user', content: 'two' }, { role: 'user', content: 'two' }, { role: 'user', content: '  ' },
+    ])).toEqual(['one', 'two']);
+  });
+
+  it('reads a terminal note\'s level from its colour', () => {
+    expect(noticeLevel('\u001b[33mswitched to work@example.com\u001b[39m')).toBe('warning');
+    expect(noticeLevel('\u001b[1;31mfailed\u001b[0m')).toBe('error');
+    expect(noticeLevel('\u001b[2mbackground task done\u001b[22m')).toBe('info');
+    expect(noticeLevel('plain')).toBe('info');
   });
 });

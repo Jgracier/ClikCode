@@ -461,6 +461,12 @@ export class ClikCodeController implements vscode.Disposable {
       return;
     }
     if (event.type === 'restore-draft') this.post({ type: 'setDraft', text: event.text });
+    // A message typed during the turn that could not be sent comes back to
+    // the composer, as the terminal restores it for editing.
+    if (event.type === 'submission' && event.disposition === 'error') {
+      const lost = this.model.submissions.find((item) => item.id === event.id);
+      if (lost) this.post({ type: 'insert', text: lost.text });
+    }
     if (event.type === 'waiting-stop') for (const id of [...this.shownDiffs]) this.forgetDiff(id);
   }
 
@@ -667,6 +673,9 @@ export class ClikCodeController implements vscode.Disposable {
         return;
       case 'cancel':
         this.cancel(message.restoreDraft);
+        return;
+      case 'unqueue':
+        this.bridge?.send({ type: 'unqueue', id: message.id });
         return;
       case 'approve':
         this.approve(message.id, message.approved);

@@ -139,6 +139,9 @@ export class IdeBridge {
       case 'cancel':
         this.worker?.client.send({ type: 'cancel', restoreDraft: request.restoreDraft });
         return;
+      case 'unqueue':
+        if (this.sessionId) void this.workerFor(this.sessionId).then((client) => client.send({ type: 'unqueue', id: request.id }), (error: unknown) => this.report(error));
+        return;
       case 'approval-response':
         this.worker?.client.send({ type: 'approval-response', id: request.id, approved: request.approved });
         return;

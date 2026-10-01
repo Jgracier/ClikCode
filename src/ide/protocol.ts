@@ -55,6 +55,8 @@ export type IdeRequest =
    * `submission` event. */
   | { type: 'send'; text: string; id?: string }
   | { type: 'cancel'; restoreDraft: boolean }
+  /** Take a queued message back before its turn (see the worker's `unqueue`). */
+  | { type: 'unqueue'; id: string }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
   | { type: 'ui-response'; id: string; result: IdeUiResult }
   | { type: 'sign-in-result'; id: string; error?: string }
