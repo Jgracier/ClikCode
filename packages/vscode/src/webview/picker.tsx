@@ -38,7 +38,6 @@ function providerIcon(provider: IdeProvider): string | undefined {
   return provider.installed ? undefined : 'cloud-download';
 }
 
-/** Whether the provider has a model list to choose from; unknown counts as yes. */
 /** A model row's label. A ClikCode from before model labels sends the id
  * itself (or its `provider:model` spelling); that one gets the shared rule
  * here. A label the bridge already shortened is shown as it came. */
@@ -47,6 +46,7 @@ function rowLabel(item: { id: string; label: string }, ...owners: Array<string |
   return spelledAsId ? modelLabel(item.label, ...owners) : item.label;
 }
 
+/** Whether the provider has a model list to choose from; unknown counts as yes. */
 export function providerChoosesModel(providerId: string | undefined): boolean {
   if (!providerId) return false;
   return providerCache?.find((item) => item.id === providerId)?.choosesModel ?? true;

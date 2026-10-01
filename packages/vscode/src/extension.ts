@@ -1,11 +1,11 @@
 /** ClikCode for VS Code: every coding agent ClikCode runs, in the editor. */
 import * as vscode from 'vscode';
 import { appendFileSync } from 'node:fs';
-import { PANEL_TYPE, supportsSecondarySidebar, VIEW_IDS, WebviewSurface } from './chat-view';
+import { PANEL_TYPE, VIEW_IDS, WebviewSurface } from './chat-view';
 import { ClikCodeController, type ControllerHost } from './controller';
 import { questionWithSelection } from './editor-context';
 import { chatModelLabel, providerDisplayName, type ChatModel } from './model';
-import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND } from './compat';
+import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND, supportsSecondarySidebar } from './compat';
 import { DiffDocuments } from './ui';
 import { registerCustomAcpCommands } from './custom-acp';
 import { mentionFromEditor, mentionFromUri } from './mentions';

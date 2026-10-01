@@ -45,8 +45,8 @@ weekly usage. On ClikDeploy Gateway the same menu shows the credit balance; a cl
 ![Accounts and usage](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/accounts.png)
 
 **Pick up any conversation.** *Conversations* (the clock button) is the same list as the terminal:
-running chats first, then recent ones, with search, rename, fork, archive and delete. Open one here,
-in a new tab, or continue it in the terminal.
+running chats first, then recent ones, with search, rename and delete (fork and archive are `/fork`
+and `/archive`). Open one here, in a new tab, or continue it in the terminal.
 
 ![Conversations](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/history.png)
 

@@ -10,7 +10,6 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import type { ChatModel } from './model';
 import type { FromWebview, ToWebview } from './webview-protocol';
-export { supportsSecondarySidebar } from './compat';
 
 export const VIEW_IDS = { secondary: 'clikcode.chatSecondary', activity: 'clikcode.chat' } as const;
 export const PANEL_TYPE = 'clikcode.chatEditor';

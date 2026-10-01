@@ -15,19 +15,6 @@ export function relativeTime(iso: string | undefined, now = Date.now()): string 
   return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-export function duration(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
-}
-
-/** The last two segments of a path, for a compact label. */
-export function shortPath(path: string): string {
-  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
-  return parts.length <= 2 ? parts.join('/') : `…/${parts.slice(-2).join('/')}`;
-}
-
 export function homeRelative(path: string | undefined): string {
   if (!path) return '';
   return path.replace(/^\/home\/[^/]+|^\/Users\/[^/]+|^[A-Z]:\\Users\\[^\\]+/, '~');

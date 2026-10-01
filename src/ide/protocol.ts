@@ -69,7 +69,6 @@ export type IdeRequest =
   /** A choice made in the editor's own widgets, applied as the terminal's
    * picker would apply it (revision 2). Answered by a `result`. */
   | { type: 'choose'; requestId: string; choice: IdeChoice }
-  | { type: 'refresh' }
   | { type: 'close' };
 
 export interface IdeSlashCommand {
@@ -98,7 +97,6 @@ export interface IdeProvider {
   integration?: string;
   /** A ready account, a credential the vendor keeps on disk, or a Gateway key. */
   signedIn: boolean;
-  accounts: number;
   current: boolean;
   /** Whether it has a model list to choose from. */
   choosesModel: boolean;
@@ -122,8 +120,6 @@ export interface IdeModel {
 export interface IdeModels {
   provider: string;
   models: IdeModel[];
-  /** The model a new chat on it would use when none is chosen. */
-  current?: string;
   /** The terminal offers "Enter a model ID…" here. */
   custom: boolean;
   error?: string;
@@ -135,17 +131,12 @@ export interface IdeConversation {
   provider?: string;
   /** Its label beside `provider`, not the stored id. */
   model?: string;
-  workspace?: string;
   updatedAt: string;
   messages: number;
   /** First words of the last message, for the list. */
   preview?: string;
   activity?: 'working' | 'idle';
   current: boolean;
-  /** Another terminal holds it right now. */
-  elsewhere: boolean;
-  /** Provider hops and forks behind it. */
-  history: number;
 }
 
 export interface IdeUsageWindow { name: string; usedPct: number; resetsAt?: string }
@@ -178,8 +169,6 @@ export interface IdeChatSettings {
   failover?: 'auto' | 'never';
   plan?: boolean;
   fast?: boolean;
-  /** Harness-specific options (the /options list), counted. */
-  options?: { available: number; set: number };
 }
 
 export interface IdeGateway {
@@ -203,7 +192,8 @@ export type IdeChoice =
   | { kind: 'account'; accountId: string }
   | { kind: 'add-account'; provider: string }
   | { kind: 'account-action'; accountId: string; action: 'reauthenticate' | 'disconnect' | 'remove' | 'verified' }
-  | { kind: 'conversation'; sessionId: string; action: 'rename' | 'fork' | 'archive' | 'delete'; name?: string }
+  /** Fork and archive are slash commands (/fork, /archive). */
+  | { kind: 'conversation'; sessionId: string; action: 'rename' | 'delete'; name?: string }
   /** A Stripe checkout page for Gateway credit: `data.url`. */
   | { kind: 'gateway-credit' };
 
@@ -220,7 +210,6 @@ export type IdeEvent =
    * message until the worker's snapshot carries it (absent for synthetic
    * prompts such as /review). */
   | { type: 'turn-start'; sessionId: string; prompt?: string; queuedTurnId?: string }
-  | { type: 'turn-end'; sessionId: string; error?: string }
   /** Work outside a turn the user is waiting on (a picker's lookups, a local
    * model loading); undefined label when it is over. */
   | { type: 'busy'; label?: string }

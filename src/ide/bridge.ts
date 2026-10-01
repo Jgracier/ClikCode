@@ -164,10 +164,6 @@ export class IdeBridge {
       case 'choose':
         void this.choose(request.requestId, request.choice);
         return;
-      case 'refresh':
-        this.worker?.client.send({ type: 'refresh' });
-        void this.emitSession().catch(() => undefined);
-        return;
       case 'close':
         void this.shutdown();
         return;
@@ -581,17 +577,13 @@ export class IdeBridge {
     await this.prepareRoute();
     const client = await this.workerFor(targetId);
     this.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
-    let failure: string | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
         this.turnWaiter = { resolve, reject };
         client.send({ type: 'submit', text: prompt, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
       });
     } catch (error) {
-      failure = messageOf(error);
-      throw error instanceof TurnFailed ? error : new TurnFailed(failure);
-    } finally {
-      this.channel.send({ type: 'turn-end', sessionId: targetId, ...(failure ? { error: failure } : {}) });
+      throw error instanceof TurnFailed ? error : new TurnFailed(messageOf(error));
     }
   }
 
@@ -928,22 +920,18 @@ export class IdeBridge {
           return;
         case 'conversation': {
           const current = choice.sessionId === this.sessionId;
-          if (current && this.workerTurnRunning && (choice.action === 'archive' || choice.action === 'delete')) {
+          if (current && this.workerTurnRunning && choice.action === 'delete') {
             throw new Error('A turn is running in this conversation: stop it first.');
           }
           queued(async () => {
             // Putting away the open chat lands on a fresh one with its setup,
             // as the terminal's list does; made before, while there is a setup.
-            const replacement = current && (choice.action === 'archive' || choice.action === 'delete') ? await newConversation(choice.sessionId) : undefined;
+            const replacement = current && choice.action === 'delete' ? await newConversation(choice.sessionId) : undefined;
             if (choice.action === 'rename') {
               const name = choice.name?.trim();
               if (!name) throw new Error('A name is needed.');
               await aiSessionCommand(choice.sessionId, `/rename ${name}`);
-            } else if (choice.action === 'fork') {
-              const forked = await aiSessionCommand(choice.sessionId, '/fork');
-              if (current && forked !== choice.sessionId) await this.switchTo(forked);
-            } else if (choice.action === 'archive') await aiSessionCommand(choice.sessionId, '/archive');
-            else await aiSessionCommand(choice.sessionId, '/delete confirm');
+            } else await aiSessionCommand(choice.sessionId, '/delete confirm');
             if (replacement) await this.switchTo(replacement);
             else if (this.sessionId) await this.emitSession();
             return { sessionId: this.sessionId };
