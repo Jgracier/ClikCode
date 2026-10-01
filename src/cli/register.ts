@@ -91,16 +91,16 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .allowUnknownOption()
     .action((command: string, binary: string, argv: string[], options: { name?: string; provider?: string }) => acpAdd(command, binary, argv, options));
   acp.command('remove <command>').description('Remove a harness added on this machine').action(acpRemove);
-  // One MCP server, added once, written into every harness that takes one.
-  const mcp = program.command('mcp').description('Share an MCP server with every harness that supports one');
+  // Recorded once. Each harness receives it when that provider is chosen.
+  const mcp = program.command('mcp').description('Record an MCP server for whichever harness you choose');
   mcp.command('add')
     .argument('<name>', 'Name the server is known by')
     .argument('<target>', 'Command to launch, or a URL for a remote server')
     .argument('[args...]', 'Arguments for a launched command')
-    .description('Install an MCP server into every harness that supports MCP')
+    .description('Record an MCP server. It is installed into a harness when you choose that provider, if the name is not already there')
     .action((name: string, target: string, args: string[]) => mcpAdd(name, target, args));
   mcp.command('targets')
-    .description('Show which harnesses would receive it, and how each spells the request')
+    .description('Show how each harness would be given a server, when you choose it')
     .action(mcpTargets);
   const gateway = program.command('gateway').description('Connect ClikDeploy Gateway for remote models');
   gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));

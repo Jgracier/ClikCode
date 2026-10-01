@@ -1,39 +1,24 @@
 /**
- * `clikcode mcp` -- one MCP server, added once, installed everywhere.
+ * `clikcode mcp` -- one MCP server, recorded once.
  *
- * Adding a server by hand means repeating it for every harness that has MCP,
- * and again for every isolated account profile. This does that fan-out and
- * reports what happened per harness, because a partial result is the normal
- * case: one vendor may reject a name another accepted.
+ * The server is written to ClikCode's mcp.json, which ClikCode's own agent
+ * reads. A vendor harness receives it the first time that provider is chosen,
+ * and only when that harness does not already have the name.
  */
 import chalk from 'chalk';
 import { stdout as output } from 'node:process';
-import { readState } from '../session/state/read.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitResult } from '../cli/structured-output.js';
 import {
-  harnessesAcceptingMcp, installMcpServerEverywhere, mcpAddArgv, mcpAddGrammar,
+  harnessesAcceptingMcp, mcpAddArgv, mcpAddGrammar, recordSharedMcpServer,
   type McpServerEntry,
 } from '../harness/mcp-registry.js';
 
 export async function mcpAdd(name: string, target: string, args: readonly string[]): Promise<void> {
   const entry: McpServerEntry = { name, target, ...(args.length ? { args } : {}) };
-  const state = await readState();
-  const results = await installMcpServerEverywhere(entry, state.accounts);
-  const installed = results.filter((result) => result.ok);
-  if (isJsonDefaultMode()) return emitResult({ mcp: 'add', server: entry, results });
-  if (!results.length) {
-    output.write(`\n${chalk.yellow('No installed harness records an "mcp add" command.')}\n\n`);
-    return;
-  }
-  output.write(`\n${chalk.green('✓')} ${chalk.bold(name)} added to ${installed.length} of ${results.length}\n`);
-  for (const result of results) {
-    const where = result.account ? `${result.harness} ${chalk.dim(`(${result.account})`)}` : result.harness;
-    output.write(result.ok
-      ? `  ${chalk.green('✓')} ${where}\n`
-      : `  ${chalk.red('✗')} ${where} ${chalk.dim(result.detail ?? '')}\n`);
-  }
-  output.write('\n');
+  await recordSharedMcpServer(entry);
+  if (isJsonDefaultMode()) return emitResult({ mcp: 'add', server: entry, recorded: 'clikcode' });
+  output.write(`\n${chalk.green('✓')} ${chalk.bold(name)} recorded. A harness gets it the first time you choose that provider, if it is not already there.\n\n`);
 }
 
 /** Which harnesses this would reach, and how each spells the request. Shown

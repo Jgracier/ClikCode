@@ -43,6 +43,8 @@ import { addTurnUsage, stopReasonNotice, type TurnUsage } from '../harness/proto
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
 import { forgetNativeThread } from '../session/native-thread.js';
+import { provisionChosenHarness } from '../harness/provision.js';
+import { stateDirectory } from '../session/store/paths.js';
 
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
@@ -278,6 +280,15 @@ export async function sendVendorTurn(input: {
   } satisfies HarnessTurnObserver;
   let activeTransport: ReturnType<typeof sessionTurnTransport> | undefined;
   for (;;) {
+    // Before this attempt spawns the vendor. A server, skill, or same-format
+    // hook that is already in the harness is left as it is. A new MCP server
+    // is invisible to a process that is already running, so that process is
+    // closed and this attempt starts one that can see it.
+    const provisioned = await provisionChosenHarness({
+      harness, account, workspace: session.workspace, stateDir: stateDirectory(),
+    });
+    if (provisioned.mcpInstalled.length) await closePersistentTransport(session.id);
+    if (provisioned.summary) prompter?.activity(chalk.dim(provisioned.summary));
     const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
     const hasImages = images.length > 0;
     const transport = sessionTurnTransport(harness, session, hasImages, { acpImages: true });
