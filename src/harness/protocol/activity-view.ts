@@ -6,6 +6,7 @@
 import type { FileDiff, DiffLine } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import { visibleSlice } from '../../tui/render/width.js';
+import { compactCount } from '../../tui/render/usage-line.js';
 import { TOOL_CATEGORY } from './tool-category.js';
 import { isAgentToolName } from './tools.js';
 
@@ -65,6 +66,7 @@ export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivity
     ...(next.agent ? {} : prior.agent ? { agent: prior.agent } : {}),
     ...(next.diff ? {} : prior.diff ? { diff: prior.diff } : {}),
     ...(next.childTools !== undefined || prior.childTools === undefined ? {} : { childTools: prior.childTools }),
+    ...(next.childTokens !== undefined || prior.childTokens === undefined ? {} : { childTokens: prior.childTokens }),
     ...(next.durationMs !== undefined || prior.durationMs === undefined ? {} : { durationMs: prior.durationMs }),
     ...(next.exitCode !== undefined || prior.exitCode === undefined ? {} : { exitCode: prior.exitCode }),
     // Likewise its output: a completion that carries none (most do not)
@@ -373,11 +375,13 @@ export function formatDuration(ms: number): string {
 
 /** What follows a finished call: a non-zero exit and a run of a second or
  * more -- the exceptions, since every call exits 0 in under a second. */
-export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'exitCode' | 'durationMs' | 'childTools'>): { parts: string[]; failed: boolean } | undefined {
+export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'exitCode' | 'durationMs' | 'childTools' | 'childTokens'>): { parts: string[]; failed: boolean } | undefined {
   if (event.kind !== 'tool-done' && event.kind !== 'tool-error') return undefined;
   const failed = event.kind === 'tool-error' || (event.exitCode !== undefined && event.exitCode !== 0);
   const parts = [
     ...(event.childTools ? [toolUses(event.childTools)] : []),
+    // A sub-agent's spend, as Claude Code shows it: "30k tokens".
+    ...(event.childTokens ? [`${compactCount(event.childTokens)} tokens`] : []),
     ...(event.exitCode !== undefined && event.exitCode !== 0 ? [`exit ${event.exitCode}`] : []),
     ...(event.durationMs !== undefined && event.durationMs >= 1000 ? [formatDuration(event.durationMs)] : []),
   ];
