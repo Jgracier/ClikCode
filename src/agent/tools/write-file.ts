@@ -69,7 +69,7 @@ export const writeFileTool = defineTool<WriteFileArgs>({
     const shown = displayPath(resolved.absolute, ctx);
     return {
       output: existing ? `Overwrote ${shown} (${args.content.length} characters).` : `Created ${shown} (${args.content.length} characters).`,
-      diff: eventDiff(existing?.text ?? '', args.content, undefined, { path: args.path, numbered: true }),
+      diff: eventDiff(existing?.text ?? '', args.content, { path: args.path, numbered: true }),
     };
   },
 });

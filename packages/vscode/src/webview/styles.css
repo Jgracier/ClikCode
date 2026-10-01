@@ -172,6 +172,8 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 }
 .activity-output.diff .del { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--err)); }
 .activity-output.diff .add { color: var(--vscode-gitDecoration-addedResourceForeground, var(--ok)); }
+.activity-output.diff .same, .activity-output.diff .gap, .activity-output.diff .num { opacity: 0.6; }
+.activity-output.diff .file { opacity: 0.8; margin-top: 4px; }
 .more-steps, .trace-toggle {
   display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 2px 0; color: var(--muted); font-size: 0.93em;
 }

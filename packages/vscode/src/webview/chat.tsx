@@ -94,6 +94,31 @@ function activityOutcome(activity: Activity, now: number | undefined): { text: s
   return parts.length ? { text: parts.join(' · '), failed } : undefined;
 }
 
+/** An edit as the terminal shows it: per file (named when there are
+ * several), hunks with line numbers where they are real, removed and added
+ * coloured, context dim, ⋮ between hunks. */
+function DiffView({ files }: { files: NonNullable<Activity['diff']> }): JSX.Element {
+  const width = Math.max(0, ...files.flatMap((file) => file.lines.map((line) => String(line.line ?? '').length)));
+  return (
+    <pre class="activity-output diff">
+      {files.map((file, fileIndex) => (
+        <div key={`f${fileIndex}`}>
+          {files.length > 1 ? (
+            <div class="file">{file.path ?? 'file'}{file.change === 'add' ? ' (new)' : file.change === 'delete' ? ' (deleted)' : ''} <span class="add">+{file.additions}</span> <span class="del">-{file.removals}</span></div>
+          ) : null}
+          {file.lines.map((line, index) => {
+            const number = width ? `${String(line.line ?? '').padStart(width)} ` : '';
+            if (line.kind === 'gap') return <div key={index} class="gap">{''.padStart(width)}{width ? ' ' : ''}⋮</div>;
+            const mark = line.kind === 'removed' ? '-' : line.kind === 'added' ? '+' : ' ';
+            return <div key={index} class={line.kind === 'removed' ? 'del' : line.kind === 'added' ? 'add' : 'same'}><span class="num">{number}</span>{mark} {line.text}</div>;
+          })}
+          {file.omitted ? <div class="gap">… {file.omitted} more line{file.omitted === 1 ? '' : 's'}</div> : null}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
 function ActivityRow({ activity, workspace, now }: { activity: Activity; workspace?: string; now?: number }): JSX.Element {
   const [open, setOpen] = useState(false);
   const status = activity.kind === 'tool-start' ? 'running' : activity.kind === 'tool-error' ? 'error' : 'done';
@@ -113,12 +138,7 @@ function ActivityRow({ activity, workspace, now }: { activity: Activity; workspa
           </button>
         ) : null}
       </div>
-      {open && activity.diff ? (
-        <pre class="activity-output diff">
-          {activity.diff.removed.map((line, index) => <div key={`r${index}`} class="del">- {line}</div>)}
-          {activity.diff.added.map((line, index) => <div key={`a${index}`} class="add">+ {line}</div>)}
-        </pre>
-      ) : null}
+      {open && activity.diff ? <DiffView files={activity.diff} /> : null}
       {open && activity.output?.length ? <pre class="activity-output">{activity.output.slice(-40).join('\n')}</pre> : null}
     </div>
   );

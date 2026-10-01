@@ -1,3 +1,4 @@
+import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
 import { parseNativeActivityEventsFromValue } from './activity-events';
 import type { AiLocalHarnessDefinition } from '../definition';
@@ -86,14 +87,15 @@ describe('incremental native tool activity', () => {
       type: 'item.completed',
       item: { id: 'edit-2', type: 'file_change', changes: [{ path: 'src/a.ts', diff: '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old line\n+new line\n' }, { path: 'src/b.ts' }] },
     }));
-    expect(event).toMatchObject({ kind: 'tool-done', label: 'Edit src/a.ts, src/b.ts', category: 'edit', id: 'edit-2', diff: { removed: ['old line'], added: ['new line'] } });
-    expect(event!.diff!.files).toEqual([{ path: 'src/a.ts', additions: 1, removals: 1, lines: [{ kind: 'removed', text: 'old line', line: 1 }, { kind: 'added', text: 'new line', line: 1 }] }]);
+    expect(event).toMatchObject({ kind: 'tool-done', label: 'Edit src/a.ts, src/b.ts', category: 'edit', id: 'edit-2' });
+    expect(event!.diff).toEqual([{ path: 'src/a.ts', additions: 1, removals: 1, lines: [{ kind: 'removed', text: 'old line', line: 1 }, { kind: 'added', text: 'new line', line: 1 }] }]);
   });
 
   it('renders a Claude edit as the lines that changed, not both texts whole', () => {
     const event = parseNativeActivityEvent({ ...codex, command: 'claude' }, JSON.stringify({
       type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Edit', input: { file_path: 'a.ts', old_string: 'one\ntwo\nthree', new_string: 'one\n2\nthree' } }] },
     }));
-    expect(event).toMatchObject({ label: 'Edit a.ts', diff: { removed: ['two'], added: ['2'] } });
+    expect(event).toMatchObject({ label: 'Edit a.ts' });
+    expect(changed(event!.diff)).toEqual({ removed: ['two'], added: ['2'] });
   });
 });

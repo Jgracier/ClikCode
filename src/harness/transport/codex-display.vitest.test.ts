@@ -63,5 +63,5 @@ it("says Codex's warnings and why it retries, and refreshes an edit's patch whil
   expect(notices).toContain('Codex: model_reasoning_effort is not supported by this model');
   expect(phases).toContain('retrying: stream disconnected before completion');
   const patched = activity.find((event) => event.id === 'f' && event.diff);
-  expect(patched).toMatchObject({ kind: 'tool-start', diff: { files: [{ path: 'a.ts', change: 'update', additions: 1, removals: 1 }] } });
+  expect(patched).toMatchObject({ kind: 'tool-start', diff: [{ path: 'a.ts', change: 'update', additions: 1, removals: 1 }] });
 });
