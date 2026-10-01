@@ -198,12 +198,16 @@ function recencySection(updatedAt: string, now: number): typeof ACTIVE_GROUP | t
 export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string } | { new: true } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
+  hooks?: { onSessionsSettled?: () => boolean },
 ): Promise<{ id: string } | { new: true } | { compose: string } | { command: string } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string,
   /** The commands a board's `/` offers. Given, and the terminal can draw it,
    * the list is the full-page board (tui/conversation-board.ts) instead. */
   boardCommands?: readonly PickerOption<string>[],
+  /** The board calls `onSessionsSettled` when running chats finish and the
+   * list is idle. A true return leaves the board up until the process exits. */
+  hooks?: { onSessionsSettled?: () => boolean },
 ): Promise<{ id: string } | { new: true } | { compose: string } | { command: string } | undefined> {
   const onBoard = Boolean(boardCommands && rl.board);
   // Titles, previews and dates live on the index. The transcript is read
@@ -492,7 +496,11 @@ export async function interactiveSessionPicker(
       const listed = sessions.find((session) => session.id === option.value);
       return listed !== undefined && conversationIdFor(listed) === currentRoot;
     })?.value;
-    const result = await rl.board!({ conversations: buildOptions, commands: boardCommands!, refresh: refreshes, onAction: manage, ...(initial ? { initial } : {}) });
+    const result = await rl.board!({
+      conversations: buildOptions, commands: boardCommands!, refresh: refreshes, onAction: manage,
+      ...(initial ? { initial } : {}),
+      ...(hooks?.onSessionsSettled ? { onSessionsSettled: hooks.onSessionsSettled } : {}),
+    });
     if (result && 'compose' in result) return { compose: result.compose };
     if (result && 'command' in result) return { command: result.command };
     selected = result?.open;
@@ -506,16 +514,16 @@ export async function interactiveSessionPicker(
   }
   // Delete and archive always return to the list. If the open chat was the
   // one removed, the list's "current" is the fresh draft made above.
-  if (returnToList) return interactiveSessionPicker(rl, replacement ?? currentId, boardCommands);
+  if (returnToList) return interactiveSessionPicker(rl, replacement ?? currentId, boardCommands, hooks);
   if (replacement) return { id: replacement };
   // Any other action closes the list on purpose (the picker rebuilds from
   // state rather than show a stale row), so it opens again on what changed.
-  if (!selected && actedOn) return interactiveSessionPicker(rl, currentId, boardCommands);
+  if (!selected && actedOn) return interactiveSessionPicker(rl, currentId, boardCommands, hooks);
   if (!selected) return undefined;
   if (selected === NEW_CONVERSATION_VALUE) return { new: true };
   if (selected === PENDING_DISCOVERY_VALUE) {
     await discovery;
-    return interactiveSessionPicker(rl, currentId, boardCommands);
+    return interactiveSessionPicker(rl, currentId, boardCommands, hooks);
   }
   if (!selected.startsWith('native:')) return { id: selected };
   const match = discovered.find(({ harness, item, accountId }) => nativeValue(harness.command, item.nativeId, accountId) === selected);

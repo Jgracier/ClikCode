@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PickerOption } from '../harness/prompter';
-import { boardKey, boardRows, boardStartRow, type BoardState } from './conversation-board';
+import { boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board';
 
 const UP = '\u001b[A';
 const DOWN = '\u001b[B';
@@ -111,5 +111,42 @@ describe('where the board opens', () => {
   it('goes straight back to the conversation it opened on', () => {
     const state: BoardState = { draft: '', selected: boardStartRow(conversations, 'old') };
     expect(boardKey(state, '\r', conversations)).toEqual({ kind: 'finish', result: { open: 'old' } });
+  });
+});
+
+const quiet = { draft: '', finding: false, aside: false };
+
+describe('when the board can hand the terminal to a new build', () => {
+  it('does not leave a board that opened with nothing running', () => {
+    expect(boardSessionsSettled({ sawWorking: false, anyWorking: false, ...quiet })).toBe(false);
+    expect(boardSettlePending({ sawWorking: false, anyWorking: false, pending: false })).toBe(false);
+  });
+
+  it('waits while a chat is still running', () => {
+    expect(boardSessionsSettled({ sawWorking: true, anyWorking: true, ...quiet })).toBe(false);
+    expect(boardSettlePending({ sawWorking: true, anyWorking: true, pending: false })).toBe(false);
+  });
+
+  it('leaves when the running chats finish and the list is idle', () => {
+    expect(boardSessionsSettled({ sawWorking: true, anyWorking: false, ...quiet })).toBe(true);
+    expect(boardSettlePending({ sawWorking: true, anyWorking: false, pending: false })).toBe(true);
+  });
+
+  it('holds the finish while a draft, search, or aside is up, then leaves', () => {
+    expect(boardSessionsSettled({ sawWorking: true, anyWorking: false, ...quiet, draft: 'fix' })).toBe(false);
+    expect(boardSessionsSettled({ sawWorking: true, anyWorking: false, ...quiet, finding: true })).toBe(false);
+    expect(boardSessionsSettled({ sawWorking: true, anyWorking: false, ...quiet, aside: true })).toBe(false);
+    const pending = boardSettlePending({ sawWorking: true, anyWorking: false, pending: false });
+    expect(boardSessionsSettled({ sawWorking: false, anyWorking: false, ...quiet, pending })).toBe(true);
+  });
+
+  it('asks again after a finish if the new build was not ready yet', () => {
+    const pending = boardSettlePending({ sawWorking: true, anyWorking: false, pending: false });
+    expect(boardSessionsSettled({ sawWorking: false, anyWorking: false, ...quiet, pending })).toBe(true);
+  });
+
+  it('waits for new work that starts after a finish', () => {
+    expect(boardSettlePending({ sawWorking: false, anyWorking: true, pending: true })).toBe(false);
+    expect(boardSessionsSettled({ sawWorking: false, anyWorking: true, ...quiet, pending: true })).toBe(false);
   });
 });

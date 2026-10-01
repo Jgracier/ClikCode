@@ -183,6 +183,31 @@ export interface ConversationBoardSettings {
    * Right or Enter goes straight back to it. Absent or not listed (a new,
    * empty chat is not) and it starts on the top row. */
   initial?: string;
+  /** Running chats were on screen and now the list is idle. Return true when
+   * this process is leaving (a newer build takes the terminal). False keeps
+   * the board up, and a later quiet tick asks again. */
+  onSessionsSettled?: () => boolean;
+}
+
+/** The board had running chats, and now it does not. A draft, a search, or a
+ * second screen means someone is using the list, so this is not the moment
+ * to leave. `pending` is a finish that already happened while the list was
+ * busy, or before a new build was ready. */
+export function boardSessionsSettled(input: {
+  sawWorking: boolean; anyWorking: boolean; draft: string; finding: boolean; aside: boolean;
+  pending?: boolean;
+}): boolean {
+  const quiet = !input.anyWorking && !input.draft && !input.finding && !input.aside;
+  return quiet && (input.sawWorking || Boolean(input.pending));
+}
+
+/** Remember a finish that could not leave yet. New work clears it, so the
+ * next chance is when that work finishes too. */
+export function boardSettlePending(input: {
+  sawWorking: boolean; anyWorking: boolean; pending: boolean;
+}): boolean {
+  if (input.anyWorking) return false;
+  return input.pending || input.sawWorking;
 }
 
 /** Where the cursor starts: on `initial` when it is listed, else the top row,
@@ -209,13 +234,31 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     /** Last spin tick saw a generating row -- one more draw after the last
      * one finishes, otherwise the spinner stays on screen. */
     let wasWorking = false;
+    /** A finish already seen, waiting until the list is idle and the new
+     * build wants the window. */
+    let pendingSettle = false;
+    const settled = (anyWorking: boolean): boolean => {
+      const ready = boardSessionsSettled({
+        sawWorking: wasWorking, anyWorking, draft: state.draft, finding: Boolean(state.finding), aside,
+        pending: pendingSettle,
+      });
+      pendingSettle = boardSettlePending({ sawWorking: wasWorking, anyWorking, pending: pendingSettle });
+      wasWorking = anyWorking;
+      if (!ready || !settings.onSessionsSettled?.()) return false;
+      finished = true;
+      clearInterval(spin);
+      stopInput();
+      return true;
+    };
     // No spinner at all under reduced motion: the glyph is the same each frame.
-    const spin = reducedMotion() ? undefined : setInterval(() => {
+    // The same tick is what notices a running chat finish, reduced motion or
+    // not -- otherwise a still spinner would never look again.
+    const spin = setInterval(() => {
       if (finished || aside) return;
       const anyWorking = rows().some((row) => row.working);
-      if (!anyWorking && !wasWorking) return;
-      wasWorking = anyWorking;
-      if (anyWorking) frame += 1;
+      if (settled(anyWorking)) return;
+      if (!anyWorking) return;
+      if (!reducedMotion()) frame += 1;
       draw();
     }, SPIN_MS);
     spin?.unref();
