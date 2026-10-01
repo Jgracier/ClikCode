@@ -4,7 +4,7 @@ import { isClikCodeAgent } from '../../session/route.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { learnedUsageReading } from '../../harness/accounts/usage-learning.js';
-import { accountQuotaSpent, usageReadingIsCurrent, usageResetLabel, type AccountUsageReading, type UsageWindow } from '../../harness/accounts/usage-reading.js';
+import { accountQuotaSpent, usageReadingIsCurrent, usageResetLabel, usageWindowTitle, type AccountUsageReading, type UsageWindow } from '../../harness/accounts/usage-reading.js';
 
 type Invocation = HarnessState['invocations'][number];
 
@@ -63,7 +63,7 @@ function allowance(account: AiHarnessAccount, state: HarnessState, now: number):
   const windows = stored?.windows ?? [];
   const current: readonly UsageWindow[] | undefined = windows.length > 0 && usageReadingIsCurrent({ windows }, now) ? windows : undefined;
   if (current?.length) {
-    const label = current.map((window) => `${window.name} ${Math.max(0, Math.min(100, Math.round(100 - window.usedPct)))}% left`).join(' · ');
+    const label = current.map((window) => `${usageWindowTitle(window.name)} ${Math.max(0, Math.min(100, Math.round(100 - window.usedPct)))}% left`).join(' · ');
     return { label, ...(usageResetLabel(current, now) ? { reset: usageResetLabel(current, now) } : {}) };
   }
   const learned = learnedUsageReading(account.usageLearning, state.invocations, account.id, now);

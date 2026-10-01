@@ -57,7 +57,7 @@ describe('the learned reading a status line receives', () => {
       ],
     };
     const reading = learnedUsageReading(mature, invocations, 'acct', T0);
-    expect(reading?.label).toBe('5h 30% left · weekly 65% left');
+    expect(reading?.label).toBe('5h 30% left · Weekly 65% left');
   });
 
   it('carries a resetsAt on every window, so the reading can expire itself', () => {

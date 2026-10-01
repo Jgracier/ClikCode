@@ -47,9 +47,15 @@ export function usageWindow(name: string, usedPct: unknown, resetsAt?: unknown):
   return { name, usedPct, ...(reset ? { resetsAt: reset } : {}) };
 }
 
+/** A window's name as it reads on screen: "Monthly", "Weekly", "5h". The
+ * stored name stays as the vendor path wrote it; only the label changes. */
+export function usageWindowTitle(name: string): string {
+  return name ? name[0]!.toUpperCase() + name.slice(1) : name;
+}
+
 /** The single wording for a set of windows, whichever path produced them. */
 function usageReadingLabel(windows: readonly UsageWindow[]): string | undefined {
-  const parts = windows.map((window) => `${window.name} ${Math.max(0, Math.min(100, Math.round(100 - window.usedPct)))}% left`);
+  const parts = windows.map((window) => `${usageWindowTitle(window.name)} ${Math.max(0, Math.min(100, Math.round(100 - window.usedPct)))}% left`);
   return parts.length ? parts.join(' · ') : undefined;
 }
 

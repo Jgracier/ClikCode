@@ -34,6 +34,7 @@
  */
 import type { HarnessState } from '../../session/model.js';
 import type { UsageReading, UsageWindow } from './usage-reading.js';
+import { usageWindowTitle } from './usage-reading.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -353,6 +354,6 @@ export function learnedUsageReading(
     readings.push({ name: window.name, usedPct, resetsAt });
   }
   if (!readings.length) return undefined;
-  const label = readings.map((r) => `${r.name} ${100 - r.usedPct}% left`).join(' · ');
+  const label = readings.map((r) => `${usageWindowTitle(r.name)} ${100 - r.usedPct}% left`).join(' · ');
   return { windows: readings, label };
 }

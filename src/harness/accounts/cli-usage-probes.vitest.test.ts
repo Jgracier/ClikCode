@@ -15,12 +15,12 @@ describe('Copilot account.getQuota', () => {
   };
 
   it('reads the chat allowance, not completions or a zero entitlement, and drops a reset that is just the request time', () => {
-    expect(copilotQuotaReading(FREE_SPENT, NOW)).toEqual({ windows: [{ name: 'chat', usedPct: 100 }], label: 'chat 0% left' });
+    expect(copilotQuotaReading(FREE_SPENT, NOW)).toEqual({ windows: [{ name: 'chat', usedPct: 100 }], label: 'Chat 0% left' });
   });
 
   it('reads a paid plan\'s premium requests with their reset', () => {
     const paid = { quotaSnapshots: { premium_interactions: { isUnlimitedEntitlement: false, entitlementRequests: 300, usedRequests: 72, remainingPercentage: 76, resetDate: '2026-10-01T00:00:00.000Z' }, chat: { isUnlimitedEntitlement: true, entitlementRequests: 0 } } };
-    expect(copilotQuotaReading(paid, NOW)).toEqual({ windows: [{ name: 'premium', usedPct: 24, resetsAt: '2026-10-01T00:00:00.000Z' }], label: 'premium 76% left' });
+    expect(copilotQuotaReading(paid, NOW)).toEqual({ windows: [{ name: 'premium', usedPct: 24, resetsAt: '2026-10-01T00:00:00.000Z' }], label: 'Premium 76% left' });
   });
 
   it('says nothing about a payload with no snapshots', () => {
@@ -37,7 +37,7 @@ describe('Kimi /api/v1/oauth/usage', () => {
   it('reads kimi\'s own normalized windows', () => {
     const body = { code: 0, msg: 'success', data: { kind: 'ok', quota: { usages: { limit5h: { usedRatio: 0.25, resetAt: '2026-09-30T09:00:00Z' }, limit7d: { usedRatio: 0.1 } }, extraUsage: null } } };
     expect(kimiQuotaReading(body)).toEqual({
-      windows: [{ name: '5h', usedPct: 25, resetsAt: '2026-09-30T09:00:00.000Z' }, { name: 'weekly', usedPct: 10 }], label: '5h 75% left · weekly 90% left',
+      windows: [{ name: '5h', usedPct: 25, resetsAt: '2026-09-30T09:00:00.000Z' }, { name: 'weekly', usedPct: 10 }], label: '5h 75% left · Weekly 90% left',
     });
   });
 
@@ -67,7 +67,7 @@ describe('Cursor plan usage', () => {
   };
   it('reads the included and API shares as monthly windows resetting at the cycle end', () => {
     const reading = cursorQuotaReading(answer);
-    expect(reading?.label).toBe('monthly 94% left · API 100% left');
+    expect(reading?.label).toBe('Monthly 94% left · API 100% left');
     expect(reading?.windows[0]).toEqual({ name: 'monthly', usedPct: 6.5, resetsAt: new Date(1792605310084).toISOString() });
   });
   it('has nothing to say without plan usage', () => {
