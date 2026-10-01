@@ -8,11 +8,10 @@
  */
 import { hostname } from 'node:os';
 import type { HarnessSession } from './model.js';
+import { SESSION_CLAIM_TTL_MS } from './claims.js';
+import { pidIsAlive } from './store/locks.js';
 
-/** How long a claim survives without a heartbeat. Generous enough that a busy
- * turn never looks abandoned, short enough that a killed terminal frees its
- * conversation quickly. */
-export const SESSION_CLAIM_TTL_MS = 90_000;
+export { SESSION_CLAIM_TTL_MS };
 
 /** Is another terminal driving this conversation right now?
  *
@@ -24,7 +23,7 @@ export function sessionClaimIsLive(
   session: HarnessSession,
   now = Date.now(),
   host = hostname(),
-  pidAlive: (pid: number) => boolean = livePid,
+  pidAlive: (pid: number) => boolean = pidIsAlive,
 ): boolean {
   const claim = session.claim;
   if (!claim) return false;
@@ -32,16 +31,6 @@ export function sessionClaimIsLive(
   if (claim.host !== host) return true;
   if (claim.pid === process.pid) return false;
   return pidAlive(claim.pid);
-}
-
-function livePid(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means the process exists but belongs to another user.
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
 }
 
 export function claimSession(session: HarnessSession, now = new Date().toISOString()): void {
