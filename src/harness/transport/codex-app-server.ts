@@ -92,6 +92,12 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
     || (typeof item.exitCode === 'number' && item.exitCode !== 0)
     || (typeof item.exit_code === 'number' && item.exit_code !== 0)
     ? 'tool-error' as const : 'tool-done' as const;
+  // A call the user (or an approval policy) declined never ran; it is not a
+  // success, which is how it read.
+  if (completed && item.status === 'declined') {
+    const declined = codexActivityForItem({ ...item, status: 'completed' }, false);
+    if (declined && declined.kind !== 'thinking') return { ...declined, kind: 'tool-error', output: ['declined'] };
+  }
   if (type === 'commandExecution') {
     const aggregated = completed && typeof item.aggregatedOutput === 'string' ? activityOutput(item.aggregatedOutput, { tail: true }) : {};
     return {
@@ -114,12 +120,30 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
     const name = typeof item.server === 'string' && typeof item.tool === 'string' ? `mcp__${item.server}__${item.tool}` : String(item.tool ?? item.server ?? item.name ?? 'tool');
     const args = item.arguments && typeof item.arguments === 'object' && !Array.isArray(item.arguments) ? item.arguments as Record<string, unknown> : undefined;
     const classified = categoryOf(name, args, 'codex');
+    // What it returned, or why it failed: an MCP result's text content, a
+    // dynamic tool's content items, the error's message.
+    const error = asRecord(item.error);
+    const failed = completed && (item.success === false || (error && typeof error.message === 'string'));
+    const resultText = [
+      ...(Array.isArray(asRecord(item.result)?.content) ? asRecord(item.result)!.content as unknown[] : []),
+      ...(Array.isArray(item.contentItems) ? item.contentItems as unknown[] : []),
+    ].flatMap((part) => { const text = asRecord(part)?.text; return typeof text === 'string' ? [text] : []; }).join('\n');
+    const said = failed && typeof error?.message === 'string' ? error.message : resultText;
     return {
-      kind: completed ? completedKind : 'tool-start', label: toolLabel(name, args, classified.category), ...classified, ...(id ? { id } : {}),
+      kind: failed ? 'tool-error' : completed ? completedKind : 'tool-start', label: toolLabel(name, args, classified.category), ...classified, ...(id ? { id } : {}),
+      ...(completed && said ? activityOutput(said) : {}),
       ...(completed ? commandOutcome(item) : {}),
     };
   }
-  if (type === 'webSearch') return { kind: completed ? completedKind : 'tool-start', label: formatToolRow('web_search', typeof item.query === 'string' ? item.query : undefined, 'fetch'), category: 'fetch', ...(id ? { id } : {}) };
+  if (type === 'webSearch') {
+    // What it did: a search, or a page it opened or searched in.
+    const action = asRecord(item.action);
+    const url = typeof action?.url === 'string' ? action.url : undefined;
+    const label = action?.type === 'openPage' && url ? formatToolRow('web_fetch', url, 'fetch')
+      : action?.type === 'findInPage' && url ? formatToolRow('web_fetch', `${typeof action.pattern === 'string' ? `"${action.pattern}" in ` : ''}${url}`, 'fetch')
+        : formatToolRow('web_search', [item.query, action?.query].find((query): query is string => typeof query === 'string' && query.trim().length > 0), 'fetch');
+    return { kind: completed ? completedKind : 'tool-start', label, category: 'fetch', ...(id ? { id } : {}) };
+  }
   if (type === 'reasoning' && completed) {
     // The item's id, so the finished summary replaces the thought that
     // streamed for it rather than adding a second one.
@@ -702,6 +726,18 @@ class CodexSessionImpl implements CodexSession {
       const id = String(params.itemId ?? '');
       const thought = target.thoughts.get(id);
       if (thought) target.thoughts.set(id, `${thought}\n\n`);
+    } else if (method === 'item/fileChange/patchUpdated' && params.changes) {
+      // The patch as it stands while the edit is still being made.
+      const itemId = String(params.itemId ?? '');
+      if (itemId) {
+        target.sawActivity = true;
+        observer.onActivity?.({ kind: 'tool-start', id: itemId, ...fileChangeActivity(params.changes) });
+      }
+    } else if (/^(warning|configWarning|deprecationNotice|guardianWarning)$/.test(method)) {
+      // Codex's own word to the user: a misconfiguration, a deprecation, a
+      // safety warning. It was dropped.
+      const message = [params.message, params.summary, params.details].find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+      if (message) observer.onNotice?.(`Codex: ${message.trim()}`);
     } else if (method === 'item/mcpToolCall/progress' && typeof params.message === 'string') {
       this.progress(target, String(params.itemId ?? ''), { output: [String(params.message)] });
     } else if (method === 'turn/diff/updated') {
@@ -745,7 +781,8 @@ class CodexSessionImpl implements CodexSession {
       turn.complete();
     } else if (method === 'error') {
       const error = (params.error as JsonObject) ?? {};
-      if (params.willRetry === true) observer.onPhase?.('retrying');
+      // Say why it is retrying, not only that it is.
+      if (params.willRetry === true) observer.onPhase?.(typeof error.message === 'string' && error.message ? `retrying: ${error.message.split('\n')[0]!.slice(0, 120)}` : 'retrying');
       else if (typeof error.message === 'string') target.lastError = error;
     }
   }
