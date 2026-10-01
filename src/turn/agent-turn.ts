@@ -1,5 +1,4 @@
 /** ClikCode's own agent turn, using Gateway or a local model for inference. */
-import { randomUUID } from 'node:crypto';
 import { stdout as output } from 'node:process';
 import type Conf from 'conf';
 import chalk from 'chalk';
@@ -7,7 +6,7 @@ import { routeMcpServers } from '../gateway/mcp.js';
 import { modelClientForSession } from '../agent/models/for-session.js';
 import { isGatewayService } from '../session/route.js';
 import { agentTurnUsage, gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
-import { stopReasonNotice, turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
+import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { extractSessionTitle, stripRepeatedTitles, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { localModelTurnHooks } from '../commands/ai/local-model.js';
@@ -18,6 +17,7 @@ import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { runPlatformAssistantTurn } from './platform-assistant-turn.js';
+import { recordInvocation, showStopReason } from './turn-output.js';
 
 /** A turn on a route that runs ClikCode's own agent: the Gateway, or
  * ClikCode Local. Only the Gateway has a platform assistant to fall back to. */
@@ -113,25 +113,16 @@ export async function runAgentTurn(input: {
     // The loop's own reason wins where it ended the turn early (max-steps).
     const loopStop = turnStopReason(harnessTurn.stopReason);
     if (loopStop && loopStop !== 'completed') usage.stopReason = loopStop;
-    const harnessInvocation = {
-      id: randomUUID(), sessionId: session.id, accountId: attributedTo,
-      provider: session.provider ?? attributedTo, ...(session.model ? { model: session.model } : {}),
-      at: new Date().toISOString(), latencyMs: Date.now() - startedAt,
-      ...(usage.input !== undefined ? { inputTokens: usage.input } : {}),
-      ...(usage.output !== undefined ? { outputTokens: usage.output } : {}),
-      ...(usage.cacheRead !== undefined ? { cacheReadTokens: usage.cacheRead } : {}),
-      ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+    const harnessInvocation = recordInvocation(state, {
+      sessionId: session.id, accountId: attributedTo, provider: session.provider ?? attributedTo, model: session.model, startedAt, usage,
       // Which context profile the agent ran under, so an evaluation can
       // attribute time and quality to it (agent/context-profile.ts).
-      ...(harnessTurn.contextProfile ? { contextProfile: harnessTurn.contextProfile } : {}),
-    };
-    state.invocations.push(harnessInvocation);
+      contextProfile: harnessTurn.contextProfile,
+    });
     const extracted = extractSessionTitle(harnessTurn.text);
     const named = { ...extracted, text: stripRepeatedTitles(extracted.text) };
     const completedText = await completeTurnCheckpoint(session, checkpoint, named.text, { title: titleStream?.title ?? named.title });
-    const stopped = stopReasonNotice(usage.stopReason);
-    if (stopped && prompter) prompter.activity(chalk.yellow(stopped));
-    else if (stopped && !isJsonDefaultMode()) process.stderr.write(`${chalk.yellow(stopped)}\n`);
+    showStopReason(prompter, usage.stopReason);
     if (!prompter) {
       emitHarnessOutput({
         session, text: completedText, invocation: harnessInvocation,
