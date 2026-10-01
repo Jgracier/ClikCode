@@ -1,7 +1,7 @@
 /** Messages between the extension host and a chat webview. */
 import type { ChatModel } from './model';
 import type { ModelPatch } from './model-patch';
-import type { IdeChoice, IdePickItem, IdeQueryName, IdeUiRequest, IdeUiResult } from './protocol';
+import type { IdeChoice, IdeConversation, IdePickItem, IdeQueryName, IdeUiRequest, IdeUiResult } from './protocol';
 
 /** A composer attachment: a file (or a range of one) the next message names. */
 export interface Mention {
@@ -17,6 +17,10 @@ export interface Mention {
    * selection): `line 12 error: Cannot find name 'x'. (ts 2304)`. */
   problems?: string[];
 }
+
+/** A row of the conversations list, as the extension answers `query
+ * conversations`: marked when another chat showing it wants the user. */
+export type ListedConversation = IdeConversation & { attention?: 'waiting' | 'unread' };
 
 /** The lists a command can drop over the chat: the conversations, or the
  * chat's account menu. */
@@ -47,6 +51,7 @@ export type WebviewRequest =
   | { method: 'choose'; choice: IdeChoice }
   /** Workspace files matching a partial path, for @-mentions. */
   | { method: 'files'; text: string }
+  /** `resume` of a conversation another chat shows brings that chat up instead. */
   | { method: 'open'; mode: 'new' | 'continue' | 'resume'; sessionId?: string }
   /** Conversation in a new editor tab. */
   | { method: 'openInTab'; sessionId?: string }

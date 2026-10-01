@@ -3,7 +3,6 @@ import * as vscode from 'vscode';
 import { appendFileSync } from 'node:fs';
 import { PANEL_TYPE, supportsSecondarySidebar, VIEW_IDS, WebviewSurface } from './chat-view';
 import { ClikCodeController, type ControllerHost } from './controller';
-import { ConversationsView } from './conversations-view';
 import { questionWithSelection } from './editor-context';
 import { chatModelLabel, providerDisplayName, type ChatModel } from './model';
 import { INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND } from './compat';
@@ -72,21 +71,11 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       if (controller === sidebar) { await revealSidebar(); return; }
       for (const [panel, owner] of tabs) if (owner === controller) panel.reveal(panel.viewColumn, false);
     },
+    chats: () => all(),
   };
   const sidebar = new ClikCodeController(host, undefined, 'side bar');
 
   const all = (): ClikCodeController[] => [sidebar, ...tabs.values()];
-  const conversations = new ConversationsView(all);
-  const conversationTree = vscode.window.createTreeView('clikcode.conversations', { treeDataProvider: conversations, showCollapseAll: false });
-  conversations.attach(conversationTree);
-  context.subscriptions.push(conversations, conversationTree, sidebar.onDidChange(() => conversations.repaint()));
-  /** A conversation brought up: the chat already showing it, else a new tab. */
-  const showConversation = async (sessionId: string): Promise<void> => {
-    if (sidebar.state.sessionId === sessionId) { await revealSidebar(); return; }
-    const tab = [...tabs].find(([, owner]) => owner.state.sessionId === sessionId)?.[0];
-    if (tab) { tab.reveal(tab.viewColumn, false); return; }
-    openTab({ mode: 'resume', sessionId });
-  };
   /** The chat a command acts on: the one focused last, else the side bar. */
   const active = (): ClikCodeController => {
     if (sidebar.focused) return sidebar;
@@ -164,7 +153,6 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
   status.command = 'clikcode.focus';
   let running: boolean | undefined;
   function paint(): void {
-    conversations.repaint();
     const state = active().state;
     const { text, tooltip } = statusText(state);
     status.text = text;
@@ -244,12 +232,6 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     // The ClikCode button in the editor's tab bar, as Claude Code's and
     // Codex's are: each click a new chat in a tab of its own.
     vscode.commands.registerCommand('clikcode.newChatTab', () => { openTab({ mode: 'new' }); }),
-    vscode.commands.registerCommand('clikcode.showConversation', (sessionId: unknown) => (typeof sessionId === 'string' ? showConversation(sessionId) : undefined)),
-    vscode.commands.registerCommand('clikcode.openConversationInNewTab', (item: unknown) => {
-      const id = typeof item === 'string' ? item : (item as { id?: unknown } | undefined)?.id;
-      if (typeof id === 'string') openTab({ mode: 'resume', sessionId: id });
-    }),
-    vscode.commands.registerCommand('clikcode.refreshConversations', () => conversations.refresh()),
     vscode.commands.registerCommand('clikcode.openInNewWindow', async () => {
       openTab({ mode: 'new' });
       await new Promise((resolve) => setTimeout(resolve, 150));

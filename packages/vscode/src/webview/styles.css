@@ -445,6 +445,7 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .conversation-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; flex: none; background: transparent; }
 .conversation-dot.working { background: var(--vscode-textLink-foreground); border-color: transparent; animation: pulse 1.4s ease-in-out infinite; }
 .conversation-dot.idle { background: var(--ok); border-color: transparent; }
+.conversation-dot.unread { background: var(--vscode-textLink-foreground); }
 .conversation-main { flex: 1; min-width: 0; }
 .conversation-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-meta { color: var(--muted); font-size: 0.88em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
