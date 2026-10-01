@@ -17,12 +17,17 @@ describe('ClikCode compatibility', () => {
   });
 
   it('accepts the bridge protocol this extension was built against', () => {
-    expect(bridgeCompatibility({ version: '1.2.3', protocol: IDE_PROTOCOL.version })).toEqual({ ok: true });
-    expect(bridgeCompatibility({ version: '1.2.3', protocol: IDE_PROTOCOL.oldestSupported })).toEqual({ ok: true });
+    expect(bridgeCompatibility({ version: '1.2.3', protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision })).toEqual({ ok: true });
+    expect(bridgeCompatibility({ version: '1.2.3', protocol: IDE_PROTOCOL.oldestSupported, revision: IDE_PROTOCOL.oldestRevision })).toEqual({ ok: true });
   });
 
   it('asks for a ClikCode update when the bridge is too old or predates the protocol field', () => {
-    for (const ready of [{ version: '1.0.0' }, { version: '1.0.0', protocol: 'x' }, { version: '1.0.0', protocol: IDE_PROTOCOL.oldestSupported - 1 }]) {
+    const revision = IDE_PROTOCOL.revision;
+    for (const ready of [
+      { version: '1.0.0' }, { version: '1.0.0', protocol: 'x', revision }, { version: '1.0.0', protocol: IDE_PROTOCOL.oldestSupported - 1, revision },
+      // A bridge from before the structured queries (no revision, or 1): the panel has no screens for it.
+      { version: '1.0.0', protocol: IDE_PROTOCOL.version }, { version: '1.0.0', protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.oldestRevision - 1 },
+    ]) {
       const verdict = bridgeCompatibility(ready);
       expect(verdict.ok).toBe(false);
       if (verdict.ok) continue;
@@ -37,7 +42,7 @@ describe('ClikCode compatibility', () => {
   });
 
   it('asks for an extension update when the bridge speaks a newer protocol', () => {
-    const verdict = bridgeCompatibility({ version: '9.0.0', protocol: IDE_PROTOCOL.version + 1 });
+    const verdict = bridgeCompatibility({ version: '9.0.0', protocol: IDE_PROTOCOL.version + 1, revision: IDE_PROTOCOL.revision });
     expect(verdict).toMatchObject({ ok: false, remedy: 'update-extension' });
     if (!verdict.ok) expect(verdict.message).toContain('Update the ClikCode extension');
   });

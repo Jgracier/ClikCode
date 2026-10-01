@@ -16,9 +16,10 @@
  *
  * `revision` counts ADDITIVE requests within a version -- ones an older
  * bridge would not answer correctly, so the editor asks for them only when
- * the bridge's `ready` carries this revision or later. It never makes an
- * editor refuse a bridge: an older revision just gets the older screens.
- *   1  the chat, the pickers as quick picks, `query slash-commands`
+ * the bridge's `ready` carries this revision or later. A bridge older than
+ * `oldestRevision` (absent: 1) is refused like an older protocol, with
+ * "Update ClikCode": the editor keeps no screens for it.
+ *   1  the chat, the pickers, `query slash-commands`
  *   2  `query` for providers, models, conversations, accounts, chat settings
  *      and the Gateway; `choose`; unknown queries answered with an error
  *
@@ -30,4 +31,5 @@ export const IDE_PROTOCOL = {
   version: 1,
   revision: 2,
   oldestSupported: 1,
+  oldestRevision: 2,
 } as const;

@@ -50,9 +50,8 @@ const SUGGESTIONS: Array<{ icon: string; title: string; prompt: string }> = [
 function Welcome({ model, onPrompt, onScreen }: { model: ChatModel; onPrompt: (text: string) => void; onScreen: (screen: WebviewScreen) => void }): JSX.Element {
   const [recent, setRecent] = useState<IdeConversation[]>();
   useEffect(() => {
-    if ((model.revision ?? 1) < 2) return;
     request<IdeConversation[]>({ method: 'query', query: 'conversations' }).then((rows) => setRecent(rows.filter((row) => !row.current).slice(0, 3)), () => undefined);
-  }, [model.revision, model.sessionId]);
+  }, [model.sessionId]);
   const provider = currentProvider(model);
   const needsSignIn = provider && provider.kind === 'harness' && !provider.signedIn && provider.installed;
   const needsGateway = provider && provider.kind === 'gateway' && !provider.signedIn;

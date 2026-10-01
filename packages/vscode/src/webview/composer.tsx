@@ -112,7 +112,6 @@ export function Composer(props: {
   const recall = useRef<{ index: number; draft: string }>();
   const history = useMemo(() => promptHistory(model.messages), [model.messages]);
   const connected = model.connection === 'ready' && Boolean(model.sessionId);
-  const structured = (model.revision ?? 1) >= 2;
 
   const autosize = (): void => {
     const element = textarea.current;
@@ -427,12 +426,11 @@ export function Composer(props: {
           onClick={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
           onKeyDown={onKeyDown} onPaste={onPaste} />
         <div class="composer-footer">
-          {structured ? footerButton('provider', <><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></>, `Provider: ${providerName}`, 'provider-button')
-            : <button type="button" class="chip-button" disabled={!connected} onClick={() => post({ type: 'send', text: '/provider', id: uid() })}><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></button>}
+          {footerButton('provider', <><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></>, `Provider: ${providerName}`, 'provider-button')}
           {/* Model and effort are one choice, as in Claude Code: `Opus Medium`. */}
-          {structured && providerChoosesModel(model.providerId)
+          {providerChoosesModel(model.providerId)
             ? footerButton('model', <><span class="chip-text">{modelWithEffort(modelName, effort?.current)}</span><Icon name="chevron-down" /></>, `Model and effort: ${modelWithEffort(modelName, effort?.current)}`, 'model-button')
-            : structured && effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current && effort.current !== 'default' ? effortLabel(effort.current) : 'Effort'}</span></>, `Reasoning effort: ${effortLabel(effort.current)}`, 'effort-button') : null}
+            : effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current && effort.current !== 'default' ? effortLabel(effort.current) : 'Effort'}</span></>, `Reasoning effort: ${effortLabel(effort.current)}`, 'effort-button') : null}
           <span class="spacer" />
           {model.accountUsage ? (
             <span class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="This account's usage">{model.accountUsage}</span>
@@ -459,7 +457,7 @@ export function Composer(props: {
           </button>
         ) : null}
         {/* Permissions belong to how this chat runs, beside whose account it runs on. */}
-        {structured && model.chatSettings?.permissions ? (
+        {model.chatSettings?.permissions ? (
           <button type="button" id="mode-button" class={`status-account${menu === 'mode' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'mode'}
             title={`Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`} disabled={!connected} onClick={() => setMenu(menu === 'mode' ? undefined : 'mode')}>
             <Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} />
