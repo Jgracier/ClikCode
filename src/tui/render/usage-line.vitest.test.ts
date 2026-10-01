@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimatedTokens, formatTurnUsage } from './usage-line';
+import { compactCount, dollars, estimatedTokens, formatTurnUsage } from './usage-line';
 
 describe('the turn usage line', () => {
   it('shows a percentage-only context and a credit cost (Kiro)', () => {
@@ -24,5 +24,11 @@ describe('the turn usage line', () => {
     expect(estimatedTokens(401)).toBe(101);
     expect(formatTurnUsage(undefined, 340)).toBe('↓ ~340 tokens');
     expect(formatTurnUsage({ input: 1200, output: 300 }, 40)).toBe('↑ 1.2k ↓ ~340 tokens');
+  });
+
+  it('formats counts and costs the same way /usage does', () => {
+    expect([999, 1_200, 37_010, 7_166_839].map(compactCount)).toEqual(['999', '1.2k', '37k', '7.2M']);
+    // A known zero cost is cents, not four places of nothing.
+    expect([0, 0.0042, 1.5].map(dollars)).toEqual(['$0.00', '$0.0042', '$1.50']);
   });
 });
