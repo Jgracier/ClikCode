@@ -39,3 +39,19 @@ Checked against the ClikCode catalog on 2026-09-30. A listed control is a ClikCo
 ClikCode keeps model and usage data keyed to the selected account or its isolated vendor profile. The model picker and account picker now refresh server lists and share current usage readings between ClikCode processes. This does not create multiple simultaneous vendor logins where a vendor refuses them.
 
 For live ACP turn and resume evidence, see [ACP_OAUTH_VERIFICATION.md](ACP_OAUTH_VERIFICATION.md). Eight of the eighteen OAuth-capable ACP harnesses passed with available accounts. Ten remain blocked by sign-in, quota, subscription, or account eligibility. A handshake alone is not counted as a completed integration check.
+
+## Turn usage over ACP, checked live on 2026-09-30
+
+Each was a real signed-in two-turn session in `scripts/vendor-sandbox.mjs`, comparing every usage-bearing frame the agent sent with what ClikCode recorded.
+
+| Harness | What the agent sends | ClikCode records |
+| --- | --- | --- |
+| Claude Code | Prompt `usage`, `usage_update` cost and context | Tokens, cache, cost, context |
+| Grok Build | Per-turn `_meta.usage` with `costUsdTicks`; `_meta.totalTokens`; model `totalContextTokens` | Tokens, reasoning, cost, context |
+| OpenCode | Prompt `usage`, `usage_update` | Tokens, cache, cost, context |
+| Goose | Prompt `usage`, session-total `usage_update` cost | Tokens, each turn's share of cost, context |
+| Cline | Nothing over ACP; its session file | Tokens, cache, cost (from the file) |
+| Kiro | `_kiro.dev/metadata`: context percentage, credits per turn | Context %, credits |
+| Cursor Agent | Only `stopReason` | Nothing: Cursor's ACP sends no usage, and its session store keeps none |
+
+Hermes was not re-checked: its model provider returned HTTP 429. The other ACP harnesses could not run a turn (see the verification table).
