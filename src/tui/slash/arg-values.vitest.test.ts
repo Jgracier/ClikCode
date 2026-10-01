@@ -15,7 +15,9 @@ vi.mock('../../harness/accounts/effort-choices.js', () => ({
 
 const { withArgValues } = await import('./arg-values.js');
 
-const harness = { command: 'grok', provider: 'xai', displayName: 'Grok' } as AiLocalHarnessDefinition;
+const harness = {
+  command: 'grok', provider: 'xai', displayName: 'Grok', localAuth: ['vendor-cli'], loginArgv: ['login'],
+} as AiLocalHarnessDefinition;
 const session = {
   id: 'chat', route: 'local', accountId: null, provider: 'grok', nativeHarness: 'grok', model: null,
   effort: 'medium', accountFailover: 'never', createdAt: '', updatedAt: '', status: 'active',
@@ -36,6 +38,7 @@ describe('/account palette values', () => {
     expect(entries[0]?.argValues?.()).toEqual([
       { value: 'work' },
       { value: 'old', detail: 'needs login' },
+      { value: 'add grok', label: '+ Add account…', detail: '· Grok' },
     ]);
   });
 

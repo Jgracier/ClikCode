@@ -7,7 +7,7 @@
  *   /model        the harness's own catalog (model-catalog.ts), with its labels
  *   /effort       what the installed harness accepts for this model
  *   /permissions  the modes this harness maps to a real flag
- *   /account      accounts on this chat's provider, signed-out ones included
+ *   /account      accounts on this chat's provider, then + Add account…
  *   /resume       the conversations /resume would list
  *
  * The vendor-derived lists load in the background: the palette reads them on
@@ -61,10 +61,17 @@ export function withArgValues(
   // only the command (`grok`). Either names this chat's provider. A list that
   // ignores that shows every provider's logins under /account.
   const providerIds = new Set([harness?.provider, harness?.command, session.provider, session.nativeHarness].filter((id): id is string => Boolean(id)));
-  const accounts: Values = state.accounts.filter((item) => providerIds.has(item.provider)).map((item) => ({
-    value: item.label,
-    ...(item.status === 'ready' ? {} : { detail: item.status.replaceAll('_', ' ') }),
-  }));
+  const accounts: Values = [
+    ...state.accounts.filter((item) => providerIds.has(item.provider)).map((item) => ({
+      value: item.label,
+      ...(item.status === 'ready' ? {} : { detail: item.status.replaceAll('_', ' ') }),
+    })),
+    // Same trailing row as the account picker. Choosing it runs `/account add
+    // <harness>`, which hands the terminal to that provider's sign-in.
+    ...(harness && (harness.localAuth.includes('api-key') || harness.loginArgv)
+      ? [{ value: `add ${harness.command}`, label: '+ Add account…', detail: `· ${harness.displayName}` }]
+      : []),
+  ];
   const chats: Values = state.sessions
     .filter((item) => item.id !== session.id && !isBlankConversation(item) && item.name)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
