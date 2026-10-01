@@ -34,6 +34,39 @@ export interface OptionPickerHost {
   ): Promise<T | undefined>;
 }
 
+/** A second screen opened from a list -- a sub-list, a row's actions, a
+ * delete confirmation -- has the keyboard until it closes. `open` returns
+ * true when it settled the list; otherwise the list takes the keyboard back,
+ * unless it finished meanwhile. */
+export function asideOpener(list: {
+  stopInput(): void; listen(): void; finished(): boolean; aside?(open: boolean): void;
+}): (open: () => Promise<boolean>) => Promise<void> {
+  return async (open) => {
+    list.stopInput();
+    list.aside?.(true);
+    try {
+      if (await open()) return;
+    } finally {
+      list.aside?.(false);
+    }
+    if (!list.finished()) list.listen();
+  };
+}
+
+/** The confirmation every row's delete gets: Cancel first. */
+export function confirmRowDelete(host: OptionPickerHost, option: PickerOption<unknown>, action: { label: string }): Promise<boolean | undefined> {
+  return host.select(`${action.label} ${option.label}?`, [
+    { label: 'Cancel', value: false },
+    { label: `${action.label} ${option.label}`, value: true },
+  ]);
+}
+
+/** Rows can land after a list opens, in stages (known ones, then fresh
+ * ones): redraw at each, whether it resolved or not. */
+export function redrawOnRefresh(refresh: PickerSettings<unknown>['refresh'], redraw: () => void): void {
+  for (const stage of [refresh ?? []].flat()) void stage.then(redraw, redraw);
+}
+
 /** How the last picker closed. A menu that opened a sub-picker reopens
  * itself unless the user left with Esc (see the Settings loop): ← goes back
  * one level, Esc leaves them all. */
@@ -129,66 +162,44 @@ export function runOptionPicker<T>(
       // reads the settings back.
       void commitAll().then(() => resolveSelection(value));
     };
+    const openAside = asideOpener({ stopInput: () => stopInput(), listen, finished: () => finished });
+    /** A list inside a row (its history, its sub-agents): a value chosen
+     * there is this picker's answer. */
+    const openList = (listTitle: string, list: readonly PickerOption<T>[]): Promise<void> => openAside(async () => {
+      const value = await host.select(listTitle, list);
+      if (value === undefined) return false;
+      finish(value);
+      return true;
+    });
     // Tab opens optional non-destructive management actions. Right Arrow is
     // deliberately identical to Enter for every picker.
-    const openActions = async (option: PickerOption<T>): Promise<void> => {
-      if (!option.actions?.length) return;
-      stopInput();
+    const openActions = (option: PickerOption<T>): Promise<void> => openAside(async () => {
       let escaped = false;
       const actionValue = await host.select(
         option.label,
-        option.actions.map((action) => ({ label: action.label, value: action.value })),
+        (option.actions ?? []).map((action) => ({ label: action.label, value: action.value })),
         undefined,
         { onEscape: () => { escaped = true; } },
       );
       if (escaped) {
         settings?.onEscape?.();
         finish(undefined, 'escape');
-        return;
+        return true;
       }
-      if (actionValue) {
-        await onAction?.(option.value, actionValue);
-        // Let the caller rebuild the parent options from authoritative
-        // state (for example, Disconnect changes an account's status).
-        // Repainting the captured array here would show stale details.
-        finish(undefined);
-        return;
-      }
-      if (finished) return;
-      listen();
-    };
-    const openAlternates = async (option: PickerOption<T>): Promise<void> => {
-      if (!option.alternates?.length) return;
-      stopInput();
-      const value = await host.select(option.label, option.alternates);
-      if (value !== undefined) return finish(value);
-      if (finished) return;
-      listen();
-    };
-    const openInner = async (option: PickerOption<T>): Promise<void> => {
-      if (!option.inner?.options.length) return;
-      stopInput();
-      const value = await host.select(option.inner.title, option.inner.options);
-      if (value !== undefined) return finish(value);
-      if (finished) return;
-      listen();
-    };
-    const confirmDelete = async (option: PickerOption<T>): Promise<void> => {
-      const action = option.deleteAction;
-      if (!action) return;
-      stopInput();
-      const confirmed = await host.select(`${action.label} ${option.label}?`, [
-        { label: 'Cancel', value: false },
-        { label: `${action.label} ${option.label}`, value: true },
-      ]);
-      if (confirmed) {
-        await onAction?.(option.value, action.value);
-        finish(undefined);
-        return;
-      }
-      if (finished) return;
-      listen();
-    };
+      if (!actionValue) return false;
+      await onAction?.(option.value, actionValue);
+      // Let the caller rebuild the parent options from authoritative
+      // state (for example, Disconnect changes an account's status).
+      // Repainting the captured array here would show stale details.
+      finish(undefined);
+      return true;
+    });
+    const confirmDelete = (option: PickerOption<T>, action: { label: string; value: string }): Promise<void> => openAside(async () => {
+      if (!await confirmRowDelete(host, option, action)) return false;
+      await onAction?.(option.value, action.value);
+      finish(undefined);
+      return true;
+    });
     /** An inline row's choice is shown at once and applied when the cursor
      * leaves the row or the picker closes -- not on every step, which turned
      * Bypass on for a moment on the way from Ask to Auto. */
@@ -238,7 +249,7 @@ export function runOptionPicker<T>(
       if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
       else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
       else if (key === '\u001b[D') {
-        if (current?.inner?.options.length) { void openInner(current); return; }
+        if (current?.inner?.options.length) { void openList(current.inner.title, current.inner.options); return; }
         settings?.onBack?.(); finish(undefined, 'back'); return;
       }
       else if (pickerConfirmsSelection(key)) {
@@ -247,11 +258,11 @@ export function runOptionPicker<T>(
       }
       else if (key === '\t') {
         const option = visible[selected];
-        if (option?.alternates?.length) void openAlternates(option);
+        if (option?.alternates?.length) void openList(option.label, option.alternates);
         else if (option?.actions?.length) void openActions(option);
         return;
       }
-      else if (pickerDeletesSelection(key)) { if (visible[selected]?.deleteAction) void confirmDelete(visible[selected]); return; }
+      else if (pickerDeletesSelection(key)) { const action = visible[selected]?.deleteAction; if (action) void confirmDelete(visible[selected]!, action); return; }
       else if (key === '\u0003') return finish(undefined, 'escape');
       else if (key === '\u001b') { settings?.onEscape?.(); return finish(undefined, 'escape'); }
       else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; }
@@ -260,7 +271,6 @@ export function runOptionPicker<T>(
       draw();
     };
     listen();
-    // Rows can land in stages (known ones, then fresh ones): redraw at each.
-    for (const refresh of [settings?.refresh ?? []].flat()) void refresh.then(() => { if (!finished) draw(); }, () => { if (!finished) draw(); });
+    redrawOnRefresh(settings?.refresh, () => { if (!finished) draw(); });
   });
 }
