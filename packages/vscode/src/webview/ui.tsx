@@ -141,16 +141,6 @@ export function Popover(props: { onClose: () => void; children: ComponentChildre
     onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onClose(); } }}>{props.children}</div>;
 }
 
-export function Meter({ usedPct, label }: { usedPct: number; label: string }): JSX.Element {
-  const used = Math.max(0, Math.min(100, Math.round(usedPct)));
-  const level = used >= 90 ? 'high' : used >= 70 ? 'mid' : 'low';
-  return (
-    <div class={`meter meter-${level}`} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={used} aria-label={label}>
-      <div class="meter-fill" style={{ width: `${used}%` }} />
-    </div>
-  );
-}
-
 export function Switch(props: { checked: boolean; label: string; onChange: (value: boolean) => void; disabled?: boolean; id?: string }): JSX.Element {
   return (
     <button type="button" role="switch" id={props.id} aria-checked={props.checked} aria-label={props.label} disabled={props.disabled}

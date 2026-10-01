@@ -118,9 +118,14 @@ export function screensSuite(): void {
 
     it('accounts and usage', async () => {
       await vscode.commands.executeCommand('clikcode.showAccounts');
-      await waitFor(api, '.account', 'accounts');
-      await sleep(2_500);
+      await waitFor(api, '#account-menu [data-key="all"]', 'the account menu');
+      await sleep(1_000);
       await screenshot('accounts');
+      await click(api, '#account-menu [data-key="all"]');
+      await waitFor(api, '.sheet .keylist-row', 'every account, in the /accounts sheet', 60_000);
+      await sleep(2_500);
+      await screenshot('accounts-all');
+      await api.probe('key', '.sheet input', 'Escape');
     });
 
     it('a narrow side bar', async () => {
@@ -129,7 +134,7 @@ export function screensSuite(): void {
       const [folder] = vscode.workspace.workspaceFolders ?? [];
       await vscode.window.showTextDocument(vscode.Uri.joinPath(folder!.uri, 'math.ts'));
       await vscode.commands.executeCommand('clikcode.showHistory');
-      await click(api, '#back-button');
+      await api.probe('key', '#history-menu input', 'Escape');
       await dragSidebarTo(1440 - 300);
       await waitFor(api, '#composer-input', 'the chat');
       await screenshot('narrow');

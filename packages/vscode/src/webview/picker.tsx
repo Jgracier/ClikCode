@@ -1,11 +1,11 @@
 /** The composer footer's menus: provider (every harness, the Gateway and
- * ClikCode Local), the chosen provider's models, reasoning effort, and
- * permissions with plan mode. */
+ * ClikCode Local), the chosen provider's models, reasoning effort,
+ * permissions with plan mode, and the chat's account. */
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
-import type { IdeAccount, IdeAccounts, IdeChoice, IdeModels, IdeProvider } from '../protocol';
-import { request } from './bus';
+import type { IdeAccount, IdeAccounts, IdeChoice, IdeGateway, IdeModels, IdeProvider } from '../protocol';
+import { post, request, uid } from './bus';
 import { modelLabel, titleCase } from './format';
 import { Icon, KeyList, Popover, Switch, type ListRow } from './ui';
 
@@ -246,46 +246,83 @@ function EffortBar(props: { model: ChatModel; onError: (message: string) => void
   );
 }
 
-/** The accounts of the chat's own provider, as a short list: choosing one
- * moves the chat onto it; another can be added for the same provider. */
-export function AccountMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
-  const [data, setData] = useState<IdeAccounts>();
-  useEffect(() => {
-    request<IdeAccounts>({ method: 'query', query: 'accounts' }).then(setData, (failure: Error) => props.onError(failure.message));
-  }, []);
-  const providerId = props.model.providerId;
-  const currentProvider = data?.accounts.find((item) => item.current)?.provider;
-  const mine = (data?.accounts ?? []).filter((item) => (item.harness ? item.harness === providerId : item.provider === currentProvider));
-  const addable = data?.addable.find((item) => item.provider === providerId);
-  const rows: ListRow[] = mine.map((account) => ({
-    key: account.id,
-    onSelect: () => { props.onClose(); if (!account.current) choose({ kind: 'account', accountId: account.id }).catch((failure: Error) => props.onError(failure.message)); },
-    render: () => (
-      <div class="row">
-        <span class="row-check">{account.current ? <Icon name="check" /> : account.problem ? <Icon name="warning" /> : null}</span>
-        <span class="row-main"><span class="row-label">{account.label}</span>
-          <span class="row-detail">{account.problem ? ACCOUNT_PROBLEM[account.problem] : account.usage?.label ?? ''}</span></span>
-      </div>
-    ),
-  }));
-  if (addable) {
-    rows.push({
-      key: 'add', onSelect: () => { props.onClose(); choose({ kind: 'add-account', provider: addable.provider }).catch((failure: Error) => props.onError(failure.message)); },
-      render: () => <div class="row"><span class="row-check"><Icon name="add" /></span><span class="row-main"><span class="row-label">Add account</span></span></div>,
-    });
-  }
-  return (
-    <Popover label="Accounts" onClose={props.onClose} class="menu" id="account-menu">
-      <div class="menu-title">{data?.accounts.find((item) => item.current)?.providerName ?? 'Accounts'}</div>
-      {!data ? <div class="picker-loading"><Icon name="loading" spin /> Loading accounts…</div>
-        : <KeyList rows={rows} label="Accounts" onEscape={props.onClose} emptyText="No accounts for this provider." />}
-    </Popover>
-  );
-}
-
 const ACCOUNT_PROBLEM: Record<NonNullable<IdeAccount['problem']>, string> = {
   verify: 'needs verifying', reauth: 'signed out', 'out-of-usage': 'out of usage',
 };
+
+function money(value: number): string {
+  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** The Gateway's credit, as the account menu's row says it. */
+function creditText(gateway: IdeGateway): { label: string; detail: string } {
+  const credit = gateway.credit;
+  if (!gateway.connected) return { label: 'Sign in to the Gateway', detail: 'Hosted models from every lab, paid from one balance' };
+  if (credit?.unlimited) return { label: 'Unlimited credit', detail: 'Your plan includes unlimited AI credit' };
+  const balance = credit?.balanceUsd !== undefined ? money(credit.balanceUsd) : '—';
+  return {
+    label: `Credit ${balance}`,
+    detail: gateway.error ?? `${credit?.allowed === false ? 'Out of credit: buy more' : 'Buy credit'}${credit?.autoTopUp ? ' · auto top-up on' : ''}`,
+  };
+}
+
+/** The accounts of the chat's own provider, as a short list: choosing one
+ * moves the chat onto it; another can be added for the same provider. On
+ * the Gateway, its credit (a click buys more). Every account of every
+ * provider, with its usage and actions, is the /accounts sheet. */
+export function AccountMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
+  const [data, setData] = useState<IdeAccounts>();
+  const [gateway, setGateway] = useState<IdeGateway>();
+  const providerId = props.model.providerId;
+  const onGateway = providerId === 'gateway';
+  const fail = (failure: Error): void => props.onError(failure.message);
+  const load = (): void => { request<IdeAccounts>({ method: 'query', query: 'accounts' }).then(setData, fail); };
+  useEffect(() => {
+    load();
+    if (onGateway) request<IdeGateway>({ method: 'query', query: 'gateway' }).then(setGateway, fail);
+  }, []);
+  const currentProvider = data?.accounts.find((item) => item.current)?.provider;
+  const mine = (data?.accounts ?? []).filter((item) => (item.harness ? item.harness === providerId : item.provider === currentProvider));
+  const addable = data?.addable.find((item) => item.provider === providerId);
+  const row = (key: string, icon: string | undefined, label: string, detail: string, run: () => void): ListRow => ({
+    key, onSelect: () => { props.onClose(); run(); },
+    render: () => (
+      <div class="row">
+        <span class="row-check">{icon ? <Icon name={icon} /> : null}</span>
+        <span class="row-main"><span class="row-label">{label}</span>{detail ? <span class="row-detail">{detail}</span> : null}</span>
+      </div>
+    ),
+  });
+  const rows: ListRow[] = mine.map((account) => row(account.id, account.current ? 'check' : account.problem ? 'warning' : undefined, account.label,
+    account.problem ? ACCOUNT_PROBLEM[account.problem] : account.usage?.label ?? '',
+    () => { if (!account.current) choose({ kind: 'account', accountId: account.id }).catch(fail); }));
+  if (gateway) {
+    const { label, detail } = creditText(gateway);
+    rows.push(row('gateway-credit', gateway.connected ? 'credit-card' : 'key', label, detail, () => {
+      if (!gateway.connected) { choose({ kind: 'provider', provider: 'gateway' }).catch(fail); return; }
+      if (gateway.credit?.unlimited) return;
+      choose({ kind: 'gateway-credit' }).then((result) => {
+        const url = (result as { url?: string } | undefined)?.url;
+        if (url) post({ type: 'openLink', href: url });
+      }, fail);
+    }));
+  }
+  if (addable) rows.push(row('add', 'add', 'Add account', '', () => { choose({ kind: 'add-account', provider: addable.provider }).catch(fail); }));
+  rows.push(row('all', 'organization', 'All accounts & usage', '', () => post({ type: 'send', text: '/accounts', id: uid() })));
+  const failover = data && props.model.chatSettings?.failover !== undefined ? data.failover : undefined;
+  return (
+    <Popover label="Accounts" onClose={props.onClose} class="menu" id="account-menu">
+      <div class="menu-title">{onGateway ? 'ClikDeploy Gateway' : data?.accounts.find((item) => item.current)?.providerName ?? 'Accounts'}</div>
+      {!data ? <div class="picker-loading"><Icon name="loading" spin /> Loading accounts…</div>
+        : <KeyList rows={rows} label="Accounts" onEscape={props.onClose} />}
+      {failover ? (
+        <label class="menu-switch"><span><Icon name="arrow-swap" /> Switch accounts automatically <span class="muted">When this account hits a usage limit, go on with the next one with room</span></span>
+          <Switch checked={failover === 'auto'} label="Switch accounts automatically"
+            onChange={(on) => choose({ kind: 'failover', value: on ? 'auto' : 'never' }).then(load, fail)} /></label>
+      ) : null}
+    </Popover>
+  );
+}
 
 /** Effort alone, for a provider with no model list: the same choices as
  * beside the model, floated over the chip. */

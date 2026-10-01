@@ -54,10 +54,10 @@ export function chatSuite(): void {
       await waitFor(api, '#more-menu', 'the More menu');
       await screenshot('more-menu', 500);
       await key(api, '#more-menu', 'Escape');
+      // Accounts & usage is the account menu, with the full list one row away.
       await vscode.commands.executeCommand('clikcode.showAccounts');
-      await waitFor(api, '[aria-label="Accounts and usage"]', 'the accounts screen');
-      await screenshot('accounts-screen', 1500);
-      await key(api, '[aria-label="Accounts and usage"]', 'Escape');
+      await waitFor(api, '#account-menu [data-key="all"]', 'the account menu, from the command');
+      await key(api, '#account-menu', 'Escape');
       await api.send('/settings');
       await waitFor(api, '.sheet', 'the settings sheet', 30_000);
       await screenshot('settings', 1000);

@@ -37,9 +37,10 @@ turn runs to steer it, `Esc` to stop.
 
 ![An approval with its diff](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/approval.png)
 
-**Keep going when a limit hits.** Add several accounts per provider. *Accounts & usage* shows each
-one's 5-hour and weekly usage; when the chat's account runs out, ClikCode moves to the next one with
-room automatically. ClikDeploy Gateway's credit balance is there too, with *Buy credit*.
+**Keep going when a limit hits.** Add several accounts per provider. The account under the message
+box lists the provider's accounts, with *Switch accounts automatically*: when the chat's account runs
+out, ClikCode moves to the next one with room. *All accounts & usage* shows each one's 5-hour and
+weekly usage. On ClikDeploy Gateway the same menu shows the credit balance; a click buys more.
 
 ![Accounts and usage](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/accounts.png)
 
