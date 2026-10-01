@@ -315,6 +315,15 @@
         "title": "Refresh Conversations",
         "category": "ClikCode",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "clikcode.newChatTab",
+        "title": "Open ClikCode in New Tab",
+        "category": "ClikCode",
+        "icon": {
+          "light": "media/editor-light.svg",
+          "dark": "media/editor-dark.svg"
+        }
       }
     ],
     "menus": {
@@ -335,12 +344,7 @@
           "group": "1_clikcode@3"
         },
         {
-          "command": "clikcode.openInNewTab",
-          "when": "activeWebviewPanelId =~ /(^|-)clikcode\\.chatEditor$/",
-          "group": "navigation@0"
-        },
-        {
-          "command": "clikcode.open",
+          "command": "clikcode.newChatTab",
           "when": "resourceScheme != clikcode-diff && resourceScheme != clikcode-change",
           "group": "navigation@100"
         }
@@ -429,6 +433,10 @@
         },
         {
           "command": "clikcode.openConversationInNewTab",
+          "when": "false"
+        },
+        {
+          "command": "clikcode.newChatTab",
           "when": "false"
         }
       ],

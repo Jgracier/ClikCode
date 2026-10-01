@@ -242,6 +242,9 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.open', async () => { await revealSidebar(); sidebar.post({ type: 'focus' }); }),
     vscode.commands.registerCommand('clikcode.openInSideBar', async () => { await revealSidebar(); sidebar.post({ type: 'focus' }); }),
     vscode.commands.registerCommand('clikcode.openInNewTab', () => { openTab({ mode: 'new' }); }),
+    // The ClikCode button in the editor's tab bar, as Claude Code's and
+    // Codex's are: each click a new chat in a tab of its own.
+    vscode.commands.registerCommand('clikcode.newChatTab', () => { openTab({ mode: 'new' }); }),
     vscode.commands.registerCommand('clikcode.showConversation', (sessionId: unknown) => (typeof sessionId === 'string' ? showConversation(sessionId) : undefined)),
     vscode.commands.registerCommand('clikcode.openConversationInNewTab', (item: unknown) => {
       const id = typeof item === 'string' ? item : (item as { id?: unknown } | undefined)?.id;
