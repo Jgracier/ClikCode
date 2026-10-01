@@ -48,10 +48,6 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   cwd: string;
   prompt: string;
   nativeSessionId?: string;
-  /** False when `nativeSessionId` was minted locally and the agent has never
-   * seen it: start with session/new instead of a resume that must fail.
-   * Defaults to true whenever `nativeSessionId` is given. */
-  sessionCreated?: boolean;
   environment: Readonly<Record<string, string>>;
   permissionMode: AiHarnessPermissionMode;
   model?: string | null;
@@ -644,8 +640,7 @@ class AcpSessionImpl implements AcpSession {
     }
     let loaded: Json | undefined;
     const wanted = input.nativeSessionId ?? this.sessionId;
-    const created = input.nativeSessionId ? input.sessionCreated !== false : wanted !== undefined;
-    if (wanted && created) {
+    if (wanted) {
       if (live.sessionId !== wanted) {
         // session/load streams the whole history before it answers, so its
         // timeout is an idle window rather than a wall-clock limit.
@@ -732,7 +727,7 @@ class AcpSessionImpl implements AcpSession {
       throw Object.assign(new Error(`${input.command} ACP does not offer effort control`), { acpUnsupportedEffort: true });
     }
     this.sessionId = turn.sessionId;
-    if (!wanted || !created) await input.onSessionId?.(turn.sessionId);
+    if (!wanted) await input.onSessionId?.(turn.sessionId);
     stillRunning();
     const blocks: Json[] = [{ type: 'text', text: input.prompt }, ...await Promise.all(images.map(acpImageBlock))];
     stillRunning();

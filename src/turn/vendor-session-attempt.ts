@@ -88,7 +88,7 @@ export async function runVendorSessionAttempt(input: {
         argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
         ...(harness.acp?.usageTotals ? { usageTotals: harness.acp.usageTotals } : {}),
         extraArgv: [...launch.optionArgv, ...optionArgv],
-        ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId, sessionCreated: true } : {}),
+        ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
         modelRequiresProtocol: harness.acp?.inheritCliOptions === false,
         // "medium" is ClikCode's generic initial value. Agents without an
