@@ -70,8 +70,7 @@
         {
           "id": "clikcode",
           "title": "ClikCode",
-          "icon": "media/activity.svg",
-          "when": "clikcode.doesNotSupportSecondarySidebar"
+          "icon": "media/activity.svg"
         }
       ],
       "secondarySidebar": [
@@ -92,6 +91,12 @@
           "icon": "media/activity.svg",
           "contextualTitle": "ClikCode",
           "when": "clikcode.doesNotSupportSecondarySidebar"
+        },
+        {
+          "id": "clikcode.conversations",
+          "name": "Conversations",
+          "icon": "media/activity.svg",
+          "contextualTitle": "ClikCode"
         }
       ],
       "clikcode-secondary": [
@@ -293,6 +298,23 @@
         "command": "clikcode.updateExtension",
         "title": "Update VS Code Extension",
         "category": "ClikCode"
+      },
+      {
+        "command": "clikcode.showConversation",
+        "title": "Show Conversation",
+        "category": "ClikCode"
+      },
+      {
+        "command": "clikcode.openConversationInNewTab",
+        "title": "Open in New Tab",
+        "category": "ClikCode",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "clikcode.refreshConversations",
+        "title": "Refresh Conversations",
+        "category": "ClikCode",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -400,6 +422,14 @@
         {
           "command": "clikcode.cancel",
           "when": "clikcode.running"
+        },
+        {
+          "command": "clikcode.showConversation",
+          "when": "false"
+        },
+        {
+          "command": "clikcode.openConversationInNewTab",
+          "when": "false"
         }
       ],
       "view/title": [
@@ -407,6 +437,23 @@
           "command": "clikcode.openInNewTab",
           "when": "view == clikcode.chat || view == clikcode.chatSecondary",
           "group": "navigation@0"
+        },
+        {
+          "command": "clikcode.openInNewTab",
+          "when": "view == clikcode.conversations",
+          "group": "navigation@1"
+        },
+        {
+          "command": "clikcode.refreshConversations",
+          "when": "view == clikcode.conversations",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "clikcode.openConversationInNewTab",
+          "when": "view == clikcode.conversations && viewItem == conversation",
+          "group": "inline"
         }
       ]
     },

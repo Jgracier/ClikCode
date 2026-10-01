@@ -29,8 +29,22 @@ function renderFinished(key: string, text: string): string {
   return html;
 }
 
+/** Copies an answer as written (its markdown), and says so for a moment. */
+function CopyAnswer({ text }: { text: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button type="button" class="icon-button tiny message-copy" title={copied ? 'Copied' : 'Copy answer'} aria-label={copied ? 'Copied' : 'Copy answer'}
+      onClick={() => { void navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}>
+      <Icon name={copied ? 'check' : 'copy'} />
+    </button>
+  );
+}
+
 const AssistantMessage = memo(({ cacheKey, text }: { cacheKey: string; text: string }): JSX.Element => (
-  <div class="message assistant"><div class="markdown" dangerouslySetInnerHTML={{ __html: renderFinished(cacheKey, text) }} /></div>
+  <div class="message assistant" role="article" aria-label="ClikCode">
+    <div class="markdown" dangerouslySetInnerHTML={{ __html: renderFinished(cacheKey, text) }} />
+    <div class="message-actions"><CopyAnswer text={text} /></div>
+  </div>
 ));
 
 /** The answer still streaming: the settled blocks and the growing one are
@@ -46,7 +60,7 @@ function LiveMarkdown({ text }: { text: string }): JSX.Element {
   );
 }
 
-const UserMessage = memo(({ text }: { text: string }): JSX.Element => <div class="message user"><div class="bubble">{text}</div></div>);
+const UserMessage = memo(({ text }: { text: string }): JSX.Element => <div class="message user" role="article" aria-label="You"><div class="bubble">{text}</div></div>);
 
 const CATEGORY_ICON: Record<string, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
 

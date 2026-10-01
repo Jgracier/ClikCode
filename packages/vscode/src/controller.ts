@@ -10,7 +10,7 @@ import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { answeredApproval, applyEvent, emptyModel, localNote, typedDuringTurn, type ChatModel } from './model';
-import type { FileDiff, IdeAccounts, IdeChatSettings, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
+import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { applyHunks, fileHunks } from './text';
@@ -210,9 +210,19 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
+  /** A turn finished while this chat was out of sight: marked unread (its
+   * tab and the conversation list say so) until it is looked at. */
+  private finishedUnseen = false;
+
+  get unread(): boolean {
+    if (this.finishedUnseen && this.visible) this.finishedUnseen = false;
+    return this.finishedUnseen;
+  }
+
   /** This window's turn finished where nobody is looking: say so, as Claude
    * Code does. Another window's turn is that window's to announce. */
   private turnEnded(previous: ChatModel): void {
+    if (!this.visible) this.finishedUnseen = true;
     if (!previous.ownTurn || (this.visible && vscode.window.state.focused)) return;
     const title = previous.title ?? 'your chat';
     void vscode.window.showInformationMessage(`ClikCode finished: ${title}`, 'Show').then((choice) => {
@@ -604,6 +614,15 @@ export class ClikCodeController implements vscode.Disposable {
     } catch (error) {
       this.note(error instanceof Error ? error.message : String(error), 'error');
     }
+  }
+
+  /** Every conversation, for the side bar's list. `start`: connect first if
+   * this chat has not yet (only the side bar's chat is asked to). */
+  async conversations(start = false): Promise<IdeConversation[] | undefined> {
+    if (start) await this.ensureStarted();
+    const bridge = this.bridge;
+    if (!bridge?.running || (this.model.revision ?? 1) < STRUCTURED_REVISION) return undefined;
+    return bridge.call<IdeConversation[]>({ type: 'query', query: 'conversations' }, 30_000);
   }
 
   async slashCommands(): Promise<IdeSlashCommand[]> {
