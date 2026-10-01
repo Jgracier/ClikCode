@@ -1,10 +1,9 @@
 /**
  * Learning a usage limit for a harness that publishes none.
  *
- * Only three of twenty-four harnesses expose a usage figure (codex, claude,
- * auggie). The rest give nothing: no percentage, no reset time, no quota
- * endpoint. Antigravity is the clearest case -- it tracks a "user quota
- * summary" internally and its `retrieveUserQuota` call answers 403 for a
+ * Some harnesses expose a quota figure, while others give no percentage,
+ * reset time, or quota endpoint. Antigravity is a clear case: it tracks a
+ * "user quota summary" internally and its `retrieveUserQuota` call answers 403 for a
  * consumer account, so there is no number to read even though one exists.
  *
  * What every harness DOES give us is the two things this needs:
@@ -87,10 +86,9 @@ type Invocation = HarnessState['invocations'][number];
 
 /** What one turn cost, in whatever unit the harness makes available.
  *
- * A ladder, not a single rule, so every harness can learn something. Four
- * harnesses (aider, copilot, hermes, cn) are text-only and will never report
- * a token, and counting their turns is still a usable signal -- a limit
- * expressed in turns is learned exactly the same way as one expressed in
+ * A ladder, not a single rule, so every harness can learn something. Some
+ * harnesses can omit token counts; counting their turns is still a usable
+ * signal. A limit expressed in turns is learned the same way as one in
  * tokens, because the method only cares that the unit is consistent. */
 export function turnCost(invocation: Invocation, weights: Readonly<Record<string, number>> = {}): number {
   // Reported cost first, and it needs no per-model weight at all: a dollar
