@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyEvent, chatModelLabel, emptyModel, type ChatModel } from '../../src/model';
+import { applyEvent, chatModelLabel, emptyModel, turnMarks, type ChatModel } from '../../src/model';
 import { formatOutput } from '../../src/format';
 import { stripAnsi } from '../../src/text';
 import { renderMarkdown } from '../../src/webview/markdown';
@@ -62,7 +62,7 @@ describe('chat model', () => {
   it('settles the thought once answer text arrives', () => {
     const model = turn(activity({ kind: 'thinking', id: 'r1', label: 'Considering' }), worker({ type: 'delta', text: 'Answer', mode: 'append' }));
     expect(model.live?.thought).toBeUndefined();
-    expect(model.live?.reasoning).toEqual([{ text: 'Considering', offset: 0, ms: expect.any(Number) }]);
+    expect(model.live?.reasoning).toEqual([{ text: 'Considering', offset: 0, ms: expect.any(Number), seq: 1 }]);
   });
 
   it('puts a note from the running turn after its prompt, not before it', () => {
@@ -102,6 +102,22 @@ describe('chat model', () => {
     expect(trace.text).toBe('Looking. ');
     expect(trace.reasoning?.[0]?.offset).toBe(0);
     expect(trace.activities[0]?.offset).toBe(9);
+  });
+
+  it('keeps thoughts and calls in the order they happened when no text comes between them', () => {
+    const model = turn(
+      activity({ kind: 'thinking', id: 'r1', label: 'First, look' }),
+      activity({ kind: 'tool-start', id: 'a', label: 'Read(a.ts)', category: 'read' }),
+      activity({ kind: 'tool-done', id: 'a', label: 'Read(a.ts)' }),
+      activity({ kind: 'thinking', id: 'r2', label: 'Now run it' }),
+      activity({ kind: 'tool-start', id: 'b', label: 'Bash(npm test)', category: 'run' }),
+      worker({ type: 'delta', text: 'Done.', mode: 'append' }),
+      worker({ type: 'waiting-stop' }),
+    );
+    const trace = model.traces.at(-1)!;
+    const order = turnMarks(trace.text, trace.activities, trace.reasoning ?? [], [])
+      .map((mark) => mark.thought?.text ?? mark.activity?.label);
+    expect(order).toEqual(['First, look', 'Read(a.ts)', 'Now run it', 'Bash(npm test)']);
   });
 
   it('keeps a finished plan with its turn, and a new turn starts without one', () => {
@@ -153,7 +169,7 @@ describe('chat model', () => {
     expect(during.running).toBe(true);
     expect(during.pendingPrompt).toBe('hi');
     expect(during.live?.text).toBe('Hello');
-    expect(during.live?.activities).toEqual([{ id: 't1', key: 't1', kind: 'tool-done', label: 'read a.ts', startedAt: expect.any(Number), offset: 5 }]);
+    expect(during.live?.activities).toEqual([{ id: 't1', key: 't1', kind: 'tool-done', label: 'read a.ts', startedAt: expect.any(Number), offset: 5, seq: 1 }]);
     expect(during.plan).toEqual([{ content: 'step', status: 'in_progress' }]);
     const after = run([
       worker({ type: 'snapshot', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello' }] }), live: { text: 'Hello', waitingLabel: 'thinking' } }),
