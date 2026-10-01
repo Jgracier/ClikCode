@@ -35,26 +35,38 @@ export function localProgressText(update: LocalModelProgress): string {
   return update.message;
 }
 
-/** Long work with its progress on the waiting line; without a terminal,
- * one stderr line per stage (and per tenth of a download) rather than one
- * per update. Nothing is shown for a model already running. */
-export function localModelProgress(): { progress: (update: LocalModelProgress) => void; done: () => void } {
+/** Long work with its progress on the waiting line; without a terminal, one
+ * stderr line per distinct `shape` (a stage, not each percent) rather than
+ * one per update. The wait starts on the first update, so work that has
+ * nothing to do -- a model already running -- shows nothing at all. Shared
+ * with commands/ai/turbofit.ts. */
+export function waitingLineProgress(): { show: (text: string, shape: string) => void; done: () => void } {
   const terminal = TERMINAL.active;
   let waiting = false;
   let stage = '';
   return {
-    progress: (update) => {
-      const text = localProgressText(update);
+    show: (text, shape) => {
       if (terminal) {
         if (!waiting) { waiting = true; terminal.startWaiting(text); }
         terminal.updateWaitingLabel(text);
         return;
       }
-      const tenth = update.totalBytes ? Math.floor(((update.bytes ?? 0) / update.totalBytes) * 10) : 0;
-      const shape = `${update.stage}:${update.message.replace(/\d+/g, '#')}:${tenth}`;
       if (shape !== stage) { stage = shape; process.stderr.write(`${text}\n`); }
     },
     done: () => { if (waiting) terminal?.stopWaiting(); },
+  };
+}
+
+/** ClikCode Local's progress: one stderr line per stage and per tenth of a
+ * download. */
+export function localModelProgress(): { progress: (update: LocalModelProgress) => void; done: () => void } {
+  const shown = waitingLineProgress();
+  return {
+    progress: (update) => {
+      const tenth = update.totalBytes ? Math.floor(((update.bytes ?? 0) / update.totalBytes) * 10) : 0;
+      shown.show(localProgressText(update), `${update.stage}:${update.message.replace(/\d+/g, '#')}:${tenth}`);
+    },
+    done: shown.done,
   };
 }
 
