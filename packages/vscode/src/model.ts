@@ -11,7 +11,7 @@
  */
 import { composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { asFileDiffs } from '../../../src/agent/line-diff';
-import { appendThought, childActivity, mergeActivity, sameCall, type Thought } from '../../../src/harness/protocol/activity-view';
+import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
@@ -31,6 +31,9 @@ export interface Activity extends Pick<HarnessActivityEvent,
   startedAt?: number;
   /** What a sub-agent this call started is doing now. */
   child?: string;
+  /** How much of the answer had streamed when the call began: where it sits
+   * between the answer's paragraphs while the turn runs. */
+  offset?: number;
 }
 
 export interface Note {
@@ -77,6 +80,12 @@ export interface LiveTurn {
   activities: Activity[];
   /** Rows made so far: the key of a call that came without an id. */
   seen: number;
+  /** The calls still open, and what the newest is doing ("running tests",
+   * "editing app.ts") -- the terminal's own status rule. */
+  openTools: Array<[string, OpenTool]>;
+  toolPhase?: string;
+  /** Messages sent into this turn while it runs, where they landed. */
+  steers: Array<{ text: string; offset: number }>;
   startedAt: number;
   /** When the turn last said anything: text, a tool, a thought, a phase. */
   lastEventAt: number;
@@ -110,7 +119,9 @@ export interface ChatModel {
   accountUsage?: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   notes: Note[];
-  queued: Array<{ id: string; text: string; command: boolean }>;
+  /** `notification`: a finished background task the agent is owed, not
+   * something the user typed. */
+  queued: Array<{ id: string; text: string; command: boolean; notification?: boolean }>;
   running: boolean;
   /** This client's submitted prompt, until a snapshot carries it. */
   pendingPrompt?: string;
@@ -187,8 +198,11 @@ function freshFor(model: ChatModel): ChatModel {
   };
 }
 
+/** A note goes where it happened: during a turn, after the prompt that
+ * started it (the prompt is not in the transcript yet), else at the end. */
 function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel {
-  return { ...model, notes: [...model.notes, { ...note, after: model.messages.length }].slice(-MAX_NOTES) };
+  const after = model.running && model.turnUserIndex !== undefined ? model.turnUserIndex + 1 : model.messages.length;
+  return { ...model, notes: [...model.notes, { ...note, after }].slice(-MAX_NOTES) };
 }
 
 export function applySession(model: ChatModel, session: HarnessSession, account?: string, label?: IdeModelLabel): ChatModel {
@@ -210,7 +224,7 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     route: session.route,
     workspace: session.workspace,
     messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : session.messages ?? [],
-    queued: (session.queuedTurns ?? []).map((item) => ({ id: item.id, text: item.text, command: item.kind === 'command' })),
+    queued: (session.queuedTurns ?? []).map((item) => ({ id: item.id, text: item.text, command: item.kind === 'command', ...(item.kind === 'notification' ? { notification: true } : {}) })),
     // The worker's journal of the running turn has the prompt from here on.
     pendingPrompt: pending?.prompt ?? (model.running ? model.pendingPrompt : undefined),
   };
@@ -247,7 +261,7 @@ function asActivity(key: string, event: HarnessActivityEvent, extra: Partial<Act
  * of the same call (by id, or the open row with its label) merges into it --
  * never reopening a finished call -- and a sub-agent's frames say what it is
  * doing inside its parent's row rather than adding rows of their own. */
-function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent): LiveTurn {
+function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live.text.length): LiveTurn {
   if (raw.kind === 'thinking' && !raw.parentId) return live;
   const event = cleanEvent(raw);
   if (event.parentId) {
@@ -267,12 +281,13 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent): LiveTurn {
     const activities = [...live.activities];
     activities[index] = asActivity(prior.key, merged, {
       ...(prior.startedAt ? { startedAt: prior.startedAt } : {}),
+      ...(prior.offset !== undefined ? { offset: prior.offset } : {}),
       ...(prior.child && merged.kind === 'tool-start' ? { child: prior.child } : {}),
     });
     return { ...live, activities };
   }
   const seen = live.seen + 1;
-  const row = asActivity(event.id ?? `#${seen}`, event, { startedAt: Date.now() });
+  const row = asActivity(event.id ?? `#${seen}`, event, { startedAt: Date.now(), offset });
   return { ...live, seen, activities: [...live.activities, row].slice(-MAX_ACTIVITIES) };
 }
 
@@ -293,13 +308,28 @@ function settle(reasoning: string[], thought: Thought): string[] {
   return [...reasoning, thought.text];
 }
 
-function applyActivity(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
-  return withThought(upsertActivity(live, event), event);
+/** The status line follows the work, as in the terminal: the newest open
+ * call names the verb, the turn's own phase otherwise. */
+function withToolPhase(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
+  if (event.parentId || event.kind === 'thinking') return live;
+  const lifecycle = activityLifecyclePhase(new Map(live.openTools), event);
+  return { ...live, openTools: [...lifecycle.activeTools], toolPhase: lifecycle.activeTools.size ? lifecycle.phase : undefined };
 }
 
-function freshLive(waitingLabel: string): LiveTurn {
-  const now = Date.now();
-  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, startedAt: now, lastEventAt: now };
+function applyActivity(live: LiveTurn, event: HarnessActivityEvent, offset?: number): LiveTurn {
+  return withToolPhase(withThought(upsertActivity(live, event, offset), event), event);
+}
+
+function freshLive(waitingLabel: string, startedAt = Date.now()): LiveTurn {
+  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, openTools: [], steers: [], startedAt, lastEventAt: Date.now() };
+}
+
+/** Text replaced wholesale keeps the rows placed in what it kept; one placed
+ * past the point where the texts differ moves back to it. */
+function rebaseOffsets<T extends { offset?: number }>(items: T[], previous: string, replacement: string): T[] {
+  let common = 0;
+  while (common < previous.length && common < replacement.length && previous[common] === replacement[common]) common += 1;
+  return items.some((item) => (item.offset ?? 0) > common) ? items.map((item) => ((item.offset ?? 0) > common ? { ...item, offset: common } : item)) : items;
 }
 
 /** A turn's reasoning for its trace: every thought, the newest kept when
@@ -327,16 +357,21 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       if (!event.live) return model.live ? endTurn({ ...next, pendingPrompt: undefined }) : next;
       // The running turn's tool rows and plan come with it (from ClikCode
       // builds that send them), so a panel opened mid-turn shows them too.
-      const base = next.live ?? freshLive('');
+      // Joined mid-turn, the clock starts where the turn really did.
+      const startedAt = Date.parse(event.session.pendingTurn?.startedAt ?? '') || undefined;
+      const base = next.live ?? freshLive('', startedAt);
       const replayed = event.live.activities
-        ? event.live.activities.reduce<LiveTurn>((live, item) => applyActivity(live, item.event), { ...base, activities: [], reasoning: [], thought: undefined, seen: 0 })
+        ? event.live.activities.reduce<LiveTurn>((live, item) => applyActivity(live, item.event, item.responseOffset),
+          { ...base, activities: [], reasoning: [], thought: undefined, seen: 0, openTools: [], toolPhase: undefined })
         : base;
+      // Steers are the turn's own record, so every window shows them.
+      const steers = (event.session.pendingTurn?.steers ?? []).map((steer) => ({ text: steer.text, offset: steer.responseOffset ?? event.live!.text.length }));
       return {
         ...next,
         running: true,
         turnUserIndex: next.turnUserIndex ?? next.messages.length,
         live: {
-          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel),
+          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers,
           ...(next.live?.text === event.live.text ? {} : { lastEventAt: Date.now() }),
         },
         ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) } : {}),
@@ -352,7 +387,11 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return { ...endTurn(model), pendingPrompt: undefined, approvals: [], submissions: [] };
     case 'delta': {
       const live = model.live ?? freshLive('thinking');
-      return { ...model, live: { ...live, text: event.mode === 'replace' ? event.text : live.text + event.text, lastEventAt: Date.now() } };
+      const text = event.mode === 'replace' ? event.text : live.text + event.text;
+      // The thought led to this text; once the answer arrives it is settled.
+      const thought = event.text && live.thought ? { thought: undefined, reasoning: settle(live.reasoning, live.thought) } : {};
+      const placed = event.mode === 'replace' ? { activities: rebaseOffsets(live.activities, live.text, text), steers: rebaseOffsets(live.steers, live.text, text) } : {};
+      return { ...model, live: { ...live, ...thought, ...placed, text, lastEventAt: Date.now() } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
@@ -430,8 +469,6 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
     case 'turn-start':
       if (model.sessionId && event.sessionId !== model.sessionId) return model;
       return { ...model, running: true, ownTurn: true, pendingPrompt: event.prompt, queued: model.queued.filter((item) => item.id !== event.queuedTurnId) };
-    case 'turn-end':
-      return model;
     case 'busy':
       return { ...model, busy: event.label };
     case 'notice':

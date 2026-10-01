@@ -46,6 +46,40 @@ describe('chat model', () => {
     expect(between.live!.activities[0]!.child).toBeUndefined();
   });
 
+  it('names what the open call is doing, as the terminal does, and says thinking once it ends', () => {
+    const testing = turn(activity({ kind: 'tool-start', id: 'b', label: 'Bash(npm test)', category: 'run' }));
+    expect(testing.live?.toolPhase).toBe('running tests');
+    expect(run([activity({ kind: 'tool-done', id: 'b', label: 'Bash(npm test)' })], testing).live?.toolPhase).toBeUndefined();
+  });
+
+  it('places a call where it happened in the answer, and moves it back when the text is replaced', () => {
+    const model = turn(worker({ type: 'delta', text: 'First part. ', mode: 'append' }), activity({ kind: 'tool-start', id: 'r', label: 'Read(a.ts)', category: 'read' }));
+    expect(model.live?.activities[0]?.offset).toBe(12);
+    const replaced = run([worker({ type: 'delta', text: 'First', mode: 'replace' })], model);
+    expect(replaced.live?.activities[0]?.offset).toBe(5);
+  });
+
+  it('settles the thought once answer text arrives', () => {
+    const model = turn(activity({ kind: 'thinking', id: 'r1', label: 'Considering' }), worker({ type: 'delta', text: 'Answer', mode: 'append' }));
+    expect(model.live?.thought).toBeUndefined();
+    expect(model.live?.reasoning).toEqual(['Considering']);
+  });
+
+  it('puts a note from the running turn after its prompt, not before it', () => {
+    const model = turn(worker({ type: 'note', message: 'switched account' }));
+    expect(model.notes.at(-1)?.after).toBe(model.messages.length + 1);
+  });
+
+  it('joins a running turn at its real start, with the steers sent into it', () => {
+    const startedAt = new Date(Date.now() - 90_000).toISOString();
+    const joined = run([worker({
+      type: 'snapshot', session: session({ pendingTurn: { prompt: 'p', startedAt, updatedAt: startedAt, outputStarted: true, steers: [{ text: 'also this', submittedAt: startedAt, responseOffset: 2 }] } }),
+      live: { text: 'abc', waitingLabel: 'thinking' },
+    })], run([{ type: 'session', session: session() }]));
+    expect(joined.live?.startedAt).toBe(Date.parse(startedAt));
+    expect(joined.live?.steers).toEqual([{ text: 'also this', offset: 2 }]);
+  });
+
   it('keeps a finished plan with its turn, and a new turn starts without one', () => {
     const steps = [{ content: 'read', status: 'completed' }, { content: 'fix', status: 'completed' }];
     const ended = turn(worker({ type: 'plan', entries: steps }), worker({ type: 'waiting-stop' }));
@@ -95,7 +129,7 @@ describe('chat model', () => {
     expect(during.running).toBe(true);
     expect(during.pendingPrompt).toBe('hi');
     expect(during.live?.text).toBe('Hello');
-    expect(during.live?.activities).toEqual([{ id: 't1', key: 't1', kind: 'tool-done', label: 'read a.ts', startedAt: expect.any(Number) }]);
+    expect(during.live?.activities).toEqual([{ id: 't1', key: 't1', kind: 'tool-done', label: 'read a.ts', startedAt: expect.any(Number), offset: 5 }]);
     expect(during.plan).toEqual([{ content: 'step', status: 'in_progress' }]);
     const after = run([
       worker({ type: 'snapshot', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello' }] }), live: { text: 'Hello', waitingLabel: 'thinking' } }),

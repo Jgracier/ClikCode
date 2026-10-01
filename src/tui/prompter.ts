@@ -28,7 +28,7 @@ import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock,
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows } from '../harness/protocol/activity-line.js';
-import { STALL_MS } from '../harness/protocol/activity-view.js';
+import { SPIN_MS, STALL_MS } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
@@ -68,7 +68,6 @@ const SCROLL_DRAIN_MIN = 4;
 const SCROLL_DRAIN_MS = 16;
 
 /** The spinner's step while something is moving. */
-const SPIN_MS = 300;
 
 /** No delta and no event for this long, with no tool running and no
  * approval up, and the band says so: the spinner stops and turns yellow and

@@ -368,7 +368,10 @@ export function Composer(props: {
       ) : null}
       {model.queued.length ? (
         <div class="queued" aria-label="Queued messages">
-          {model.queued.map((item) => (
+          {model.queued.map((item) => item.notification ? (
+            // A background task's result the agent is owed: not the user's to edit.
+            <div key={item.id} class="queued-item"><Icon name="bell" /><span class="queued-text">Background task finished</span><span class="muted">next turn</span></div>
+          ) : (
             <div key={item.id} class="queued-item">
               <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
               <span class="muted">queued</span>
