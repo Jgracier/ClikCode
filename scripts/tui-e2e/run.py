@@ -278,6 +278,33 @@ SCENARIOS = {
         'watch': [], 'ever': ['› look at this [Pasted text #1 +12 lines]'], 'final_once': ['Paste received: whole.'],
         'final_contains': ['pasted row 12'],
     },
+    # Ctrl+S mid-turn: what is typed stops the turn and is sent as the next
+    # one at once -- one row the whole way, from the composer to its prompt.
+    'send-now-mid-answer': {
+        'env': {'FAKE_DELAY_MS': '300'},
+        'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']},
+                  {'blocks': ['Sent now and answered.']}],
+        'steps': [
+            ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
+            ('keys', 'do this instead'), ('wait_for', 'ctrl+s to send now', 5), ('keys', '\x13'),
+            ('wait_for', 'Sent now and answered.', 40), ('settle', 3),
+        ],
+        'watch': ['start the long job', 'do this instead', 'Sent now and answered.'],
+        'ever': ['sending now'], 'never': ['The long job is finished.'],
+    },
+    # With nothing typed, Ctrl+S sends the message already queued.
+    'send-queued-now': {
+        'env': {'FAKE_DELAY_MS': '300'},
+        'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']},
+                  {'blocks': ['The queued one answered now.']}],
+        'steps': [
+            ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
+            ('type', 'then do this'), ('wait_for', 'ctrl+s sends now', 10), ('keys', '\x13'),
+            ('wait_for', 'The queued one answered now.', 40), ('settle', 3),
+        ],
+        'watch': ['start the long job', 'then do this', 'The queued one answered now.'],
+        'never': ['The long job is finished.'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
