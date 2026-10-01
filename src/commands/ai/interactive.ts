@@ -228,9 +228,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // common time either is actually needed — has somewhere to show its
   // "installing…" spinner and a real terminal to suspend into for a vendor
   // login prompt, instead of running headless before the UI exists.
-  const rl: HarnessPrompter = terminalUiSupported()
-    ? new TerminalHarnessPrompter()
-    : createInterface({
+  //
+  // `terminal` is the one test for "this is the terminal UI": the plain
+  // readline below (no alternate screen) has no render, panel or notice.
+  const terminal = terminalUiSupported() ? new TerminalHarnessPrompter() : undefined;
+  const rl: HarnessPrompter = terminal
+    ?? createInterface({
       input, output, terminal: false, historySize: 1_000, removeHistoryDuplicates: true,
       completer: (value: string) => {
         const fallbackCommands = slashCommandsFor(session!).map((item) => item.value);
@@ -238,8 +241,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         return [matches.length ? matches : fallbackCommands, value] as [string[], string];
       },
     });
-  if (rl instanceof TerminalHarnessPrompter) TERMINAL.active = rl;
-  rl.render?.(session);
+  if (terminal) TERMINAL.active = terminal;
+  terminal?.render(session);
   let selectionNotice: string | undefined;
   if (!session.nativeHarness && !isClikCodeAgent(session)) {
     // Nothing here ends ClikCode: Esc on the picker leaves the chat with no
@@ -302,12 +305,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     warmNativeModelCatalog(harness, target.accountId ? targetState.accounts.find((item) => item.id === target.accountId) : undefined);
   };
   warmCatalogFor(session, state);
-  if (rl.render) rl.render(session, initialAccount, selectionNotice);
+  if (terminal) terminal.render(session, initialAccount, selectionNotice);
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
   const refreshUsage = (target: HarnessSession, targetState: HarnessState): void => {
-    if (!(rl instanceof TerminalHarnessPrompter)) return;
+    if (!terminal) return;
     void nativeUsageReading(target, targetState).then((reading) => {
-      if (TERMINAL.active === rl) rl.usage(reading?.label, usageResetLabel(reading?.windows));
+      if (TERMINAL.active === terminal) terminal.usage(reading?.label, usageResetLabel(reading?.windows));
     }).catch(() => { /* Usage is optional provider metadata. */ });
   };
   refreshUsage(session, state);
@@ -333,11 +336,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let usageInterval: ReturnType<typeof setInterval> | undefined;
   const newerBuild = (): boolean => Boolean(startupBuild && currentWorkerBuild() !== startupBuild);
   const beginBuildReplace = (): Promise<void> | undefined => {
-    if (!(rl instanceof TerminalHarnessPrompter) || !newerBuild()) return undefined;
+    if (!terminal || !newerBuild()) return undefined;
     const sessionId = id;
     return replaceCliWithNewBuild({
       sessionId,
-      closeUi: () => rl.close(),
+      closeUi: () => terminal.close(),
       release: async () => {
         if (usageInterval) clearInterval(usageInterval);
         clearInterval(claimInterval);
@@ -357,7 +360,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       updateSeen = true;
       void retireStaleWorkers().catch(() => undefined);
     }
-    if (rl instanceof TerminalHarnessPrompter && rl.idleForBuildReplace()) {
+    if (terminal?.idleForBuildReplace()) {
       void beginBuildReplace();
       return;
     }
@@ -366,7 +369,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       if (!notice) notice = 'A newer ClikCode build will load when nothing is running.';
     }
   };
-  usageInterval = rl instanceof TerminalHarnessPrompter ? setInterval(() => {
+  usageInterval = terminal ? setInterval(() => {
     noteNewerBuild();
     void readState({ transcripts: [] }).then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
@@ -403,9 +406,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
    * message. */
   const handleTurnFailure = async (error: unknown, promptText: string | undefined): Promise<void> => {
     const message = error instanceof Error ? error.message : String(error);
-    if (!rl.render) { emitHarnessOutput({ panel: 'error', message }); return; }
+    if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return; }
     notice = isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
-    if (!promptText || !isUsageExhaustedMessage(message) || !(rl instanceof TerminalHarnessPrompter)) return;
+    if (!promptText || !isUsageExhaustedMessage(message)) return;
     // An account of this provider got its quota back after failover looked
     // (a re-read landed meanwhile): send it again here, once, rather than
     // offering to leave the provider.
@@ -418,7 +421,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       resend = promptText;
       notice = undefined;
     } else {
-      const moved = await interactiveResumeInPicker(rl, id, promptText).catch(() => undefined);
+      const moved = await interactiveResumeInPicker(terminal, id, promptText).catch(() => undefined);
       if (moved) {
         id = moved;
         resend = promptText;
@@ -486,8 +489,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // (drawn by the live view once this window follows it) or an
         // interrupted one (drawn as such here); see the prompter's
         // transcriptMessages.
-        const running = rl instanceof TerminalHarnessPrompter ? await workerTurn(latest.id) : undefined;
-        rl.render?.(latest, account, notice, running ? { running: true, ...running } : { running: false });
+        const running = terminal ? await workerTurn(latest.id) : undefined;
+        terminal?.render(latest, account, notice, running ? { running: true, ...running } : { running: false });
         refreshUsage(latest, latestState);
         notice = undefined;
         if (synchronizedSessionId !== id) {
@@ -498,7 +501,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           void synchronizeNativeTranscript(latestState, latest).then(async (changed) => {
             if (!changed || syncId !== id) return;
             await writeState(latestState);
-            if (syncId === id) rl.render?.(latest, account, undefined, running ? { running: true, ...running } : { running: false });
+            if (syncId === id) terminal?.render(latest, account, undefined, running ? { running: true, ...running } : { running: false });
           }).catch(() => undefined);
         }
         const queued = latest.queuedTurns?.[0];
@@ -511,8 +514,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // the queued message waits behind it, so that turn is followed to its
         // end rather than the message sent into it only to be queued again.
         const runningTurn = queued && queued.kind !== 'command' ? running : undefined;
-        if (runningTurn && rl instanceof TerminalHarnessPrompter) {
-          await followRunning(rl, runningTurn.prompt, queued?.text);
+        if (runningTurn && terminal) {
+          await followRunning(terminal, runningTurn.prompt, queued?.text);
           continue;
         }
         if (queued?.kind === 'command') {
@@ -533,19 +536,19 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         } else if (resend) {
           line = resend;
           resend = undefined;
-        } else if (rl instanceof TerminalHarnessPrompter) {
+        } else if (terminal) {
           // A turn just ended, or the prompt is coming back. Do not wait out
           // the usage tick to pick up a build that landed during the turn.
-          if (rl.idleForBuildReplace()) {
+          if (terminal.idleForBuildReplace()) {
             const leaving = beginBuildReplace();
             if (leaving) { await leaving; return; }
           }
           // The worker may start a turn while this sits here (another
           // window's, or a follow-up for a finished background shell), or
           // queue something: either ends the prompt, keeping the draft.
-          const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, ...(signal ? { signal } : {}) }), queueMark);
+          const answer = await questionOrWorker(latest.id, (signal) => terminal.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, ...(signal ? { signal } : {}) }), queueMark);
           if ('woke' in answer) {
-            if (answer.woke === 'turn') await followRunning(rl, answer.prompt, answer.prompt);
+            if (answer.woke === 'turn') await followRunning(terminal, answer.prompt, answer.prompt);
             continue;
           }
           line = answer.line.trim();
@@ -573,7 +576,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       const runInteractiveTurn = async (targetId: string, promptText: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> => {
         // The worker is another process. A draft is written now, because this
         // message is what makes the chat a conversation.
-        if (rl instanceof TerminalHarnessPrompter) await ensureSessionOnDisk(targetId);
+        if (terminal) await ensureSessionOnDisk(targetId);
         const activeState = await readState({ transcripts: [targetId] });
         const active = activeState.sessions.find((item) => item.id === targetId);
         const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
@@ -586,13 +589,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // Likewise a ClikCode Local model: loaded here, with its progress on
         // the waiting line, and held by this terminal rather than the worker.
         await ensureLocalModelForTurn(active);
-        if (active && rl instanceof TerminalHarnessPrompter) {
+        if (active && terminal) {
           // The submitted prompt is the prompter's for the whole turn, not a
           // message and not part of this snapshot: it is not a message yet, and
           // put in `messages` it lived somewhere the worker's next snapshot
           // overwrote -- which is what made the message the user had just sent
           // appear and then vanish. See tui/render/pending-prompt.ts.
-          rl.submitted(turn.echo ? promptText : undefined);
+          terminal.submitted(turn.echo ? promptText : undefined);
           const pending: HarnessSession = {
             ...active,
             messages: sessionTranscriptMessages(active),
@@ -601,11 +604,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               ? { queuedTurns: active.queuedTurns?.filter((item) => item.id !== turn.queuedTurnId) }
               : {}),
           };
-          rl.render(pending, activeAccount);
+          terminal.render(pending, activeAccount);
           // The worker owns cancellation, steering and the preserve-vs-discard
           // decision on a cancel (worker/session-worker.ts's runTurn), and
           // runTurnThroughWorker rethrows only a genuine failure.
-          const outcome = await runTurnThroughWorker(targetId, rl, promptText, turn);
+          const outcome = await runTurnThroughWorker(targetId, terminal, promptText, turn);
           if (outcome.notice) notice = outcome.notice;
           if (outcome.left) openBoard = true;
           return;
@@ -618,9 +621,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       };
       /** A subprocess the user has to wait for gets the same waiting indicator a turn does. */
       const withWaiting = async <T>(label: string, work: () => Promise<T>): Promise<T> => {
-        if (!(rl instanceof TerminalHarnessPrompter)) return work();
-        rl.startWaiting(label);
-        try { return await work(); } finally { rl.stopWaiting(); }
+        if (!terminal) return work();
+        terminal.startWaiting(label);
+        try { return await work(); } finally { terminal.stopWaiting(); }
       };
       /** The headless handler, with its output in a panel.
        *
@@ -657,13 +660,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             continue;
           }
           const controller = new AbortController();
-          const waiting = rl instanceof TerminalHarnessPrompter ? rl : undefined;
-          if (waiting) waiting.startWaiting(`! ${command}`, () => controller.abort());
+          terminal?.startWaiting(`! ${command}`, () => controller.abort());
           let result: Awaited<ReturnType<typeof runShellCommand>>;
           try {
             result = await runShellCommand(command, activeWorkspace, controller.signal);
           } finally {
-            waiting?.stopWaiting();
+            terminal?.stopWaiting();
           }
           const note: ShellNote = { command, output: result.output, exitCode: result.exitCode, at: new Date().toISOString() };
           const shellState = await readState();
@@ -688,7 +690,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           attachmentSession.updatedAt = new Date().toISOString();
           await writeState(attachmentState);
           notice = `Attached ${compactPath(standaloneAttachment)} for the next request`;
-          if (!rl.render) emitHarnessOutput({ panel: 'attachments', attachments: attachmentSession.attachments ?? [] });
+          if (!terminal) emitHarnessOutput({ panel: 'attachments', attachments: attachmentSession.attachments ?? [] });
           continue;
         }
         const commandState = await readState();
@@ -722,13 +724,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           if (!commandHarness || !manager) throw new Error('Choose a provider first.');
           if (manager.listArgv) {
             const listing = await withWaiting(`loading ${manager.label}…`, () => nativeManagerListing(commandState, commandSession, route.name));
-            rl.panel?.(listing.label, listing.text);
-            if (!rl.panel) emitHarnessOutput({ panel: route.name, text: `${listing.label}\n\n${listing.text}` });
-          } else if (manager.manageArgv && rl instanceof TerminalHarnessPrompter) {
+            if (terminal) terminal.panel(listing.label, listing.text);
+            else emitHarnessOutput({ panel: route.name, text: `${listing.label}\n\n${listing.text}` });
+          } else if (manager.manageArgv && terminal) {
             const selectedAccount = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
-            await rl.suspend();
+            await terminal.suspend();
             try { await runNativeHarnessCommand(commandHarness, manager.manageArgv, turnEnvironment(commandHarness, selectedAccount)); }
-            finally { rl.resume(); }
+            finally { terminal.resume(); }
           } else throw new Error(`${commandHarness.displayName} requires an interactive terminal for ${manager.label}.`);
         }
         else if (BOARD_REPLACES.has(route.entry.name) && !viaBoard) {
@@ -763,7 +765,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               await enqueueCommandLine(id, commandLine);
               continue;
             }
-            if (!rl.select) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
+            if (!terminal) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
             const chosen = await interactiveEnginePicker(config, rl, id) ?? id;
             const chosenState = await readState({ transcripts: [chosen] });
             if (sessionHarness(chosenState.sessions.find((item) => item.id === chosen))) {
@@ -778,7 +780,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           const showSession = async (target: string): Promise<void> => {
             const shown = await readState({ transcripts: [target] });
             const session = shown.sessions.find((item) => item.id === target);
-            if (session) rl.render?.(session, session.accountId ? shown.accounts.find((item) => item.id === session.accountId)?.label : undefined);
+            if (session) terminal?.render(session, session.accountId ? shown.accounts.find((item) => item.id === session.accountId)?.label : undefined);
           };
           const openConversationPicker = async (): Promise<InteractiveSlashOutcome> => {
             // The board's `/` sets up the NEXT conversation. A fresh one is
@@ -812,7 +814,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           const interactive: Record<InteractiveSlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>> = {
             exit: async () => { await aiSessionLeave(id); return { exit: true }; },
             new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
-            redraw: async () => { rl.render?.(commandSession, commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId)?.label : undefined); },
+            redraw: async () => { terminal?.render(commandSession, commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId)?.label : undefined); },
             provider: async () => ({ id: await interactiveEnginePicker(config, rl, id) ?? id }),
             accounts: async () => {
               // `/accounts login <harness>` and `/accounts add <harness>` sign in
@@ -834,26 +836,26 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               if (!args) return interactiveModelPicker(rl, id);
               const outcome = await viaHeadless(text);
               const model = (await readState({ transcripts: [outcome.id ?? id] })).sessions.find((item) => item.id === (outcome.id ?? id))?.model;
-              if (model) rl.notice?.(`Model set to ${commandHarness ? harnessModelLabel(commandHarness, model) : model}`);
+              if (model) terminal?.notice(`Model set to ${commandHarness ? harnessModelLabel(commandHarness, model) : model}`);
               return outcome;
             },
             effort: async () => {
               if (!args) return interactiveEffortPicker(rl, id);
               const outcome = await viaHeadless(text);
-              rl.notice?.(`Effort set to ${settingLabel(args.trim().toLowerCase() === 'default' ? '' : args.trim().toLowerCase())}`);
+              terminal?.notice(`Effort set to ${settingLabel(args.trim().toLowerCase() === 'default' ? '' : args.trim().toLowerCase())}`);
               return outcome;
             },
             permissions: async () => {
               if (!args) return interactivePermissionPicker(rl, id);
               const outcome = await viaHeadless(text);
-              rl.notice?.(`Permissions set to ${settingLabel(args.trim().toLowerCase())}`);
+              terminal?.notice(`Permissions set to ${settingLabel(args.trim().toLowerCase())}`);
               return outcome;
             },
             options: async () => interactiveHarnessOptionPicker(rl, id),
             capabilities: async () => {
               const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');
-              rl.panel?.(title, rest.join('\n'));
-              if (!rl.panel) emitHarnessOutput({ panel: 'capabilities', text: [title, ...rest].join('\n') });
+              if (terminal) terminal.panel(title, rest.join('\n'));
+              else emitHarnessOutput({ panel: 'capabilities', text: [title, ...rest].join('\n') });
             },
             settings: async () => {
               // `/settings tools`: straight to Tools & integrations (MCP servers, skills, agents).
@@ -926,20 +928,20 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               const memory = await readMemoryFile(commandSession);
               const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === 'win32' ? 'notepad' : 'vi');
               const [editorBinary = 'vi', ...editorArgs] = editor.split(/\s+/).filter(Boolean);
-              if (rl instanceof TerminalHarnessPrompter) await rl.suspend();
+              await terminal?.suspend();
               try {
                 await new Promise<void>((resolveEdit, rejectEdit) => {
                   const child = spawn(editorBinary, [...editorArgs, memory.path], { stdio: 'inherit', cwd: commandSession.workspace ?? process.cwd() });
                   child.once('error', rejectEdit);
                   child.once('exit', () => resolveEdit());
                 });
-              } finally { if (rl instanceof TerminalHarnessPrompter) rl.resume(); }
+              } finally { terminal?.resume(); }
               return {};
             },
             doctor: async () => {
               const report = await withWaiting('checking harnesses…', () => doctorSummary(commandState));
-              rl.panel?.('ClikCode doctor', report);
-              if (!rl.panel) emitHarnessOutput({ panel: 'doctor', text: report });
+              if (terminal) terminal.panel('ClikCode doctor', report);
+              else emitHarnessOutput({ panel: 'doctor', text: report });
             },
             login: async () => {
               if (!commandHarness) throw new Error('Choose a provider before signing in.');
@@ -985,9 +987,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // text back so the failure is visible and recoverable.
         if (queuedTurnId && !cancelled) {
           await releaseQueuedTurn(id, queuedTurnId).catch(() => undefined);
-          TERMINAL.active?.restoreDraft(line);
+          terminal?.restoreDraft(line);
         }
-        if (cancelled && rl.render) notice = 'Stopped';
+        if (cancelled && terminal) notice = 'Stopped';
         else await handleTurnFailure(error, queuedTurnId ? undefined : line);
       }
     }
@@ -1005,7 +1007,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     // Closed without ever being started: not stored. After the claim release,
     // which reads the record it is releasing.
     await discardIfBlank(id).catch(() => undefined);
-    if (TERMINAL.active === rl) TERMINAL.active = undefined;
+    if (TERMINAL.active === terminal) TERMINAL.active = undefined;
     rl.close();
   }
 }
